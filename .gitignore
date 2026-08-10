@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+# 実行時の作業ディレクトリと適用結果（原本のコピー）
+.ailine_*/
+*.out.xlsx
+*.out.ods
