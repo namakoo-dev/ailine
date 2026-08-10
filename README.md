@@ -101,7 +101,7 @@ python ailine.py stop
 | ヘルパ | モデルが書くのは | 隠している難所 |
 |---|---|---|
 | `SortByColumn(oDoc, col, ascending)` | `Call SortByColumn(oDoc, 1, False)` | 範囲検出・`SortFields`・`ContainsHeader=False` |
-| `InsertBarChart(oDoc, valCol)` | `Call InsertBarChart(oDoc, 1)` | 見栄えのする棒グラフ。タイトル・横軸・データラベル・系列色を見出しから自動導出（LO native の表現力を自前で引き出す。項目名は列0固定） |
+| `InsertBarChart(oDoc, valCol)` | `Call InsertBarChart(oDoc, 1)` | 見栄えのする棒グラフ。タイトル・横軸・系列色を見出しから自動導出（データラベルは付けず縦軸で読ませる清潔な既定。LO native の表現力を自前で引き出す。項目名は列0固定） |
 | `MergeCells(oDoc, c1, r1, c2, r2)` | `Call MergeCells(oDoc, 0, 0, 1, 0)` | 範囲を渡さず単一セルに merge する誤りを封じる |
 | `InsertRows(oDoc, atRow, count)` | `Call InsertRows(oDoc, 1, 1)` | `Rows.insertByIndex`・0起点の位置 |
 | `DrawTableBorders(oDoc)` | `Call DrawTableBorders(oDoc)` | データ範囲を自動検出・`TableBorder2` の格子 |

@@ -51,8 +51,9 @@ End Sub
 
 ' 1枚目シートに「見栄えのする」棒グラフを1つ挿入する。範囲もスタイルも内部で組む。
 ' ★ 項目名は先頭列(列0)に固定。呼び側は「値の列」だけ渡す（迷わせない）。
-' ★ タイトル・横軸タイトル・データラベル・系列色を見出しから自動導出して styling する
+' ★ タイトル・横軸タイトル・系列色を見出しから自動導出して styling する
 '    ＝ LibreOffice native チャートの表現力を自前で引き出す（外部依存なし・ours）。
+'    データラベルは付けない（値は縦軸で読める。全棒に数字を振らない方が清潔＝プロの既定）。
 '   valCol : 棒にする値の列（0 起点。例: 金額=1, 売上=3）
 Sub InsertBarChart(oDoc As Object, valCol As Integer)
     Dim oSheet As Object, oCharts As Object, oChart As Object, oDiag As Object
@@ -104,7 +105,6 @@ Sub InsertBarChart(oDoc As Object, valCol As Integer)
     oChart.HasLegend = False
 
     oDiag = oChart.getDiagram()
-    oDiag.DataCaption = com.sun.star.chart.ChartDataCaption.VALUE   ' 各棒に値
     oDiag.HasXAxisTitle = True : oDiag.XAxisTitle.String = sCat     ' 横軸＝項目名の見出し
     ' 系列色（★16進 RRGGBB。VBASupport の RGB は BGR になるので使わない）
     oDiag.getDataRowProperties(0).FillColor = &H2E86C1&            ' 落ち着いた青
