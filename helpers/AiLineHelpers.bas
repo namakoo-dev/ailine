@@ -49,13 +49,17 @@ Sub SortByColumn(oDoc As Object, col As Integer, ascending As Boolean)
 End Sub
 
 
-' 1枚目シートに棒グラフを1つ挿入する。範囲アドレスは内部で組み立てる。
+' 1枚目シートに「見栄えのする」棒グラフを1つ挿入する。範囲もスタイルも内部で組む。
 ' ★ 項目名は先頭列(列0)に固定。呼び側は「値の列」だけ渡す（迷わせない）。
+' ★ タイトル・横軸タイトル・データラベル・系列色を見出しから自動導出して styling する
+'    ＝ LibreOffice native チャートの表現力を自前で引き出す（外部依存なし・ours）。
 '   valCol : 棒にする値の列（0 起点。例: 金額=1, 売上=3）
 Sub InsertBarChart(oDoc As Object, valCol As Integer)
-    Dim oSheet As Object, oCharts As Object
+    Dim oSheet As Object, oCharts As Object, oChart As Object, oDiag As Object
     Dim lastRow As Long
     Dim catCol As Integer
+    Dim sCat As String, sVal As String
+    Dim sName As String
     catCol = 0                        ' 項目名は先頭列に固定
     oSheet = oDoc.Sheets.getByIndex(0)
 
@@ -68,9 +72,11 @@ Sub InsertBarChart(oDoc As Object, valCol As Integer)
     If lastRow < 1 Then Exit Sub
 
     oCharts = oSheet.Charts
+    sName = "Chart_" & valCol
+    If oCharts.hasByName(sName) Then Exit Sub   ' 既にあれば作り直さない
 
     Dim oRect As New com.sun.star.awt.Rectangle
-    oRect.X = 9000 : oRect.Y = 500 : oRect.Width = 12000 : oRect.Height = 7500
+    oRect.X = 9000 : oRect.Y = 400 : oRect.Width = 14000 : oRect.Height = 8500
 
     ' 項目名の列 と 値の列（見出し行0を含める＝ラベルになる）の2範囲
     Dim oRanges(1) As New com.sun.star.table.CellRangeAddress
@@ -80,13 +86,28 @@ Sub InsertBarChart(oDoc As Object, valCol As Integer)
     oRanges(1).Sheet = 0
     oRanges(1).StartColumn = valCol : oRanges(1).StartRow = 0
     oRanges(1).EndColumn = valCol   : oRanges(1).EndRow = lastRow
+    ' True,True = 先頭行=系列名・先頭列=項目名。既定は縦棒グラフ。
+    oCharts.addNewByName(sName, oRect, oRanges(), True, True)
 
-    Dim sName As String
-    sName = "Chart_" & valCol
-    If Not oCharts.hasByName(sName) Then
-        ' True,True = 先頭行=系列名・先頭列=項目名。既定は縦棒グラフ。
-        oCharts.addNewByName(sName, oRect, oRanges(), True, True)
-    End If
+    ' ── styling（見出しから導出。LO native は色/ラベル/タイトル/軸/フォントを honor する） ──
+    sCat = oSheet.getCellByPosition(catCol, 0).getString()
+    sVal = oSheet.getCellByPosition(valCol, 0).getString()
+    oChart = oCharts.getByName(sName).getEmbeddedObject()
+
+    ' タイトル＝値の見出し。太字・濃色
+    oChart.HasMainTitle = True
+    oChart.Title.String = sVal
+    oChart.Title.CharColor = &H1B2B49&      ' 濃紺
+    oChart.Title.CharHeight = 15
+    oChart.Title.CharWeight = com.sun.star.awt.FontWeight.BOLD
+    ' 単系列なので凡例は畳む（余計な要素を出さない）
+    oChart.HasLegend = False
+
+    oDiag = oChart.getDiagram()
+    oDiag.DataCaption = com.sun.star.chart.ChartDataCaption.VALUE   ' 各棒に値
+    oDiag.HasXAxisTitle = True : oDiag.XAxisTitle.String = sCat     ' 横軸＝項目名の見出し
+    ' 系列色（★16進 RRGGBB。VBASupport の RGB は BGR になるので使わない）
+    oDiag.getDataRowProperties(0).FillColor = &H2E86C1&            ' 落ち着いた青
 End Sub
 
 
