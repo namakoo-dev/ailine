@@ -154,6 +154,18 @@ def test_diff_detects_colwidth(tmp_path):
     assert changed is True
     assert any("列幅" in ln for ln in lines)
 
+def test_diff_detects_align_only_change(tmp_path):
+    # 中央揃えだけの変更も検出すること（AlignCenter ヘルパが no-op 誤判定されないため）
+    from openpyxl.styles import Alignment
+    p = _book(tmp_path, [["a", 1]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(1, 1).alignment = Alignment(horizontal="center")
+    wb.save(p)
+    after = ailine.snapshot(p)
+    changed, _ = ailine.diff_snapshots(before, after)
+    assert changed is True
+
 
 # --- 文書の説明 ------------------------------------------------------------
 

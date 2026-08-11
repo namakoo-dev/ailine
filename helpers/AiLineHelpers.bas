@@ -182,6 +182,51 @@ Sub AutoFitColumns(oDoc As Object)
 End Sub
 
 
+' 使用中の表（見出し行0〜最終データ行・0列〜最終列）の全セルを中央揃えにする。
+' ★ 範囲は自動検出。呼び側は引数なし。セル配置は HoriJustify で設定する
+'   （CharHorizontalAlignment は段落用で Calc のセルには効かない ── 7B が滑りやすい罠）。
+Sub AlignCenter(oDoc As Object)
+    Dim oSheet As Object, oRange As Object
+    Dim lastRow As Long, lastCol As Integer
+    oSheet = oDoc.Sheets.getByIndex(0)
+    lastRow = 0
+    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
+        lastRow = lastRow + 1
+    Loop
+    lastRow = lastRow - 1
+    lastCol = 0
+    Do While oSheet.getCellByPosition(lastCol, 0).getString() <> ""
+        lastCol = lastCol + 1
+    Loop
+    lastCol = lastCol - 1
+    If lastRow < 0 Or lastCol < 0 Then Exit Sub
+    oRange = oSheet.getCellRangeByPosition(0, 0, lastCol, lastRow)
+    oRange.HoriJustify = com.sun.star.table.CellHoriJustify.CENTER
+End Sub
+
+
+' 指定列のデータセル（見出し行0を除く）に3桁区切りのカンマ書式 #,##0 を付ける。
+' ★ queryKey の -1（未登録）を addNew で拾う所と Locale の構築を内部で正しく処理する
+'   （7B は queryKey だけ書いて addNew を落とし、Locale() を関数呼びして滑る）。
+'   col : カンマを付ける列（0起点。例: 単価=3, 金額=4）
+Sub FormatThousands(oDoc As Object, col As Integer)
+    Dim oSheet As Object, oFormats As Object
+    Dim lastRow As Long, nFmt As Long
+    Dim aLocale As New com.sun.star.lang.Locale
+    oSheet = oDoc.Sheets.getByIndex(0)
+    lastRow = 1
+    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
+        lastRow = lastRow + 1
+    Loop
+    lastRow = lastRow - 1
+    If lastRow < 1 Then Exit Sub
+    oFormats = oDoc.getNumberFormats()
+    nFmt = oFormats.queryKey("#,##0", aLocale, False)
+    If nFmt = -1 Then nFmt = oFormats.addNew("#,##0", aLocale)
+    oSheet.getCellRangeByPosition(col, 1, col, lastRow).NumberFormat = nFmt
+End Sub
+
+
 ' VLOOKUP 相当。1枚目シートの各データ行について、keyCol の値をキーに
 ' 別表シートを照合し、見つけた値を resultCol に書く（静的な値として）。
 ' ★ 数式の =VLOOKUP は この経路で #VALUE! になるため、Basic 側で照合する。

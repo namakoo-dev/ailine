@@ -168,9 +168,9 @@ def _charts_count(path: Path) -> int:
 
 
 def snapshot(path: Path) -> dict:
-    """文書の状態を取る。★ 値/数値書式/背景色/太字 に加え、罫線・結合・列幅・行高も
-       捉える。これで『書式のみ・罫線のみ・列幅のみ・結合のみ』の変更も『変化した』と
-       検出でき、no-op 誤検出（＝効いているのに失敗扱い）を防ぐ。"""
+    """文書の状態を取る。★ 値/数値書式/背景色/太字 に加え、罫線・結合・列幅・行高・
+       水平配置も捉える。これで『書式のみ・罫線のみ・列幅のみ・結合のみ・中央揃えのみ』
+       の変更も『変化した』と検出でき、no-op 誤検出（＝効いているのに失敗扱い）を防ぐ。"""
     wb = openpyxl.load_workbook(path)
     snap = {"sheets": list(wb.sheetnames), "charts": _charts_count(path),
             "cells": {}, "merges": {}, "colw": {}, "rowh": {}}
@@ -191,9 +191,14 @@ def snapshot(path: Path) -> dict:
                 bsig = (bd.left.style, bd.right.style, bd.top.style, bd.bottom.style) if bd else None
                 if bsig == (None, None, None, None):
                     bsig = None
-                if val in (None, "") and fill is None and not bold and numfmt == "General" and bsig is None:
+                # ★ 水平配置（中央揃え等）。既定は None/'general' 扱い。
+                align = cell.alignment.horizontal if cell.alignment else None
+                if align == "general":
+                    align = None
+                if (val in (None, "") and fill is None and not bold
+                        and numfmt == "General" and bsig is None and align is None):
                     continue
-                snap["cells"][f"{name}!{r},{c}"] = (val, numfmt, fill, bold, bsig)
+                snap["cells"][f"{name}!{r},{c}"] = (val, numfmt, fill, bold, bsig, align)
         snap["merges"][name] = sorted(str(rng) for rng in ws.merged_cells.ranges)
         snap["colw"][name] = {k: round(d.width, 2) for k, d in ws.column_dimensions.items() if d.width}
         snap["rowh"][name] = {k: round(d.height, 2) for k, d in ws.row_dimensions.items() if d.height}

@@ -52,7 +52,7 @@ python ailine.py stop
   「正しい参照例の供給 ＋ 効果の検証」で上げる。実測で **7B が正解例 1 本で
   苦手層（新シート・グラフ）を 0% → ほぼ解ける**まで上がった。
 - ★ **検証をループに（no-op ガード）** — 適用の前後で文書を snapshot し、
-  値・数値書式・背景色・太字・**罫線・結合・列幅・行高**・シート・グラフの変化を見る
+  値・数値書式・背景色・太字・**罫線・結合・列幅・行高・水平配置**・シート・グラフの変化を見る
   （構造や装飾だけの変更も取りこぼさない）。LibreOffice + LLM は
   **「実行時エラー無しで成功と報告し、実際は何もしない」**ことがある（もっともらしい
   UNO の幻覚）。変化ゼロなら失敗として修復に回す。
@@ -106,6 +106,8 @@ python ailine.py stop
 | `InsertRows(oDoc, atRow, count)` | `Call InsertRows(oDoc, 1, 1)` | `Rows.insertByIndex`・0起点の位置 |
 | `DrawTableBorders(oDoc)` | `Call DrawTableBorders(oDoc)` | データ範囲を自動検出・`TableBorder2` の格子 |
 | `AutoFitColumns(oDoc)` | `Call AutoFitColumns(oDoc)` | 使用列を自動検出・`OptimalWidth` |
+| `AlignCenter(oDoc)` | `Call AlignCenter(oDoc)` | 表全体を中央揃え。セル配置は `HoriJustify`（`CharHorizontalAlignment` は段落用で効かず 7B が滑る罠を封じる） |
+| `FormatThousands(oDoc, col)` | `Call FormatThousands(oDoc, 4)` | 指定列に3桁区切り `#,##0`。`queryKey` の -1 を `addNew` で拾い Locale を正しく構築（7B は addNew を落として滑る） |
 | `VLookupFromTable(oDoc, keyCol, resultCol, lookupSheet)` | `Call VLookupFromTable(oDoc, 0, 2, "単価表")` | Basic 側で照合（数式 `=VLOOKUP` はこの経路で `#VALUE!`）。参照表は 列0=キー/列1=値 |
 | `PivotSum(oDoc, groupCol, valueCol)` | `Call PivotSum(oDoc, 0, 1)` | 本物のピボット（DataPilot）を新「ピボット」シートに。分類×合計を自動 |
 | `StyleBold(oDoc, c1, r1, c2, r2)` | `Call StyleBold(oDoc, 0, 0, 4, 0)` | ★Basic では no-op。太字は **ailine が openpyxl で後付け**（LO は太字を xlsx に書けないため） |
