@@ -58,21 +58,9 @@ def test_load_helpers_missing_dir(tmp_path):
     assert catalog == "" and files == []
 
 
-# --- 自作の道: openpyxl による太字後付け（LO が xlsx に書けない分） ----------
-
-def test_apply_style_directives_bold(tmp_path):
-    p = _book(tmp_path, [["h1", "h2"], ["a", 1]])
-    code = "Sub Run(oDoc As Object)\n Call StyleBold(oDoc, 0, 0, 1, 0)\nEnd Sub"
-    n = ailine.apply_style_directives(p, code)
-    assert n == 1
-    ws = openpyxl.load_workbook(p).active
-    assert ws.cell(1, 1).font.bold is True
-    assert ws.cell(1, 2).font.bold is True
-    assert ws.cell(2, 1).font.bold in (None, False)   # データ行は太字にしない
-
-def test_apply_style_directives_none(tmp_path):
-    p = _book(tmp_path, [["a", 1]])
-    assert ailine.apply_style_directives(p, "Sub Run(oDoc As Object)\nEnd Sub") == 0
+# ★ 太字は native（StyleBold ヘルパが Basic で CharWeight+CharWeightAsian を当てる）。
+#   openpyxl 後付けは撤去した。日本語太字は CharWeightAsian が要る点が要（実測）。
+#   ここは Basic 側の実挙動なので純ロジック test では検証せず、通し試験＋描画で確認する。
 
 
 # --- snapshot / 差分（no-op ガードの核） -----------------------------------

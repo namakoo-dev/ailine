@@ -111,6 +111,7 @@ def load_helpers(helpers_dir: Path) -> tuple:
         "\n\n## 定義済みヘルパ（★ 呼ぶだけ・再定義しない）\n"
         "arcane な操作（並べ替え等）は、自分で書かず次のヘルパを使うこと。\n"
         "★ 呼び方は必ず `Call 名前(引数)` の形（Call を付ける。括弧つきで Call 無しは誤動作する）。\n"
+        "★ ヘルパの中身は絶対に書き写すな（SummaryTable 等が長くても）。必ず `Call 名前(...)` の1行だけで呼ぶ。\n"
         "例: 金額が列1なら、金額で降順に並べ替え → `Call SortByColumn(oDoc, 1, False)`\n"
         "例: 金額(列1)の棒グラフ（項目名は先頭列に自動）→ `Call InsertBarChart(oDoc, 1)`\n"
         "例: A1とB1を結合 → `Call MergeCells(oDoc, 0, 0, 1, 0)`\n"
@@ -119,9 +120,12 @@ def load_helpers(helpers_dir: Path) -> tuple:
         "例: 各列の幅を内容に合わせる → `Call AutoFitColumns(oDoc)`\n"
         "例: C列(列2)に、商品名(列0)をキーに『単価表』から値を引く（VLOOKUP相当）"
         " → `Call VLookupFromTable(oDoc, 0, 2, \"単価表\")`（参照表は 列0=キー・列1=値）\n"
-        "例: 部門(列0)ごとに金額(列1)を合計するピボット → `Call PivotSum(oDoc, 0, 1)`\n"
-        "例: 見出し行(行0, 列0〜4)を太字に → `Call StyleBold(oDoc, 0, 0, 4, 0)`"
-        "（★太字は Basic では xlsx に出ないので ailine が openpyxl で後付けする）\n"
+        "例: 『ピボット』で部門(列0)ごとに金額(列1)を集計（本物の DataPilot・Excel で操作可）"
+        " → `Call PivotSum(oDoc, 0, 1)`\n"
+        "例: 『集計表／まとめ』を作る＝部門(列0)ごとの金額(列1)を見栄えのする普通の表に"
+        "（罫線・カンマ・太字つき。★『ピボット』と明示されない集計は基本こちら）"
+        " → `Call SummaryTable(oDoc, 0, 1)`\n"
+        "例: 見出し行(行0, 列0〜4)を太字に → `Call StyleBold(oDoc, 0, 0, 4, 0)`\n"
         f"--- 定義済み（この通り既に存在する。再定義するな）---\n{srcs}\n--- ここまで ---\n")
     return catalog, files
 
@@ -278,33 +282,6 @@ def basrun_apply(book: Path, code: str, workdir: Path, helper_files=()) -> tuple
     return True, None, raw
 
 
-# ★ 自作の道: LibreOffice が xlsx に書き出せない書式（太字）を openpyxl で後付けする。
-STYLEBOLD_RE = re.compile(
-    r"StyleBold\s*\(\s*oDoc\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", re.I)
-
-
-def apply_style_directives(book: Path, code: str) -> int:
-    """生成コード中の `StyleBold(oDoc, c1,r1,c2,r2)` を解釈し、その範囲を太字にする。
-       ★ LibreOffice は CharWeight の太字を xlsx に書けない（実測）。openpyxl で補う。
-       戻り値 = 適用した StyleBold の件数。"""
-    from openpyxl.styles import Font
-    calls = STYLEBOLD_RE.findall(code)
-    if not calls:
-        return 0
-    wb = openpyxl.load_workbook(book)
-    ws = wb[wb.sheetnames[0]]
-    for c1, r1, c2, r2 in calls:
-        c1, r1, c2, r2 = int(c1), int(r1), int(c2), int(r2)
-        for r in range(r1, r2 + 1):
-            for c in range(c1, c2 + 1):
-                cell = ws.cell(row=r + 1, column=c + 1)   # 0起点→1起点
-                f = cell.font
-                cell.font = Font(name=f.name, size=f.size, bold=True,
-                                 italic=f.italic, color=f.color)
-    wb.save(book)
-    return len(calls)
-
-
 # ---------------------------------------------------------------------------
 # run コマンド本体
 # ---------------------------------------------------------------------------
@@ -361,9 +338,6 @@ def cmd_run(a) -> int:
                      {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。コードのみ。"}]
             continue
 
-        n_style = apply_style_directives(out_book, code)  # ★ 自作の道: openpyxl で太字を後付け
-        if n_style:
-            print(f"（太字を openpyxl で後付け: {n_style} 箇所）")
         after = snapshot(out_book)
         changed, lines = diff_snapshots(before, after)
         if not changed:

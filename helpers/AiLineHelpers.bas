@@ -326,11 +326,108 @@ Sub PivotSum(oDoc As Object, groupCol As Integer, valueCol As Integer)
 End Sub
 
 
-' 太字。★ このヘルパは Basic 側では何もしない（no-op）。
-'   理由: LibreOffice は CharWeight の太字を xlsx に書き出せない（実測・描画で確認）。
-'   そこで ailine が basrun 適用後に openpyxl で太字を後付けする（自作の道）。
-'   モデルは太字にしたい範囲を渡してこれを呼ぶだけでよい。
+' 集計表。1枚目シートのデータを groupCol で分類し valueCol の合計を、新しい「集計」シートに
+' 見栄えのする普通の表として出す（分類×合計＋総合計行）。★ PivotSum が作る本物の DataPilot は
+' LibreOffice が開くたび再描画してセル書式を撥ねる（罫線・カンマが出ない）。こちらは普通のセルに
+' 書くので、格子罫線・カンマ・中央揃え・太字が native でそのまま残る（描画で確認済み）。
+'   groupCol : 分類の基準列（0起点。例: 部門=1）
+'   valueCol : 合計する値の列（例: 金額=4）
+Sub SummaryTable(oDoc As Object, groupCol As Integer, valueCol As Integer)
+    Dim oSheet As Object, oOut As Object
+    Dim lastRow As Long, i As Long, j As Long
+    oSheet = oDoc.Sheets.getByIndex(0)
+    lastRow = 1
+    Do While oSheet.getCellByPosition(0, lastRow).getString() <> "" : lastRow = lastRow + 1 : Loop
+    lastRow = lastRow - 1
+    If lastRow < 1 Then Exit Sub
+
+    Dim gHead As String, vHead As String
+    gHead = oSheet.getCellByPosition(groupCol, 0).getString()
+    vHead = oSheet.getCellByPosition(valueCol, 0).getString()
+
+    ' 分類ごとの合計（出現順を保つ）
+    Dim keys(1000) As String, sums(1000) As Double
+    Dim nKeys As Integer : nKeys = 0
+    Dim total As Double : total = 0
+    Dim k As String, v As Double, found As Integer
+    For i = 1 To lastRow
+        k = oSheet.getCellByPosition(groupCol, i).getString()
+        v = oSheet.getCellByPosition(valueCol, i).getValue()
+        found = -1
+        For j = 0 To nKeys - 1
+            If keys(j) = k Then found = j : Exit For
+        Next j
+        If found = -1 Then
+            keys(nKeys) = k : sums(nKeys) = v : nKeys = nKeys + 1
+        Else
+            sums(found) = sums(found) + v
+        End If
+        total = total + v
+    Next i
+
+    If oDoc.Sheets.hasByName("集計") Then oDoc.Sheets.removeByName("集計")
+    oDoc.Sheets.insertNewByName("集計", oDoc.Sheets.Count)
+    oOut = oDoc.Sheets.getByName("集計")
+
+    oOut.getCellByPosition(0, 0).setString(gHead)
+    oOut.getCellByPosition(1, 0).setString("合計 - " & vHead)
+    For j = 0 To nKeys - 1
+        oOut.getCellByPosition(0, j + 1).setString(keys(j))
+        oOut.getCellByPosition(1, j + 1).setValue(sums(j))
+    Next j
+    Dim totalRow As Integer : totalRow = nKeys + 1
+    oOut.getCellByPosition(0, totalRow).setString("合計")
+    oOut.getCellByPosition(1, totalRow).setValue(total)
+
+    ' ── native 整形（普通のセルなので全部残る） ──
+    Dim oRange As Object
+    oRange = oOut.getCellRangeByPosition(0, 0, 1, totalRow)
+    oRange.HoriJustify = com.sun.star.table.CellHoriJustify.CENTER
+    Dim ln As New com.sun.star.table.BorderLine2
+    ln.LineStyle = 0 : ln.LineWidth = 26
+    Dim bd As New com.sun.star.table.TableBorder2
+    bd.TopLine = ln : bd.BottomLine = ln : bd.LeftLine = ln : bd.RightLine = ln
+    bd.HorizontalLine = ln : bd.VerticalLine = ln
+    bd.IsTopLineValid = True : bd.IsBottomLineValid = True
+    bd.IsLeftLineValid = True : bd.IsRightLineValid = True
+    bd.IsHorizontalLineValid = True : bd.IsVerticalLineValid = True
+    oRange.TableBorder2 = bd
+    ' 値列のデータ行＋合計にカンマ
+    Dim oFormats As Object, nFmt As Long, aLocale As New com.sun.star.lang.Locale
+    oFormats = oDoc.getNumberFormats()
+    nFmt = oFormats.queryKey("#,##0", aLocale, False)
+    If nFmt = -1 Then nFmt = oFormats.addNew("#,##0", aLocale)
+    oOut.getCellRangeByPosition(1, 1, 1, totalRow).NumberFormat = nFmt
+    ' 見出し行と合計行を native 太字
+    Call BoldRange(oOut, 0, 0, 1, 0)
+    Call BoldRange(oOut, 0, totalRow, 1, totalRow)
+    ' 列幅
+    oOut.Columns.getByIndex(0).OptimalWidth = True
+    oOut.Columns.getByIndex(1).OptimalWidth = True
+End Sub
+
+
+' 範囲を太字にする。★ セルに CharWeight / CharWeightAsian / CharWeightComplex を直接当てる。
+'   ★ 日本語は CharWeightAsian が効く（CharWeight だけだと日本語が太らない）。数値セルも
+'     壊さず太字にできる（text cursor 経由は数値を文字列化するので使わない）。実測で
+'     xlsx に太字が書き出せることを openpyxl 読み戻し＋描画の両方で確認済み。
 '   col1,row1 = 左上（0起点）  col2,row2 = 右下
 Sub StyleBold(oDoc As Object, col1 As Integer, row1 As Integer, col2 As Integer, row2 As Integer)
-    ' 意図的に空。実体は ailine 側（Python/openpyxl）が適用する。
+    Dim oSheet As Object
+    oSheet = oDoc.Sheets.getByIndex(0)
+    Call BoldRange(oSheet, col1, row1, col2, row2)
+End Sub
+
+
+' 指定シートのセル範囲を太字にする内部ヘルパ（StyleBold / SummaryTable が使う）。
+Sub BoldRange(oSheet As Object, col1 As Integer, row1 As Integer, col2 As Integer, row2 As Integer)
+    Dim oCell As Object, r As Integer, c As Integer
+    For r = row1 To row2
+        For c = col1 To col2
+            oCell = oSheet.getCellByPosition(c, r)
+            oCell.CharWeight = com.sun.star.awt.FontWeight.BOLD
+            oCell.CharWeightAsian = com.sun.star.awt.FontWeight.BOLD
+            oCell.CharWeightComplex = com.sun.star.awt.FontWeight.BOLD
+        Next c
+    Next r
 End Sub

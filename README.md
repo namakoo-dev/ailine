@@ -62,10 +62,6 @@ python ailine.py stop
 
 ## ★ 限界（正直に）
 
-- **太字は「自作の道」で対応。** LibreOffice は CharWeight の太字を xlsx に書き出せない
-  （store でも storeToURL でも。描画で二重確認）。そこで `StyleBold` ヘルパは Basic 側では
-  何もせず、**ailine が basrun 適用後に openpyxl で太字を後付け**する。フォント色・サイズも
-  同じ仕組みで足せる。値・数式・数値書式・背景色は Basic で直接動く。
 - **珍しい UNO 操作は外しやすい。** LibreOffice Basic + UNO は学習データが薄い。
   参照ライブラリで補う設計だが、載っていない操作は当たり率が落ちる。
 - **no-op ガードが保証するのは「変化したこと」だけ。**「**正しいか**」は保証しない ──
@@ -109,8 +105,9 @@ python ailine.py stop
 | `AlignCenter(oDoc)` | `Call AlignCenter(oDoc)` | 表全体を中央揃え。セル配置は `HoriJustify`（`CharHorizontalAlignment` は段落用で効かず 7B が滑る罠を封じる） |
 | `FormatThousands(oDoc, col)` | `Call FormatThousands(oDoc, 4)` | 指定列に3桁区切り `#,##0`。`queryKey` の -1 を `addNew` で拾い Locale を正しく構築（7B は addNew を落として滑る） |
 | `VLookupFromTable(oDoc, keyCol, resultCol, lookupSheet)` | `Call VLookupFromTable(oDoc, 0, 2, "単価表")` | Basic 側で照合（数式 `=VLOOKUP` はこの経路で `#VALUE!`）。参照表は 列0=キー/列1=値 |
-| `PivotSum(oDoc, groupCol, valueCol)` | `Call PivotSum(oDoc, 0, 1)` | 本物のピボット（DataPilot）を新「ピボット」シートに。分類×合計を自動 |
-| `StyleBold(oDoc, c1, r1, c2, r2)` | `Call StyleBold(oDoc, 0, 0, 4, 0)` | ★Basic では no-op。太字は **ailine が openpyxl で後付け**（LO は太字を xlsx に書けないため） |
+| `PivotSum(oDoc, groupCol, valueCol)` | `Call PivotSum(oDoc, 0, 1)` | 本物のピボット（DataPilot）を新「ピボット」シートに。分類×合計を自動。★LO は開くたび再描画してセル書式を撥ねる（罫線・カンマが出ない）＝清潔な表が欲しければ下の `SummaryTable` |
+| `SummaryTable(oDoc, groupCol, valueCol)` | `Call SummaryTable(oDoc, 0, 1)` | 分類×合計を新「集計」シートに**普通の表**として出す（格子罫線・カンマ・中央揃え・見出し/合計太字を native で。DataPilot でないので全部残る） |
+| `StyleBold(oDoc, c1, r1, c2, r2)` | `Call StyleBold(oDoc, 0, 0, 4, 0)` | native 太字。★`CharWeight`＋**`CharWeightAsian`**（日本語）＋`CharWeightComplex` をセルに直接。text cursor は数値を壊すので使わない |
 
 ユーザは `SortByColumn` を知らなくてよい。**「金額で降順に並べ替えて」と自然文で頼むだけ**で、
 モデルが列と向きを選んでヘルパを呼ぶ。難所に触れないので滑らない（実測で完全降順を確認）。
