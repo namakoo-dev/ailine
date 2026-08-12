@@ -14,14 +14,14 @@
   LibreOffice + LLM は「実行時エラー無しで成功と報告し、実際は何もしない」ことがある
   （もっともらしい UNO の幻覚）。変化ゼロなら失敗として修復に回す。
 - **コピー安全**: 原本は触らず `<book>.out.xlsx` に適用する（`--inplace` で上書き）。壊さない。
-- **参照ライブラリ**: `refs/*.bas` を few-shot に供給。苦手層（新シート・ソート・グラフ）を補う。
+- **参照ライブラリ**: `refs/*.bas` を few-shot に供給。苦手層（新シート・色）を補う。
+  並べ替え・グラフ・ピボットなどの難所は `helpers/*.bas` の検証済みヘルパを `Call` で呼ばせる。
 - **レビュー導線**: 生成した .bas と、変わったセルの差分を必ず表示する。
 
 ## 正直な限界
 
-- **太字などフォント装飾は未対応**: この LibreOffice 経路では、モデル内で CharWeight を
-  設定しても xlsx に書き出されない（basrun_spike で確認）。値・数式・数値書式・背景色は動く。
-- LibreOffice Basic + UNO は学習データが薄く、珍しい操作は外しやすい。参照を足して補う設計。
+- LibreOffice Basic + UNO は学習データが薄く、珍しい操作は外しやすい。参照とヘルパで補う設計
+  （太字も当初「環境不可」と誤断したが、実際は `CharWeight`+`CharWeightAsian` の native 書きで解決済み）。
 - ローカル LLM(ollama) と LibreOffice(basrun 経由) が要る。**外部送信はしない。**
 - no-op ガードが保証するのは「変化したこと」だけ。「**正しいか**」は差分を人が見て判断する。
 """
@@ -46,9 +46,22 @@ except ImportError:
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
 DEFAULT_HELPERS = HERE / "helpers"
-BASRUN = Path(os.environ.get("BASRUN", r"C:\Dev\nagi-bas\basrun.py"))
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL = os.environ.get("AILINE_MODEL", "qwen2.5-coder:7b")
+
+
+def basrun_path() -> Path:
+    """basrun.py の場所。環境変数 BASRUN > ailine と並びの checkout の順で探す。"""
+    env = os.environ.get("BASRUN")
+    if env:
+        return Path(env)
+    for name in ("basrun", "nagi-bas"):  # 公開 repo 名 / 作者ローカルの旧ディレクトリ名
+        p = HERE.parent / name / "basrun.py"
+        if p.exists():
+            return p
+    sys.exit("basrun.py が見つからない: ailine と並びに"
+             " https://github.com/watasisaikou/basrun を clone するか、"
+             "環境変数 BASRUN でパスを指定する")
 
 CONTRACT = """あなたは LibreOffice Basic を書く。出力は .bas のコードだけ。説明・markdown 柵は禁止。
 
@@ -274,7 +287,7 @@ def basrun_apply(book: Path, code: str, workdir: Path, helper_files=()) -> tuple
         shutil.copy2(hf, src / hf.name)
     (src / "Gen.bas").write_text(code, encoding="utf-8")
     p = subprocess.run(
-        [sys.executable, str(BASRUN), "apply", str(book), str(src), "AiLine", "Gen.Run"],
+        [sys.executable, str(basrun_path()), "apply", str(book), str(src), "AiLine", "Gen.Run"],
         capture_output=True, text=True, encoding="utf-8", errors="replace")  # ★ cp932 事故を避ける
     raw = (p.stdout or "") + "\n" + (p.stderr or "")
     if p.returncode != 0:
@@ -286,7 +299,7 @@ def basrun_apply(book: Path, code: str, workdir: Path, helper_files=()) -> tuple
 # run コマンド本体
 # ---------------------------------------------------------------------------
 
-def cmd_run(a) -> int:
+def cmd_run(a: argparse.Namespace) -> int:
     book = Path(a.book).resolve()
     if not book.exists():
         sys.exit(f"文書が無い: {book}")
@@ -369,8 +382,8 @@ def cmd_run(a) -> int:
     return 0 if result["ok"] else 1
 
 
-def cmd_stop(a) -> int:
-    subprocess.run([sys.executable, str(BASRUN), "stop"], encoding="utf-8", errors="replace")
+def cmd_stop(a: argparse.Namespace) -> int:
+    subprocess.run([sys.executable, str(basrun_path()), "stop"], encoding="utf-8", errors="replace")
     return 0
 
 

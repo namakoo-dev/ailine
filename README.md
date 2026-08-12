@@ -5,8 +5,9 @@
 「Excel の見積に金額と合計を入れて」を、平文の Basic に翻訳し、`.xlsx` に適用する。
 書いたコードは平文で残り、`git diff` で読める。外部にデータは送らない。
 
-> **状態: 骨格（PoC）。** 中核のパイプライン（生成 → 適用 → 検証 → 修復）は動くが、
-> 参照ライブラリの拡充・対応書式・テストはこれから。実運用の前に下の「限界」を必ず読むこと。
+> **状態: 骨格（PoC）。** 中核のパイプライン（生成 → 適用 → 検証 → 修復）は動き、
+> 純ロジックのユニットテスト 20 件は緑。参照ライブラリの拡充と、実機 LibreOffice を
+> 通した自動の通し試験はこれから。実運用の前に下の「限界」を必ず読むこと。
 
 ---
 
@@ -29,20 +30,23 @@
 
 ```bash
 # 生成 → コピーに適用 → 変化を検証 → 差分を表示（原本は触らない）
-python ailine.py run 見積.xlsx "各行の 列5 に 売上(列3) − 原価(列4) を入れる"
+python ailine.py run demo/sample.xlsx "各行の 列5 に 売上(列3) − 原価(列4) を入れる"
 
 # 生成して見せるだけ（レビュー用。適用しない）
-python ailine.py run 見積.xlsx "..." --dry
+python ailine.py run demo/sample.xlsx "..." --dry
 
 # 原本を上書きしてよいとき
-python ailine.py run 見積.xlsx "..." --inplace
+python ailine.py run demo/sample.xlsx "..." --inplace
 
 # 別のモデルに載せ替える（天井を上げたいとき）
-python ailine.py run 見積.xlsx "..." --model qwen2.5-coder:32b
+python ailine.py run demo/sample.xlsx "..." --model qwen2.5-coder:32b
 
 # 起動した LibreOffice を落とす
 python ailine.py stop
 ```
+
+試せる表を `demo/` に同梱している: `sample.xlsx`（商品×金額の一覧）・
+`sales.xlsx`（部門×金額 — ピボット/集計表向き）・`lookup.xlsx`（明細＋単価表 — VLOOKUP 向き）。
 
 ## 設計判断（なぜこうしたか）
 
@@ -50,7 +54,8 @@ python ailine.py stop
 
 - **モデル非依存** — `--model` で差し替える。天井はモデルの大きさでなく
   「正しい参照例の供給 ＋ 効果の検証」で上げる。実測で **7B が正解例 1 本で
-  苦手層（新シート・グラフ）を 0% → ほぼ解ける**まで上がった。
+  苦手層（新シート・ソート・グラフ）を 0% → 67%** まで上げた（残ったソートの
+  取り違えは、のちに下の「ヘルパ」方式で解決）。
 - ★ **検証をループに（no-op ガード）** — 適用の前後で文書を snapshot し、
   値・数値書式・背景色・太字・**罫線・結合・列幅・行高・水平配置**・シート・グラフの変化を見る
   （構造や装飾だけの変更も取りこぼさない）。LibreOffice + LLM は
