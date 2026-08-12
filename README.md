@@ -1,6 +1,6 @@
 # ailine
 
-**自然言語のタスクを、ローカル LLM が LibreOffice Basic に書き起こし、[basrun](https://github.com/watasisaikou/basrun) で文書に適用し、★ 効果を読み戻して検証する。**
+**自然言語のタスクを、ローカル LLM が LibreOffice Basic に書き起こし、[basrun](https://github.com/namakoo-dev/basrun) で文書に適用し、★ 効果を読み戻して検証する。**
 
 「Excel の見積に金額と合計を入れて」を、平文の Basic に翻訳し、`.xlsx` に適用する。
 書いたコードは平文で残り、`git diff` で読める。外部にデータは送らない。
@@ -77,7 +77,7 @@ python ailine.py stop
 
 - Python 3.10+ と `openpyxl`
 - [ollama](https://ollama.com/) ＋ コード生成モデル（既定 `qwen2.5-coder:7b`）
-- LibreOffice ＋ [basrun](https://github.com/watasisaikou/basrun)（環境変数 `BASRUN` で場所を指定可）
+- LibreOffice ＋ [basrun](https://github.com/namakoo-dev/basrun)（環境変数 `BASRUN` で場所を指定可）
 
 ## 参照ライブラリ
 

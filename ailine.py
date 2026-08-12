@@ -60,7 +60,7 @@ def basrun_path() -> Path:
         if p.exists():
             return p
     sys.exit("basrun.py が見つからない: ailine と並びに"
-             " https://github.com/watasisaikou/basrun を clone するか、"
+             " https://github.com/namakoo-dev/basrun を clone するか、"
              "環境変数 BASRUN でパスを指定する")
 
 CONTRACT = """あなたは LibreOffice Basic を書く。出力は .bas のコードだけ。説明・markdown 柵は禁止。
