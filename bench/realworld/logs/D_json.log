@@ -1,0 +1,24 @@
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.1s)
+⏳ 初回準備（文書の正規化）… (0.6s)
+⏳ LibreOffice で適用中… (0.6s)
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=merged_head.xlsx
+解釈: 操作:並べ替え 対象:上期 順:降順
+
+─ 生成した .bas（決定論・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Call SortByColumn(oDoc, 1, False)
+End Sub
+
+──────────────────────────────────────────
+
+（文書に変化は検出されなかった）
+
+✓ 達成を機械検証済み（操作:並べ替え）: 行数が少なく比較不要
+
+適用先: merged_head.out.xlsx（原本 merged_head.xlsx は無変更）
+
+{"ok": true, "attempts": 1, "task": "7月で降順に並べ替えて", "model": "qwen2.5-coder:7b", "path": "dsl", "command": "解釈: 操作:並べ替え 対象:上期 順:降順", "postcondition": "pass", "changes": [], "advisories": [], "out": "C:\\Dev\\ailine\\bench\\realworld\\merged_head.out.xlsx"}
+EXIT:0

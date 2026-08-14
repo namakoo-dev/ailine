@@ -1,0 +1,54 @@
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.2s)
+⏳ 初回準備（文書の正規化）… (0.6s)
+⏳ LibreOffice で適用中… (0.6s)
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=formulas.xlsx
+解釈: 操作:並べ替え 対象:数量 順:降順
+
+─ 生成した .bas（決定論・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Call SortByColumn(oDoc, 1, False)
+End Sub
+
+──────────────────────────────────────────
+
+変更点:
+＊セル値変更: Sheet
+  A2: 値 'ノート'→'ハサミ'
+  B2: 値 10→30
+  C2: 値 100→300
+  A3: 値 '鉛筆'→'定規'
+  B3: 値 15→25
+  C3: 値 150→250
+  A5: 値 '定規'→'鉛筆'
+  B5: 値 25→15
+  C5: 値 250→150
+  A6: 値 'ハサミ'→'ノート'
+  B6: 値 30→10
+  C6: 値 300→100
+Traceback (most recent call last):
+  File "C:\Dev\ailine\ailine.py", line 2628, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\Dev\ailine\ailine.py", line 2624, in main
+    return a.func(a)
+           ^^^^^^^^^
+  File "C:\Dev\ailine\ailine.py", line 1981, in cmd_run
+    return cmd_run_dsl(a, book, book_meta, op, step.get("args", {}))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Dev\ailine\ailine.py", line 2094, in cmd_run_dsl
+    pcok, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"])
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Dev\ailine\ailine.py", line 1489, in run_postcondition
+    return fn(out_book, resolved_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Dev\ailine\ailine.py", line 1254, in check_sort
+    else all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)))
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Dev\ailine\ailine.py", line 1254, in <genexpr>
+    else all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)))
+             ^^^^^^^^^^^^^^^^^^^^^^
+TypeError: '>=' not supported between instances of 'int' and 'NoneType'
+EXIT:1

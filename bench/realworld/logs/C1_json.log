@@ -1,0 +1,21 @@
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.1s)
+⏳ 初回準備（文書の正規化）… (0.7s)
+⏳ 生成中 (qwen2.5-coder:7b)… (6.5s)
+⏳ LibreOffice で適用中… (0.6s)
+■ ailine（自由生成経路）  model=qwen2.5-coder:7b  book=formulas.xlsx
+■ 参照ライブラリ: C:\Dev\ailine\refs  (3 例)
+■ ヘルパ: C:\Dev\ailine\helpers  (1 本を同梱・Call で呼ばせる)
+
+─ 試行 1 ─ 生成した .bas ───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+End Sub
+──────────────────────────────────────────
+× no-op（実行は成功したが文書に変化が無い）。修復する。
+
+× 1 回試みたが達成できなかった。
+
+{"ok": false, "attempts": 1, "task": "何もしないでください", "model": "qwen2.5-coder:7b", "path": "freeform", "command": null, "postcondition": null}
+EXIT:1

@@ -1,0 +1,38 @@
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.2s)
+⏳ 初回準備（文書の正規化）… (2.4s)
+⏳ LibreOffice で適用中… (0.7s)
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=large.xlsx
+解釈: 操作:並べ替え 対象:単価 順:降順
+
+─ 生成した .bas（決定論・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Call SortByColumn(oDoc, 2, False)
+End Sub
+
+──────────────────────────────────────────
+
+変更点:
+＊セル値変更: Sheet
+  A10: 値 'P00009'→'P00729'
+  B10: 値 10→30
+  C10: 値 433→9073
+  A100: 値 'P00099'→'P00235'
+  B100: 値 50→36
+  C100: 値 3763→8795
+  A1000: 値 'P00999'→'P00160'
+  B1000: 値 50→11
+  C1000: 値 1063→6020
+  A101: 値 'P00100'→'P02424'
+  B101: 値 1→25
+  C101: 値 3800→8788
+  …ほか 2964 セル
+
+✓ 達成を機械検証済み（操作:並べ替え）: 3000 行が降順
+
+適用先: large.out.xlsx（原本 large.xlsx は無変更）
+
+{"ok": true, "attempts": 1, "task": "単価で降順に並べ替えて", "model": "qwen2.5-coder:7b", "path": "dsl", "command": "解釈: 操作:並べ替え 対象:単価 順:降順", "postcondition": "pass", "changes": ["＊セル値変更: Sheet", "  A10: 値 'P00009'→'P00729'", "  B10: 値 10→30", "  C10: 値 433→9073", "  A100: 値 'P00099'→'P00235'", "  B100: 値 50→36", "  C100: 値 3763→8795", "  A1000: 値 'P00999'→'P00160'", "  B1000: 値 50→11", "  C1000: 値 1063→6020", "  A101: 値 'P00100'→'P02424'", "  B101: 値 1→25", "  C101: 値 3800→8788", "  …ほか 2964 セル"], "advisories": [], "out": "C:\\Dev\\ailine\\bench\\realworld\\large.out.xlsx"}
+EXIT:0
