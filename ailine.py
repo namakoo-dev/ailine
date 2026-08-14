@@ -120,6 +120,8 @@ CONTRACT = """あなたは LibreOffice Basic を書く。出力は .bas のコ�
   値は `.getValue()/.setValue()`、文字は `.getString()/.setString()`。
 - 数値書式は `oDoc.getNumberFormats()` の queryKey/addNew を取り `範囲.NumberFormat = nFmt`。
 - 列を文字("A")で指す API は使わない（例外で静かに止まる）。数値の列番号だけ。
+- ★ 新しいシートを作らず、既存シートの中の最小の変更で達成することを最優先する
+  （依頼が明示的にシート新設・ピボットを求めていない限り）。
 """
 
 # セルの状態を snapshot する際の使用範囲の上限（病的に巨大な文書での暴走を防ぐ）
@@ -716,12 +718,20 @@ def detect_ghost_data(before: dict, after: dict) -> str | None:
     """★ 幽霊データ検出: 変更セルが全部、原本の使用範囲（データが存在した矩形）の
        外に集中している場合だけ疑わしい旨を返す。1セルでも範囲内なら何も言わない
        （保守的。使用範囲が不明なシートが混ざる場合も判定を保留する）。
-       ★ M2c: 判定対象は『値変更』の部分集合だけ（書式のみの変更は無視・保守性は部分集合内で維持）。"""
+       ★ M2c: 判定対象は『値変更』の部分集合だけ（書式のみの変更は無視・保守性は部分集合内で維持）。
+       ★ W6: 実行中に新規作成されたシート（before["sheets"] に無い）のセルはここでは無視する
+       （new_sheet_advisories が別途担当）。以前は『使用範囲が不明なシートが1つでも混ざると
+       関数全体が判定を保留する』実装だったため、AGGREGATE/CHART/PivotSum のように新規シート
+       を作る操作が絡むたび、他シートの本当のゴーストデータ検出まで丸ごと素通りしていた
+       （監査実測。旧シート範囲が不明＝原本に無い＝新規シート、の場合に限って除外することで
+       既存シートに対する検出力は変えずに直す）。"""
     changed = _value_changed_cells(before, after)
     if not changed:
         return None
     outside = []
     for sheet, r, c in changed:
+        if sheet not in before["sheets"]:
+            continue   # ★ W6: 新規作成されたシート＝ここでの判定対象外
         rect = _used_range(before, sheet)
         if rect is None:
             return None  # このシートの原本データ範囲が不明 → 判定を保留
@@ -729,6 +739,8 @@ def detect_ghost_data(before: dict, after: dict) -> str | None:
         if min_r <= r <= max_r and min_c <= c <= max_c:
             return None  # 1つでも範囲内 → 発火しない
         outside.append((r, c))
+    if not outside:
+        return None   # 変更が全部、新規シートのセルだけだった
     rows = [r for r, _ in outside]
     cols = [c for _, c in outside]
     top_left = _cell_ref(min(rows), min(cols))
@@ -837,6 +849,70 @@ def extract_task_mentions(task: str, sheet_names: list) -> dict:
     return {"cols": cols, "digit_cols": digit_cols, "rows": rows, "sheets": sheets}
 
 
+def _new_sheets(before: dict, after: dict) -> list:
+    """before に無く after に有るシート名（実行中に新規作成されたシート）。順序維持。"""
+    return [s for s in after["sheets"] if s not in before["sheets"]]
+
+
+def _sheet_only_snapshot(snap: dict, sheet: str) -> dict:
+    """snap のうち sheet に属する情報だけを持つ縮小 snapshot。
+       ★ detect_ghost_data/detect_uniform_fill/count_reconciliation は snapshot() が返す
+       dict の形（cells/merges/colw/rowh/sheets）をそのまま前提にした既存ロジックなので、
+       新規シート専用に書き直さず、この縮小 snapshot 越しに『再利用』する（new_sheet_advisories
+       が使う）。"""
+    prefix = sheet + "!"
+    return {
+        "sheets": [sheet],
+        "charts": 0,
+        "cells": {k: v for k, v in snap["cells"].items() if k.startswith(prefix)},
+        "merges": {sheet: snap.get("merges", {}).get(sheet, [])},
+        "colw": {sheet: snap.get("colw", {}).get(sheet, {})},
+        "rowh": {sheet: snap.get("rowh", {}).get(sheet, {})},
+        "truncated": snap.get("truncated", False),
+    }
+
+
+def new_sheet_advisories(before: dict, after: dict) -> list:
+    """★ W6 項目2: 監査所見「新規『集計』シートの全 0 埋めが★素通り」の根治。
+       detect_ghost_data / detect_uniform_fill / count_reconciliation は『変更セル全部が
+       該当した時だけ発火する』設計のため、新規シートの異常が他シートの正常な変更と混ざると
+       『全部該当』が崩れ、丸ごと素通りしていた（例: COMPUTE_COLUMN が本シートの小計に書いた
+       正しい値と、AGGREGATE が作った『集計』シートの壊れた全0埋めが同じ diff に同居する）。
+       新規シートごとに単独の縮小 before/after（空 before・そのシートだけの after）を作って
+       同じ3関数へ通すことで、他シートの変更に影響されず判定する。
+       ★ detect_ghost_data は『原本の使用範囲外か』を測る関数だが、新規シートに原本の
+       使用範囲は存在しない（何もかもが『新規』であって『範囲外』ではない）。そのため
+       常に None を返す（適用はするが構造的に無言＝その関数の既存の誠実さをそのまま踏襲）。"""
+    lines = []
+    for sheet in _new_sheets(before, after):
+        empty_before = {"sheets": [sheet], "charts": 0, "cells": {}, "merges": {sheet: []},
+                         "colw": {sheet: {}}, "rowh": {sheet: {}}, "truncated": False}
+        sheet_after = _sheet_only_snapshot(after, sheet)
+        for fn in (detect_ghost_data, detect_uniform_fill):
+            msg = fn(empty_before, sheet_after)
+            if msg:
+                lines.append(msg.replace("★ 疑わしい: ", f"★ 疑わしい: 新規シート『{sheet}』の", 1))
+        recon = count_reconciliation(empty_before, sheet_after)
+        if recon:
+            lines.append(f"新規シート『{sheet}』 {recon}")
+    return lines
+
+
+_NEW_SHEET_MENTION_RE = re.compile(r"シート|ピボット|別に")
+
+
+def unrequested_new_sheet_advisory(task: str, before: dict, after: dict) -> list:
+    """★ W6 項目3（機械側）: 依頼文にシート新設の明示的な言及（『シート』『ピボット』
+       『別に』のいずれか）が無いのに新規シートが作られたら申告する。
+       ★ 保守的: 言及があれば（AGGREGATE/CHART/PivotSum 等が意図どおり新設したと見なし）沈黙。
+       プロンプト側の抑制（CONTRACT の追記）はあくまで誘導であって保証にならないため、
+       この機械申告が最終防衛線（feedback_intent_vs_guarantee: 指示は意図、保証は機械）。"""
+    new_sheets = _new_sheets(before, after)
+    if not new_sheets or _NEW_SHEET_MENTION_RE.search(task):
+        return []
+    return [f"★ 依頼にない新しいシートが作成されました（{s}）" for s in new_sheets]
+
+
 def _changed_sheets(before: dict, after: dict) -> set:
     """何かしら変わったシート名の集合（セル・結合・列幅・行高・追加/削除）。"""
     changed = set()
@@ -888,7 +964,8 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict) -> list:
 
 def build_advisories(task: str, before: dict, after: dict) -> list:
     """diff の後に表示する助言行を全部集める。
-       ①幽霊データ ②一様埋め ③件数の突き合わせ ④依頼文言との重なり。"""
+       ①幽霊データ ②一様埋め ③件数の突き合わせ ④依頼文言との重なり
+       ⑤新規シートの中身（★ W6） ⑥依頼にないシート新設の申告（★ W6）。"""
     lines = []
     for fn in (detect_ghost_data, detect_uniform_fill):
         msg = fn(before, after)
@@ -897,6 +974,8 @@ def build_advisories(task: str, before: dict, after: dict) -> list:
     recon = count_reconciliation(before, after)
     if recon:
         lines.append(recon)
+    lines.extend(new_sheet_advisories(before, after))
+    lines.extend(unrequested_new_sheet_advisory(task, before, after))
     mentions = extract_task_mentions(task, before["sheets"])
     lines.extend(mention_overlap_advisory(mentions, before, after))
     return lines
@@ -914,7 +993,7 @@ OP_LABELS = {
     "SORT": "並べ替え", "COMPUTE_COLUMN": "計算列", "LOOKUP_FILL": "転記",
     "AGGREGATE": "集計", "BOLD": "太字", "FILL_COLOR": "背景色",
     "NUMBER_FORMAT": "数値書式", "MERGE": "セル結合", "CHART": "グラフ",
-    "CENTER_ALIGN": "中央揃え",
+    "CENTER_ALIGN": "中央揃え", "APPEND_TOTAL": "合計追加",
 }
 
 # op → 必須 slot 名のタプル。翻訳直後の slot 欠落チェックと確認行の項目順を兼ねる。
@@ -929,6 +1008,8 @@ OP_SCHEMA = {
     "MERGE": ("range",),
     "CHART": ("value_col",),
     "CENTER_ALIGN": ("target",),
+    # ★ W6: label/factor は既定値がある任意項目（無指定でも FREEFORM に退避させない）。
+    "APPEND_TOTAL": ("col",),
 }
 
 # ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、
@@ -943,7 +1024,9 @@ FILL_COLOR: 背景色。args: target("row:N"か"col:列名"), color(英語色名
 NUMBER_FORMAT: 数値書式。args: col(列名), style("thousands")
 MERGE: セル結合。args: range("A1:C1"形式)
 CHART: 棒グラフ。args: value_col(列名)
-CENTER_ALIGN: 中央揃え。args: target("all" か "col:列名")"""
+CENTER_ALIGN: 中央揃え。args: target("all" か "col:列名")
+APPEND_TOTAL: 列の合計を表の最終行の下に追加する（税込み合計等）。args: col(合計する列名),
+  label(省略可・既定"合計"。表示ラベル), factor(省略可・既定1。消費税10%込みなら1.1)"""
 
 # ★ M2c: battery(v1) が実測で取り違えた基本パターンに加え、複合依頼(battery v2)を few-shot で
 #   教える。同じ混同/構造を別の言い回しで示す（battery の項目文そのままは使わない＝暗記でなく
@@ -972,6 +1055,15 @@ TRANSLATION_FEWSHOT = [
      '{"plan": ['
      '{"op": "SORT", "args": {"col": "金額", "order": "asc"}}, '
      '{"op": "BOLD", "args": {"target": "row:1"}}]}'),
+    # ★ W6: APPEND_TOTAL 語彙昇格（監査3回連続失敗の実測による）。
+    #   ①明示的な倍率(消費税等)つき ②単純な合計、の両方を教える。
+    ('対象ブックの構成: {"Sheet": ["品目", "数量", "単価", "小計"]}\n'
+     '依頼: 「税込み合計を一番下に出して（消費税10%）」',
+     '{"plan": [{"op": "APPEND_TOTAL", "args": '
+     '{"col": "小計", "label": "税込み合計", "factor": 1.1}}]}'),
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「金額の合計を最後に」',
+     '{"plan": [{"op": "APPEND_TOTAL", "args": {"col": "金額"}}]}'),
 ]
 
 TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙を使った「計画」の JSON に翻訳する。
@@ -1250,6 +1342,21 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict) -> tuple:
         if (err := resolve_in("value_col", first_sheet)):
             return False, resolved, inferred, err
 
+    elif op == "APPEND_TOTAL":
+        if (err := resolve_in("col", first_sheet)):
+            return False, resolved, inferred, err
+        # ★ W6: label/factor は既定値を持つ任意項目。ここで確定させ、codegen/事後条件/
+        #   確認行の全部に同じ既定解決を一貫して渡す。
+        resolved["label"] = str(resolved.get("label") or "合計")
+        factor_raw = resolved.get("factor", 1)
+        try:
+            factor = float(factor_raw) if factor_raw not in (None, "") else 1.0
+        except (TypeError, ValueError):
+            return False, resolved, inferred, f"倍率『{factor_raw}』が数値ではありません"
+        if factor <= 0:
+            return False, resolved, inferred, f"倍率『{factor_raw}』は正の数でなければなりません"
+        resolved["factor"] = factor
+
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
 
@@ -1271,6 +1378,7 @@ _CONFIRM_FIELDS = {
     "MERGE": (("範囲", "range", None),),
     "CHART": (("値列", "value_col", None),),
     "CENTER_ALIGN": (("対象", "target", None),),
+    "APPEND_TOTAL": (("対象列", "col", None), ("ラベル", "label", None), ("倍率", "factor", None)),
 }
 
 
@@ -1361,6 +1469,29 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
     if op == "CHART":
         v_idx = headers[first_sheet].index(resolved_args["value_col"])
         return _wrap_basic(f"    Call InsertBarChart(oDoc, {hr0}, {v_idx})\n")
+
+    if op == "APPEND_TOTAL":
+        # ★ W6: ヘルパは無し（罫線・カンマ等の見栄えまでは踏み込まない・素の SUM 式だけ）。
+        #   データ最終行の直下に [ラベル文字列 | 合計式] を書く。
+        #   ラベルは対象列の左隣に置く（既存の帳票では『合計』の文字が金額の左に来るのが自然
+        #   で、対象列自体を上書きしない＝既存構造を壊さない置き方）。対象列が表の最左端
+        #   （col_idx=0）の場合は左隣が無いため、値のみを書きラベルは省略する。
+        col_idx = headers[first_sheet].index(resolved_args["col"])
+        label = str(resolved_args.get("label", "合計")).replace('"', '""')
+        factor = float(resolved_args.get("factor", 1) or 1)
+        col_letter = get_column_letter(col_idx + 1)
+        start_excel_row = hr0 + 2   # データ先頭行（Basic 0起点 hr0+1）の Excel(1起点) 行
+        factor_tail = "" if factor == 1 else f"*{factor:g}"
+        body = ("    Dim oSheet As Object, lastRow As Long, totalRow As Long\n"
+                "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                + _scan_last_row_basic(start_row=str(hr0 + 1))
+                + "    totalRow = lastRow + 1\n")
+        if col_idx > 0:
+            body += f'    oSheet.getCellByPosition({col_idx - 1}, totalRow).setString("{label}")\n'
+        body += (f'    oSheet.getCellByPosition({col_idx}, totalRow).setFormula('
+                 f'"=SUM(" & "{col_letter}" & {start_excel_row} & ":" & "{col_letter}" & '
+                 f'(lastRow + 1) & ")" & "{factor_tail}")\n')
+        return _wrap_basic(body)
 
     if op == "CENTER_ALIGN":
         if resolved_args["target"] == "all":
@@ -1843,12 +1974,80 @@ def check_center_align(path: Path, args: dict, header_row: int = 1) -> tuple:
     return "pass", f"{len(cells)} セルの中央揃えを確認"
 
 
+def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
+    """★ W6: APPEND_TOTAL の事後条件（二層・COMPUTE_COLUMN の use_formula 版と同じ考え方）。
+       ①式文字列が期待形『=SUM(...)』（factor!=1 のときは末尾に *factor が付く）
+       ②data_only 読みのキャッシュ値が「列合計×factor」と一致（浮動小数は丸め許容）。
+       対象列が表の最左端でない場合は、その左隣セルに期待ラベルが立っていることも確認する
+       （codegen_dsl の配置と対）。
+
+       ★ 合計行の位置は『対象列そのものに "=SUM(" で始まる式が最初に現れた行』として直接
+       探す（生読み・型判定はしない）。実測で分かった罠が2つあり、どちらもこの探し方だけ
+       で同時に避けられる:
+       - COMPUTE_COLUMN の式化（W3 Part3・既定）で対象列自体が "=B2*C2" 型の式で埋まって
+         いることがある。生セル値の型（数値かどうか）だけで『データ行/合計行』を分けようと
+         すると、データ行の式もキャッシュ値未読の合計行の式も同じ『文字列』に見えて区別
+         できない（E2E 実測: 小計列を先に式化してから APPEND_TOTAL するケースで発覚）。
+       - 最終データ行の判定に列1(左端)を走査する既存の _scan_last_row は使わない。左端が
+         分類列で、かつ対象列がその右隣（＝ラベルの置き場所が偶然その分類列と重なる、例:
+         2列だけの帳票）だと、書き込んだラベルの文字列自体が『データ行』として誤って
+         数えられ off-by-one になる（実測）。
+       "=SUM(" という固有の目印を対象列自身の中だけで探すので、他列の中身にも
+       COMPUTE_COLUMN の式の形にも影響されない。"""
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    idx = _col_index_by_header(ws, args["col"], header_row=header_row)
+    if idx is None:
+        wb.close()
+        return "fail", f"列『{args['col']}』が見つからない"
+    r = header_row + 1
+    while True:
+        v = ws.cell(row=r, column=idx).value
+        if v is None:
+            break
+        if isinstance(v, str) and v.replace(" ", "").startswith("=SUM("):
+            break
+        r += 1
+    last = r - 1
+    if last < header_row + 1:
+        wb.close()
+        return "fail", _ZERO_TARGET_REASON
+    total_row = r
+    got_formula = ws.cell(row=total_row, column=idx).value
+    if not isinstance(got_formula, str) or not got_formula.replace(" ", "").startswith("=SUM("):
+        wb.close()
+        return "fail", f"{total_row}行目: 合計の式が期待形（=SUM(...)）でない (実際 {got_formula!r})"
+    label_ok = True
+    want_label = str(args.get("label") or "合計")
+    got_label = None
+    if idx > 1:
+        got_label = ws.cell(row=total_row, column=idx - 1).value
+        label_ok = got_label == want_label
+    wb.close()
+    if not label_ok:
+        return "fail", f"{total_row}行目: ラベルが期待『{want_label}』と不一致 (実際 {got_label!r})"
+
+    wb_v = openpyxl.load_workbook(path, data_only=True)
+    ws_v = wb_v[wb_v.sheetnames[0]]
+    raw_vals = [ws_v.cell(row=rr, column=idx).value for rr in range(header_row + 1, last + 1)]
+    nums = [v for v in raw_vals if _is_number(v)]
+    got_cached = ws_v.cell(row=total_row, column=idx).value
+    wb_v.close()
+    if not nums:
+        return "fail", _ZERO_TARGET_REASON
+    factor = float(args.get("factor", 1) or 1)
+    want_total = sum(nums) * factor
+    if not _is_number(got_cached) or abs(got_cached - want_total) > 1e-6:
+        return "fail", f"{total_row}行目: 合計のキャッシュ値が不一致 (期待 {want_total} 実際 {got_cached!r})"
+    return "pass", f"{len(nums)} 行の合計を検証（式・キャッシュ値・ラベルとも一致）"
+
+
 POSTCONDITIONS = {
     "SORT": check_sort, "COMPUTE_COLUMN": check_compute_column,
     "LOOKUP_FILL": check_lookup_fill, "AGGREGATE": check_aggregate,
     "BOLD": check_bold, "FILL_COLOR": check_fill_color,
     "NUMBER_FORMAT": check_number_format, "MERGE": check_merge,
-    "CENTER_ALIGN": check_center_align,
+    "CENTER_ALIGN": check_center_align, "APPEND_TOTAL": check_append_total,
 }
 
 

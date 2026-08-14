@@ -2536,3 +2536,362 @@ def test_scan_last_row_basic_custom_start_row_and_min_ok():
     out = ailine._scan_last_row_basic(start_row="3", min_ok="2")
     assert "lastRow = 3\n" in out
     assert "If lastRow < 2 Then Exit Sub\n" in out
+
+
+# ===========================================================================
+# W6: APPEND_TOTAL 語彙昇格（監査3回連続失敗の実測による昇格経済学）
+# ===========================================================================
+
+def test_ops_doc_and_fewshot_mention_append_total():
+    assert "APPEND_TOTAL" in ailine.OPS_DOC
+    assert any("APPEND_TOTAL" in assistant_ex for _u, assistant_ex in ailine.TRANSLATION_FEWSHOT)
+
+def test_translate_task_parses_append_total_with_label_and_factor(monkeypatch):
+    monkeypatch.setattr(
+        ailine, "ollama_generate_json",
+        lambda model, msgs, temperature=0.1, num_predict=300:
+        '{"plan": [{"op": "APPEND_TOTAL", "args": '
+        '{"col": "小計", "label": "税込み合計", "factor": 1.1}}]}')
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
+    result = ailine.translate_task("m", "税込み合計を一番下に出して（消費税10%）", meta)
+    step = result["plan"][0]
+    assert step["op"] == "APPEND_TOTAL"
+    assert step["args"] == {"col": "小計", "label": "税込み合計", "factor": 1.1}
+
+def test_translate_task_parses_append_total_without_optional_args(monkeypatch):
+    monkeypatch.setattr(
+        ailine, "ollama_generate_json",
+        lambda model, msgs, temperature=0.1, num_predict=300:
+        '{"plan": [{"op": "APPEND_TOTAL", "args": {"col": "金額"}}]}')
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    result = ailine.translate_task("m", "金額の合計を最後に", meta)
+    step = result["plan"][0]
+    assert step["op"] == "APPEND_TOTAL"
+    assert step["args"] == {"col": "金額"}   # label/factor の既定は verify_dsl_args 側が確定する
+
+
+# --- ② 検証（接地） ----------------------------------------------------------
+
+def test_verify_dsl_args_append_total_defaults_label_and_factor():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("APPEND_TOTAL", {"col": "金額"}, meta)
+    assert ok
+    assert resolved["col"] == "金額"
+    assert resolved["label"] == "合計"
+    assert resolved["factor"] == 1.0
+
+def test_verify_dsl_args_append_total_resolves_explicit_label_and_factor():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計", "factor": 1.1}, meta)
+    assert ok
+    assert resolved["label"] == "税込み合計"
+    assert resolved["factor"] == 1.1
+
+def test_verify_dsl_args_append_total_rejects_non_numeric_factor():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "金額", "factor": "abc"}, meta)
+    assert not ok
+    assert "数値ではありません" in err
+
+def test_verify_dsl_args_append_total_rejects_zero_or_negative_factor():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "金額", "factor": 0}, meta)
+    assert not ok
+    assert "正の数" in err
+
+def test_verify_dsl_args_append_total_unknown_column_is_clarify_error():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "存在しない"}, meta)
+    assert not ok
+    assert "がありません" in err
+
+def test_format_confirmation_line_append_total_shows_col_label_factor():
+    line = ailine.format_confirmation_line(
+        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計", "factor": 1.1}, set())
+    assert "対象列:小計" in line
+    assert "ラベル:税込み合計" in line
+    assert "倍率:1.1" in line
+
+
+# --- ④ codegen（決定論） ------------------------------------------------------
+
+def test_codegen_dsl_append_total_places_label_left_of_value_and_formula_with_factor():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
+    code = ailine.codegen_dsl(
+        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計", "factor": 1.1}, meta)
+    # 小計=列3(0起点)。ラベルはその左隣=列2に置く（既存構造を壊さない置き方）。
+    assert 'getCellByPosition(2, totalRow).setString("税込み合計")' in code
+    assert 'getCellByPosition(3, totalRow).setFormula(' in code
+    assert '"=SUM(" & "D" & 2 & ":" & "D" & (lastRow + 1) & ")" & "*1.1"' in code
+
+def test_codegen_dsl_append_total_omits_factor_tail_when_factor_is_one():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    code = ailine.codegen_dsl("APPEND_TOTAL", {"col": "金額", "label": "合計", "factor": 1}, meta)
+    assert '"=SUM(" & "B" & 2 & ":" & "B" & (lastRow + 1) & ")" & ""' in code
+
+def test_codegen_dsl_append_total_leftmost_column_skips_label():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["金額", "部門"]}}
+    code = ailine.codegen_dsl("APPEND_TOTAL", {"col": "金額", "label": "合計", "factor": 1}, meta)
+    assert "setString(" not in code   # 列0は左隣が無いためラベルを省略する
+
+
+# --- ⑥ 事後条件（二層: 式文字列 + キャッシュ値、ラベル一致） -------------------
+
+def test_check_append_total_passes_with_factor_and_label(tmp_path):
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["品目", "数量", "単価", "小計"])
+    ws.append(["a", 3, 50000, 150000])
+    ws.append(["b", 1, 120000, 120000])
+    ws.append(["c", 12, 8000, 96000])
+    ws["C5"] = "税込み合計"
+    ws["D5"] = "=SUM(D2:D4)*1.1"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"D5": 402600})
+    status, reason = ailine.check_append_total(
+        p, {"col": "小計", "label": "税込み合計", "factor": 1.1})
+    assert status == "pass"
+    assert "式・キャッシュ値・ラベルとも一致" in reason
+
+def test_check_append_total_fails_when_formula_not_sum(tmp_path):
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["品目", "数量", "単価", "小計"])
+    ws.append(["a", 3, 50000, 150000])
+    ws["D3"] = 999999   # 合計行のはずが数式でなく値
+    wb.save(p)
+    status, reason = ailine.check_append_total(p, {"col": "小計", "label": "合計", "factor": 1})
+    assert status == "fail"
+    assert "式が期待形" in reason
+
+def test_check_append_total_fails_when_cache_value_wrong(tmp_path):
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["部門", "金額"])
+    ws.append(["a", 100])
+    ws.append(["b", 200])
+    ws["A4"] = "合計"
+    ws["B4"] = "=SUM(B2:B3)"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"B4": 999})
+    status, reason = ailine.check_append_total(p, {"col": "金額", "label": "合計", "factor": 1})
+    assert status == "fail"
+    assert "キャッシュ値が不一致" in reason
+
+def test_check_append_total_fails_when_label_wrong(tmp_path):
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["部門", "金額"])
+    ws.append(["a", 100])
+    ws.append(["b", 200])
+    ws["A4"] = "TOTAL"   # 期待ラベルは「合計」
+    ws["B4"] = "=SUM(B2:B3)"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"B4": 300})
+    status, reason = ailine.check_append_total(p, {"col": "金額", "label": "合計", "factor": 1})
+    assert status == "fail"
+    assert "ラベルが期待" in reason
+
+def test_check_append_total_fails_when_zero_data_rows(tmp_path):
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["部門", "金額"])
+    wb.save(p)
+    status, reason = ailine.check_append_total(p, {"col": "金額", "label": "合計", "factor": 1})
+    assert status == "fail"
+    assert reason == ailine._ZERO_TARGET_REASON
+
+def test_check_append_total_leftmost_column_skips_label_check(tmp_path):
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["金額", "備考"])
+    ws.append([100, "x"])
+    ws.append([200, "y"])
+    ws["A4"] = "=SUM(A2:A3)"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"A4": 300})
+    status, reason = ailine.check_append_total(p, {"col": "金額", "label": "合計", "factor": 1})
+    assert status == "pass"
+
+def test_run_postcondition_dispatches_append_total(tmp_path):
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["部門", "金額"])
+    ws.append(["a", 100])
+    ws["A3"] = "合計"
+    ws["B3"] = "=SUM(B2:B2)"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"B3": 100})
+    status, reason = ailine.run_postcondition(
+        "APPEND_TOTAL", p, {"col": "金額", "label": "合計", "factor": 1})
+    assert status == "pass"
+
+
+# --- CONTRACT: 自由生成に「新規シートを作らない」誘導が入っている ----------------
+
+def test_contract_prompt_discourages_new_sheet_creation():
+    assert "新しいシートを作らず" in ailine.CONTRACT
+
+
+# ===========================================================================
+# W6: 助言網を新規シートへ拡張（監査所見: 新規『集計』シートの全0埋めが★素通り）
+# ===========================================================================
+
+def test_new_sheet_advisories_flags_entirely_zero_filled_new_sheet(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    out = wb.create_sheet("集計")
+    for r in range(1, 4):
+        for c in range(1, 3):
+            out.cell(row=r, column=c, value=0)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    lines = ailine.new_sheet_advisories(before, after)
+    assert any("新規シート『集計』の" in ln and "★ 疑わしい" in ln and "値 0" in ln for ln in lines)
+
+def test_new_sheet_advisories_empty_when_new_sheet_has_normal_varied_content(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    out = wb.create_sheet("集計")
+    out.append(["部門", "合計"])
+    out.append(["a", 100])
+    out.append(["b", 200])
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.new_sheet_advisories(before, after) == []
+
+def test_new_sheet_advisories_empty_when_no_new_sheet(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=1, column=1, value="変更")
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.new_sheet_advisories(before, after) == []
+
+def test_build_advisories_still_flags_new_sheet_zero_fill_when_mixed_with_unrelated_change(tmp_path):
+    # ★ 監査実測の再現: COMPUTE_COLUMN が小計列へ正しい(非一様な)値を書き込みつつ、
+    #   同じ実行で新規『集計』シートが全0埋め(バグ)で作られるケース。
+    #   旧実装は detect_uniform_fill が『変更セル全部が同一値』を diff 全体に要求するため、
+    #   小計列の非一様な正しい値に引きずられて新規シートの異常が丸ごと素通りしていた。
+    p = _book(tmp_path, [["品目", "小計"], ["a", None], ["b", None]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    ws.cell(row=2, column=2, value=150000)   # 小計へ正しい値（非一様）
+    ws.cell(row=3, column=2, value=96000)
+    out = wb.create_sheet("集計")
+    for r in range(1, 3):
+        for c in range(1, 3):
+            out.cell(row=r, column=c, value=0)   # ★バグ想定: 新規シートが全0埋め
+    wb.save(p)
+    after = ailine.snapshot(p)
+    lines = ailine.build_advisories("小計を計算して集計もして", before, after)
+    assert any("新規シート『集計』の" in ln and "★ 疑わしい" in ln for ln in lines)
+
+def test_detect_ghost_data_still_fires_for_existing_sheet_when_new_sheet_also_created(tmp_path):
+    # ★ W6: 以前は新規シートが混ざるだけで rect=None → 関数全体が None を返し、
+    #   既存シートの本当のゴーストデータまで丸ごと素通りしていた（回帰）。
+    p = _book(tmp_path, [["a", 1], ["b", 2]])   # 使用範囲 A1:B2
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=26, value="ghost")   # Z2、既存シートの範囲外
+    wb.create_sheet("集計").cell(row=1, column=1, value="新規")   # 同時に新規シートも作る
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.detect_ghost_data(before, after)
+    assert msg is not None
+    assert "Z2" in msg
+
+def test_detect_ghost_data_none_when_all_changes_are_in_a_new_sheet(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.create_sheet("集計").cell(row=1, column=1, value="新規")
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.detect_ghost_data(before, after) is None
+
+
+# ===========================================================================
+# W6: 依頼にないシート新設の申告
+# ===========================================================================
+
+def test_unrequested_new_sheet_advisory_fires_when_task_does_not_mention_sheet():
+    before = {"sheets": ["Sheet"]}
+    after = {"sheets": ["Sheet", "集計"]}
+    lines = ailine.unrequested_new_sheet_advisory("部門ごとに金額を集計して", before, after)
+    assert lines == ["★ 依頼にない新しいシートが作成されました（集計）"]
+
+@pytest.mark.parametrize("phrase", ["集計シートを作って", "ピボットにして", "別に表を作って"])
+def test_unrequested_new_sheet_advisory_silent_when_task_mentions_keyword(phrase):
+    before = {"sheets": ["Sheet"]}
+    after = {"sheets": ["Sheet", "集計"]}
+    assert ailine.unrequested_new_sheet_advisory(phrase, before, after) == []
+
+def test_unrequested_new_sheet_advisory_empty_when_no_new_sheet():
+    before = {"sheets": ["Sheet"]}
+    after = {"sheets": ["Sheet"]}
+    assert ailine.unrequested_new_sheet_advisory("金額を並べ替えて", before, after) == []
+
+def test_cmd_run_dsl_aggregate_flags_unrequested_new_sheet(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["部門", "金額"], ["a", 100], ["a", 200], ["b", 300]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "AGGREGATE", "args": {"group_col": "部門", "value_col": "金額"}})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        out = wb2.create_sheet("集計")
+        out.append(["部門", "合計 - 金額"])
+        out.append(["a", 300])
+        out.append(["b", 300])
+        out.append(["合計", 600])
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(book), task="部門ごとに金額を集計して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "★ 依頼にない新しいシートが作成されました（集計）" in captured.out
+
+def test_cmd_run_dsl_aggregate_silent_when_task_mentions_sheet_keyword(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["部門", "金額"], ["a", 100], ["b", 300]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "AGGREGATE", "args": {"group_col": "部門", "value_col": "金額"}})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        out = wb2.create_sheet("集計")
+        out.append(["部門", "合計 - 金額"])
+        out.append(["a", 100])
+        out.append(["b", 300])
+        out.append(["合計", 400])
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(book), task="部門ごとに金額を集計シートにまとめて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "依頼にない新しいシート" not in captured.out

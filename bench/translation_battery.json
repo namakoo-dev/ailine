@@ -61,6 +61,10 @@
           }
         }
       }
+    },
+    "v2_1": {
+      "changed": "2026-08-15 (実行前凍結の改訂・透明に記録)",
+      "note": "APPEND_TOTAL 語彙昇格（2026-08-15・監査 3 連続失敗の実測による昇格経済学）に伴い #102 の期待を [COMPUTE_COLUMN, APPEND_TOTAL] に改訂"
     }
   },
   "items": [
@@ -594,10 +598,13 @@
           "target": "小計"
         },
         {
-          "op": "OUT_OF_VOCAB",
-          "about": "税込み合計"
+          "op": "APPEND_TOTAL",
+          "col": "小計",
+          "label": "税込み合計",
+          "factor": 1.1
         }
-      ]
+      ],
+      "note": "v2_1 改訂 (2026-08-15): APPEND_TOTAL 語彙昇格前は OUT_OF_VOCAB だった"
     },
     {
       "id": 103,
