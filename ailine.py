@@ -535,13 +535,15 @@ _RE_ROW = re.compile(r"行\s*(\d+)")
 
 def extract_task_mentions(task: str, sheet_names: list) -> dict:
     """タスク文言から明示的な言及だけを正規表現で抜き出す（保守的・誤検知回避優先）。
-       戻り値: {"cols": {1起点の列番号}, "rows": {1起点の行番号}, "sheets": {原本に実在するシート名}}
-       ★ 列の数字表記(『列3』)は人が普段言う1起点の列番号として扱う（＝C列）。"""
+       戻り値: {"cols": {1起点の列番号(文字表記=曖昧さなし)}, "digit_cols": {数字表記の生の値},
+               "rows": {1起点の行番号}, "sheets": {原本に実在するシート名}}
+       ★ 列の数字表記(『列2』)は曖昧 — 本ツールの規約(README・ヘルパ)は 0 起点だが、
+       人が普段言うのは 1 起点。どちらか一方に断定すると正しい結果へ誤警報を出す
+       (2026-08-14 再監査 2 回目で実測:『在庫(列2)』= 0 起点 C 列への正しい変更に
+       B 列不在の★が出た)。生の値のまま保持し、照合側で両解釈を許す。"""
     cols = set()
-    for m in _RE_COL_KANJI_NUM.finditer(task):
-        n = int(m.group(1))
-        if n >= 1:
-            cols.add(n)
+    digit_cols = {int(m.group(1)) for m in _RE_COL_KANJI_NUM.finditer(task)
+                  if int(m.group(1)) >= 0}
     for pat in (_RE_COL_LETTER_PREFIX, _RE_COL_LETTER_SUFFIX):
         for m in pat.finditer(task):
             try:
@@ -550,7 +552,7 @@ def extract_task_mentions(task: str, sheet_names: list) -> dict:
                 pass
     rows = {int(m.group(1)) for m in _RE_ROW.finditer(task) if int(m.group(1)) >= 1}
     sheets = {s for s in sheet_names if s and s in task}
-    return {"cols": cols, "rows": rows, "sheets": sheets}
+    return {"cols": cols, "digit_cols": digit_cols, "rows": rows, "sheets": sheets}
 
 
 def _changed_sheets(before: dict, after: dict) -> set:
@@ -572,8 +574,10 @@ def _changed_sheets(before: dict, after: dict) -> set:
 
 
 def mention_overlap_advisory(mentions: dict, before: dict, after: dict) -> list:
-    """言及があるのに変更範囲と全く重ならない場合だけ警告する（保守的）。"""
-    if not (mentions["cols"] or mentions["rows"] or mentions["sheets"]):
+    """言及があるのに変更範囲と全く重ならない場合だけ警告する（保守的）。
+       数字表記の列は 0 起点/1 起点の両解釈を許し、どちらかが触られていれば沈黙する。"""
+    if not (mentions["cols"] or mentions.get("digit_cols") or mentions["rows"]
+            or mentions["sheets"]):
         return []
     changed = _changed_cells(before, after)
     changed_cols = {c for _, _, c in changed}
@@ -585,6 +589,12 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict) -> list:
         if col not in changed_cols:
             letter = get_column_letter(col)
             lines.append(f"★ 依頼で言及された『列{letter}』は存在しません/変更されていません")
+    for n in sorted(mentions.get("digit_cols", set())):
+        # 1 起点読み = 列 n / 0 起点読み = 列 n+1 (1 起点換算)。両方外れた時だけ警告し、
+        # 警告文は文字に変換せずユーザーの書いた数字のまま返す (推定で上書きしない)
+        candidates = {c for c in (n, n + 1) if c >= 1}
+        if candidates and not (candidates & changed_cols):
+            lines.append(f"★ 依頼で言及された『列{n}』は存在しません/変更されていません")
     for row in sorted(mentions["rows"]):
         if row not in changed_rows:
             lines.append(f"★ 依頼で言及された『行{row}』は存在しません/変更されていません")

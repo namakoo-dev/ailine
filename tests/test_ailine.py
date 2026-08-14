@@ -733,7 +733,8 @@ def test_extract_task_mentions_column_letter_and_number_and_row():
     m2 = ailine.extract_task_mentions("Z列の値を確認", ["Sheet"])
     assert m2["cols"] == {26}
     m3 = ailine.extract_task_mentions("列3を直して行5も見て", ["Sheet"])
-    assert m3["cols"] == {3}
+    assert m3["cols"] == set()          # 数字表記は曖昧なので cols に断定で入れない
+    assert m3["digit_cols"] == {3}      # 生の値のまま保持し照合側で両解釈
     assert m3["rows"] == {5}
 
 def test_extract_task_mentions_only_real_sheet_names_match():
@@ -744,7 +745,26 @@ def test_extract_task_mentions_only_real_sheet_names_match():
 
 def test_extract_task_mentions_empty_when_no_mentions():
     m = ailine.extract_task_mentions("いい感じにして", ["Sheet"])
-    assert m == {"cols": set(), "rows": set(), "sheets": set()}
+    assert m == {"cols": set(), "digit_cols": set(), "rows": set(), "sheets": set()}
+
+
+def test_mention_digit_col_accepts_both_zero_and_one_based(tmp_path):
+    """再監査 2 回目の誤警報の再発防止: 『在庫(列2)』= 0 起点で C 列(1 起点 3) を
+    正しく変更したのに B 列不在の★が出た。数字表記は両解釈のどちらかが触られて
+    いれば沈黙する。"""
+    p = _book(tmp_path, [["商品", "金額", "在庫"], ["りんご", 100, 8]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=3, value=16)   # C 列 = 0 起点の列2 を変更
+    wb.save(p)
+    after = ailine.snapshot(p)
+    mentions = ailine.extract_task_mentions("在庫(列2)の値を2倍にする", before["sheets"])
+    assert ailine.mention_overlap_advisory(mentions, before, after) == []   # 誤警報なし
+
+    # 両解釈とも外れている場合だけ警告し、警告文は数字のまま
+    mentions9 = ailine.extract_task_mentions("列9を2倍にする", before["sheets"])
+    lines = ailine.mention_overlap_advisory(mentions9, before, after)
+    assert any("『列9』" in ln for ln in lines)
 
 def test_mention_overlap_flags_unmatched_column(tmp_path):
     p = _book(tmp_path, [["商品", "金額"], ["りんご", 100], ["バナナ", 200]])
