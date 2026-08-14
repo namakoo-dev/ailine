@@ -39,14 +39,33 @@ python ailine.py run demo/sample.xlsx "各行の 列5 に 売上(列3) − 原�
 # 生成して見せるだけ（レビュー用。適用しない）
 python ailine.py run demo/sample.xlsx "..." --dry
 
-# 原本を上書きしてよいとき
+# 原本を上書きしてよいとき（上書き前に自動でバックアップを作る）
 python ailine.py run demo/sample.xlsx "..." --inplace
 
 # 別のモデルに載せ替える（天井を上げたいとき）
 python ailine.py run demo/sample.xlsx "..." --model qwen2.5-coder:32b
 
+# 参照ライブラリ / ヘルパのディレクトリを差し替える（既定は ./refs, ./helpers）
+python ailine.py run demo/sample.xlsx "..." --refs my_refs --helpers my_helpers
+
+# 生成の温度・修復の最大回数・適用タイムアウト秒を調整する
+python ailine.py run demo/sample.xlsx "..." --temperature 0.1 --repair 3 --timeout 60
+
+# 結果を JSON でも出す（changes/advisories/out などを機械可読で受け取る）
+python ailine.py run demo/sample.xlsx "..." --json
+
 # 起動した LibreOffice を落とす
 python ailine.py stop
+
+# セットアップを診断する（python/openpyxl/ollama/モデル/LibreOffice/basrun/demo）
+python ailine.py doctor
+
+# 実行履歴を見る（新しい順。既定 10 件）
+python ailine.py history --max 20
+
+# --inplace のバックアップから復元する（復元前の現状も自動で退避＝復元自体も可逆）
+python ailine.py restore demo/sample.xlsx
+python ailine.py restore demo/sample.xlsx --list   # 一覧だけ表示（復元しない）
 ```
 
 試せる表を `demo/` に同梱している: `sample.xlsx`（商品×金額の一覧）・
@@ -68,6 +87,18 @@ python ailine.py stop
 - **コピー安全** — 原本は触らず `<book>.out.xlsx` に適用する。壊さない。
 - **参照ライブラリ** — `refs/*.bas` を few-shot に供給。苦手な操作（並べ替え・
   グラフ・新シート）の**動作検証済みの正解例**を渡して補う。追加は `refs/` に置くだけ。
+- ★ **達成検証層（M2a）** — 「✓ の下に隠れた失敗」（幽霊データ・無関係なすり替え・
+  1 行の静かな欠落）への機械的対抗。差分の後に助言として表示する（ブロックはしない）。
+  - **幽霊データ検出** — 変更セルの全部が原本の使用範囲外に集中している場合だけ
+    「★ 疑わしい: 変更が元データの範囲外です（Z2:Z6）」。
+  - **一様埋め検出** — 変化前が全部空欄・変化後が全部同一値（特に 0/空文字）の場合だけ
+    「★ 疑わしい: 空欄への同一値の一括書き込みです（値 0 × 5 セル）」。
+  - **件数の突き合わせ** — 変更が単一列に集中している場合、「列 C: データ 3 行のうち
+    2 行を変更（1 行は未変更）」を添える（りんご欠落型を1秒で見えるように）。
+  - **依頼文と変更範囲の重なりチェック** — タスク文言に「列Z」「行5」「シート名」等の
+    明示的な言及があるのに、変更が全く重ならない場合だけ「★ 依頼で言及された『列Z』
+    は存在しません/変更されていません」。言及ゼロのタスクでは何も言わない。
+  - どれも保守的（両条件とも全セルがそれに該当した時だけ発火）＝誤検知回避優先。
 
 ## ★ 限界（正直に）
 
@@ -75,6 +106,12 @@ python ailine.py stop
   参照ライブラリで補う設計だが、載っていない操作は当たり率が落ちる。
 - **no-op ガードが保証するのは「変化したこと」だけ。**「**正しいか**」は保証しない ──
   出力の差分を人が見て判断すること。ツールは必ず「差分を見て判断せよ」と促す。
+  M2a の助言（★ 疑わしい 等）も同じ層 — 「変化」の機械保証であって、「依頼を
+  達成したか」は助言＋人の確認が要る。
+- **timeout kill 後に固まった LibreOffice** は、稀に手動で `python ailine.py stop`
+  （または OS のタスクマネージャ）から止める必要がある場合がある。
+- **人が同ファイルを開いたまま実行した場合は未検証。** ロックや競合の扱いは
+  基本の LibreOffice/OS の挙動に委ねている。
 - **ローカル完結。** ollama と LibreOffice が要る。**外部にデータは送らない。**
 
 ## 必要なもの

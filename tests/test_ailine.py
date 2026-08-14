@@ -624,3 +624,329 @@ def test_diff_snapshots_new_value_cell_uses_a1_ref_and_no_raw_tuple(tmp_path):
     assert "値" in detail
     assert "None" not in detail                 # 生 tuple の名残（Noneの生表示）が無い
     assert "数値書式" not in detail              # 値だけの変更で偽の書式差分が出ない
+
+
+# --- ★ M2a: 疑わしい変化の機械検出 ------------------------------------------
+
+def test_detect_ghost_data_single_cell_outside_original_range(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])   # 使用範囲は A1:B2
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=26, value="ghost")   # Z2（範囲外）
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.detect_ghost_data(before, after)
+    assert msg is not None
+    assert "Z2" in msg
+    assert "★ 疑わしい" in msg
+
+def test_detect_ghost_data_range_of_outside_cells(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    for r in (2, 3, 4):
+        wb.active.cell(row=r, column=26, value=0)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.detect_ghost_data(before, after)
+    assert msg is not None
+    assert "Z2:Z4" in msg
+
+def test_detect_ghost_data_none_when_any_change_is_in_range(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=26, value="ghost")   # 範囲外
+    wb.active.cell(row=1, column=1, value="変更")      # 範囲内も混ざる
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.detect_ghost_data(before, after) is None
+
+def test_detect_ghost_data_none_when_no_change():
+    snap = {"cells": {}}
+    assert ailine.detect_ghost_data(snap, snap) is None
+
+
+def test_detect_uniform_fill_flags_same_value_into_blank_cells(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=1, column=3, value=0)   # C列は元々空欄
+    wb.active.cell(row=2, column=3, value=0)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.detect_uniform_fill(before, after)
+    assert msg is not None
+    assert "値 0 × 2 セル" in msg
+    assert "★ 疑わしい" in msg
+
+def test_detect_uniform_fill_none_when_overwriting_existing_value(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=1, column=1, value=0)   # 既存値の上書き（空欄からではない）
+    wb.active.cell(row=1, column=3, value=0)   # こちらは空欄から
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.detect_uniform_fill(before, after) is None
+
+def test_detect_uniform_fill_none_when_values_differ(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=1, column=3, value=0)
+    wb.active.cell(row=2, column=3, value=1)   # 値がバラバラ
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.detect_uniform_fill(before, after) is None
+
+
+# --- ★ M2a: 件数の突き合わせ -------------------------------------------------
+
+def test_count_reconciliation_reports_data_vs_changed_rows(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["りんご", 100], ["バナナ", 200], ["みかん", 300]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=2, value=999)   # りんご行のみ変更
+    wb.active.cell(row=3, column=2, value=999)   # バナナ行のみ変更（みかん行は無変更）
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.count_reconciliation(before, after)
+    assert msg == "列 B: データ 3 行のうち 2 行を変更（1 行は未変更）"
+
+def test_count_reconciliation_none_when_multiple_columns_changed(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["りんご", 100], ["バナナ", 200]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=1, value="リンゴ")
+    wb.active.cell(row=2, column=2, value=999)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.count_reconciliation(before, after) is None
+
+
+# --- ★ M2a: 依頼文と変更範囲の重なりチェック ----------------------------------
+
+def test_extract_task_mentions_column_letter_and_number_and_row():
+    m = ailine.extract_task_mentions("列Zの値を全部2倍にする", ["Sheet"])
+    assert m["cols"] == {26}
+    m2 = ailine.extract_task_mentions("Z列の値を確認", ["Sheet"])
+    assert m2["cols"] == {26}
+    m3 = ailine.extract_task_mentions("列3を直して行5も見て", ["Sheet"])
+    assert m3["cols"] == {3}
+    assert m3["rows"] == {5}
+
+def test_extract_task_mentions_only_real_sheet_names_match():
+    m = ailine.extract_task_mentions("集計シートを見て", ["Sheet", "集計"])
+    assert m["sheets"] == {"集計"}
+    m2 = ailine.extract_task_mentions("集計シートを見て", ["Sheet"])   # 実在しない
+    assert m2["sheets"] == set()
+
+def test_extract_task_mentions_empty_when_no_mentions():
+    m = ailine.extract_task_mentions("いい感じにして", ["Sheet"])
+    assert m == {"cols": set(), "rows": set(), "sheets": set()}
+
+def test_mention_overlap_flags_unmatched_column(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["りんご", 100], ["バナナ", 200]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=2, value=999)   # B列だけを変更
+    wb.save(p)
+    after = ailine.snapshot(p)
+    mentions = ailine.extract_task_mentions("列Zを2倍にする", before["sheets"])
+    lines = ailine.mention_overlap_advisory(mentions, before, after)
+    assert any("列Z" in ln and "★" in ln for ln in lines)
+
+def test_mention_overlap_silent_when_mentioned_column_was_changed(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["りんご", 100]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=2, value=999)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    mentions = ailine.extract_task_mentions("B列を確認", before["sheets"])
+    assert ailine.mention_overlap_advisory(mentions, before, after) == []
+
+def test_mention_overlap_flags_untouched_real_sheet(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in [["商品", "金額"], ["りんご", 100]]:
+        ws.append(row)
+    wb.create_sheet("集計")
+    wb.save(p)
+    before = ailine.snapshot(p)
+    wb2 = openpyxl.load_workbook(p)
+    wb2.active.cell(row=2, column=2, value=999)   # Sheet 側だけ変更、集計シートは無変更
+    wb2.save(p)
+    after = ailine.snapshot(p)
+    mentions = ailine.extract_task_mentions("集計シートも直して", before["sheets"])
+    lines = ailine.mention_overlap_advisory(mentions, before, after)
+    assert any("集計" in ln for ln in lines)
+
+def test_mention_overlap_empty_when_no_mentions(tmp_path):
+    p = _book(tmp_path, [["a", 1]])
+    snap = ailine.snapshot(p)
+    assert ailine.mention_overlap_advisory({"cols": set(), "rows": set(), "sheets": set()}, snap, snap) == []
+
+
+# --- ★ M2a: 生成コードの切断検出 ---------------------------------------------
+
+@pytest.mark.parametrize("code,truncated", [
+    ("Sub Run(oDoc As Object)\nEnd Sub", False),
+    ("Sub Run(oDoc As Object)\n  oDoc.Sheets.getByIndex(0)\nEnd Sub", False),
+    ("", True),
+    ("   \n  ", True),
+    ("Sub Run(oDoc As Object)\n  oDoc.Sheets.getByIndex(0", True),          # 開き括弧で途切れ
+    ("Sub Run(oDoc As Object)\n  Dim oSheet As Object\n  oSheet", True),    # 識別子で途切れ
+    ("Sub Run(oDoc As Object)\nEnd Sub\nDim leftover", True),              # End Sub の後に続きがある
+])
+def test_is_truncated_code(code, truncated):
+    assert ailine.is_truncated_code(code) is truncated
+
+
+# --- ★ M2a: 実行時エラー表示の整形 --------------------------------------------
+
+def test_short_error_summary_returns_last_line_of_traceback():
+    tb = ("Traceback (most recent call last):\n"
+          '  File "basrun.py", line 10, in <module>\n'
+          "    raise ValueError('bad state')\n"
+          "ValueError: bad state")
+    assert ailine.short_error_summary(tb) == "ValueError: bad state"
+
+def test_short_error_summary_single_line():
+    assert ailine.short_error_summary("何かの実行時エラー") == "何かの実行時エラー"
+
+def test_short_error_summary_empty():
+    assert ailine.short_error_summary("") == "(詳細不明)"
+    assert ailine.short_error_summary(None) == "(詳細不明)"
+
+def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, monkeypatch, capsys):
+    # ★ M2a: 端末には最終行だけ、履歴 jsonl には全文（トレースバックをそのまま出さない）。
+    book = _book(tmp_path, [["a", 1]])
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2:
+                        "Sub Run(oDoc As Object)\nEnd Sub")
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    traceback_text = ("Traceback (most recent call last):\n"
+                       '  File "basrun.py", line 10, in <module>\n'
+                       "    raise ValueError('bad state')\n"
+                       "ValueError: bad state")
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None:
+                        (False, traceback_text, traceback_text))
+    recorded = {}
+    monkeypatch.setattr(ailine, "append_history", lambda entry, path=None: recorded.update(entry))
+
+    ns = argparse.Namespace(
+        book=str(book), task="テスト", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0)
+
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "Traceback (most recent call last):" not in captured.out
+    assert "ValueError: bad state" in captured.out
+    assert recorded["failure_kind"] == "runtime_error"
+    assert recorded["error_detail"] == traceback_text
+
+
+# --- ★ M2a: --inplace バックアップ + restore --------------------------------
+
+def test_utc_ts_format():
+    import re as _re
+    assert _re.match(r"^\d{8}T\d{6}Z$", ailine._utc_ts())
+
+def test_backup_path_for_uses_stem_ts_suffix(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    p = ailine.backup_path_for(Path("demo/sample.xlsx"), ts="20260814T120000Z")
+    assert p == tmp_path / "backups" / "sample.20260814T120000Z.xlsx"
+
+def test_make_backup_copies_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"HELLO")
+    dst = ailine.make_backup(book)
+    assert dst.exists()
+    assert dst.read_bytes() == b"HELLO"
+    assert dst.parent == tmp_path / "backups"
+
+def test_list_backups_sorted_newest_first_and_filters_by_stem_suffix(tmp_path, monkeypatch):
+    backups = tmp_path / "backups"
+    backups.mkdir(parents=True)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    (backups / "book.20200101T000000Z.xlsx").write_bytes(b"old")
+    (backups / "book.20260101T000000Z.xlsx").write_bytes(b"new")
+    (backups / "other.20260101T000000Z.xlsx").write_bytes(b"unrelated")   # 別 book
+    (backups / "junk.txt").write_bytes(b"not a backup")                  # 形が違う
+    result = ailine.list_backups(tmp_path / "book.xlsx")
+    assert [p.name for p in result] == ["book.20260101T000000Z.xlsx", "book.20200101T000000Z.xlsx"]
+
+def test_list_backups_empty_when_dir_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "nope")
+    assert ailine.list_backups(tmp_path / "book.xlsx") == []
+
+def test_restore_backup_restores_and_stays_reversible(tmp_path, monkeypatch):
+    backups = tmp_path / "backups"
+    backups.mkdir(parents=True)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = tmp_path / "book.xlsx"
+    (backups / "book.20200101T000000Z.xlsx").write_bytes(b"BACKED_UP_CONTENT")
+    book.write_bytes(b"CURRENT")   # --inplace で上書きされた後の現状を模す
+
+    used = ailine.restore_backup(book)
+
+    assert used.name == "book.20200101T000000Z.xlsx"
+    assert book.read_bytes() == b"BACKED_UP_CONTENT"
+    remaining = ailine.list_backups(book)
+    assert len(remaining) == 2   # 復元前の CURRENT も退避されている＝復元自体も可逆
+    contents = {p.read_bytes() for p in remaining}
+    assert b"CURRENT" in contents
+    assert b"BACKED_UP_CONTENT" in contents
+
+def test_restore_backup_raises_when_none_exist(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    with pytest.raises(FileNotFoundError):
+        ailine.restore_backup(tmp_path / "book.xlsx")
+
+def test_cmd_restore_list_shows_backups(tmp_path, monkeypatch, capsys):
+    backups = tmp_path / "backups"
+    backups.mkdir(parents=True)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    (backups / "book.20200101T000000Z.xlsx").write_bytes(b"a")
+    ns = argparse.Namespace(book=str(tmp_path / "book.xlsx"), list=True)
+    rc = ailine.cmd_restore(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "book.20200101T000000Z.xlsx" in captured.out
+
+def test_cmd_restore_list_says_none_when_no_backups(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    ns = argparse.Namespace(book=str(tmp_path / "book.xlsx"), list=True)
+    rc = ailine.cmd_restore(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "無い" in captured.out
+
+def test_cmd_restore_restores_and_reports_success(tmp_path, monkeypatch, capsys):
+    backups = tmp_path / "backups"
+    backups.mkdir(parents=True)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"current")
+    (backups / "book.20200101T000000Z.xlsx").write_bytes(b"restored")
+    ns = argparse.Namespace(book=str(book), list=False)
+    rc = ailine.cmd_restore(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "✓" in captured.out
+    assert book.read_bytes() == b"restored"
+
+def test_cmd_restore_fails_when_no_backups(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    ns = argparse.Namespace(book=str(tmp_path / "book.xlsx"), list=False)
+    rc = ailine.cmd_restore(ns)
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "×" in captured.out

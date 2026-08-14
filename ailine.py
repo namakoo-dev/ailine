@@ -48,7 +48,7 @@ from pathlib import Path
 
 try:
     import openpyxl
-    from openpyxl.utils import get_column_letter
+    from openpyxl.utils import get_column_letter, column_index_from_string
 except ImportError:
     sys.exit("openpyxl が要る:  pip install openpyxl")
 
@@ -61,6 +61,7 @@ DEFAULT_APPLY_TIMEOUT = 180.0  # M1: 暴走マクロで無限ハングしない�
 
 HISTORY_DIR = Path.home() / ".ailine"
 HISTORY_FILE = HISTORY_DIR / "history.jsonl"
+BACKUP_DIR = HISTORY_DIR / "backups"
 
 
 def _find_basrun_path() -> Path | None:
@@ -202,6 +203,29 @@ def extract_bas(text: str) -> str:
 
 def valid_signature(code: str) -> bool:
     return re.search(r"Sub\s+Run\s*\(\s*oDoc\s+As\s+Object\s*\)", code, re.I) is not None
+
+
+#  ★ 開始の "Sub 名前(...)" だけを数える（"End Sub" 内の "Sub" を誤って開始として
+#     二重カウントしないよう、識別子が続く形に絞る）。
+_SUB_OPEN_RE = re.compile(r"\bSub\s+[A-Za-z_]\w*", re.I)
+_ENDSUB_RE = re.compile(r"\bEnd\s+Sub\b", re.I)
+
+
+def is_truncated_code(code: str) -> bool:
+    """生成 Basic が途中で切断された兆候を、構造だけを見て検出する（M2a）。
+       ★ 正しさは判定しない。CONTRACT は『手続きはちょうど1つ、必ず End Sub で閉じる』
+       前提のため、Sub/End Sub の対応と『最後の行がちょうど End Sub か』だけを見れば、
+       開き括弧や識別子で途中生成が止まった典型パターン（＝最後の行が End Sub でない）
+       を漏れなく拾える。bad_signature（署名自体が無い）とは別の失敗分類。"""
+    stripped = code.strip()
+    if not stripped:
+        return True
+    sub_count = len(_SUB_OPEN_RE.findall(stripped))
+    endsub_count = len(_ENDSUB_RE.findall(stripped))
+    if sub_count == 0 or sub_count != endsub_count:
+        return True
+    last_line = stripped.splitlines()[-1].strip()
+    return not bool(_ENDSUB_RE.fullmatch(last_line))
 
 
 # ---------------------------------------------------------------------------
@@ -374,11 +398,232 @@ def diff_snapshots(before: dict, after: dict) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# 疑わしい変化の機械検出（M2a: 冷間再監査が実測した「✓ の下の失敗」への対抗）
+#
+# ★ 全部「差分の後の助言」であってブロックしない。誤検知を恐れて条件は保守的に
+#   （両条件とも『変更セルの全部がそれに該当』した時だけ発火）。
+# ---------------------------------------------------------------------------
+
+def _changed_cells(before: dict, after: dict) -> list:
+    """(sheet, row, col) のリスト。値/書式/色/太字/罫線/配置のいずれかが変わったセル。"""
+    keys = set(before["cells"]) | set(after["cells"])
+    out = []
+    for k in keys:
+        if before["cells"].get(k) != after["cells"].get(k):
+            sheet, rc = k.split("!", 1)
+            r_str, c_str = rc.split(",")
+            out.append((sheet, int(r_str), int(c_str)))
+    return out
+
+
+def _used_range(before: dict, sheet: str) -> tuple | None:
+    """原本(before snapshot)においてそのシートで実際に値が入っていたセルの矩形
+       (min_row, max_row, min_col, max_col)。★ 近似: 値(idx0)が非空のセルだけを対象に
+       する（書式のみのセルは『データ』に数えない）。値が1つも無ければ None。"""
+    rows, cols = [], []
+    prefix = sheet + "!"
+    for k, v in before["cells"].items():
+        if not k.startswith(prefix):
+            continue
+        if v[0] in (None, ""):
+            continue
+        r_str, c_str = k[len(prefix):].split(",")
+        rows.append(int(r_str)); cols.append(int(c_str))
+    if not rows:
+        return None
+    return (min(rows), max(rows), min(cols), max(cols))
+
+
+def detect_ghost_data(before: dict, after: dict) -> str | None:
+    """★ 幽霊データ検出: 変更セルが全部、原本の使用範囲（データが存在した矩形）の
+       外に集中している場合だけ疑わしい旨を返す。1セルでも範囲内なら何も言わない
+       （保守的。使用範囲が不明なシートが混ざる場合も判定を保留する）。"""
+    changed = _changed_cells(before, after)
+    if not changed:
+        return None
+    outside = []
+    for sheet, r, c in changed:
+        rect = _used_range(before, sheet)
+        if rect is None:
+            return None  # このシートの原本データ範囲が不明 → 判定を保留
+        min_r, max_r, min_c, max_c = rect
+        if min_r <= r <= max_r and min_c <= c <= max_c:
+            return None  # 1つでも範囲内 → 発火しない
+        outside.append((r, c))
+    rows = [r for r, _ in outside]
+    cols = [c for _, c in outside]
+    top_left = _cell_ref(min(rows), min(cols))
+    bot_right = _cell_ref(max(rows), max(cols))
+    span = top_left if len(outside) == 1 else f"{top_left}:{bot_right}"
+    return f"★ 疑わしい: 変更が元データの範囲外です（{span}）"
+
+
+def detect_uniform_fill(before: dict, after: dict) -> str | None:
+    """★ 一様埋め検出: 変更セルの全部で『変化前が空欄』かつ『変化後が全部同一値』
+       （特に 0/空文字）の場合だけ疑わしい旨を返す（保守的）。"""
+    keys = set(before["cells"]) | set(after["cells"])
+    after_vals = []
+    for k in keys:
+        b = before["cells"].get(k)
+        a = after["cells"].get(k)
+        if b == a:
+            continue
+        b_val = b[0] if b is not None else None
+        if b_val not in (None, ""):
+            return None  # 変化前が空欄でないセルが1つでもある → 発火しない
+        after_vals.append(a[0] if a is not None else None)
+    if not after_vals:
+        return None
+    if len(set(after_vals)) != 1:
+        return None
+    val = after_vals[0]
+    if val in (None, ""):
+        return None  # 空欄→空欄は『埋めた』ことにならない
+    return f"★ 疑わしい: 空欄への同一値の一括書き込みです（値 {_fmt_cell_value(val)} × {len(after_vals)} セル）"
+
+
+def _data_row_count(before: dict, sheet: str, key_col: int) -> int:
+    """★ 近似: そのシートの原本使用範囲のうち見出し行(1行目)を除いた行で、
+       key_col（左隣接のキー列）が埋まっている行数をデータ行数の目安とする。
+       結合セルや空行の扱いまでは厳密化しない、素直な近似。"""
+    rect = _used_range(before, sheet)
+    if rect is None:
+        return 0
+    min_r, max_r, _min_c, _max_c = rect
+    start = max(min_r + 1, 2)
+    prefix = sheet + "!"
+    count = 0
+    for r in range(start, max_r + 1):
+        v = before["cells"].get(f"{prefix}{r},{key_col}")
+        if v is not None and v[0] not in (None, ""):
+            count += 1
+    return count
+
+
+def count_reconciliation(before: dict, after: dict) -> str | None:
+    """変更が単一シート・単一列に集中している場合だけ「データ N 行のうち M 行を変更」
+       を添える（りんご欠落型のような『1行だけ抜けている』変更を1秒で見えるように）。"""
+    changed = _changed_cells(before, after)
+    if not changed:
+        return None
+    sheets = {s for s, _, _ in changed}
+    cols = {c for _, _, c in changed}
+    if len(sheets) != 1 or len(cols) != 1:
+        return None
+    sheet = next(iter(sheets))
+    col = next(iter(cols))
+    rect = _used_range(before, sheet)
+    if rect is None:
+        return None
+    _min_r, _max_r, min_c, _max_c = rect
+    key_col = col - 1 if col > min_c else col
+    data_rows = _data_row_count(before, sheet, key_col)
+    changed_rows = len({r for _, r, _ in changed})
+    unchanged_rows = max(data_rows - changed_rows, 0)
+    col_letter = get_column_letter(col)
+    return (f"列 {col_letter}: データ {data_rows} 行のうち {changed_rows} 行を変更"
+            f"（{unchanged_rows} 行は未変更）")
+
+
+# --- 依頼文言と変更範囲の重なりチェック（保守的・明示言及がある時だけ）--------
+
+_RE_COL_KANJI_NUM = re.compile(r"列\s*(\d+)")
+_RE_COL_LETTER_PREFIX = re.compile(r"列\s*([A-Za-z]{1,3})(?![A-Za-z0-9])")
+_RE_COL_LETTER_SUFFIX = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,3})\s*列")
+_RE_ROW = re.compile(r"行\s*(\d+)")
+
+
+def extract_task_mentions(task: str, sheet_names: list) -> dict:
+    """タスク文言から明示的な言及だけを正規表現で抜き出す（保守的・誤検知回避優先）。
+       戻り値: {"cols": {1起点の列番号}, "rows": {1起点の行番号}, "sheets": {原本に実在するシート名}}
+       ★ 列の数字表記(『列3』)は人が普段言う1起点の列番号として扱う（＝C列）。"""
+    cols = set()
+    for m in _RE_COL_KANJI_NUM.finditer(task):
+        n = int(m.group(1))
+        if n >= 1:
+            cols.add(n)
+    for pat in (_RE_COL_LETTER_PREFIX, _RE_COL_LETTER_SUFFIX):
+        for m in pat.finditer(task):
+            try:
+                cols.add(column_index_from_string(m.group(1).upper()))
+            except ValueError:
+                pass
+    rows = {int(m.group(1)) for m in _RE_ROW.finditer(task) if int(m.group(1)) >= 1}
+    sheets = {s for s in sheet_names if s and s in task}
+    return {"cols": cols, "rows": rows, "sheets": sheets}
+
+
+def _changed_sheets(before: dict, after: dict) -> set:
+    """何かしら変わったシート名の集合（セル・結合・列幅・行高・追加/削除）。"""
+    changed = set()
+    for name in set(before["sheets"]) | set(after["sheets"]):
+        if name not in before["sheets"] or name not in after["sheets"]:
+            changed.add(name)
+            continue
+        if before.get("merges", {}).get(name) != after.get("merges", {}).get(name):
+            changed.add(name)
+        elif before.get("colw", {}).get(name) != after.get("colw", {}).get(name):
+            changed.add(name)
+        elif before.get("rowh", {}).get(name) != after.get("rowh", {}).get(name):
+            changed.add(name)
+    for sheet, _r, _c in _changed_cells(before, after):
+        changed.add(sheet)
+    return changed
+
+
+def mention_overlap_advisory(mentions: dict, before: dict, after: dict) -> list:
+    """言及があるのに変更範囲と全く重ならない場合だけ警告する（保守的）。"""
+    if not (mentions["cols"] or mentions["rows"] or mentions["sheets"]):
+        return []
+    changed = _changed_cells(before, after)
+    changed_cols = {c for _, _, c in changed}
+    changed_rows = {r for _, r, _ in changed}
+    changed_sheets = _changed_sheets(before, after)
+
+    lines = []
+    for col in sorted(mentions["cols"]):
+        if col not in changed_cols:
+            letter = get_column_letter(col)
+            lines.append(f"★ 依頼で言及された『列{letter}』は存在しません/変更されていません")
+    for row in sorted(mentions["rows"]):
+        if row not in changed_rows:
+            lines.append(f"★ 依頼で言及された『行{row}』は存在しません/変更されていません")
+    for sheet in sorted(mentions["sheets"]):
+        if sheet not in changed_sheets:
+            lines.append(f"★ 依頼で言及された『{sheet}』は存在しません/変更されていません")
+    return lines
+
+
+def build_advisories(task: str, before: dict, after: dict) -> list:
+    """diff の後に表示する助言行を全部集める。
+       ①幽霊データ ②一様埋め ③件数の突き合わせ ④依頼文言との重なり。"""
+    lines = []
+    for fn in (detect_ghost_data, detect_uniform_fill):
+        msg = fn(before, after)
+        if msg:
+            lines.append(msg)
+    recon = count_reconciliation(before, after)
+    if recon:
+        lines.append(recon)
+    mentions = extract_task_mentions(task, before["sheets"])
+    lines.extend(mention_overlap_advisory(mentions, before, after))
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # basrun 経由の適用
 # ---------------------------------------------------------------------------
 
 def _timeout_error_message(timeout: float) -> str:
     return f"実行時エラー: マクロが {timeout:.0f} 秒で終了しない（無限ループの可能性）"
+
+
+def short_error_summary(err: str) -> str:
+    """★ M2a: obasync 由来の生 Python トレースバックを端末にそのまま出さないための
+       整形。最終行（例外名+メッセージ）だけを取り出す。全文は履歴 jsonl 側に残す
+       （修復ループへは従来どおり err の全文を渡す＝モデルへの情報は減らさない）。"""
+    lines = [ln for ln in (err or "").splitlines() if ln.strip()]
+    return lines[-1].strip() if lines else "(詳細不明)"
 
 
 def _kill_process_tree(pid: int) -> None:
@@ -475,6 +720,93 @@ def success_message(result: dict) -> str | None:
     if result.get("ok") and not result.get("dry"):
         return "★ 変化は検出したが『正しいか』は上の差分を見て判断してください（no-op ガードは正しさを保証しない）。"
     return None
+
+
+# ---------------------------------------------------------------------------
+# --inplace バックアップ + restore（M2a）
+#
+# ★ --inplace は原本を上書きするので、上書き前に必ず ~/.ailine/backups/ へコピーする。
+#   バックアップに失敗したら --inplace 自体を中止する（安全側。原本は無変更のまま）。
+#   restore は復元前の現状も退避してから上書きする＝復元自体も取り消せる。
+# ---------------------------------------------------------------------------
+
+_BACKUP_TS_RE = re.compile(r"^\d{8}T\d{6}Z$")
+
+
+def _utc_ts() -> str:
+    """ファイル名に使える UTC タイムスタンプ（例: 20260814T120000Z）。"""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def backup_path_for(book: Path, ts: str | None = None) -> Path:
+    ts = ts or _utc_ts()
+    return BACKUP_DIR / f"{book.stem}.{ts}{book.suffix}"
+
+
+def make_backup(book: Path) -> Path:
+    """book のバックアップを ~/.ailine/backups/ に作る。戻り値はバックアップ先。
+       ★ 失敗したら例外を投げる（呼び出し側が --inplace 中止の判断に使う）。"""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    dst = backup_path_for(book)
+    shutil.copy2(book, dst)
+    return dst
+
+
+def _parse_backup_name(name: str, stem: str, suffix: str) -> str | None:
+    """バックアップのファイル名が `<stem>.<ts><suffix>` の形かを見て、ts を返す
+       （形が違えば None）。"""
+    prefix = stem + "."
+    if not (name.startswith(prefix) and name.endswith(suffix)):
+        return None
+    ts = name[len(prefix):len(name) - len(suffix)]
+    return ts if _BACKUP_TS_RE.match(ts) else None
+
+
+def list_backups(book: Path) -> list:
+    """book に対応するバックアップを新しい順(タイムスタンプ降順)で返す。"""
+    if not BACKUP_DIR.is_dir():
+        return []
+    stem, suffix = book.stem, book.suffix
+    found = []
+    for p in BACKUP_DIR.iterdir():
+        ts = _parse_backup_name(p.name, stem, suffix)
+        if ts is not None:
+            found.append((ts, p))
+    found.sort(key=lambda pair: pair[0], reverse=True)   # ts は辞書順=時刻順
+    return [p for _ts, p in found]
+
+
+def restore_backup(book: Path) -> Path:
+    """book を最新バックアップから復元する。★ 復元前の現状も退避してからコピーする
+       （復元自体も取り消せるように）。戻り値は使ったバックアップの Path。
+       バックアップが1つも無ければ例外を投げる。"""
+    backups = list_backups(book)
+    if not backups:
+        raise FileNotFoundError(f"{book.name} のバックアップが無い")
+    latest = backups[0]
+    if book.exists():
+        make_backup(book)   # 復元前の現状も退避＝restore 自体も可逆にする
+    shutil.copy2(latest, book)
+    return latest
+
+
+def cmd_restore(a: argparse.Namespace) -> int:
+    book = Path(a.book).resolve()
+    if a.list:
+        backups = list_backups(book)
+        if not backups:
+            print(f"{book.name} のバックアップは無い")
+            return 0
+        for p in backups:
+            print(p.name)
+        return 0
+    try:
+        used = restore_backup(book)
+    except FileNotFoundError as e:
+        print(f"× {e}")
+        return 1
+    print(f"✓ {book.name} を {used.name} から復元した")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -591,8 +923,11 @@ def cmd_doctor(a: argparse.Namespace) -> int:
 # 実行履歴（M1: 最小版・将来の需要センサー）
 # ---------------------------------------------------------------------------
 
-def build_history_entry(result: dict, book: Path, task: str, model: str, failure_kind: str) -> dict:
-    """1 run の結果を history.jsonl の 1 行分の dict にする（純ロジック・テスト用に分離）。"""
+def build_history_entry(result: dict, book: Path, task: str, model: str, failure_kind: str,
+                         error_detail: str | None = None) -> dict:
+    """1 run の結果を history.jsonl の 1 行分の dict にする（純ロジック・テスト用に分離）。
+       ★ M2a: error_detail は runtime_error 時の生エラー全文（端末には最終行だけ出す
+       ため、詳細を追いたい時の唯一の入り口になる）。"""
     return {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "book": str(book),
@@ -601,6 +936,7 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         "ok": bool(result.get("ok")),
         "attempts": result.get("attempts", 0),
         "failure_kind": failure_kind,
+        "error_detail": error_detail,
         "changes": (result.get("changes") or [])[:3],
         "out": result.get("out"),
     }
@@ -714,6 +1050,16 @@ def cmd_run(a: argparse.Namespace) -> int:
                      {"role": "user", "content": "署名が違う。`Sub Run(oDoc As Object)` を1つだけ。コードのみ。"}]
             continue
 
+        # ★ M2a: bad_signature とは別の分類。署名はあるが本体が途中で切れているケース。
+        if is_truncated_code(code):
+            print("× 生成コードが不完全（途中で切断）。修復する。")
+            failure_kind = "truncated"
+            msgs += [{"role": "assistant", "content": raw},
+                     {"role": "user", "content":
+                      "コードが途中で切れている（End Sub まで書き切れていない）。"
+                      "最初から完全なコードを1つだけ書いて。コードのみ。"}]
+            continue
+
         if a.dry:
             print("\n（--dry: 適用しない。レビュー後に --dry を外して実行）")
             result["ok"] = True
@@ -726,8 +1072,12 @@ def cmd_run(a: argparse.Namespace) -> int:
         ok, err, rawout = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
         progress_end(t0)
         if not ok:
-            print(f"× 実行時エラー。修復する。\n{err[:400]}")
+            # ★ M2a: obasync の生 Python トレースバックを端末にそのまま出さない。
+            #   端末は最終行(例外名+メッセージ)だけ。修復ループへは従来どおり err の全文
+            #   を渡す（モデルへの情報は減らさない）。全文は履歴 jsonl 側に残す。
+            print(f"× 実行時エラー: {short_error_summary(err)}（詳細は履歴に記録）。修復する。")
             failure_kind = "runtime_error"
+            result["last_error_full"] = err
             msgs += [{"role": "assistant", "content": raw},
                      {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。コードのみ。"}]
             continue
@@ -746,15 +1096,29 @@ def cmd_run(a: argparse.Namespace) -> int:
         print("\n✓ 適用され、文書が変化した。変更点:")
         for ln in lines:
             print(ln)
+        advisories = build_advisories(a.task, before, after)
+        for adv in advisories:
+            print(adv)
         result["ok"] = True
         result["changes"] = lines
+        result["advisories"] = advisories
         failure_kind = "none"
         if a.inplace:
-            shutil.move(out_book, book)
-            print(f"\n適用先: {book.name}（--inplace で上書き）")
+            try:
+                make_backup(book)
+            except Exception as e:
+                # ★ M2a: バックアップ失敗時は --inplace を中止する（安全側・原本は無変更）。
+                print(f"× バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}")
+                print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
+                result["out"] = str(out_book)
+            else:
+                shutil.move(out_book, book)
+                print(f"\n適用先: {book.name}（--inplace で上書き）")
+                print(f"復元: ailine restore {book.name}")
+                result["out"] = str(book)
         else:
             print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
-        result["out"] = str(book if a.inplace else out_book)
+            result["out"] = str(out_book)
         break
     else:
         print(f"\n× {a.repair+1} 回試みたが達成できなかった。")
@@ -766,7 +1130,9 @@ def cmd_run(a: argparse.Namespace) -> int:
         print("\n" + msg)
 
     try:
-        append_history(build_history_entry(result, book, a.task, a.model, failure_kind))
+        error_detail = result.get("last_error_full") if failure_kind == "runtime_error" else None
+        append_history(build_history_entry(result, book, a.task, a.model, failure_kind,
+                                            error_detail=error_detail))
     except Exception as e:
         print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
 
@@ -808,6 +1174,11 @@ def build_parser() -> argparse.ArgumentParser:
     h = sub.add_parser("history", help="実行履歴を表示する")
     h.add_argument("--max", type=int, default=10, help="表示件数（既定 10、新しい順）")
     h.set_defaults(func=cmd_history)
+
+    rs = sub.add_parser("restore", help="--inplace のバックアップから復元する")
+    rs.add_argument("book", help="対象の文書 (.xlsx / .ods)")
+    rs.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
+    rs.set_defaults(func=cmd_restore)
     return ap
 
 
