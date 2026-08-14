@@ -250,6 +250,32 @@ def describe_book(path: Path) -> str:
     return "\n".join(lines)
 
 
+def book_columns(path: Path) -> dict:
+    """全シートの見出し行（1行目の値）を {シート名: [列名,...]} で返す。
+       ★ describe_book は1枚目だけの人間可読版。こちらは M2b の翻訳・検証が使う
+       機械可読の接地情報（列は最初の空欄で打ち切る＝連続した見出しだけを列とみなす）。"""
+    wb = openpyxl.load_workbook(path, read_only=True)
+    out = {}
+    for name in wb.sheetnames:
+        ws = wb[name]
+        ncol = min(ws.max_column or 0, MAX_COLS)
+        headers = []
+        for c in range(1, ncol + 1):
+            v = ws.cell(row=1, column=c).value
+            if v in (None, ""):
+                break
+            headers.append(str(v))
+        out[name] = headers
+    wb.close()
+    return out
+
+
+def build_book_meta(path: Path) -> dict:
+    """{"sheets": [...], "headers": {シート名: [列名,...]}}。M2b 翻訳・検証の接地情報。"""
+    headers = book_columns(path)
+    return {"sheets": list(headers.keys()), "headers": headers}
+
+
 def _charts_count(path: Path) -> int:
     try:
         with zipfile.ZipFile(path) as z:
@@ -621,6 +647,751 @@ def build_advisories(task: str, before: dict, after: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+# M2b: 中間命令言語（DSL）パイプライン
+#   ①翻訳(LLM) → ②検証(接地) → ③確認行 → ④決定論 codegen(LLM不使用) → ⑤適用(既存機構)
+#   → ⑥op別事後条件(openpyxl で機械検証)
+#   ★ 天井は bench/translation_battery.json で実測（凍結合格線: op90%/slot80%/誤断定20%）。
+#   CLARIFY・語彙外(FREEFORM)・翻訳失敗は現行の自由生成経路（M2a 助言つき）へ retreat する。
+# ---------------------------------------------------------------------------
+
+OP_LABELS = {
+    "SORT": "並べ替え", "COMPUTE_COLUMN": "計算列", "LOOKUP_FILL": "転記",
+    "AGGREGATE": "集計", "BOLD": "太字", "FILL_COLOR": "背景色",
+    "NUMBER_FORMAT": "数値書式", "MERGE": "セル結合", "CHART": "グラフ",
+    "CENTER_ALIGN": "中央揃え",
+}
+
+# op → 必須 slot 名のタプル。翻訳直後の slot 欠落チェックと確認行の項目順を兼ねる。
+OP_SCHEMA = {
+    "SORT": ("col", "order"),
+    "COMPUTE_COLUMN": ("operands", "operator"),
+    "LOOKUP_FILL": ("target_sheet", "target_col", "source_sheet", "key_col"),
+    "AGGREGATE": ("group_col", "value_col"),
+    "BOLD": ("target",),
+    "FILL_COLOR": ("target", "color"),
+    "NUMBER_FORMAT": ("col", "style"),
+    "MERGE": ("range",),
+    "CHART": ("value_col",),
+    "CENTER_ALIGN": ("target",),
+}
+
+# ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、
+#   本番プロンプトはここが唯一の元）。
+OPS_DOC = """SORT: 並べ替え。args: col(列名), order(asc|desc)
+COMPUTE_COLUMN: 既存列同士の計算で新列を作る。args: operands(列名2つ), operator(+,-,*,/)
+LOOKUP_FILL: 別シートの対応表から値を転記。args: target_sheet, target_col, source_sheet, key_col
+AGGREGATE: グループ別に集計表を作る。args: group_col, value_col
+BOLD: 太字。args: target("row:行番号" か "col:列名")
+FILL_COLOR: 背景色。args: target("row:N"か"col:列名"), color(英語色名)
+NUMBER_FORMAT: 数値書式。args: col(列名), style("thousands")
+MERGE: セル結合。args: range("A1:C1"形式)
+CHART: 棒グラフ。args: value_col(列名)
+CENTER_ALIGN: 中央揃え。args: target("all" か "col:列名")"""
+
+# ★ battery(v1) が実測で取り違えた3パターンの few-shot。同じ混同を別の言い回しで示す
+#   （battery の項目文そのままは使わない＝暗記でなく汎化を確かめる）。
+#   ①「引いてくる/転記」は LOOKUP_FILL であって COMPUTE_COLUMN（四則演算）ではない。
+#   ②③ 条件付き書式・集計行の追記は語彙に無い操作＝ FREEFORM（曖昧ではないので CLARIFY ではない）。
+TRANSLATION_FEWSHOT = [
+    ('対象ブックの構成: {"Sheet": ["商品", "単価"], "商品マスタ": ["商品", "単価"]}\n'
+     '依頼: 「商品マスタから商品名を引っ張ってきて明細に入れて」',
+     '{"op": "LOOKUP_FILL", "args": {"target_sheet": "Sheet", "target_col": "商品", '
+     '"source_sheet": "商品マスタ", "key_col": "商品"}}'),
+    ('対象ブックの構成: {"Sheet": ["商品", "金額", "在庫"]}\n'
+     '依頼: 「金額が1000円未満の行を薄い黄色にして」',
+     '{"op": "FREEFORM"}'),
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「合計を一番下の行に追加して」',
+     '{"op": "FREEFORM"}'),
+]
+
+TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙のどれか一つの JSON 命令に翻訳する。
+出力形式は必ず {{"op": "<語彙>", "args": {{...}}}} のいずれか一つ。それ以外は書かない。
+重要な規則:
+- 列は必ず「対象ブックの構成」に実在する列名で指定する（番号ではなく）
+- 依頼が曖昧で必須引数を確定できないなら {{"op": "CLARIFY", "question": "確認文"}} を返す。推測で断定しない
+- 依頼の操作が語彙のどれにも当てはまらないなら {{"op": "FREEFORM"}}
+  （条件付き書式・行/シートの削除やコピー・集計行の追記などは語彙外）
+- JSON のみ出力（説明・markdown 柵は禁止）
+
+操作語彙:
+{ops}"""
+
+TRANSLATION_USER = "対象ブックの構成: {book}\n依頼: 「{text}」"
+
+
+def build_translation_messages(task: str, book_meta: dict) -> list:
+    """翻訳リクエストの messages（system + few-shot + 実クエリ）を組む。"""
+    msgs = [{"role": "system", "content": TRANSLATION_SYSTEM.format(ops=OPS_DOC)}]
+    for user_ex, assistant_ex in TRANSLATION_FEWSHOT:
+        msgs.append({"role": "user", "content": user_ex})
+        msgs.append({"role": "assistant", "content": assistant_ex})
+    book_desc = json.dumps(book_meta.get("headers", {}), ensure_ascii=False)
+    msgs.append({"role": "user", "content": TRANSLATION_USER.format(book=book_desc, text=task)})
+    return msgs
+
+
+def ollama_generate_json(model: str, messages: list, temperature: float = 0.1,
+                          num_predict: int = 300) -> str:
+    """M2b 翻訳層専用。/api/chat を format="json" 付きで叩く（bench/translation_spike.py
+       で実測済みの型。qwen3 系は think:false を足す）。★ 通常生成の ollama_generate とは
+       あえて別関数にする — format="json" を全体に効かせると Basic 生成側が壊れるため。
+       戻り値は content 文字列（json.loads は呼び出し側 translate_task が行う）。"""
+    body = {
+        "model": model, "messages": messages, "stream": False, "format": "json",
+        "options": {"temperature": temperature, "num_predict": num_predict, "num_ctx": 8192},
+    }
+    if "qwen3" in model:
+        body["think"] = False
+    req = urllib.request.Request(f"{OLLAMA}/api/chat", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        d = json.load(r)
+    return d.get("message", {}).get("content", "")
+
+
+def translate_task(model: str, task: str, book_meta: dict, temperature: float = 0.1) -> dict:
+    """① 翻訳。自然言語タスクを命令言語 JSON {"op", "args", "question"?} に翻訳する。
+       接地: book_meta の実在シート/列名だけを few-shot と一緒に渡す。
+       ★ 失敗（API 不通・JSON 不正・op が語彙外・必須 slot 欠落）は例外を投げずクラッシュ
+       させない。どれか一つでも起きたら op="FREEFORM" に退避し、呼び出し側が現行の
+       自由生成経路（M2a 助言つき）へフォールバックできるようにする。"""
+    try:
+        messages = build_translation_messages(task, book_meta)
+        raw = ollama_generate_json(model, messages, temperature=temperature)
+        data = json.loads(raw)
+    except Exception:
+        return {"op": "FREEFORM", "args": {}}
+    if not isinstance(data, dict):
+        return {"op": "FREEFORM", "args": {}}
+    op = str(data.get("op", "")).upper()
+    if op == "CLARIFY":
+        question = data.get("question")
+        return {"op": "CLARIFY", "question": question or "確認が必要です", "args": {}}
+    if op not in OP_SCHEMA:
+        return {"op": "FREEFORM", "args": {}}
+    args = data.get("args")
+    if not isinstance(args, dict):
+        # モデルが args で包まず op と slot をフラットに返した場合の救済（寛容に受ける）。
+        args = {k: v for k, v in data.items() if k != "op"}
+    required = OP_SCHEMA[op]
+    if any(k not in args or args[k] in (None, "") for k in required):
+        return {"op": "FREEFORM", "args": {}}
+    return {"op": op, "args": args}
+
+
+# --- ② 検証（接地：実在するシート/列名かを機械照合） -------------------------
+
+COLOR_MAP = {
+    "red": "FF0000", "green": "00B050", "blue": "0000FF", "yellow": "FFFF00",
+    "orange": "FFA500", "purple": "800080", "pink": "FFC0CB", "black": "000000",
+    "white": "FFFFFF", "gray": "808080", "grey": "808080",
+    "lightblue": "ADD8E6", "lightgreen": "90EE90", "lightyellow": "FFFFE0",
+    "lightred": "FFCCCC", "lightgray": "D3D3D3", "lightgrey": "D3D3D3",
+}
+
+
+def _digit_candidates(raw: str, headers: list) -> list:
+    """数字表記の列参照を 0 起点/1 起点の両解釈で実在列名に変換した候補（重複除去・順序維持）。
+       数字表記でなければ空リスト。"""
+    s = str(raw).strip()
+    if not re.fullmatch(r"\d+", s):
+        return []
+    n = int(s)
+    cands = []
+    for idx in (n, n - 1):        # 0起点読み(n) と 1起点読み(n-1) の両方を試す
+        if 0 <= idx < len(headers) and headers[idx] not in cands:
+            cands.append(headers[idx])
+    return cands
+
+
+def resolve_col_ref(raw, headers: list) -> tuple:
+    """(実在列名 or None, 推定だったか, エラー文 or None)。
+       ★ 列名を正とする。実在すればそのまま。数字表記なら 0/1 起点の両候補を試し、
+       一意に決まればそれを『推定』として解決、決まらなければ CLARIFY 相当のエラーを返す。"""
+    s = str(raw)
+    if s in headers:
+        return s, False, None
+    cands = _digit_candidates(s, headers)
+    if len(cands) == 1:
+        return cands[0], True, None
+    if len(cands) > 1:
+        return None, False, f"列『{s}』は複数の解釈が可能で一意に決まりません: {cands}"
+    known = ", ".join(headers) if headers else "(無し)"
+    return None, False, f"列『{s}』がありません。ある列: {known}"
+
+
+def verify_dsl_args(op: str, args: dict, book_meta: dict) -> tuple:
+    """② 検証。(ok, resolved_args, inferred_keys, error_message)。
+       args のシート/列名が実在するかを機械照合し、実在名に解決する。実在しなければ
+       CLARIFY 相当のエラーメッセージを返す（呼び出し側が確認質問として表示する）。"""
+    sheets = book_meta["sheets"]
+    headers = book_meta["headers"]
+    if not sheets:
+        return False, dict(args), set(), "ブックにシートが無い"
+    first_sheet = sheets[0]
+    resolved = dict(args)
+    inferred: set = set()
+
+    def resolve_in(key: str, sheet_name: str):
+        val, was_inferred, err = resolve_col_ref(resolved.get(key), headers.get(sheet_name, []))
+        if err:
+            return err
+        resolved[key] = val
+        if was_inferred:
+            inferred.add(key)
+        return None
+
+    def check_sheet(key: str):
+        name = resolved.get(key)
+        if name not in sheets:
+            return f"シート『{name}』がありません。あるシート: {', '.join(sheets)}"
+        return None
+
+    if op == "SORT":
+        if (err := resolve_in("col", first_sheet)):
+            return False, resolved, inferred, err
+        if resolved.get("order") not in ("asc", "desc"):
+            return False, resolved, inferred, f"順序『{resolved.get('order')}』は asc/desc のどちらでもありません"
+
+    elif op == "COMPUTE_COLUMN":
+        operands = resolved.get("operands")
+        if not (isinstance(operands, list) and len(operands) == 2):
+            return False, resolved, inferred, "演算対象が2つの列名になっていません"
+        new_operands = []
+        for o in operands:
+            v, was_inferred, err = resolve_col_ref(o, headers.get(first_sheet, []))
+            if err:
+                return False, resolved, inferred, err
+            new_operands.append(v)
+            if was_inferred:
+                inferred.add("operands")
+        resolved["operands"] = new_operands
+        if resolved.get("operator") not in ("+", "-", "*", "/"):
+            return False, resolved, inferred, f"演算子『{resolved.get('operator')}』が不明です"
+
+    elif op == "LOOKUP_FILL":
+        if (err := check_sheet("target_sheet")):
+            return False, resolved, inferred, err
+        if (err := check_sheet("source_sheet")):
+            return False, resolved, inferred, err
+        if resolved["target_sheet"] != first_sheet:
+            return False, resolved, inferred, f"対象シートは1枚目（{first_sheet}）のみ対応しています"
+        if (err := resolve_in("target_col", resolved["target_sheet"])):
+            return False, resolved, inferred, err
+        if (err := resolve_in("key_col", resolved["target_sheet"])):
+            return False, resolved, inferred, err
+
+    elif op == "AGGREGATE":
+        if (err := resolve_in("group_col", first_sheet)):
+            return False, resolved, inferred, err
+        if (err := resolve_in("value_col", first_sheet)):
+            return False, resolved, inferred, err
+
+    elif op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
+        target = str(resolved.get("target", ""))
+        if target == "all":
+            if op != "CENTER_ALIGN":
+                return False, resolved, inferred, f"対象『all』は {OP_LABELS[op]} では未対応です"
+        elif target.startswith("row:"):
+            n = target[4:]
+            if not (n.isdigit() and int(n) >= 1):
+                return False, resolved, inferred, f"行番号『{n}』が不正です"
+        elif target.startswith("col:"):
+            colname = target[4:]
+            v, was_inferred, err = resolve_col_ref(colname, headers.get(first_sheet, []))
+            if err:
+                return False, resolved, inferred, err
+            resolved["target"] = f"col:{v}"
+            if was_inferred:
+                inferred.add("target")
+        else:
+            return False, resolved, inferred, f"対象『{target}』の形式が不明です（row:N / col:列名 / all）"
+        if op == "FILL_COLOR":
+            color = str(resolved.get("color", "")).lower()
+            if color not in COLOR_MAP:
+                return False, resolved, inferred, f"色『{color}』は未対応です。使える色: {', '.join(sorted(COLOR_MAP))}"
+            resolved["color"] = color
+
+    elif op == "NUMBER_FORMAT":
+        if (err := resolve_in("col", first_sheet)):
+            return False, resolved, inferred, err
+        if resolved.get("style") != "thousands":
+            return False, resolved, inferred, f"書式『{resolved.get('style')}』は未対応です（対応: thousands）"
+
+    elif op == "MERGE":
+        if not re.fullmatch(r"[A-Za-z]{1,3}\d+:[A-Za-z]{1,3}\d+", str(resolved.get("range", ""))):
+            return False, resolved, inferred, f"範囲『{resolved.get('range')}』の形式が不正です（例: A1:C1）"
+
+    elif op == "CHART":
+        if (err := resolve_in("value_col", first_sheet)):
+            return False, resolved, inferred, err
+
+    else:
+        return False, resolved, inferred, f"未対応の操作: {op}"
+
+    return True, resolved, inferred, None
+
+
+# --- ③ 確認行（命令言語形式） -------------------------------------------------
+
+_CONFIRM_FIELDS = {
+    "SORT": (("対象", "col", None), ("順", "order", lambda v: "降順" if v == "desc" else "昇順")),
+    "COMPUTE_COLUMN": (("演算対象", "operands", lambda v: " と ".join(v)), ("演算子", "operator", None)),
+    "LOOKUP_FILL": (("対象シート", "target_sheet", None), ("対象列", "target_col", None),
+                     ("参照シート", "source_sheet", None), ("キー列", "key_col", None)),
+    "AGGREGATE": (("分類列", "group_col", None), ("集計列", "value_col", None)),
+    "BOLD": (("対象", "target", None),),
+    "FILL_COLOR": (("対象", "target", None), ("色", "color", None)),
+    "NUMBER_FORMAT": (("対象列", "col", None), ("書式", "style", None)),
+    "MERGE": (("範囲", "range", None),),
+    "CHART": (("値列", "value_col", None),),
+    "CENTER_ALIGN": (("対象", "target", None),),
+}
+
+
+def format_confirmation_line(op: str, resolved_args: dict, inferred: set) -> str:
+    """命令言語形式の確認行を1行で組む（例: 解釈: 操作:並べ替え 対象:金額 順:降順）。
+       推定で埋めた（数字表記から解決した等）引数には (推定) を付ける。"""
+    parts = [f"操作:{OP_LABELS.get(op, op)}"]
+    for label, key, transform in _CONFIRM_FIELDS.get(op, ()):
+        val = resolved_args.get(key)
+        shown = transform(val) if transform else val
+        tag = "(推定)" if key in inferred else ""
+        parts.append(f"{label}:{shown}{tag}")
+    return "解釈: " + " ".join(parts)
+
+
+# --- ④ 決定論 codegen（op → Basic テンプレ。LLM は一切使わない） --------------
+
+def _wrap_basic(body: str) -> str:
+    """CONTRACT と同じ骨格（Option 2行 + Sub Run(oDoc As Object) 1つ）で包む。"""
+    return "Option VBASupport 1\nOption Explicit\n\nSub Run(oDoc As Object)\n" + body + "End Sub\n"
+
+
+def _scan_last_row_basic(var: str = "oSheet", key_col: str = "0") -> str:
+    """走査ループの定型（refs の作法どおり：A列を上から走査して最終データ行を探す）。"""
+    return (f"    lastRow = 1\n"
+            f"    Do While {var}.getCellByPosition({key_col}, lastRow).getString() <> \"\"\n"
+            f"        lastRow = lastRow + 1\n"
+            f"    Loop\n"
+            f"    lastRow = lastRow - 1\n"
+            f"    If lastRow < 1 Then Exit Sub\n")
+
+
+def codegen_dsl(op: str, resolved_args: dict, book_meta: dict) -> str:
+    """④ 決定論 codegen。既存ヘルパへの Call を最優先し、無い操作だけテンプレ Basic を書く。"""
+    headers = book_meta["headers"]
+    first_sheet = book_meta["sheets"][0]
+
+    if op == "SORT":
+        col_idx = headers[first_sheet].index(resolved_args["col"])
+        asc = "True" if resolved_args["order"] == "asc" else "False"
+        return _wrap_basic(f"    Call SortByColumn(oDoc, {col_idx}, {asc})\n")
+
+    if op == "LOOKUP_FILL":
+        theaders = headers[resolved_args["target_sheet"]]
+        key_idx = theaders.index(resolved_args["key_col"])
+        tgt_idx = theaders.index(resolved_args["target_col"])
+        src = resolved_args["source_sheet"].replace('"', '""')
+        return _wrap_basic(f'    Call VLookupFromTable(oDoc, {key_idx}, {tgt_idx}, "{src}")\n')
+
+    if op == "AGGREGATE":
+        g_idx = headers[first_sheet].index(resolved_args["group_col"])
+        v_idx = headers[first_sheet].index(resolved_args["value_col"])
+        return _wrap_basic(f"    Call SummaryTable(oDoc, {g_idx}, {v_idx})\n")
+
+    if op == "NUMBER_FORMAT":
+        col_idx = headers[first_sheet].index(resolved_args["col"])
+        return _wrap_basic(f"    Call FormatThousands(oDoc, {col_idx})\n")
+
+    if op == "MERGE":
+        c1s, r1s, c2s, r2s = re.match(
+            r"([A-Za-z]{1,3})(\d+):([A-Za-z]{1,3})(\d+)", resolved_args["range"]).groups()
+        col1 = column_index_from_string(c1s.upper()) - 1
+        col2 = column_index_from_string(c2s.upper()) - 1
+        row1, row2 = int(r1s) - 1, int(r2s) - 1
+        return _wrap_basic(f"    Call MergeCells(oDoc, {col1}, {row1}, {col2}, {row2})\n")
+
+    if op == "CHART":
+        v_idx = headers[first_sheet].index(resolved_args["value_col"])
+        return _wrap_basic(f"    Call InsertBarChart(oDoc, {v_idx})\n")
+
+    if op == "CENTER_ALIGN":
+        if resolved_args["target"] == "all":
+            return _wrap_basic("    Call AlignCenter(oDoc)\n")
+        # col:NAME はヘルパ無し → refs の作法（走査して範囲を求め HoriJustify）でテンプレを書く。
+        col_idx = headers[first_sheet].index(resolved_args["target"][4:])
+        body = ("    Dim oSheet As Object, oRange As Object, lastRow As Long\n"
+                "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                + _scan_last_row_basic().replace("lastRow < 1", "lastRow < 0")
+                + f"    oRange = oSheet.getCellRangeByPosition({col_idx}, 0, {col_idx}, lastRow)\n"
+                "    oRange.HoriJustify = com.sun.star.table.CellHoriJustify.CENTER\n")
+        return _wrap_basic(body)
+
+    if op == "BOLD":
+        target = resolved_args["target"]
+        if target.startswith("row:"):
+            row_idx = int(target[4:]) - 1
+            body = ("    Dim oSheet As Object, lastCol As Integer\n"
+                    "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                    "    lastCol = 0\n"
+                    "    Do While oSheet.getCellByPosition(lastCol, 0).getString() <> \"\"\n"
+                    "        lastCol = lastCol + 1\n"
+                    "    Loop\n"
+                    "    lastCol = lastCol - 1\n"
+                    "    If lastCol < 0 Then Exit Sub\n"
+                    f"    Call StyleBold(oDoc, 0, {row_idx}, lastCol, {row_idx})\n")
+        else:
+            col_idx = headers[first_sheet].index(target[4:])
+            body = ("    Dim oSheet As Object, lastRow As Long\n"
+                    "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                    + _scan_last_row_basic().replace("lastRow < 1", "lastRow < 0")
+                    + f"    Call StyleBold(oDoc, {col_idx}, 0, {col_idx}, lastRow)\n")
+        return _wrap_basic(body)
+
+    if op == "FILL_COLOR":
+        target = resolved_args["target"]
+        hexcolor = COLOR_MAP[resolved_args["color"]]
+        if target.startswith("row:"):
+            row_idx = int(target[4:]) - 1
+            body = ("    Dim oSheet As Object, lastCol As Integer, c As Integer\n"
+                    "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                    "    lastCol = 0\n"
+                    "    Do While oSheet.getCellByPosition(lastCol, 0).getString() <> \"\"\n"
+                    "        lastCol = lastCol + 1\n"
+                    "    Loop\n"
+                    "    lastCol = lastCol - 1\n"
+                    "    If lastCol < 0 Then Exit Sub\n"
+                    "    For c = 0 To lastCol\n"
+                    f"        oSheet.getCellByPosition(c, {row_idx}).CellBackColor = &H{hexcolor}&\n"
+                    "    Next c\n")
+        else:
+            col_idx = headers[first_sheet].index(target[4:])
+            body = ("    Dim oSheet As Object, lastRow As Long, r As Long\n"
+                    "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                    + _scan_last_row_basic().replace("lastRow < 1", "lastRow < 0")
+                    + "    For r = 0 To lastRow\n"
+                    f"        oSheet.getCellByPosition({col_idx}, r).CellBackColor = &H{hexcolor}&\n"
+                    "    Next r\n")
+        return _wrap_basic(body)
+
+    if op == "COMPUTE_COLUMN":
+        op1, op2 = resolved_args["operands"]
+        i1 = headers[first_sheet].index(op1)
+        i2 = headers[first_sheet].index(op2)
+        operator = resolved_args["operator"]
+        new_col = len(headers[first_sheet])   # 0起点で次の空き列
+        header_name = f"{op1}{operator}{op2}".replace('"', '""')
+        body = ("    Dim oSheet As Object, lastRow As Long, i As Long\n"
+                "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                + _scan_last_row_basic()
+                + f"    oSheet.getCellByPosition({new_col}, 0).setString(\"{header_name}\")\n"
+                "    For i = 1 To lastRow\n"
+                f"        oSheet.getCellByPosition({new_col}, i).setValue("
+                f"oSheet.getCellByPosition({i1}, i).getValue() {operator} "
+                f"oSheet.getCellByPosition({i2}, i).getValue())\n"
+                "    Next i\n")
+        return _wrap_basic(body)
+
+    raise ValueError(f"未対応の op: {op}")
+
+
+# --- ⑥ op 別事後条件（達成の機械検証。openpyxl で out ファイルを読むだけ・LO 不要） ----
+
+def _col_index_by_header(ws, name: str):
+    """見出し行(1行目)を左から走査して name に一致する列の1起点インデックスを返す。無ければ None。"""
+    c = 1
+    while True:
+        v = ws.cell(row=1, column=c).value
+        if v in (None, ""):
+            return None
+        if str(v) == name:
+            return c
+        c += 1
+
+
+def _scan_last_row(ws, key_col: int = 1) -> int:
+    """key_col(1起点)を上から走査した最終データ行（見出し行0を除く）。データが無ければ1。"""
+    r = 2
+    while ws.cell(row=r, column=key_col).value not in (None, ""):
+        r += 1
+    return r - 1
+
+
+def _scan_last_col(ws) -> int:
+    """見出し行(1行目)を左から走査した最終列（1起点）。"""
+    c = 1
+    while ws.cell(row=1, column=c).value not in (None, ""):
+        c += 1
+    return c - 1
+
+
+def _apply_operator(a, b, operator: str):
+    a = a or 0
+    b = b or 0
+    if operator == "+":
+        return a + b
+    if operator == "-":
+        return a - b
+    if operator == "*":
+        return a * b
+    if operator == "/":
+        return a / b if b else 0
+    raise ValueError(operator)
+
+
+def check_sort(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    idx = _col_index_by_header(ws, args["col"])
+    if idx is None:
+        wb.close()
+        return False, f"列『{args['col']}』が見つからない"
+    last = _scan_last_row(ws)
+    vals = [ws.cell(row=r, column=idx).value for r in range(2, last + 1)]
+    wb.close()
+    if len(vals) < 2:
+        return True, "行数が少なく比較不要"
+    asc = args["order"] == "asc"
+    ok = (all(vals[i] <= vals[i + 1] for i in range(len(vals) - 1)) if asc
+          else all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)))
+    if not ok:
+        return False, f"列『{args['col']}』が指定順（{args['order']}）に並んでいない"
+    return True, f"{len(vals)} 行が{'昇順' if asc else '降順'}"
+
+
+def check_compute_column(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    op1, op2 = args["operands"]
+    i1 = _col_index_by_header(ws, op1)
+    i2 = _col_index_by_header(ws, op2)
+    newname = f"{op1}{args['operator']}{op2}"
+    inew = _col_index_by_header(ws, newname)
+    if i1 is None or i2 is None or inew is None:
+        wb.close()
+        return False, f"演算対象または新列『{newname}』が見つからない"
+    last = _scan_last_row(ws)
+    for r in range(2, last + 1):
+        a = ws.cell(row=r, column=i1).value
+        b = ws.cell(row=r, column=i2).value
+        got = ws.cell(row=r, column=inew).value
+        want = _apply_operator(a, b, args["operator"])
+        if got is None or abs(got - want) > 1e-6:
+            wb.close()
+            return False, f"{r}行目: 期待 {want} 実際 {got}"
+    wb.close()
+    return True, f"{last - 1} 行を検証"
+
+
+def check_lookup_fill(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    if args["target_sheet"] not in wb.sheetnames or args["source_sheet"] not in wb.sheetnames:
+        wb.close()
+        return False, "対象/参照シートが無い"
+    tws = wb[args["target_sheet"]]
+    sws = wb[args["source_sheet"]]
+    key_idx = _col_index_by_header(tws, args["key_col"])
+    tgt_idx = _col_index_by_header(tws, args["target_col"])
+    if key_idx is None or tgt_idx is None:
+        wb.close()
+        return False, "対象シートにキー列/対象列が無い"
+    lookup = {}
+    r = 2
+    while sws.cell(row=r, column=1).value not in (None, ""):
+        lookup[sws.cell(row=r, column=1).value] = sws.cell(row=r, column=2).value
+        r += 1
+    checked = 0
+    r = 2
+    while tws.cell(row=r, column=key_idx).value not in (None, ""):
+        key = tws.cell(row=r, column=key_idx).value
+        if key in lookup:
+            got = tws.cell(row=r, column=tgt_idx).value
+            want = lookup[key]
+            if got != want:
+                wb.close()
+                return False, f"{r}行目: キー『{key}』の転記値が不一致 (期待 {want!r} 実際 {got!r})"
+            checked += 1
+        r += 1
+    wb.close()
+    if checked == 0:
+        return False, "対応表に載っているキーが1件も転記されていない"
+    return True, f"{checked} 行を検証"
+
+
+def check_aggregate(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    if "集計" not in wb.sheetnames:
+        wb.close()
+        return False, "『集計』シートが無い"
+    src = wb[wb.sheetnames[0]]
+    gi = _col_index_by_header(src, args["group_col"])
+    vi = _col_index_by_header(src, args["value_col"])
+    if gi is None or vi is None:
+        wb.close()
+        return False, "分類列/集計列が見つからない"
+    expect: dict = {}
+    r = 2
+    while src.cell(row=r, column=1).value not in (None, ""):
+        k = src.cell(row=r, column=gi).value
+        v = src.cell(row=r, column=vi).value or 0
+        expect[k] = expect.get(k, 0) + v
+        r += 1
+    out = wb["集計"]
+    seen = set()
+    r = 2
+    while True:
+        k = out.cell(row=r, column=1).value
+        if k in (None, "") or k == "合計":
+            break
+        v = out.cell(row=r, column=2).value or 0
+        if k not in expect or abs(v - expect[k]) > 1e-6:
+            wb.close()
+            return False, f"グループ『{k}』の合計が不一致 (期待 {expect.get(k)} 実際 {v})"
+        seen.add(k)
+        r += 1
+    wb.close()
+    if seen != set(expect.keys()):
+        return False, "集計に含まれないグループがある"
+    return True, f"{len(expect)} グループを検証"
+
+
+def check_bold(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    kind, val = args["target"].split(":", 1)
+    if kind == "row":
+        last_col = _scan_last_col(ws)
+        row = int(val)
+        cells = [ws.cell(row=row, column=c) for c in range(1, last_col + 1)]
+        label = f"{row}行目"
+    else:
+        idx = _col_index_by_header(ws, val)
+        if idx is None:
+            wb.close()
+            return False, f"列『{val}』が見つからない"
+        last_row = _scan_last_row(ws)
+        cells = [ws.cell(row=r, column=idx) for r in range(1, last_row + 1)]
+        label = f"列『{val}』"
+    ok = all(c.font and c.font.bold for c in cells)
+    wb.close()
+    if not ok:
+        return False, f"{label} に太字でないセルがある"
+    return True, f"{len(cells)} セルが太字"
+
+
+def check_fill_color(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    want_hex = COLOR_MAP[args["color"]].upper()
+    kind, val = args["target"].split(":", 1)
+    if kind == "row":
+        last_col = _scan_last_col(ws)
+        row = int(val)
+        cells = [ws.cell(row=row, column=c) for c in range(1, last_col + 1)]
+        label = f"{row}行目"
+    else:
+        idx = _col_index_by_header(ws, val)
+        if idx is None:
+            wb.close()
+            return False, f"列『{val}』が見つからない"
+        last_row = _scan_last_row(ws)
+        cells = [ws.cell(row=r, column=idx) for r in range(1, last_row + 1)]
+        label = f"列『{val}』"
+
+    def _matches(cell) -> bool:
+        if cell.fill is None or not cell.fill.patternType:
+            return False
+        return str(cell.fill.start_color.rgb).upper().endswith(want_hex)
+
+    ok = all(_matches(c) for c in cells)
+    wb.close()
+    if not ok:
+        return False, f"{label} に色『{args['color']}』が付いていないセルがある"
+    return True, f"{len(cells)} セルの背景色を確認"
+
+
+def check_number_format(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    idx = _col_index_by_header(ws, args["col"])
+    if idx is None:
+        wb.close()
+        return False, f"列『{args['col']}』が見つからない"
+    last = _scan_last_row(ws)
+    if last < 2:
+        wb.close()
+        return False, "データ行が無い"
+    ok = all("#,##0" in (ws.cell(row=r, column=idx).number_format or "") for r in range(2, last + 1))
+    wb.close()
+    if not ok:
+        return False, f"列『{args['col']}』に桁区切り書式が付いていないセルがある"
+    return True, f"{last - 1} 行に桁区切り書式を確認"
+
+
+def check_merge(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ranges = {str(r) for r in ws.merged_cells.ranges}
+    wb.close()
+    if args["range"] not in ranges:
+        return False, f"範囲『{args['range']}』が結合されていない"
+    return True, f"{args['range']} の結合を確認"
+
+
+def check_chart(path: Path, before_charts: int) -> tuple:
+    after = _charts_count(path)
+    if after != before_charts + 1:
+        return False, f"グラフ数が +1 でない（{before_charts} → {after}）"
+    return True, f"グラフ数 {before_charts} → {after}"
+
+
+def check_center_align(path: Path, args: dict) -> tuple:
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    target = args["target"]
+    if target == "all":
+        last_row = _scan_last_row(ws)
+        last_col = _scan_last_col(ws)
+        cells = [ws.cell(row=r, column=c) for r in range(1, last_row + 1) for c in range(1, last_col + 1)]
+        label = "表全体"
+    else:
+        colname = target[4:]
+        idx = _col_index_by_header(ws, colname)
+        if idx is None:
+            wb.close()
+            return False, f"列『{colname}』が見つからない"
+        last_row = _scan_last_row(ws)
+        cells = [ws.cell(row=r, column=idx) for r in range(1, last_row + 1)]
+        label = f"列『{colname}』"
+    ok = all(c.alignment and c.alignment.horizontal == "center" for c in cells)
+    wb.close()
+    if not ok:
+        return False, f"{label} に中央揃えでないセルがある"
+    return True, f"{len(cells)} セルの中央揃えを確認"
+
+
+POSTCONDITIONS = {
+    "SORT": check_sort, "COMPUTE_COLUMN": check_compute_column,
+    "LOOKUP_FILL": check_lookup_fill, "AGGREGATE": check_aggregate,
+    "BOLD": check_bold, "FILL_COLOR": check_fill_color,
+    "NUMBER_FORMAT": check_number_format, "MERGE": check_merge,
+    "CENTER_ALIGN": check_center_align,
+}
+
+
+def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_charts: int = 0) -> tuple:
+    """⑥ op 別事後条件。(ok, reason)。CHART だけ before_charts と比較する専用の形。"""
+    if op == "CHART":
+        return check_chart(out_book, before_charts)
+    fn = POSTCONDITIONS.get(op)
+    if fn is None:
+        return False, f"未対応の op: {op}"
+    return fn(out_book, resolved_args)
+
+
+# ---------------------------------------------------------------------------
 # basrun 経由の適用
 # ---------------------------------------------------------------------------
 
@@ -949,6 +1720,11 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         "error_detail": error_detail,
         "changes": (result.get("changes") or [])[:3],
         "out": result.get("out"),
+        # ★ M2b: DSL 経路(path="dsl")では命令言語の確認文(command)と事後条件の合否を残す。
+        #   自由生成経路(path="freeform")では両方 None のまま（既存キーは不変）。
+        "path": result.get("path", "freeform"),
+        "command": result.get("command"),
+        "postcondition": result.get("postcondition"),
     }
 
 
@@ -1009,10 +1785,152 @@ def cmd_history(a: argparse.Namespace) -> int:
 # run コマンド本体
 # ---------------------------------------------------------------------------
 
+def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: str,
+                 error_detail: str | None = None) -> None:
+    """--json 出力・成功時の注意書き・履歴の記録。cmd_run_freeform / cmd_run_dsl の共通末尾。
+       ★ DSL 経路(path="dsl")は "✓ 達成を機械検証済み" を既に自分で出しているので、
+       success_message() の『正しいかは差分を見て判断』（自由生成向けの注意書き）は出さない。"""
+    if a.json:
+        print("\n" + json.dumps(result, ensure_ascii=False))
+    if result.get("path") != "dsl":
+        msg = success_message(result)
+        if msg:
+            print("\n" + msg)
+    try:
+        detail = error_detail if error_detail is not None else (
+            result.get("last_error_full") if failure_kind == "runtime_error" else None)
+        append_history(build_history_entry(result, book, a.task, a.model, failure_kind,
+                                            error_detail=detail))
+    except Exception as e:
+        print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
+
+
 def cmd_run(a: argparse.Namespace) -> int:
+    """run コマンドの入口。① 翻訳 → CLARIFY なら質問して exit 3 / DSL 語彙なら②〜⑥の
+       決定論パイプライン(cmd_run_dsl) / それ以外(FREEFORM・翻訳失敗)は現行の自由生成
+       経路(cmd_run_freeform)へ retreat する。"""
     book = Path(a.book).resolve()
     if not book.exists():
         sys.exit(f"文書が無い: {book}")
+
+    book_meta = build_book_meta(book)
+    t0 = progress_start(f"⏳ 翻訳中 ({a.model})…")
+    translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
+    progress_end(t0)
+
+    op = translation.get("op")
+    if op == "CLARIFY":
+        question = translation.get("question") or "確認が必要です"
+        print(f"？ {question}")
+        return 3
+    if op in OP_SCHEMA:
+        return cmd_run_dsl(a, book, book_meta, op, translation.get("args", {}))
+    return cmd_run_freeform(a, book)
+
+
+def cmd_run_dsl(a: argparse.Namespace, book: Path, book_meta: dict, op: str, raw_args: dict) -> int:
+    """M2b の決定論パイプライン本体。②検証 → ③確認行 → ④codegen → ⑤適用 → ⑥事後条件。"""
+    ok, resolved, inferred, err = verify_dsl_args(op, raw_args, book_meta)
+    if not ok:
+        print(f"？ {err}")
+        return 3
+
+    line = format_confirmation_line(op, resolved, inferred)
+    print(f"■ ailine（DSL 経路）  model={a.model}  book={book.name}")
+    print(line)
+
+    if a.ask:
+        try:
+            ans = input("続行しますか？ [y/N]: ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans not in ("y", "yes"):
+            print("× 中止した")
+            return 1
+
+    workdir = book.parent / f".ailine_{book.stem}"
+    workdir.mkdir(exist_ok=True)
+    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    apply_timeout = a.timeout if a.timeout else None   # 0 で無効化（旧挙動 = 無制限）
+    helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
+    _helper_catalog, helper_files = load_helpers(helpers_dir)
+
+    code = codegen_dsl(op, resolved, book_meta)
+    (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
+    print(f"\n─ 生成した .bas（決定論・LLM不使用）───────────────")
+    print(code)
+    print("──────────────────────────────────────────")
+
+    result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
+              "path": "dsl", "command": line, "postcondition": None}
+
+    if a.dry:
+        print("（--dry: 適用しない。レビュー後に --dry を外して実行）")
+        result["ok"] = True
+        result["dry"] = True
+        _finish_run(a, book, result, "none")
+        return 0
+
+    t0 = progress_start("⏳ 初回準備（文書の正規化）…")
+    source_book = normalize_book(book, workdir, timeout=apply_timeout)
+    progress_end(t0)
+    before = snapshot(source_book)
+
+    shutil.copy2(source_book, out_book)   # 原本は触らず、正規化済みコピーに適用
+    t0 = progress_start("⏳ LibreOffice で適用中…")
+    okrun, err_apply, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
+    progress_end(t0)
+    if not okrun:
+        print(f"× 実行時エラー: {short_error_summary(err_apply)}（詳細は履歴に記録）。")
+        result["last_error_full"] = err_apply
+        _finish_run(a, book, result, "runtime_error", error_detail=err_apply)
+        return 1
+
+    after = snapshot(out_book)
+    changed, lines = diff_snapshots(before, after)
+    print("\n変更点:" if changed else "\n（文書に変化は検出されなかった）")
+    for ln in lines:
+        print(ln)
+    advisories = build_advisories(a.task, before, after)
+    for adv in advisories:
+        print(adv)
+    result["changes"] = lines
+    result["advisories"] = advisories
+
+    pcok, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"])
+    result["postcondition"] = "pass" if pcok else "fail"
+    if not pcok:
+        print(f"\n× 適用されたが事後条件を満たさない: {reason}")
+        result["out"] = str(out_book)
+        _finish_run(a, book, result, "postcondition_fail")
+        return 1
+
+    print(f"\n✓ 達成を機械検証済み（操作:{OP_LABELS.get(op, op)}）: {reason}")
+    result["ok"] = True
+
+    if a.inplace:
+        try:
+            make_backup(book)
+        except Exception as e:
+            print(f"× バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}")
+            print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
+            result["out"] = str(out_book)
+        else:
+            shutil.move(out_book, book)
+            print(f"\n適用先: {book.name}（--inplace で上書き）")
+            print(f"復元: ailine restore {book.name}")
+            result["out"] = str(book)
+    else:
+        print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
+        result["out"] = str(out_book)
+
+    _finish_run(a, book, result, "none")
+    return 0
+
+
+def cmd_run_freeform(a: argparse.Namespace, book: Path) -> int:
+    """自由生成経路（従来の cmd_run 本体そのまま。M2a の助言つき）。
+       ① 翻訳が CLARIFY にも DSL 語彙にも決まらなかった（FREEFORM・翻訳失敗）ときに使う。"""
     refs_dir = Path(a.refs).resolve() if a.refs else DEFAULT_REFS
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     helper_catalog, helper_files = load_helpers(helpers_dir)
@@ -1021,7 +1939,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     user = f"{desc}\n\nタスク:\n{a.task}\n\n`Sub Run(oDoc As Object)` を1つだけ書け。コードのみ。"
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
-    print(f"■ ailine  model={a.model}  book={book.name}")
+    print(f"■ ailine（自由生成経路）  model={a.model}  book={book.name}")
     print(f"■ 参照ライブラリ: {refs_dir}  ({len(list(refs_dir.glob('*.bas'))) if refs_dir.is_dir() else 0} 例)")
     print(f"■ ヘルパ: {helpers_dir}  ({len(helper_files)} 本を同梱・Call で呼ばせる)")
 
@@ -1039,7 +1957,8 @@ def cmd_run(a: argparse.Namespace) -> int:
         progress_end(t0)
         before = snapshot(source_book)
 
-    result = {"ok": False, "attempts": 0, "task": a.task, "model": a.model}
+    result = {"ok": False, "attempts": 0, "task": a.task, "model": a.model,
+              "path": "freeform", "command": None, "postcondition": None}
     failure_kind = "none"
     for attempt in range(a.repair + 1):
         result["attempts"] = attempt + 1
@@ -1133,19 +2052,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     else:
         print(f"\n× {a.repair+1} 回試みたが達成できなかった。")
 
-    if a.json:
-        print("\n" + json.dumps(result, ensure_ascii=False))
-    msg = success_message(result)
-    if msg:
-        print("\n" + msg)
-
-    try:
-        error_detail = result.get("last_error_full") if failure_kind == "runtime_error" else None
-        append_history(build_history_entry(result, book, a.task, a.model, failure_kind,
-                                            error_detail=error_detail))
-    except Exception as e:
-        print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
-
+    _finish_run(a, book, result, failure_kind)
     return 0 if result["ok"] else 1
 
 
@@ -1172,6 +2079,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--timeout", type=float, default=DEFAULT_APPLY_TIMEOUT,
                    help=f"basrun apply のタイムアウト秒 (既定 {DEFAULT_APPLY_TIMEOUT:.0f}、"
                         "0 で無効化=旧挙動の無制限)")
+    r.add_argument("--ask", action="store_true",
+                   help="DSL 経路の確認行の後に y/n で対話する（既定は表示して続行）")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")

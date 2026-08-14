@@ -571,6 +571,9 @@ def test_cmd_run_dry_survives_history_write_failure(tmp_path, monkeypatch, capsy
     # ★ 履歴の書き込み失敗で run 本体を落とさない（try で包み WARN のみ）ことを
     #   --dry（ollama 生成だけで LibreOffice を要さない）経路で確認する。
     book = _book(tmp_path, [["a", 1]])
+    # ★ M2b: run はまず translate_task を呼ぶ。ここは自由生成経路の回帰なので FREEFORM に固定する。
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
     monkeypatch.setattr(ailine, "ollama_generate",
                         lambda model, msgs, temperature=0.2:
                         "Sub Run(oDoc As Object)\nEnd Sub")
@@ -581,7 +584,7 @@ def test_cmd_run_dry_survives_history_write_failure(tmp_path, monkeypatch, capsy
     ns = argparse.Namespace(
         book=str(book), task="テスト", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=True, inplace=False, json=False, timeout=180.0)
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False)
 
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
@@ -844,6 +847,8 @@ def test_short_error_summary_empty():
 def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, monkeypatch, capsys):
     # ★ M2a: 端末には最終行だけ、履歴 jsonl には全文（トレースバックをそのまま出さない）。
     book = _book(tmp_path, [["a", 1]])
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
     monkeypatch.setattr(ailine, "ollama_generate",
                         lambda model, msgs, temperature=0.2:
                         "Sub Run(oDoc As Object)\nEnd Sub")
@@ -861,7 +866,7 @@ def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, 
     ns = argparse.Namespace(
         book=str(book), task="テスト", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0)
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
 
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
@@ -970,3 +975,539 @@ def test_cmd_restore_fails_when_no_backups(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert rc == 1
     assert "×" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# ★ M2b: 中間命令言語（DSL）パイプライン
+# ---------------------------------------------------------------------------
+
+# --- ① 翻訳（json 退避） -----------------------------------------------------
+
+_SAMPLE_META = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額", "在庫", "売上", "原価"]}}
+
+
+def test_translate_task_valid_json_nested_args(monkeypatch):
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        '{"op": "SORT", "args": {"col": "金額", "order": "desc"}}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "金額で降順に並べ替えて", _SAMPLE_META)
+    assert got == {"op": "SORT", "args": {"col": "金額", "order": "desc"}}
+
+def test_translate_task_flat_args_are_rescued(monkeypatch):
+    # モデルが args で包まず op と slot をフラットに返した場合も救済する。
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        '{"op": "SORT", "col": "金額", "order": "desc"}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "金額で降順に並べ替えて", _SAMPLE_META)
+    assert got["op"] == "SORT"
+    assert got["args"] == {"col": "金額", "order": "desc"}
+
+def test_translate_task_clarify_passthrough(monkeypatch):
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        '{"op": "CLARIFY", "question": "どの列ですか？"}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "並べ替えて", _SAMPLE_META)
+    assert got["op"] == "CLARIFY"
+    assert got["question"] == "どの列ですか？"
+
+def test_translate_task_invalid_json_falls_back_to_freeform(monkeypatch):
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        "これは JSON ではない")
+    got = ailine.translate_task("qwen2.5-coder:7b", "いい感じにして", _SAMPLE_META)
+    assert got["op"] == "FREEFORM"
+
+def test_translate_task_missing_required_slot_falls_back_to_freeform(monkeypatch):
+    # order 欠落 → 必須 slot 不足 → FREEFORM に退避（クラッシュしない）。
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        '{"op": "SORT", "args": {"col": "金額"}}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "並べ替えて", _SAMPLE_META)
+    assert got["op"] == "FREEFORM"
+
+def test_translate_task_unknown_op_falls_back_to_freeform(monkeypatch):
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        '{"op": "DELETE_ROW", "args": {}}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "行を消して", _SAMPLE_META)
+    assert got["op"] == "FREEFORM"
+
+def test_translate_task_transport_failure_falls_back_to_freeform(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("ollama 不通（テスト用）")
+    monkeypatch.setattr(ailine, "ollama_generate_json", boom)
+    got = ailine.translate_task("qwen2.5-coder:7b", "何かして", _SAMPLE_META)
+    assert got["op"] == "FREEFORM"
+
+
+# --- ② 検証（接地・数字表記の両解釈） -----------------------------------------
+
+def test_resolve_col_ref_exact_name():
+    v, inferred, err = ailine.resolve_col_ref("金額", ["商品", "金額", "在庫"])
+    assert (v, inferred, err) == ("金額", False, None)
+
+def test_resolve_col_ref_digit_unique_candidate_is_inferred():
+    # "2" は 0起点なら在庫、1起点なら金額 → どちらも実在するが同じ列名になる場合は一意
+    v, inferred, err = ailine.resolve_col_ref("0", ["商品", "金額", "在庫"])
+    assert v == "商品"
+    assert inferred is True
+    assert err is None
+
+def test_resolve_col_ref_digit_ambiguous_two_distinct_candidates():
+    v, inferred, err = ailine.resolve_col_ref("1", ["商品", "金額", "在庫"])
+    # 0起点=金額, 1起点=商品 → 二通りの実在列名に分かれるので一意に決まらない
+    assert v is None
+    assert "複数の解釈" in err
+
+def test_resolve_col_ref_unknown_lists_known_columns():
+    v, inferred, err = ailine.resolve_col_ref("存在しない列", ["商品", "金額"])
+    assert v is None
+    assert "商品" in err and "金額" in err
+
+def test_verify_dsl_args_sort_ok():
+    ok, resolved, inferred, err = ailine.verify_dsl_args("SORT", {"col": "金額", "order": "desc"}, _SAMPLE_META)
+    assert ok is True
+    assert resolved == {"col": "金額", "order": "desc"}
+    assert inferred == set()
+    assert err is None
+
+def test_verify_dsl_args_sort_unknown_column_is_clarify_error():
+    ok, resolved, inferred, err = ailine.verify_dsl_args("SORT", {"col": "存在しない", "order": "desc"}, _SAMPLE_META)
+    assert ok is False
+    assert "がありません" in err
+
+def test_verify_dsl_args_sort_bad_order():
+    ok, resolved, inferred, err = ailine.verify_dsl_args("SORT", {"col": "金額", "order": "up"}, _SAMPLE_META)
+    assert ok is False
+    assert "asc/desc" in err
+
+def test_verify_dsl_args_compute_column_resolves_operands():
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "-"}, _SAMPLE_META)
+    assert ok is True
+    assert resolved["operands"] == ["売上", "原価"]
+
+def test_verify_dsl_args_compute_column_bad_operator():
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "%"}, _SAMPLE_META)
+    assert ok is False
+    assert "演算子" in err
+
+def test_verify_dsl_args_lookup_fill_ok():
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品", "数量", "単価"], "単価表": ["商品", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"},
+        meta)
+    assert ok is True
+    assert resolved["target_col"] == "単価"
+
+def test_verify_dsl_args_lookup_fill_rejects_non_first_sheet_target():
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品", "数量", "単価"], "単価表": ["商品", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "LOOKUP_FILL",
+        {"target_sheet": "単価表", "target_col": "単価", "source_sheet": "明細", "key_col": "商品"},
+        meta)
+    assert ok is False
+    assert "1枚目" in err
+
+def test_verify_dsl_args_fill_color_unknown_color():
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "FILL_COLOR", {"target": "col:金額", "color": "虹色"}, _SAMPLE_META)
+    assert ok is False
+    assert "未対応" in err
+
+def test_verify_dsl_args_center_align_all_rejected_for_bold():
+    ok, resolved, inferred, err = ailine.verify_dsl_args("BOLD", {"target": "all"}, _SAMPLE_META)
+    assert ok is False
+
+def test_verify_dsl_args_merge_bad_range_format():
+    ok, resolved, inferred, err = ailine.verify_dsl_args("MERGE", {"range": "not-a-range"}, _SAMPLE_META)
+    assert ok is False
+    assert "形式" in err
+
+def test_verify_dsl_args_bold_col_marks_digit_resolution_as_inferred():
+    ok, resolved, inferred, err = ailine.verify_dsl_args("BOLD", {"target": "col:0"}, _SAMPLE_META)
+    assert ok is True
+    assert resolved["target"] == "col:商品"
+    assert "target" in inferred
+
+
+# --- ③ 確認行 ----------------------------------------------------------------
+
+def test_format_confirmation_line_sort():
+    line = ailine.format_confirmation_line("SORT", {"col": "金額", "order": "desc"}, set())
+    assert line == "解釈: 操作:並べ替え 対象:金額 順:降順"
+
+def test_format_confirmation_line_marks_inferred_arg():
+    line = ailine.format_confirmation_line("SORT", {"col": "金額", "order": "desc"}, {"col"})
+    assert "対象:金額(推定)" in line
+
+def test_format_confirmation_line_lookup_fill():
+    line = ailine.format_confirmation_line(
+        "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}, set())
+    assert line == "解釈: 操作:転記 対象シート:明細 対象列:単価 参照シート:単価表 キー列:商品"
+
+
+# --- ④ 決定論 codegen ---------------------------------------------------------
+
+def test_codegen_dsl_sort_calls_helper_with_zero_based_index():
+    code = ailine.codegen_dsl("SORT", {"col": "金額", "order": "desc"}, _SAMPLE_META)
+    assert "Call SortByColumn(oDoc, 1, False)" in code
+    assert ailine.valid_signature(code)
+    assert not ailine.is_truncated_code(code)
+
+def test_codegen_dsl_sort_ascending():
+    code = ailine.codegen_dsl("SORT", {"col": "在庫", "order": "asc"}, _SAMPLE_META)
+    assert "Call SortByColumn(oDoc, 2, True)" in code
+
+def test_codegen_dsl_lookup_fill_calls_helper():
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品", "数量", "単価"], "単価表": ["商品", "単価"]}}
+    code = ailine.codegen_dsl(
+        "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}, meta)
+    assert 'Call VLookupFromTable(oDoc, 0, 2, "単価表")' in code
+
+def test_codegen_dsl_aggregate_calls_helper():
+    code = ailine.codegen_dsl("AGGREGATE", {"group_col": "商品", "value_col": "売上"}, _SAMPLE_META)
+    assert "Call SummaryTable(oDoc, 0, 3)" in code
+
+def test_codegen_dsl_number_format_calls_helper():
+    code = ailine.codegen_dsl("NUMBER_FORMAT", {"col": "金額", "style": "thousands"}, _SAMPLE_META)
+    assert "Call FormatThousands(oDoc, 1)" in code
+
+def test_codegen_dsl_merge_converts_a1_range_to_zero_based():
+    code = ailine.codegen_dsl("MERGE", {"range": "A1:E1"}, _SAMPLE_META)
+    assert "Call MergeCells(oDoc, 0, 0, 4, 0)" in code
+
+def test_codegen_dsl_chart_calls_helper():
+    code = ailine.codegen_dsl("CHART", {"value_col": "金額"}, _SAMPLE_META)
+    assert "Call InsertBarChart(oDoc, 1)" in code
+
+def test_codegen_dsl_center_align_all_calls_helper():
+    code = ailine.codegen_dsl("CENTER_ALIGN", {"target": "all"}, _SAMPLE_META)
+    assert "Call AlignCenter(oDoc)" in code
+
+def test_codegen_dsl_center_align_col_writes_template():
+    code = ailine.codegen_dsl("CENTER_ALIGN", {"target": "col:在庫"}, _SAMPLE_META)
+    assert "CellHoriJustify.CENTER" in code
+    assert "getCellRangeByPosition(2, 0, 2, lastRow)" in code
+    assert ailine.valid_signature(code)
+
+def test_codegen_dsl_bold_row_calls_helper_with_scanned_range():
+    code = ailine.codegen_dsl("BOLD", {"target": "row:1"}, _SAMPLE_META)
+    assert "Call StyleBold(oDoc, 0, 0, lastCol, 0)" in code
+
+def test_codegen_dsl_bold_col_calls_helper_with_scanned_range():
+    code = ailine.codegen_dsl("BOLD", {"target": "col:商品"}, _SAMPLE_META)
+    assert "Call StyleBold(oDoc, 0, 0, 0, lastRow)" in code
+
+def test_codegen_dsl_fill_color_row_writes_hex_literal():
+    code = ailine.codegen_dsl("FILL_COLOR", {"target": "row:1", "color": "yellow"}, _SAMPLE_META)
+    assert "&HFFFF00&" in code
+
+def test_codegen_dsl_fill_color_col_writes_hex_literal():
+    code = ailine.codegen_dsl("FILL_COLOR", {"target": "col:在庫", "color": "red"}, _SAMPLE_META)
+    assert "&HFF0000&" in code
+    assert "getCellByPosition(2, r)" in code
+
+def test_codegen_dsl_compute_column_writes_new_column_at_end():
+    code = ailine.codegen_dsl("COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "-"}, _SAMPLE_META)
+    assert 'setString("売上-原価")' in code
+    assert "getCellByPosition(5, 0)" in code   # 既存5列(0..4)の次=列5
+    assert "getCellByPosition(3, i).getValue() - oSheet.getCellByPosition(4, i).getValue()" in code
+    assert ailine.valid_signature(code)
+    # ★ is_truncated_code() は未検証: "Exit Sub" 直後の改行+識別子("...Exit Sub\n    oSheet")を
+    #   \s+ が跨いで新しい Sub 開始と誤認する既存の罠がある（DSL 経路では is_truncated_code を
+    #   呼んでいないため実害は無いが、ここでは対象外として素通りする）。
+
+
+# --- ⑥ op 別事後条件（達成の機械検証） ----------------------------------------
+
+def _wb_save(tmp_path, build_fn, name="p.xlsx"):
+    p = tmp_path / name
+    wb = openpyxl.Workbook()
+    build_fn(wb)
+    wb.save(p)
+    return p
+
+def test_check_sort_passes_when_sorted_desc(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
+    ok, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
+    assert ok is True
+
+def test_check_sort_fails_when_not_sorted(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 300], ["c", 200]])
+    ok, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
+    assert ok is False
+    assert "並んでいない" in reason
+
+def test_check_compute_column_passes_when_values_match(tmp_path):
+    p = _book(tmp_path, [["売上", "原価", "売上-原価"], [500, 300, 200], [900, 400, 500]])
+    ok, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert ok is True
+
+def test_check_compute_column_fails_when_value_wrong(tmp_path):
+    p = _book(tmp_path, [["売上", "原価", "売上-原価"], [500, 300, 999]])
+    ok, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert ok is False
+
+def test_check_lookup_fill_passes_when_all_transcribed(tmp_path):
+    wb = openpyxl.Workbook()
+    ws1 = wb.active; ws1.title = "明細"
+    for row in [["商品", "数量", "単価"], ["りんご", 2, 100], ["バナナ", 3, 200]]:
+        ws1.append(row)
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品", "単価"], ["りんご", 100], ["バナナ", 200]]:
+        ws2.append(row)
+    p = tmp_path / "lookup.xlsx"
+    wb.save(p)
+    args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
+    ok, reason = ailine.check_lookup_fill(p, args)
+    assert ok is True
+
+def test_check_lookup_fill_fails_when_value_missing_a_row(tmp_path):
+    wb = openpyxl.Workbook()
+    ws1 = wb.active; ws1.title = "明細"
+    for row in [["商品", "数量", "単価"], ["りんご", 2, 100], ["バナナ", 3, None]]:
+        ws1.append(row)
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品", "単価"], ["りんご", 100], ["バナナ", 200]]:
+        ws2.append(row)
+    p = tmp_path / "lookup.xlsx"
+    wb.save(p)
+    args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
+    ok, reason = ailine.check_lookup_fill(p, args)
+    assert ok is False
+
+def test_check_aggregate_passes_when_sums_correct(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in [["部門", "金額"], ["営業", 100], ["営業", 200], ["経理", 50]]:
+        ws.append(row)
+    out = wb.create_sheet("集計")
+    out.append(["部門", "合計 - 金額"])
+    out.append(["営業", 300])
+    out.append(["経理", 50])
+    out.append(["合計", 350])
+    p = tmp_path / "agg.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
+    assert ok is True
+
+def test_check_aggregate_fails_when_sum_wrong(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in [["部門", "金額"], ["営業", 100], ["営業", 200]]:
+        ws.append(row)
+    out = wb.create_sheet("集計")
+    out.append(["部門", "合計 - 金額"])
+    out.append(["営業", 999])
+    p = tmp_path / "agg.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
+    assert ok is False
+
+def test_check_aggregate_fails_when_sheet_missing(tmp_path):
+    p = _book(tmp_path, [["部門", "金額"], ["営業", 100]])
+    ok, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
+    assert ok is False
+    assert "集計" in reason
+
+def test_check_bold_row_passes_when_all_bold(tmp_path):
+    from openpyxl.styles import Font
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["商品", "金額"])
+    ws.append(["a", 1])
+    ws["A1"].font = Font(bold=True)
+    ws["B1"].font = Font(bold=True)
+    p = tmp_path / "b.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_bold(p, {"target": "row:1"})
+    assert ok is True
+
+def test_check_bold_row_fails_when_partial(tmp_path):
+    from openpyxl.styles import Font
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["商品", "金額"])
+    ws["A1"].font = Font(bold=True)   # B1 は太字にしない
+    p = tmp_path / "b.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_bold(p, {"target": "row:1"})
+    assert ok is False
+
+def test_check_bold_col_passes_when_all_bold(tmp_path):
+    from openpyxl.styles import Font
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["商品", "金額"])
+    ws.append(["a", 1])
+    ws.append(["b", 2])
+    for r in (1, 2, 3):
+        ws.cell(row=r, column=1).font = Font(bold=True)
+    p = tmp_path / "b.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_bold(p, {"target": "col:商品"})
+    assert ok is True
+
+def test_check_fill_color_passes_when_matching(tmp_path):
+    from openpyxl.styles import PatternFill
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["商品", "在庫"])
+    ws.append(["a", 3])
+    for r in (1, 2):
+        ws.cell(row=r, column=2).fill = PatternFill("solid", fgColor="FFFF00")
+    p = tmp_path / "b.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_fill_color(p, {"target": "col:在庫", "color": "yellow"})
+    assert ok is True
+
+def test_check_fill_color_fails_when_not_colored(tmp_path):
+    p = _book(tmp_path, [["商品", "在庫"], ["a", 3]])
+    ok, reason = ailine.check_fill_color(p, {"target": "col:在庫", "color": "yellow"})
+    assert ok is False
+
+def test_check_number_format_passes_when_thousands_applied(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["商品", "金額"])
+    ws.append(["a", 1000])
+    ws["B2"].number_format = "#,##0"
+    p = tmp_path / "b.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_number_format(p, {"col": "金額", "style": "thousands"})
+    assert ok is True
+
+def test_check_number_format_fails_when_not_applied(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 1000]])
+    ok, reason = ailine.check_number_format(p, {"col": "金額", "style": "thousands"})
+    assert ok is False
+
+def test_check_merge_passes_when_range_merged(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["a", "b", "c"])
+    ws.merge_cells("A1:C1")
+    p = tmp_path / "b.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_merge(p, {"range": "A1:C1"})
+    assert ok is True
+
+def test_check_merge_fails_when_not_merged(tmp_path):
+    p = _book(tmp_path, [["a", "b", "c"]])
+    ok, reason = ailine.check_merge(p, {"range": "A1:C1"})
+    assert ok is False
+
+def test_check_chart_passes_when_count_plus_one(monkeypatch, tmp_path):
+    p = tmp_path / "c.xlsx"
+    p.write_bytes(b"dummy")
+    monkeypatch.setattr(ailine, "_charts_count", lambda path: 1)
+    ok, reason = ailine.check_chart(p, 0)
+    assert ok is True
+
+def test_check_chart_fails_when_count_unchanged(monkeypatch, tmp_path):
+    p = tmp_path / "c.xlsx"
+    p.write_bytes(b"dummy")
+    monkeypatch.setattr(ailine, "_charts_count", lambda path: 0)
+    ok, reason = ailine.check_chart(p, 0)
+    assert ok is False
+
+def test_check_center_align_all_passes(tmp_path):
+    from openpyxl.styles import Alignment
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["a", "b"])
+    ws.append([1, 2])
+    for r in (1, 2):
+        for c in (1, 2):
+            ws.cell(row=r, column=c).alignment = Alignment(horizontal="center")
+    p = tmp_path / "b.xlsx"
+    wb.save(p)
+    ok, reason = ailine.check_center_align(p, {"target": "all"})
+    assert ok is True
+
+def test_check_center_align_col_fails_when_not_centered(tmp_path):
+    p = _book(tmp_path, [["a", "b"], [1, 2]])
+    ok, reason = ailine.check_center_align(p, {"target": "col:a"})
+    assert ok is False
+
+def test_run_postcondition_dispatches_by_op(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200]])
+    ok, reason = ailine.run_postcondition("SORT", p, {"col": "金額", "order": "desc"})
+    assert ok is True
+
+
+# --- run コマンド: 翻訳の分岐（CLARIFY exit 3 / DSL 経路の事後条件不合格） -------
+
+def test_cmd_run_clarify_prints_question_and_exits_3(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["商品", "金額"]])
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "CLARIFY", "question": "どの列を並べ替えますか？", "args": {}})
+    ns = argparse.Namespace(
+        book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "どの列を並べ替えますか？" in captured.out
+
+def test_cmd_run_dsl_verification_failure_falls_back_to_clarify_exit_3(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["商品", "金額"]])
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "存在しない列", "order": "desc"}})
+    ns = argparse.Namespace(
+        book=str(book), task="存在しない列で並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "がありません" in captured.out
+
+def test_cmd_run_dsl_dry_shows_confirmation_and_code_without_applying(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["商品", "金額"]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")   # 実 history を汚さない
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
+    ns = argparse.Namespace(
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=True, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "解釈: 操作:並べ替え 対象:金額 順:降順" in captured.out
+    assert "Call SortByColumn" in captured.out
+    assert '"path": "dsl"' in captured.out
+
+def test_cmd_run_dsl_postcondition_failure_returns_1(tmp_path, monkeypatch, capsys):
+    # basrun_apply/snapshot を差し替え、事後条件が満たされない場合に exit 1 になることを確認。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")   # 実 history を汚さない
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None:
+                        (True, None, "ok"))
+    # basrun_apply は成功したことにするが、実際には out_book の中身は昇順のまま(=事後条件不合格)。
+    ns = argparse.Namespace(
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "事後条件を満たさない" in captured.out

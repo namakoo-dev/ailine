@@ -76,48 +76,52 @@ def score_slots(expect, got):
     return hits, total
 
 
-op_ok = op_n = slot_ok = slot_n = 0
-misassert = amb_n = 0
-fails = []
-for item in BATTERY["items"]:
-    book = json.dumps(BATTERY["_meta"]["books"][item["book"]], ensure_ascii=False)
-    try:
-        got = ask(item["text"], book)
-    except Exception as e:
-        fails.append((item["id"], "API/JSON 失敗: " + str(e)[:60]))
-        op_n += 1
-        continue
-    got_op = str(got.get("op", "")).upper()
-    exp = item["expect"]
-    if exp in ("clarify", "freeform"):
-        amb_n += 1
-        op_n += 1
-        ok = got_op == exp.upper() or (exp == "clarify" and got_op == "FREEFORM")
-        # clarify 期待に FREEFORM は「断定はしていない」ので誤断定に数えない
-        if got_op not in ("CLARIFY", "FREEFORM"):
-            misassert += 1
-            fails.append((item["id"], f"誤断定: {got_op} ← 期待 {exp}"))
-        elif ok:
-            op_ok += 1
+# ★ M2b: 本実装 (ailine.translate_task) が同じ BATTERY / score_slots を再利用できるよう、
+#   採点ループは import 時に走らせず __main__ 実行時だけに限定する
+#   （bench/translation_dsl_battery_run.py が BATTERY・score_slots・norm を import する）。
+if __name__ == "__main__":
+    op_ok = op_n = slot_ok = slot_n = 0
+    misassert = amb_n = 0
+    fails = []
+    for item in BATTERY["items"]:
+        book = json.dumps(BATTERY["_meta"]["books"][item["book"]], ensure_ascii=False)
+        try:
+            got = ask(item["text"], book)
+        except Exception as e:
+            fails.append((item["id"], "API/JSON 失敗: " + str(e)[:60]))
+            op_n += 1
+            continue
+        got_op = str(got.get("op", "")).upper()
+        exp = item["expect"]
+        if exp in ("clarify", "freeform"):
+            amb_n += 1
+            op_n += 1
+            ok = got_op == exp.upper() or (exp == "clarify" and got_op == "FREEFORM")
+            # clarify 期待に FREEFORM は「断定はしていない」ので誤断定に数えない
+            if got_op not in ("CLARIFY", "FREEFORM"):
+                misassert += 1
+                fails.append((item["id"], f"誤断定: {got_op} ← 期待 {exp}"))
+            elif ok:
+                op_ok += 1
+            else:
+                fails.append((item["id"], f"{got_op} ← 期待 {exp} (許容内だが不一致)"))
+                op_ok += 1  # 安全側の取り違えは op 正解扱い (断定していない)
         else:
-            fails.append((item["id"], f"{got_op} ← 期待 {exp} (許容内だが不一致)"))
-            op_ok += 1  # 安全側の取り違えは op 正解扱い (断定していない)
-    else:
-        op_n += 1
-        if got_op == exp["op"]:
-            op_ok += 1
-            h, t = score_slots(exp, got)
-            slot_ok += h
-            slot_n += t
-            if h < t:
-                fails.append((item["id"], f"slot {h}/{t}: {json.dumps(got, ensure_ascii=False)[:100]}"))
-        else:
-            fails.append((item["id"], f"op {got_op} ← 期待 {exp['op']}"))
+            op_n += 1
+            if got_op == exp["op"]:
+                op_ok += 1
+                h, t = score_slots(exp, got)
+                slot_ok += h
+                slot_n += t
+                if h < t:
+                    fails.append((item["id"], f"slot {h}/{t}: {json.dumps(got, ensure_ascii=False)[:100]}"))
+            else:
+                fails.append((item["id"], f"op {got_op} ← 期待 {exp['op']}"))
 
-print(f"model: {MODEL}")
-print(f"op 分類: {op_ok}/{op_n} = {op_ok/op_n:.1%}  (合格線 90%)")
-print(f"必須 slot: {slot_ok}/{slot_n} = {slot_ok/max(slot_n,1):.1%}  (合格線 80%)")
-print(f"曖昧への誤断定: {misassert}/{amb_n}  (合格線 20% 以下)")
-print("\n-- 不一致の明細:")
-for fid, msg in fails:
-    print(f"  #{fid}: {msg}")
+    print(f"model: {MODEL}")
+    print(f"op 分類: {op_ok}/{op_n} = {op_ok/op_n:.1%}  (合格線 90%)")
+    print(f"必須 slot: {slot_ok}/{slot_n} = {slot_ok/max(slot_n,1):.1%}  (合格線 80%)")
+    print(f"曖昧への誤断定: {misassert}/{amb_n}  (合格線 20% 以下)")
+    print("\n-- 不一致の明細:")
+    for fid, msg in fails:
+        print(f"  #{fid}: {msg}")
