@@ -17,5 +17,8 @@ basrun-ts / ailine-ts の移行実験では完成後に遡って掘った（考�
 - [run-history](nodes/run-history.md) — 実行履歴 = ヘルパ昇格経済学の需要センサー（失敗種別を構造化記録）
 - [doctor](nodes/doctor.md) — セットアップ診断 7 項目。買った人の最初の 5 分を守る器官
 
+- [dsl-pipeline](nodes/dsl-pipeline.md) — 中間命令言語の二段構え（翻訳→決定論 codegen→事後条件・列名を正とする・段階的劣化）
+- [plan-execution](nodes/plan-execution.md) — 複合依頼の計画実行・黙落の構造的禁止・「言い切る範囲=検証した範囲」の正直バナー
+
 保留（挙動は実装済みだが GUI 導入で形が動く見込みのため、安定後にノード化）:
 進捗表示 / 差分表示の人間化 — 現状の挙動は commit 688eab7 とテストが一次資料
