@@ -13,3 +13,9 @@ basrun-ts / ailine-ts の移行実験では完成後に遡って掘った（考�
 ## ノード索引
 
 - [noop-guard-normalization](nodes/noop-guard-normalization.md) — 適用前の LibreOffice 正規化パス。初回保存の行高実体化が no-op ガードを盲目にする問題への恒久対処
+- [apply-timeout](nodes/apply-timeout.md) — 適用タイムアウト既定 180s・PID kill・★固まった LO は自動復旧しない既知の限界つき
+- [run-history](nodes/run-history.md) — 実行履歴 = ヘルパ昇格経済学の需要センサー（失敗種別を構造化記録）
+- [doctor](nodes/doctor.md) — セットアップ診断 7 項目。買った人の最初の 5 分を守る器官
+
+保留（挙動は実装済みだが GUI 導入で形が動く見込みのため、安定後にノード化）:
+進捗表示 / 差分表示の人間化 — 現状の挙動は commit 688eab7 とテストが一次資料
