@@ -1,0 +1,37 @@
+⏳ 初回準備（文書の正規化+構造読み取り）… (0.7s)
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.2s)
+⏳ LibreOffice で適用中… (0.6s)
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=w3_d_e2e.xlsx
+解釈: 操作:並べ替え 対象:7月 順:降順
+
+─ 生成した .bas（決定論・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Call SortByColumn(oDoc, 1, 4, 3, False)
+End Sub
+
+──────────────────────────────────────────
+
+変更点:
+＊セル値変更: Sheet
+  A3: 値 'りんご'→'なし'
+  B3: 値 100→168
+  C3: 値 123→191
+  D3: 値 146→214
+  E3: 値 169→237
+  A4: 値 'みかん'→'もも'
+  B4: 値 117→151
+  C4: 値 140→174
+  D4: 値 163→197
+  E4: 値 186→220
+  A6: 値 'もも'→'みかん'
+  B6: 値 151→117
+  …ほか 8 セル
+
+✓ 達成を機械検証済み（操作:並べ替え）: 5 行を検証（降順）
+
+適用先: w3_d_e2e.out.xlsx（原本 w3_d_e2e.xlsx は無変更）
+
+{"ok": true, "attempts": 1, "task": "7月で降順に並べ替えて", "model": "qwen2.5-coder:7b", "path": "dsl", "command": "解釈: 操作:並べ替え 対象:7月 順:降順", "postcondition": "pass", "changes": ["＊セル値変更: Sheet", "  A3: 値 'りんご'→'なし'", "  B3: 値 100→168", "  C3: 値 123→191", "  D3: 値 146→214", "  E3: 値 169→237", "  A4: 値 'みかん'→'もも'", "  B4: 値 117→151", "  C4: 値 140→174", "  D4: 値 163→197", "  E4: 値 186→220", "  A6: 値 'もも'→'みかん'", "  B6: 値 151→117", "  …ほか 8 セル"], "advisories": [], "out": "C:\\Dev\\ailine\\e2e_work\\w3_d_e2e.out.xlsx"}

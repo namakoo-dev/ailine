@@ -1,0 +1,32 @@
+⏳ 初回準備（文書の正規化+構造読み取り）… (0.7s)
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.2s)
+⏳ LibreOffice で適用中… (0.6s)
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=w3_sales_e2e.xlsx
+解釈: 操作:並べ替え 対象:金額 順:降順
+
+─ 生成した .bas（決定論・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Call SortByColumn(oDoc, 0, 1, 1, False)
+End Sub
+
+──────────────────────────────────────────
+
+変更点:
+＊セル値変更: Sheet
+  B2: 値 100→500
+  A3: 値 '営業'→'開発'
+  B3: 値 200→400
+  A5: 値 '開発'→'総務'
+  B5: 値 400→250
+  B6: 値 500→200
+  A7: 値 '総務'→'営業'
+  B7: 値 250→100
+
+✓ 達成を機械検証済み（操作:並べ替え）: 6 行を検証（降順）
+
+適用先: w3_sales_e2e.out.xlsx（原本 w3_sales_e2e.xlsx は無変更）
+
+{"ok": true, "attempts": 1, "task": "金額で降順に並べ替えて", "model": "qwen2.5-coder:7b", "path": "dsl", "command": "解釈: 操作:並べ替え 対象:金額 順:降順", "postcondition": "pass", "changes": ["＊セル値変更: Sheet", "  B2: 値 100→500", "  A3: 値 '営業'→'開発'", "  B3: 値 200→400", "  A5: 値 '開発'→'総務'", "  B5: 値 400→250", "  B6: 値 500→200", "  A7: 値 '総務'→'営業'", "  B7: 値 250→100"], "advisories": [], "out": "C:\\Dev\\ailine\\e2e_work\\w3_sales_e2e.out.xlsx"}

@@ -7,33 +7,31 @@ Option Explicit
 '  ★ ここは人が検証して固定する。生成物ではない。
 ' ────────────────────────────────────────────────────────────────
 
-' 1枚目シートのデータ行（見出し行0を除く）を、col 列で並べ替える。
-' 範囲と見出し扱いは内部で自動処理する。呼び側は列と向きだけ渡す。
+' 1枚目シートのデータ行（見出し行 headerRow を除く）を、col 列で並べ替える。
+' 範囲と見出し扱いは内部で自動処理する。呼び側は見出し行・列幅・列・向きを渡す。
+'   headerRow  : 見出し行（0 起点。W3: StructDump が推定した実際の見出し行。物理1行目なら0）
+'   lastCol    : 表の最終列（0 起点。★ W3: 多段見出しでは先頭列が見出し行で空欄になり得る
+'                （例: 親見出し行にのみ商品名があり子見出し行の同じ列は空）ため、Basic で
+'                見出し行を走査して求めず、接地済みの列数から Python 側(codegen_dsl)が
+'                決定論的に渡す）
 '   col        : 並べ替えの基準列（0 起点）
 '   ascending  : True=昇順, False=降順
-Sub SortByColumn(oDoc As Object, col As Integer, ascending As Boolean)
+Sub SortByColumn(oDoc As Object, headerRow As Integer, lastCol As Integer, col As Integer, ascending As Boolean)
     Dim oSheet As Object, oRange As Object
-    Dim lastRow As Long, lastCol As Integer
+    Dim lastRow As Long
     oSheet = oDoc.Sheets.getByIndex(0)
 
-    ' 最終データ行（A 列を上から走査）
-    lastRow = 1
+    ' 最終データ行（A 列を見出しの直下から走査）
+    lastRow = headerRow + 1
     Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
         lastRow = lastRow + 1
     Loop
     lastRow = lastRow - 1
 
-    ' 最終列（見出し行0を左から走査）
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, 0).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
-    lastCol = lastCol - 1
+    If lastRow < headerRow + 1 Then Exit Sub   ' データが無い
 
-    If lastRow < 1 Then Exit Sub   ' データが無い
-
-    ' 行1..lastRow（見出しを含めない）を範囲にする
-    oRange = oSheet.getCellRangeByPosition(0, 1, lastCol, lastRow)
+    ' 見出しの直下..lastRow（見出しを含めない）を範囲にする
+    oRange = oSheet.getCellRangeByPosition(0, headerRow + 1, lastCol, lastRow)
 
     Dim aFields(0) As New com.sun.star.util.SortField
     aFields(0).Field = col                 ' 範囲は列0起点なので絶対列＝相対列
@@ -50,12 +48,13 @@ End Sub
 
 
 ' 1枚目シートに「見栄えのする」棒グラフを1つ挿入する。範囲もスタイルも内部で組む。
-' ★ 項目名は先頭列(列0)に固定。呼び側は「値の列」だけ渡す（迷わせない）。
+' ★ 項目名は先頭列(列0)に固定。呼び側は「見出し行・値の列」を渡す（迷わせない）。
 ' ★ タイトル・横軸タイトル・系列色を見出しから自動導出して styling する
 '    ＝ LibreOffice native チャートの表現力を自前で引き出す（外部依存なし・ours）。
 '    データラベルは付けない（値は縦軸で読める。全棒に数字を振らない方が清潔＝プロの既定）。
-'   valCol : 棒にする値の列（0 起点。例: 金額=1, 売上=3）
-Sub InsertBarChart(oDoc As Object, valCol As Integer)
+'   headerRow : 見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
+'   valCol    : 棒にする値の列（0 起点。例: 金額=1, 売上=3）
+Sub InsertBarChart(oDoc As Object, headerRow As Integer, valCol As Integer)
     Dim oSheet As Object, oCharts As Object, oChart As Object, oDiag As Object
     Dim lastRow As Long
     Dim catCol As Integer
@@ -64,13 +63,13 @@ Sub InsertBarChart(oDoc As Object, valCol As Integer)
     catCol = 0                        ' 項目名は先頭列に固定
     oSheet = oDoc.Sheets.getByIndex(0)
 
-    ' 最終データ行（A 列を上から走査）
-    lastRow = 1
+    ' 最終データ行（A 列を見出しの直下から走査）
+    lastRow = headerRow + 1
     Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
         lastRow = lastRow + 1
     Loop
     lastRow = lastRow - 1
-    If lastRow < 1 Then Exit Sub
+    If lastRow < headerRow + 1 Then Exit Sub
 
     oCharts = oSheet.Charts
     sName = "Chart_" & valCol
@@ -79,20 +78,20 @@ Sub InsertBarChart(oDoc As Object, valCol As Integer)
     Dim oRect As New com.sun.star.awt.Rectangle
     oRect.X = 9000 : oRect.Y = 400 : oRect.Width = 14000 : oRect.Height = 8500
 
-    ' 項目名の列 と 値の列（見出し行0を含める＝ラベルになる）の2範囲
+    ' 項目名の列 と 値の列（見出し行を含める＝ラベルになる）の2範囲
     Dim oRanges(1) As New com.sun.star.table.CellRangeAddress
     oRanges(0).Sheet = 0
-    oRanges(0).StartColumn = catCol : oRanges(0).StartRow = 0
+    oRanges(0).StartColumn = catCol : oRanges(0).StartRow = headerRow
     oRanges(0).EndColumn = catCol   : oRanges(0).EndRow = lastRow
     oRanges(1).Sheet = 0
-    oRanges(1).StartColumn = valCol : oRanges(1).StartRow = 0
+    oRanges(1).StartColumn = valCol : oRanges(1).StartRow = headerRow
     oRanges(1).EndColumn = valCol   : oRanges(1).EndRow = lastRow
     ' True,True = 先頭行=系列名・先頭列=項目名。既定は縦棒グラフ。
     oCharts.addNewByName(sName, oRect, oRanges(), True, True)
 
     ' ── styling（見出しから導出。LO native は色/ラベル/タイトル/軸/フォントを honor する） ──
-    sCat = oSheet.getCellByPosition(catCol, 0).getString()
-    sVal = oSheet.getCellByPosition(valCol, 0).getString()
+    sCat = oSheet.getCellByPosition(catCol, headerRow).getString()
+    sVal = oSheet.getCellByPosition(valCol, headerRow).getString()
     oChart = oCharts.getByName(sName).getEmbeddedObject()
 
     ' タイトル＝値の見出し。太字・濃色
@@ -182,59 +181,61 @@ Sub AutoFitColumns(oDoc As Object)
 End Sub
 
 
-' 使用中の表（見出し行0〜最終データ行・0列〜最終列）の全セルを中央揃えにする。
-' ★ 範囲は自動検出。呼び側は引数なし。セル配置は HoriJustify で設定する
+' 使用中の表（見出し行 headerRow〜最終データ行・0列〜最終列）の全セルを中央揃えにする。
+' ★ 範囲は自動検出（最終行のみ）。セル配置は HoriJustify で設定する
 '   （CharHorizontalAlignment は段落用で Calc のセルには効かない ── 7B が滑りやすい罠）。
-Sub AlignCenter(oDoc As Object)
+'   headerRow : 見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
+'   lastCol   : 表の最終列（0 起点。★ W3: 多段見出しでは見出し行の先頭列が空欄になり得るため
+'               Basic で走査せず、接地済みの列数から Python 側(codegen_dsl)が渡す）
+Sub AlignCenter(oDoc As Object, headerRow As Integer, lastCol As Integer)
     Dim oSheet As Object, oRange As Object
-    Dim lastRow As Long, lastCol As Integer
+    Dim lastRow As Long
     oSheet = oDoc.Sheets.getByIndex(0)
-    lastRow = 0
+    ' 最終データ行（A 列を見出しの直下から走査。0行でも見出し行自体は対象にする）
+    lastRow = headerRow + 1
     Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
         lastRow = lastRow + 1
     Loop
     lastRow = lastRow - 1
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, 0).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
-    lastCol = lastCol - 1
-    If lastRow < 0 Or lastCol < 0 Then Exit Sub
-    oRange = oSheet.getCellRangeByPosition(0, 0, lastCol, lastRow)
+    If lastCol < 0 Then Exit Sub
+    oRange = oSheet.getCellRangeByPosition(0, headerRow, lastCol, lastRow)
     oRange.HoriJustify = com.sun.star.table.CellHoriJustify.CENTER
 End Sub
 
 
-' 指定列のデータセル（見出し行0を除く）に3桁区切りのカンマ書式 #,##0 を付ける。
+' 指定列のデータセル（見出し行 headerRow を除く）に3桁区切りのカンマ書式 #,##0 を付ける。
 ' ★ queryKey の -1（未登録）を addNew で拾う所と Locale の構築を内部で正しく処理する
 '   （7B は queryKey だけ書いて addNew を落とし、Locale() を関数呼びして滑る）。
-'   col : カンマを付ける列（0起点。例: 単価=3, 金額=4）
-Sub FormatThousands(oDoc As Object, col As Integer)
+'   headerRow : 見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
+'   col       : カンマを付ける列（0起点。例: 単価=3, 金額=4）
+Sub FormatThousands(oDoc As Object, headerRow As Integer, col As Integer)
     Dim oSheet As Object, oFormats As Object
     Dim lastRow As Long, nFmt As Long
     Dim aLocale As New com.sun.star.lang.Locale
     oSheet = oDoc.Sheets.getByIndex(0)
-    lastRow = 1
+    lastRow = headerRow + 1
     Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
         lastRow = lastRow + 1
     Loop
     lastRow = lastRow - 1
-    If lastRow < 1 Then Exit Sub
+    If lastRow < headerRow + 1 Then Exit Sub
     oFormats = oDoc.getNumberFormats()
     nFmt = oFormats.queryKey("#,##0", aLocale, False)
     If nFmt = -1 Then nFmt = oFormats.addNew("#,##0", aLocale)
-    oSheet.getCellRangeByPosition(col, 1, col, lastRow).NumberFormat = nFmt
+    oSheet.getCellRangeByPosition(col, headerRow + 1, col, lastRow).NumberFormat = nFmt
 End Sub
 
 
 ' VLOOKUP 相当。1枚目シートの各データ行について、keyCol の値をキーに
 ' 別表シートを照合し、見つけた値を resultCol に書く（静的な値として）。
 ' ★ 数式の =VLOOKUP は この経路で #VALUE! になるため、Basic 側で照合する。
-' ★ 参照表(lookupSheet)は「列0=キー・列1=値」の2列表を前提にする。
+' ★ 参照表(lookupSheet)は「列0=キー・列1=値」の2列表を前提にする（物理1行目が見出し・
+'   検出対象外）。
+'   headerRow   : 1枚目シートの見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
 '   keyCol      : 1枚目シートの、キーが入っている列（例: 商品名=0）
 '   resultCol   : 1枚目シートの、引いた値を書き込む列（例: 単価=2）
 '   lookupSheet : 参照表のシート名（例: "単価表"）
-Sub VLookupFromTable(oDoc As Object, keyCol As Integer, resultCol As Integer, lookupSheet As String)
+Sub VLookupFromTable(oDoc As Object, headerRow As Integer, keyCol As Integer, resultCol As Integer, lookupSheet As String)
     Dim oSheet As Object, oLook As Object
     Dim lastRow As Long, lastLook As Long, i As Long, j As Long
     Dim key As String
@@ -245,20 +246,20 @@ Sub VLookupFromTable(oDoc As Object, keyCol As Integer, resultCol As Integer, lo
     oLook = oDoc.Sheets.getByName(lookupSheet)
 
     ' 対象シートの最終データ行
-    lastRow = 1
+    lastRow = headerRow + 1
     Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
         lastRow = lastRow + 1
     Loop
     lastRow = lastRow - 1
 
-    ' 参照表の最終行
+    ' 参照表の最終行（参照表は常に物理1行目が見出し）
     lastLook = 1
     Do While oLook.getCellByPosition(0, lastLook).getString() <> ""
         lastLook = lastLook + 1
     Loop
     lastLook = lastLook - 1
 
-    For i = 1 To lastRow
+    For i = headerRow + 1 To lastRow
         key = oSheet.getCellByPosition(keyCol, i).getString()
         For j = 1 To lastLook
             If oLook.getCellByPosition(0, j).getString() = key Then
@@ -330,27 +331,28 @@ End Sub
 ' 見栄えのする普通の表として出す（分類×合計＋総合計行）。★ PivotSum が作る本物の DataPilot は
 ' LibreOffice が開くたび再描画してセル書式を撥ねる（罫線・カンマが出ない）。こちらは普通のセルに
 ' 書くので、格子罫線・カンマ・中央揃え・太字が native でそのまま残る（描画で確認済み）。
-'   groupCol : 分類の基準列（0起点。例: 部門=1）
-'   valueCol : 合計する値の列（例: 金額=4）
-Sub SummaryTable(oDoc As Object, groupCol As Integer, valueCol As Integer)
+'   headerRow : 集計元(1枚目シート)の見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
+'   groupCol  : 分類の基準列（0起点。例: 部門=1）
+'   valueCol  : 合計する値の列（例: 金額=4）
+Sub SummaryTable(oDoc As Object, headerRow As Integer, groupCol As Integer, valueCol As Integer)
     Dim oSheet As Object, oOut As Object
     Dim lastRow As Long, i As Long, j As Long
     oSheet = oDoc.Sheets.getByIndex(0)
-    lastRow = 1
+    lastRow = headerRow + 1
     Do While oSheet.getCellByPosition(0, lastRow).getString() <> "" : lastRow = lastRow + 1 : Loop
     lastRow = lastRow - 1
-    If lastRow < 1 Then Exit Sub
+    If lastRow < headerRow + 1 Then Exit Sub
 
     Dim gHead As String, vHead As String
-    gHead = oSheet.getCellByPosition(groupCol, 0).getString()
-    vHead = oSheet.getCellByPosition(valueCol, 0).getString()
+    gHead = oSheet.getCellByPosition(groupCol, headerRow).getString()
+    vHead = oSheet.getCellByPosition(valueCol, headerRow).getString()
 
     ' 分類ごとの合計（出現順を保つ）
     Dim keys(1000) As String, sums(1000) As Double
     Dim nKeys As Integer : nKeys = 0
     Dim total As Double : total = 0
     Dim k As String, v As Double, found As Integer
-    For i = 1 To lastRow
+    For i = headerRow + 1 To lastRow
         k = oSheet.getCellByPosition(groupCol, i).getString()
         v = oSheet.getCellByPosition(valueCol, i).getValue()
         found = -1

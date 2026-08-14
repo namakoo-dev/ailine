@@ -1,0 +1,43 @@
+⏳ 初回準備（文書の正規化+構造読み取り）… (0.6s)
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.4s)
+⏳ LibreOffice で適用中… (0.7s)
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=w3_sample_e2e.xlsx
+解釈: 操作:計算列 演算対象:売上 と 原価 演算子:-
+
+─ 生成した .bas（決定論・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Dim oSheet As Object, lastRow As Long, i As Long
+    oSheet = oDoc.Sheets.getByIndex(0)
+    lastRow = 1
+    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
+        lastRow = lastRow + 1
+    Loop
+    lastRow = lastRow - 1
+    If lastRow < 1 Then Exit Sub
+    oSheet.getCellByPosition(5, 0).setString("売上-原価")
+    For i = 1 To lastRow
+        oSheet.getCellByPosition(5, i).setFormula("=" & "D" & (i + 1) & "-" & "E" & (i + 1))
+    Next i
+End Sub
+
+──────────────────────────────────────────
+
+変更点:
+＊セル値変更: Sheet
+  F1: 値 (空)→'売上-原価'
+  F2: 値 (空)→'=D2-E2'
+  F3: 値 (空)→'=D3-E3'
+  F4: 値 (空)→'=D4-E4'
+  F5: 値 (空)→'=D5-E5'
+  F6: 値 (空)→'=D6-E6'
+★ 疑わしい: 変更が元データの範囲外です（F1:F6）
+列 F: データ 5 行のうち 6 行を変更（0 行は未変更）
+
+✓ 達成を機械検証済み（操作:計算列）: 5 行を検証（式・キャッシュ値とも一致）
+
+適用先: w3_sample_e2e.out.xlsx（原本 w3_sample_e2e.xlsx は無変更）
+
+{"ok": true, "attempts": 1, "task": "売上から原価を引いた利益列を作って", "model": "qwen2.5-coder:7b", "path": "dsl", "command": "解釈: 操作:計算列 演算対象:売上 と 原価 演算子:-", "postcondition": "pass", "changes": ["＊セル値変更: Sheet", "  F1: 値 (空)→'売上-原価'", "  F2: 値 (空)→'=D2-E2'", "  F3: 値 (空)→'=D3-E3'", "  F4: 値 (空)→'=D4-E4'", "  F5: 値 (空)→'=D5-E5'", "  F6: 値 (空)→'=D6-E6'"], "advisories": ["★ 疑わしい: 変更が元データの範囲外です（F1:F6）", "列 F: データ 5 行のうち 6 行を変更（0 行は未変更）"], "out": "C:\\Dev\\ailine\\e2e_work\\w3_sample_e2e.out.xlsx"}

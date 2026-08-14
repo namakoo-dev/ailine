@@ -885,7 +885,9 @@ def test_short_error_summary_empty():
 
 def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, monkeypatch, capsys):
     # ★ M2a: 端末には最終行だけ、履歴 jsonl には全文（トレースバックをそのまま出さない）。
-    book = _book(tmp_path, [["a", 1]])
+    # ★ W3: 見出し検出には「見出し行(複数の非空文字列)+データ行(型の混在)」が要るため、
+    #   単一行 [["a", 1]] でなく見出し+データの2行にする（意図は runtime_error 経路の確認）。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 1]])
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
     monkeypatch.setattr(ailine, "ollama_generate",
@@ -1278,12 +1280,27 @@ def test_verify_dsl_args_compute_column_target_resolves_existing_column():
     assert ok is True
     assert resolved["target"] == "金額"
 
-def test_verify_dsl_args_compute_column_target_unknown_column_errors():
+def test_verify_dsl_args_compute_column_target_unknown_falls_back_to_new_column():
+    # ★ W3: 実測で qwen2.5-coder:7b が「利益列を作って」の『利益』(新規列名) を target に
+    #   誤って埋める頻度が高いと判明（E2E③『売上から原価を引いた利益列を作って』）。
+    #   target が実在しない場合は一意性の曖昧さ(digit候補の複数一致)とは別なので、
+    #   CLARIFY で止めず target 無指定＝新規列作成にフォールバックする。
     ok, resolved, inferred, err = ailine.verify_dsl_args(
         "COMPUTE_COLUMN",
         {"operands": ["売上", "原価"], "operator": "-", "target": "存在しない列"}, _SAMPLE_META)
+    assert ok is True
+    assert "target" not in resolved
+    assert err is None
+
+def test_verify_dsl_args_compute_column_target_ambiguous_digit_still_errors():
+    # ★ W3: 実在しない場合と違い、複数解釈が可能な曖昧なケースは引き続き CLARIFY で止める
+    #   （推測で断定しない原則は真に曖昧なケースにだけ残す）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["列0", "列1", "列2", "列3"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["列0", "列1"], "operator": "-", "target": "2"}, meta)
     assert ok is False
-    assert "存在しない列" in err
+    assert "一意に決まりません" in err
 
 def test_verify_dsl_args_compute_column_no_target_still_ok():
     # target 無指定は従来どおり合格（新規列パス）。
@@ -1303,13 +1320,24 @@ def test_format_confirmation_line_compute_column_with_target_shows_it():
     assert "対象列:金額" in line
 
 def test_codegen_dsl_compute_column_with_target_writes_into_existing_column():
+    # ★ W3 Part3: 既定は式（setFormula）。値ベタ書きは use_formula=False（--values）で確認する。
     code = ailine.codegen_dsl(
         "COMPUTE_COLUMN",
         {"operands": ["売上", "原価"], "operator": "-", "target": "金額"}, _SAMPLE_META)
     # 金額は _SAMPLE_META の列1（0起点）。新規列(列5)には書かず、既存の列1に書く。
-    assert "getCellByPosition(1, i).setValue" in code
+    assert "getCellByPosition(1, i).setFormula" in code
+    assert '"D" & (i + 1) & "-" & "E" & (i + 1)' in code   # 売上=D列(3+1) 原価=E列(4+1)
     assert 'setString("売上-原価")' not in code   # 見出しは上書きしない(既存のまま)
     assert ailine.valid_signature(code)
+
+def test_codegen_dsl_compute_column_values_mode_writes_static_getvalue():
+    # ★ W3 Part3: --values（use_formula=False）は旧来の値ベタ書きのまま。
+    code = ailine.codegen_dsl(
+        "COMPUTE_COLUMN",
+        {"operands": ["売上", "原価"], "operator": "-", "target": "金額"}, _SAMPLE_META,
+        use_formula=False)
+    assert "getCellByPosition(1, i).setValue" in code
+    assert "setFormula" not in code
 
 def test_verify_dsl_args_lookup_fill_ok():
     meta = {"sheets": ["明細", "単価表"],
@@ -1373,14 +1401,16 @@ def test_format_confirmation_line_lookup_fill():
 # --- ④ 決定論 codegen ---------------------------------------------------------
 
 def test_codegen_dsl_sort_calls_helper_with_zero_based_index():
+    # ★ W3: SortByColumn は headerRow(0起点) を新たな第2引数に取る。_SAMPLE_META は
+    #   header_rows を持たない旧テスト値＝既定1行目(hr0=0)になる。
     code = ailine.codegen_dsl("SORT", {"col": "金額", "order": "desc"}, _SAMPLE_META)
-    assert "Call SortByColumn(oDoc, 1, False)" in code
+    assert "Call SortByColumn(oDoc, 0, 4, 1, False)" in code   # lastCol=4 (_SAMPLE_META は5列)
     assert ailine.valid_signature(code)
     assert not ailine.is_truncated_code(code)
 
 def test_codegen_dsl_sort_ascending():
     code = ailine.codegen_dsl("SORT", {"col": "在庫", "order": "asc"}, _SAMPLE_META)
-    assert "Call SortByColumn(oDoc, 2, True)" in code
+    assert "Call SortByColumn(oDoc, 0, 4, 2, True)" in code
 
 def test_codegen_dsl_lookup_fill_calls_helper():
     meta = {"sheets": ["明細", "単価表"],
@@ -1388,15 +1418,15 @@ def test_codegen_dsl_lookup_fill_calls_helper():
     code = ailine.codegen_dsl(
         "LOOKUP_FILL",
         {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}, meta)
-    assert 'Call VLookupFromTable(oDoc, 0, 2, "単価表")' in code
+    assert 'Call VLookupFromTable(oDoc, 0, 0, 2, "単価表")' in code
 
 def test_codegen_dsl_aggregate_calls_helper():
     code = ailine.codegen_dsl("AGGREGATE", {"group_col": "商品", "value_col": "売上"}, _SAMPLE_META)
-    assert "Call SummaryTable(oDoc, 0, 3)" in code
+    assert "Call SummaryTable(oDoc, 0, 0, 3)" in code
 
 def test_codegen_dsl_number_format_calls_helper():
     code = ailine.codegen_dsl("NUMBER_FORMAT", {"col": "金額", "style": "thousands"}, _SAMPLE_META)
-    assert "Call FormatThousands(oDoc, 1)" in code
+    assert "Call FormatThousands(oDoc, 0, 1)" in code
 
 def test_codegen_dsl_merge_converts_a1_range_to_zero_based():
     code = ailine.codegen_dsl("MERGE", {"range": "A1:E1"}, _SAMPLE_META)
@@ -1404,11 +1434,11 @@ def test_codegen_dsl_merge_converts_a1_range_to_zero_based():
 
 def test_codegen_dsl_chart_calls_helper():
     code = ailine.codegen_dsl("CHART", {"value_col": "金額"}, _SAMPLE_META)
-    assert "Call InsertBarChart(oDoc, 1)" in code
+    assert "Call InsertBarChart(oDoc, 0, 1)" in code
 
 def test_codegen_dsl_center_align_all_calls_helper():
     code = ailine.codegen_dsl("CENTER_ALIGN", {"target": "all"}, _SAMPLE_META)
-    assert "Call AlignCenter(oDoc)" in code
+    assert "Call AlignCenter(oDoc, 0, 4)" in code   # lastCol=4 (_SAMPLE_META は5列)
 
 def test_codegen_dsl_center_align_col_writes_template():
     code = ailine.codegen_dsl("CENTER_ALIGN", {"target": "col:在庫"}, _SAMPLE_META)
@@ -1418,7 +1448,7 @@ def test_codegen_dsl_center_align_col_writes_template():
 
 def test_codegen_dsl_bold_row_calls_helper_with_scanned_range():
     code = ailine.codegen_dsl("BOLD", {"target": "row:1"}, _SAMPLE_META)
-    assert "Call StyleBold(oDoc, 0, 0, lastCol, 0)" in code
+    assert "Call StyleBold(oDoc, 0, 0, 4, 0)" in code   # ★ W3: lastCol は走査でなく接地済み列数から決定論的に決まる
 
 def test_codegen_dsl_bold_col_calls_helper_with_scanned_range():
     code = ailine.codegen_dsl("BOLD", {"target": "col:商品"}, _SAMPLE_META)
@@ -1434,9 +1464,18 @@ def test_codegen_dsl_fill_color_col_writes_hex_literal():
     assert "getCellByPosition(2, r)" in code
 
 def test_codegen_dsl_compute_column_writes_new_column_at_end():
+    # ★ W3 Part3: 既定は式。値ベタ書きの回帰は use_formula=False 側で確認する。
     code = ailine.codegen_dsl("COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "-"}, _SAMPLE_META)
     assert 'setString("売上-原価")' in code
     assert "getCellByPosition(5, 0)" in code   # 既存5列(0..4)の次=列5
+    assert 'getCellByPosition(5, i).setFormula("=" & "D" & (i + 1) & "-" & "E" & (i + 1))' in code
+    assert ailine.valid_signature(code)
+
+def test_codegen_dsl_compute_column_values_mode_new_column_uses_getvalue():
+    code = ailine.codegen_dsl("COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "-"},
+                               _SAMPLE_META, use_formula=False)
+    assert 'setString("売上-原価")' in code
+    assert "getCellByPosition(5, 0)" in code
     assert "getCellByPosition(3, i).getValue() - oSheet.getCellByPosition(4, i).getValue()" in code
     assert ailine.valid_signature(code)
     # ★ is_truncated_code() は未検証: "Exit Sub" 直後の改行+識別子("...Exit Sub\n    oSheet")を
@@ -1886,6 +1925,9 @@ def test_cmd_run_dsl_prints_truncation_notice_when_snapshot_truncated(tmp_path, 
 
 def test_cmd_run_clarify_prints_question_and_exits_3(tmp_path, monkeypatch, capsys):
     book = _book(tmp_path, [["商品", "金額"]])
+    # ★ W3: 正規化パス(StructDump)は翻訳より前に走るので、CLARIFY 系の単体テストも
+    #   normalize_book を差し替えて LibreOffice を要さないようにする。
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "CLARIFY", "question": "どの列を並べ替えますか？", "args": {}})
@@ -1900,6 +1942,7 @@ def test_cmd_run_clarify_prints_question_and_exits_3(tmp_path, monkeypatch, caps
 
 def test_cmd_run_dsl_verification_failure_falls_back_to_clarify_exit_3(tmp_path, monkeypatch, capsys):
     book = _book(tmp_path, [["商品", "金額"]])
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "SORT", "args": {"col": "存在しない列", "order": "desc"}})
@@ -2159,9 +2202,337 @@ def test_cmd_run_plan_dependent_chaining_resolves_new_column_reference(tmp_path,
     ns = argparse.Namespace(
         book=str(p), task="売上から原価を引いた利益列を作って、利益で降順に並べ替えて",
         model="qwen2.5-coder:7b", refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False,
+        # ★ W3 Part3: fake_apply は静的な値を直接書き込む(式は書かない)ので、この
+        #   テストは --values（値ベタ書き）経路として実行する。式検証(二層)は
+        #   check_compute_column の専用ユニットテストで別途カバーする。
+        values=True)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
     assert "列『利益』がありません" not in captured.out
     assert "✓ すべて機械検証済み" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# ★ W3 Part1/2: StructDump（LibreOffice の目で構造を読む）+ 見出し行推定
+#   ★ LO 依存部（実使用範囲の取得）は fixture の dict/テキストで代用する
+#   （normalize_book/basrun_apply は差し替え、StructDump のパーサ・ヒューリスティクス
+#   だけを純ロジックとして検証する）。実機での動作は E2E ログで別途確認する。
+# ---------------------------------------------------------------------------
+
+def test_parse_structdump_raw_parses_tab_delimited_lines():
+    text = "SHEET\tSheet\t0\t0\t4\t9\t0\t1\t0\nSHEET\t単価表\t0\t0\t1\t3\t0\t0\t0\n"
+    got = ailine.parse_structdump_raw(text)
+    assert got["Sheet"]["used_range"] == {"start_col": 0, "start_row": 0, "end_col": 4, "end_row": 9}
+    assert got["Sheet"]["charts"] == 1
+    assert got["単価表"]["shapes"] == 0
+
+def test_parse_structdump_raw_ignores_malformed_lines():
+    text = "not a sheet line\nSHEET\ttoo\tfew\tcolumns\n"
+    assert ailine.parse_structdump_raw(text) == {}
+
+def test_parse_structdump_raw_empty_text_gives_empty_dict():
+    assert ailine.parse_structdump_raw("") == {}
+
+def test_row_char_stats_counts_nonempty_str_and_bold(tmp_path):
+    from openpyxl.styles import Font
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "金額", "在庫"])
+    ws.append(["りんご", 100, 5])
+    ws["A1"].font = Font(bold=True)
+    ws["B1"].font = Font(bold=True)
+    wb.save(p)
+    wb2 = openpyxl.load_workbook(p)
+    stats = ailine._row_char_stats(wb2.active, 1, 2, 1, 3)
+    assert stats[1] == {"nonempty": 3, "str": 3, "bold": 2}
+    assert stats[2] == {"nonempty": 3, "str": 1, "bold": 0}   # りんご=文字列, 100/5=数値
+
+def test_build_struct_dump_falls_back_to_openpyxl_when_no_raw_dump(tmp_path, monkeypatch):
+    # ★ normalize_book が差し替えられて structdump.txt が書かれない場合(単体テストの通常経路)、
+    #   openpyxl の max_row/max_column から used_range を推定する（CLARIFY を誤って出さないため）。
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    dump = ailine.build_struct_dump(p, workdir)
+    sheet = dump["sheets"]["Sheet"]
+    assert sheet["used_range"]["start_row"] == 1
+    assert sheet["rows"][1] == {"nonempty": 2, "str": 2, "bold": 0}
+    assert sheet["rows"][2]["nonempty"] == 2 and sheet["rows"][2]["str"] == 1
+
+def test_detect_header_row_simple_single_level_header():
+    # 普通の帳票（demo/sales.xlsx 型）: 行1=見出し、行2以降=数値混在データ。
+    sheet_struct = {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+        3: {"nonempty": 2, "str": 1, "bold": 0},
+    }}
+    row, confident = ailine.detect_header_row(sheet_struct)
+    assert (row, confident) == (1, True)
+
+def test_detect_header_row_title_row_then_header_at_row3():
+    # A検体型: 行1=結合タイトル(str=1・閾値未満で候補外)、行2=単一文字列、行3=見出し(str=5)、
+    # 行4以降=型混在データ。
+    sheet_struct = {"rows": {
+        1: {"nonempty": 1, "str": 1, "bold": 1},
+        2: {"nonempty": 1, "str": 1, "bold": 0},
+        3: {"nonempty": 5, "str": 5, "bold": 0},
+        4: {"nonempty": 5, "str": 1, "bold": 0},
+    }}
+    row, confident = ailine.detect_header_row(sheet_struct)
+    assert (row, confident) == (3, True)
+
+def test_detect_header_row_two_level_header_picks_child_row():
+    # D検体型: 行1=親見出し(結合・str=3)、行2=子見出し(str=4・型混在なし直下）、
+    # 行3=型混在データ → 子見出し行(2)を採用する。
+    sheet_struct = {"rows": {
+        1: {"nonempty": 3, "str": 3, "bold": 0},
+        2: {"nonempty": 4, "str": 4, "bold": 0},
+        3: {"nonempty": 5, "str": 1, "bold": 0},
+    }}
+    row, confident = ailine.detect_header_row(sheet_struct)
+    assert (row, confident) == (2, True)
+
+def test_detect_header_row_ambiguous_two_equally_valid_candidates_is_not_confident():
+    # 型混在の直下が2つとも存在する（曖昧）場合は推測しない。
+    sheet_struct = {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+        3: {"nonempty": 2, "str": 2, "bold": 0},
+        4: {"nonempty": 2, "str": 1, "bold": 0},
+    }}
+    row, confident = ailine.detect_header_row(sheet_struct)
+    assert confident is False
+    assert row is None
+
+def test_detect_header_row_empty_sheet_is_not_confident():
+    assert ailine.detect_header_row({"rows": {}}) == (None, False)
+
+def test_resolve_header_rows_confident_detection_no_clarify():
+    struct_dump = {"sheets": {"Sheet": {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+    }}}}
+    header_rows, clarify = ailine.resolve_header_rows(struct_dump, ["Sheet"])
+    assert header_rows == {"Sheet": 1}
+    assert clarify is None
+
+def test_resolve_header_rows_ambiguous_asks_clarify_with_exact_wording():
+    struct_dump = {"sheets": {"Sheet": {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+        3: {"nonempty": 2, "str": 2, "bold": 0},
+        4: {"nonempty": 2, "str": 1, "bold": 0},
+    }}}}
+    header_rows, clarify = ailine.resolve_header_rows(struct_dump, ["Sheet"])
+    assert clarify == "見出しは何行目ですか？（1 行目/3 行目 のように答えて）"
+    assert header_rows == {"Sheet": 1}   # 既定のまま(呼び出し側は CLARIFY で止まるので使われない)
+
+def test_resolve_header_rows_no_struct_dump_defaults_to_row1_no_clarify():
+    header_rows, clarify = ailine.resolve_header_rows({}, ["Sheet", "単価表"])
+    assert header_rows == {"Sheet": 1, "単価表": 1}
+    assert clarify is None
+
+def test_resolve_header_rows_empty_sheets_list_is_noop():
+    assert ailine.resolve_header_rows({"sheets": {}}, []) == ({}, None)
+
+def test_cmd_run_clarify_on_ambiguous_header_before_translation(tmp_path, monkeypatch, capsys):
+    # ★ W3: 見出し推定が曖昧なら、翻訳(translate_task)を呼ぶ前に CLARIFY して exit 3 になる
+    #   （『三層全部が同じ見出し推定を使う』の前提＝そもそも翻訳に渡す接地が無い）。
+    book = _book(tmp_path, [["a", 1], ["b", 2]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    ambiguous = {"sheets": {"Sheet": {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+        3: {"nonempty": 2, "str": 2, "bold": 0},
+        4: {"nonempty": 2, "str": 1, "bold": 0},
+    }}}}
+    monkeypatch.setattr(ailine, "build_struct_dump", lambda book, workdir: ambiguous)
+    called = {"n": 0}
+    def boom(*a, **k):
+        called["n"] += 1
+        return {"plan": [{"op": "FREEFORM", "args": {}}]}
+    monkeypatch.setattr(ailine, "translate_task", boom)
+    ns = argparse.Namespace(
+        book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "見出しは何行目ですか" in captured.out
+    assert called["n"] == 0   # 翻訳は一度も呼ばれていない
+
+def test_cmd_run_dry_skips_structdump_and_uses_physical_row1(tmp_path, monkeypatch, capsys):
+    # ★ --dry は LibreOffice に触れない（既存の設計不変条件）。normalize_book が
+    #   呼ばれていないことを確認する。
+    book = _book(tmp_path, [["商品", "金額"]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    called = {"n": 0}
+    def boom(*a, **k):
+        called["n"] += 1
+        return a[0]
+    monkeypatch.setattr(ailine, "normalize_book", boom)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
+    ns = argparse.Namespace(
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    assert rc == 0
+    assert called["n"] == 0
+
+
+# --- codegen: header_row(hr0) が三層で一貫して使われる（接地→codegen） -------------
+
+def test_codegen_dsl_sort_uses_detected_header_row_from_book_meta():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]},
+            "header_rows": {"Sheet": 3}}
+    code = ailine.codegen_dsl("SORT", {"col": "金額", "order": "desc"}, meta)
+    assert "Call SortByColumn(oDoc, 2, 1, 1, False)" in code   # hr0 = 3-1 = 2, lastCol=1(列2つ)
+
+def test_codegen_dsl_compute_column_formula_uses_detected_header_row():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "売上", "原価"]},
+            "header_rows": {"Sheet": 3}}
+    code = ailine.codegen_dsl("COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "-"}, meta)
+    assert "For i = 3 To lastRow" in code   # hr0+1 = 2+1 = 3
+    assert 'setString("売上-原価")' in code
+    assert 'getCellByPosition(3, 2).setString' in code   # 新規列は列3, 見出し行は hr0=2
+
+
+# --- 事後条件: header_row が接地・codegen と同じ行を使う ---------------------------
+
+def test_check_sort_with_header_row_three_matches_a_specimen_layout(tmp_path):
+    p = tmp_path / "a_like.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws["A1"] = "タイトル"
+    ws["A2"] = "作成日"
+    for c, h in enumerate(["商品", "金額"], start=1):
+        ws.cell(row=3, column=c, value=h)
+    ws.append(["a", 300]); ws.append(["b", 200]); ws.append(["c", 100])
+    # ↑ append は末尾行に追記するため、3行目の直後(4行目)から入る
+    wb.save(p)
+    status, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"}, header_row=3)
+    assert status == "pass"
+
+def test_check_sort_with_wrong_header_row_fails_to_find_column(tmp_path):
+    p = tmp_path / "a_like.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws["A1"] = "タイトル"
+    ws["A2"] = "作成日"
+    for c, h in enumerate(["商品", "金額"], start=1):
+        ws.cell(row=3, column=c, value=h)
+    ws.append(["a", 300])
+    wb.save(p)
+    status, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"}, header_row=1)
+    assert status == "fail"
+    assert "がありません" not in reason or "見つからない" in reason
+
+
+def _inject_formula_cache(path, sheet_filename: str, addr_to_value: dict) -> None:
+    """テスト専用: xlsx の数式セルへキャッシュ値(<v>)を直接注入する（openpyxl は数式を
+       計算しないため、LO を使わずに二層事後条件(式+キャッシュ値)を検証するための小道具）。"""
+    import re
+    import zipfile
+    tmp = path.with_suffix(".tmp.xlsx")
+    with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == sheet_filename:
+                text = data.decode("utf-8")
+                for addr, value in addr_to_value.items():
+                    # openpyxl は数式セルに空の <v></v> を既に書いていることがある（無い場合もある）。
+                    # どちらでも対応できるよう <v>...</v> の有無を任意にして丸ごと置き換える。
+                    pattern = re.compile(rf'(<c r="{addr}"[^>]*>.*?<f>.*?</f>)(?:<v>.*?</v>)?(</c>)')
+                    text = pattern.sub(rf'\1<v>{value}</v>\2', text, count=1)
+                data = text.encode("utf-8")
+            zout.writestr(item, data)
+    tmp.replace(path)
+
+
+def _formula_book(tmp_path, header_row_values, data_rows, formula_col_letter, operator_col_letters,
+                   operator, name="f.xlsx"):
+    """演算対象2列+式列を持つブックを作る。式列には setFormula 相当の文字列を直接書く
+       （キャッシュ値は別途 _inject_formula_cache で注ぐ）。"""
+    p = tmp_path / name
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(header_row_values)
+    for i, row in enumerate(data_rows, start=2):
+        ws[f"A{i}"] = f"item{i}"   # ★ _scan_last_row は A列(key_col=1既定)で行の有無を判定する
+        for col_letter, val in row.items():
+            ws[f"{col_letter}{i}"] = val
+        c1, c2 = operator_col_letters
+        ws[f"{formula_col_letter}{i}"] = f"={c1}{i}{operator}{c2}{i}"
+    wb.save(p)
+    return p
+
+def test_check_compute_column_formula_mode_passes_when_formula_and_cache_both_match(tmp_path):
+    p = _formula_book(tmp_path, ["商品", "数量", "単価", "小計"],
+                       [{"B": 3, "C": 120}, {"B": 5, "C": 80}], "D", ("B", "C"), "*")
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"D2": 360, "D3": 400})
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["数量", "単価"], "operator": "*", "target": "小計"}, use_formula=True)
+    assert status == "pass"
+    assert "式・キャッシュ値とも一致" in reason
+
+def test_check_compute_column_formula_mode_fails_when_formula_string_wrong(tmp_path):
+    p = tmp_path / "f.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "小計"])
+    ws.append(["りんご", 3, 120, None])
+    ws["D2"] = "=B2+C2"   # ★ 期待は * なのに + を書いてしまった想定
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"D2": 123})
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["数量", "単価"], "operator": "*", "target": "小計"}, use_formula=True)
+    assert status == "fail"
+    assert "式が期待形でない" in reason
+
+def test_check_compute_column_formula_mode_fails_when_cache_value_wrong(tmp_path):
+    p = _formula_book(tmp_path, ["商品", "数量", "単価", "小計"],
+                       [{"B": 3, "C": 120}], "D", ("B", "C"), "*")
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"D2": 999})   # ★ 期待360なのに999
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["数量", "単価"], "operator": "*", "target": "小計"}, use_formula=True)
+    assert status == "fail"
+    assert "キャッシュ値が不一致" in reason
+
+def test_check_compute_column_values_mode_unaffected_by_formula_flag_default(tmp_path):
+    # use_formula 省略時は既定 False（旧テスト・旧挙動と同一）。
+    p = _book(tmp_path, [["売上", "原価", "売上-原価"], [500, 300, 200]])
+    status, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert status == "pass"
+    assert "キャッシュ値" not in reason
+
+
+# --- codegen: COMPUTE_COLUMN の式化は LO 方言(;/.) を要さない（formula_spike の実測どおり） --
+
+def test_codegen_dsl_compute_column_formula_has_no_semicolon_or_sheet_dot():
+    # ★ bench/formula_spike_RESULTS.md: setFormula は多引数(;)・シート参照(.)の時だけ
+    #   LO 方言が要る。COMPUTE_COLUMN は単純な行内二項演算(=B2*C2 型)でどちらも使わない。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価", "小計"]}}
+    code = ailine.codegen_dsl("COMPUTE_COLUMN",
+                               {"operands": ["数量", "単価"], "operator": "*", "target": "小計"}, meta)
+    assert ";" not in code
+    assert '"A" & (i + 1) & "*" & "B" & (i + 1)' in code   # 数量=A列(0+1) 単価=B列(1+1)
+
+
+# --- _scan_last_row_basic: header_row 対応の走査開始/ガード閾値 -------------------
+
+def test_scan_last_row_basic_default_matches_legacy_output():
+    assert ailine._scan_last_row_basic() == (
+        "    lastRow = 1\n"
+        "    Do While oSheet.getCellByPosition(0, lastRow).getString() <> \"\"\n"
+        "        lastRow = lastRow + 1\n"
+        "    Loop\n"
+        "    lastRow = lastRow - 1\n"
+        "    If lastRow < 1 Then Exit Sub\n")
+
+def test_scan_last_row_basic_custom_start_row_and_min_ok():
+    out = ailine._scan_last_row_basic(start_row="3", min_ok="2")
+    assert "lastRow = 3\n" in out
+    assert "If lastRow < 2 Then Exit Sub\n" in out
