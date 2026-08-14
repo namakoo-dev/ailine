@@ -33,18 +33,22 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
     import openpyxl
+    from openpyxl.utils import get_column_letter
 except ImportError:
     sys.exit("openpyxl が要る:  pip install openpyxl")
 
@@ -53,20 +57,56 @@ DEFAULT_REFS = HERE / "refs"
 DEFAULT_HELPERS = HERE / "helpers"
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL = os.environ.get("AILINE_MODEL", "qwen2.5-coder:7b")
+DEFAULT_APPLY_TIMEOUT = 180.0  # M1: 暴走マクロで無限ハングしないよう既定 ON（--timeout 0 で無効化）
+
+HISTORY_DIR = Path.home() / ".ailine"
+HISTORY_FILE = HISTORY_DIR / "history.jsonl"
 
 
-def basrun_path() -> Path:
-    """basrun.py の場所。環境変数 BASRUN > ailine と並びの checkout の順で探す。"""
+def _find_basrun_path() -> Path | None:
+    """basrun.py の場所。環境変数 BASRUN > ailine と並びの checkout の順で探す。
+       見つからなければ None（sys.exit しない版。doctor から非致命的に使う）。"""
     env = os.environ.get("BASRUN")
     if env:
-        return Path(env)
+        p = Path(env)
+        return p if p.exists() else None
     for name in ("basrun", "nagi-bas"):  # 公開 repo 名 / 作者ローカルの旧ディレクトリ名
         p = HERE.parent / name / "basrun.py"
         if p.exists():
             return p
-    sys.exit("basrun.py が見つからない: ailine と並びに"
-             " https://github.com/namakoo-dev/basrun を clone するか、"
-             "環境変数 BASRUN でパスを指定する")
+    return None
+
+
+def basrun_path() -> Path:
+    """basrun.py の場所。無ければ理由つきで落とす（run から使う致命版）。"""
+    p = _find_basrun_path()
+    if p is None:
+        sys.exit("basrun.py が見つからない: ailine と並びに"
+                 " https://github.com/namakoo-dev/basrun を clone するか、"
+                 "環境変数 BASRUN でパスを指定する")
+    return p
+
+
+# ---------------------------------------------------------------------------
+# 進捗表示（M1: 生成中の完全沈黙を解消。凝った演出はしない — Windows コンソール安全第一）
+# ---------------------------------------------------------------------------
+
+def _fmt_elapsed(seconds: float) -> str:
+    """経過秒を表示用に整形する（例: 12.34 → '(12.3s)'）。"""
+    return f"({seconds:.1f}s)"
+
+
+def progress_start(label: str) -> float:
+    """進捗の開始行を stderr に出す（改行しない＝完了時に経過秒を追記する）。
+       --json のときも常に stderr（stdout の機械出力を汚さない）。
+       開始時刻(time.monotonic())を返す。"""
+    print(label, end="", file=sys.stderr, flush=True)
+    return time.monotonic()
+
+
+def progress_end(start: float) -> None:
+    """開始行に経過秒を追記して改行する。"""
+    print(" " + _fmt_elapsed(time.monotonic() - start), file=sys.stderr)
 
 CONTRACT = """あなたは LibreOffice Basic を書く。出力は .bas のコードだけ。説明・markdown 柵は禁止。
 
@@ -235,6 +275,41 @@ def snapshot(path: Path) -> dict:
     return snap
 
 
+# ★ snapshot() の cell tuple の並びと対応する日本語ラベル（M1: 生 tuple 漏れの解消）。
+_CELL_FIELD_LABELS = ("値", "数値書式", "背景", "太字", "罫線", "配置")
+# snapshot() は完全に既定状態のセルを cells 辞書に入れない（skip 条件参照）。
+# 片側が辞書に無い(=完全既定)ときは、この既定 tuple で埋める（全 None で埋めると
+# 数値書式が『None→General』という偽の差分を作ってしまう＝実測で見つけた罠）。
+_CELL_DEFAULT = (None, "General", None, False, None, None)
+
+
+def _cell_ref(row: int, col: int) -> str:
+    """0起点の内部行/列表記(r,c)を、人が読める A1 形式（例: B2）にする。"""
+    return f"{get_column_letter(col)}{row}"
+
+
+def _fmt_cell_value(v) -> str:
+    """人が読める値表示（None は '(空)'、文字列はクォート）。"""
+    if v is None:
+        return "(空)"
+    if isinstance(v, str):
+        return f"'{v}'"
+    return str(v)
+
+
+def describe_cell_change(before: tuple | None, after: tuple | None) -> str:
+    """(値,数値書式,背景,太字,罫線,配置) の tuple 差分を、★ 変わったフィールドだけ
+       日本語ラベルで列挙する人間可読の文字列にする（tuple の生表示は出さない）。
+       例: 値 'りんご'→'リンゴ', 太字 (空)→True"""
+    b = before if before is not None else _CELL_DEFAULT
+    a = after if after is not None else _CELL_DEFAULT
+    parts = []
+    for label, bv, av in zip(_CELL_FIELD_LABELS, b, a):
+        if bv != av:
+            parts.append(f"{label} {_fmt_cell_value(bv)}→{_fmt_cell_value(av)}")
+    return ", ".join(parts) if parts else "(差分なし)"
+
+
 def diff_snapshots(before: dict, after: dict) -> tuple:
     """(changed: bool, lines: [str])。人が読める変更点も返す。
        セル値/書式/色/太字/罫線・結合・列幅・行高・シート・グラフの変化を見る。"""
@@ -275,8 +350,10 @@ def diff_snapshots(before: dict, after: dict) -> tuple:
         if b == a:
             continue
         cell_changes += 1
-        sheet, rest = k.split("!", 1)
-        changed_by_sheet.setdefault(sheet, []).append(f"  {rest}: {b} → {a}")
+        sheet, rc = k.split("!", 1)
+        r_str, c_str = rc.split(",")
+        ref = _cell_ref(int(r_str), int(c_str))
+        changed_by_sheet.setdefault(sheet, []).append(f"  {ref}: {describe_cell_change(b, a)}")
 
     shown = 0
     for sheet, clines in changed_by_sheet.items():
@@ -300,9 +377,37 @@ def diff_snapshots(before: dict, after: dict) -> tuple:
 # basrun 経由の適用
 # ---------------------------------------------------------------------------
 
-def basrun_apply(book: Path, code: str, workdir: Path, helper_files=()) -> tuple:
+def _timeout_error_message(timeout: float) -> str:
+    return f"実行時エラー: マクロが {timeout:.0f} 秒で終了しない（無限ループの可能性）"
+
+
+def _kill_process_tree(pid: int) -> None:
+    """PID 指定でプロセスツリーを kill する。
+       ★ taskkill /IM（名前一括）は使わない — 無関係な他プロセスも巻き込む
+       （2026-08 の Senior MCP 事故の教訓）。必ず特定した PID だけを狙う。"""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True)
+    else:
+        import signal
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except Exception:
+            pass
+
+
+def basrun_apply(book: Path, code: str, workdir: Path, helper_files=(),
+                  timeout: float | None = DEFAULT_APPLY_TIMEOUT) -> tuple:
     """生成コードを book に適用する。(ok, error_or_None, raw_output)。
-       helper_files があれば同じ src に置く＝同じライブラリに同期され、Gen から呼べる。"""
+       helper_files があれば同じ src に置く＝同じライブラリに同期され、Gen から呼べる。
+
+    ★ M1: timeout（既定 180 秒、None/0 で無効）を basrun 側の `apply --timeout` に
+       転送する。basrun は自分の内部タイムアウトで、ハングした接続先の LibreOffice
+       だけを stop_office() で終了させる（taskkill 一括はしない、既存機構）。
+       ここではさらに外側の安全網として、basrun 自身が固まった場合に備えて
+       ゆとり(+30秒)を持たせた outer timeout を持ち、それも超えたら basrun.py の
+       プロセスを PID 指定で kill する。どちらの経路で落ちても、修復ループには
+       同じ「実行時エラー: マクロが N 秒で終了しない」で渡す（正直な分類）。"""
     src = workdir / "src"
     if src.exists():
         shutil.rmtree(src)
@@ -310,11 +415,32 @@ def basrun_apply(book: Path, code: str, workdir: Path, helper_files=()) -> tuple
     for hf in helper_files:
         shutil.copy2(hf, src / hf.name)
     (src / "Gen.bas").write_text(code, encoding="utf-8")
-    p = subprocess.run(
-        [sys.executable, str(basrun_path()), "apply", str(book), str(src), "AiLine", "Gen.Run"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")  # ★ cp932 事故を避ける
-    raw = (p.stdout or "") + "\n" + (p.stderr or "")
-    if p.returncode != 0:
+
+    cmd = [sys.executable, str(basrun_path()), "apply", str(book), str(src), "AiLine", "Gen.Run"]
+    if timeout:
+        cmd += ["--timeout", str(timeout)]
+    outer_timeout = (timeout + 30) if timeout else None
+
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace")  # ★ cp932 事故を避ける
+    try:
+        out, err_out = proc.communicate(timeout=outer_timeout)
+    except subprocess.TimeoutExpired:
+        # ★ basrun 自身の内部タイムアウト＋stop_office() が働かなかった場合の安全網。
+        _kill_process_tree(proc.pid)
+        try:
+            out, err_out = proc.communicate(timeout=5)
+        except Exception:
+            out, err_out = "", ""
+        raw = (out or "") + "\n" + (err_out or "")
+        return False, _timeout_error_message(timeout), raw
+
+    raw = (out or "") + "\n" + (err_out or "")
+    if proc.returncode != 0:
+        # basrun 自身の内部タイムアウトで落ちた場合も、同じ「実行時エラー」分類に正規化する。
+        if timeout and "秒応答しなかった" in raw:
+            return False, _timeout_error_message(timeout), raw
         return False, raw.strip()[-800:], raw
     return True, None, raw
 
@@ -324,7 +450,8 @@ def basrun_apply(book: Path, code: str, workdir: Path, helper_files=()) -> tuple
 NOOP_MACRO = "Option VBASupport 1\nOption Explicit\n\nSub Run(oDoc As Object)\nEnd Sub\n"
 
 
-def normalize_book(book: Path, workdir: Path) -> Path:
+def normalize_book(book: Path, workdir: Path,
+                    timeout: float | None = DEFAULT_APPLY_TIMEOUT) -> Path:
     """コピーを LibreOffice で一度（空マクロで）開いて保存する ＝ P0 の正規化パス。
 
     LibreOffice は openpyxl 製（＝ LO で保存されたことがない）ブックを初回保存する際、
@@ -336,7 +463,7 @@ def normalize_book(book: Path, workdir: Path) -> Path:
     テスト側で先に実装していた（挙動の参考。製品経路に入れるのはこちらが初）。"""
     normalized = workdir / ("normalized" + book.suffix)
     shutil.copy2(book, normalized)
-    ok, err, _ = basrun_apply(normalized, NOOP_MACRO, workdir)
+    ok, err, _ = basrun_apply(normalized, NOOP_MACRO, workdir, timeout=timeout)
     if not ok:
         sys.exit(f"正規化パスに失敗した（LibreOffice で開けなかった）: {err}")
     return normalized
@@ -348,6 +475,188 @@ def success_message(result: dict) -> str | None:
     if result.get("ok") and not result.get("dry"):
         return "★ 変化は検出したが『正しいか』は上の差分を見て判断してください（no-op ガードは正しさを保証しない）。"
     return None
+
+
+# ---------------------------------------------------------------------------
+# doctor（M1: セットアップ診断）
+# ---------------------------------------------------------------------------
+
+def _load_module_from_path(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _check_python_version() -> tuple:
+    ok = sys.version_info >= (3, 10)
+    detail = "" if ok else f"現在 {sys.version.split()[0]}。3.10 以上へ更新して"
+    return ok, detail
+
+
+def _check_openpyxl() -> tuple:
+    try:
+        import openpyxl as _op  # noqa: F401 — 到達確認のみ
+        return True, ""
+    except ImportError:
+        return False, "pip install openpyxl"
+
+
+def _check_ollama_reachable(timeout: float = 3.0) -> tuple:
+    try:
+        with urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=timeout) as r:
+            json.load(r)
+        return True, ""
+    except Exception as e:
+        return False, f"`ollama serve` を起動して（{e}）"
+
+
+def _check_model_available(model: str, timeout: float = 3.0) -> tuple:
+    try:
+        with urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=timeout) as r:
+            d = json.load(r)
+    except Exception:
+        return False, "ollama に繋がらないため確認できない（先に ollama 到達を直して）"
+    names = {m.get("name") for m in d.get("models", [])}
+    if model in names:
+        return True, ""
+    return False, f"`ollama pull {model}` で取得して"
+
+
+def _check_libreoffice() -> tuple:
+    p = _find_basrun_path()
+    if p is None:
+        return False, "basrun.py が無いため確認できない"
+    try:
+        mod = _load_module_from_path(p, "_ailine_basrun_probe")
+        d = mod.office_dir()
+        return True, str(d)
+    except SystemExit as e:
+        return False, str(e)
+    except Exception as e:
+        return False, f"検出に失敗: {e}"
+
+
+def _check_basrun() -> tuple:
+    p = _find_basrun_path()
+    if p is None:
+        return False, ("ailine と並びに https://github.com/namakoo-dev/basrun を"
+                       " clone するか、環境変数 BASRUN でパスを指定して")
+    return True, str(p)
+
+
+def _check_demo_dir() -> tuple:
+    d = HERE / "demo"
+    ok = d.is_dir() and any(d.glob("*.xlsx"))
+    detail = "" if ok else f"{d} に .xlsx サンプルが無い"
+    return ok, detail
+
+
+def doctor_checks(model: str = DEFAULT_MODEL) -> list:
+    """(項目名, ok, 詳細/直し方) のリスト。判定ロジックだけを持ち、副作用(print)は
+       cmd_doctor 側に置く（テストしやすくするため分離）。"""
+    return [
+        ("python 3.10+", *_check_python_version()),
+        ("openpyxl", *_check_openpyxl()),
+        (f"ollama 到達 ({OLLAMA})", *_check_ollama_reachable()),
+        (f"モデル '{model}'", *_check_model_available(model)),
+        ("LibreOffice", *_check_libreoffice()),
+        ("basrun.py", *_check_basrun()),
+        ("demo/", *_check_demo_dir()),
+    ]
+
+
+def format_doctor_report(results: list) -> tuple:
+    """(表示テキスト, all_ok)。"""
+    lines = []
+    all_ok = True
+    for name, ok, detail in results:
+        mark = "✓" if ok else "×"
+        if ok:
+            line = f"{mark} {name}" + (f" ({detail})" if detail else "")
+        else:
+            all_ok = False
+            line = f"{mark} {name}" + (f" — {detail}" if detail else "")
+        lines.append(line)
+    return "\n".join(lines), all_ok
+
+
+def cmd_doctor(a: argparse.Namespace) -> int:
+    text, all_ok = format_doctor_report(doctor_checks(a.model))
+    print(text)
+    return 0 if all_ok else 1
+
+
+# ---------------------------------------------------------------------------
+# 実行履歴（M1: 最小版・将来の需要センサー）
+# ---------------------------------------------------------------------------
+
+def build_history_entry(result: dict, book: Path, task: str, model: str, failure_kind: str) -> dict:
+    """1 run の結果を history.jsonl の 1 行分の dict にする（純ロジック・テスト用に分離）。"""
+    return {
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "book": str(book),
+        "task": task,
+        "model": model,
+        "ok": bool(result.get("ok")),
+        "attempts": result.get("attempts", 0),
+        "failure_kind": failure_kind,
+        "changes": (result.get("changes") or [])[:3],
+        "out": result.get("out"),
+    }
+
+
+def append_history(entry: dict, path: Path | None = None) -> None:
+    """history.jsonl に 1 行 append する。★ 失敗したら例外を投げる（run 本体を落とさ
+       ないための try は呼び出し側(cmd_run)が持つ。ここでは書き込みロジックだけ）。"""
+    p = path or HISTORY_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def read_history(path: Path | None = None, max_n: int = 10) -> list:
+    """新しい順に最大 max_n 件を返す。壊れた行は読み飛ばす。"""
+    p = path or HISTORY_FILE
+    if not p.exists():
+        return []
+    entries = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return list(reversed(entries))[:max_n]
+
+
+def format_history_table(entries: list) -> str:
+    """人が読める表形式。履歴が無ければ「履歴はまだ無い」を返す。"""
+    if not entries:
+        return "履歴はまだ無い"
+    header = f"{'日時':<20} {'結果':<4} {'試行':<4} {'モデル':<20} {'文書':<20} タスク"
+    lines = [header]
+    for e in entries:
+        mark = "✓" if e.get("ok") else "×"
+        ts = str(e.get("ts", ""))
+        attempts = str(e.get("attempts", ""))
+        model = str(e.get("model", ""))
+        book = Path(str(e.get("book", ""))).name
+        task = str(e.get("task", ""))
+        line = f"{ts:<20} {mark:<4} {attempts:<4} {model:<20} {book:<20} {task}"
+        kind = e.get("failure_kind")
+        if not e.get("ok") and kind not in (None, "none"):
+            line += f"  [{kind}]"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def cmd_history(a: argparse.Namespace) -> int:
+    entries = read_history(max_n=a.max)
+    print(format_history_table(entries))
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -374,17 +683,23 @@ def cmd_run(a: argparse.Namespace) -> int:
     workdir.mkdir(exist_ok=True)
     out_book = book.with_name(book.stem + ".out" + book.suffix)
 
+    apply_timeout = a.timeout if a.timeout else None   # 0 で無効化（旧挙動 = 無制限）
+
     before = None
     source_book = book
     if not a.dry:
-        print("■ 正規化パス: LibreOffice で一度（空マクロで）開いて保存（初回保存の実体化を先に済ませる）")
-        source_book = normalize_book(book, workdir)
+        t0 = progress_start("⏳ 初回準備（文書の正規化）…")
+        source_book = normalize_book(book, workdir, timeout=apply_timeout)
+        progress_end(t0)
         before = snapshot(source_book)
 
     result = {"ok": False, "attempts": 0, "task": a.task, "model": a.model}
+    failure_kind = "none"
     for attempt in range(a.repair + 1):
         result["attempts"] = attempt + 1
+        t0 = progress_start(f"⏳ 生成中 ({a.model})…")
         raw = ollama_generate(a.model, msgs, temperature=a.temperature)
+        progress_end(t0)
         code = extract_bas(raw)
         (workdir / f"attempt{attempt}.bas").write_text(code, encoding="utf-8")
 
@@ -394,6 +709,7 @@ def cmd_run(a: argparse.Namespace) -> int:
 
         if not valid_signature(code):
             print("× 署名が違う（Sub Run(oDoc As Object) が無い）。修復する。")
+            failure_kind = "bad_signature"
             msgs += [{"role": "assistant", "content": raw},
                      {"role": "user", "content": "署名が違う。`Sub Run(oDoc As Object)` を1つだけ。コードのみ。"}]
             continue
@@ -402,12 +718,16 @@ def cmd_run(a: argparse.Namespace) -> int:
             print("\n（--dry: 適用しない。レビュー後に --dry を外して実行）")
             result["ok"] = True
             result["dry"] = True
+            failure_kind = "none"
             break
 
         shutil.copy2(source_book, out_book)   # 原本は触らず、正規化済みコピーに適用
-        ok, err, rawout = basrun_apply(out_book, code, workdir, helper_files)
+        t0 = progress_start("⏳ LibreOffice で適用中…")
+        ok, err, rawout = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
+        progress_end(t0)
         if not ok:
             print(f"× 実行時エラー。修復する。\n{err[:400]}")
+            failure_kind = "runtime_error"
             msgs += [{"role": "assistant", "content": raw},
                      {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。コードのみ。"}]
             continue
@@ -416,6 +736,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         changed, lines = diff_snapshots(before, after)
         if not changed:
             print("× no-op（実行は成功したが文書に変化が無い）。修復する。")
+            failure_kind = "noop"
             msgs += [{"role": "assistant", "content": raw},
                      {"role": "user", "content":
                       "実行は成功したが文書に一切変化が無かった（no-op）。"
@@ -427,6 +748,7 @@ def cmd_run(a: argparse.Namespace) -> int:
             print(ln)
         result["ok"] = True
         result["changes"] = lines
+        failure_kind = "none"
         if a.inplace:
             shutil.move(out_book, book)
             print(f"\n適用先: {book.name}（--inplace で上書き）")
@@ -442,6 +764,12 @@ def cmd_run(a: argparse.Namespace) -> int:
     msg = success_message(result)
     if msg:
         print("\n" + msg)
+
+    try:
+        append_history(build_history_entry(result, book, a.task, a.model, failure_kind))
+    except Exception as e:
+        print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
+
     return 0 if result["ok"] else 1
 
 
@@ -465,10 +793,21 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--dry", action="store_true", help="生成して見せるだけ（適用しない）")
     r.add_argument("--inplace", action="store_true", help="原本を上書き（既定はコピー .out に適用）")
     r.add_argument("--json", action="store_true", help="結果を JSON でも出す")
+    r.add_argument("--timeout", type=float, default=DEFAULT_APPLY_TIMEOUT,
+                   help=f"basrun apply のタイムアウト秒 (既定 {DEFAULT_APPLY_TIMEOUT:.0f}、"
+                        "0 で無効化=旧挙動の無制限)")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")
     s.set_defaults(func=cmd_stop)
+
+    d = sub.add_parser("doctor", help="セットアップを診断する")
+    d.add_argument("--model", default=DEFAULT_MODEL, help=f"確認するモデル (既定 {DEFAULT_MODEL})")
+    d.set_defaults(func=cmd_doctor)
+
+    h = sub.add_parser("history", help="実行履歴を表示する")
+    h.add_argument("--max", type=int, default=10, help="表示件数（既定 10、新しい順）")
+    h.set_defaults(func=cmd_history)
     return ap
 
 
