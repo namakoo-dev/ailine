@@ -292,12 +292,19 @@ def snapshot(path: Path) -> dict:
        水平配置も捉える。これで『書式のみ・罫線のみ・列幅のみ・結合のみ・中央揃えのみ』
        の変更も『変化した』と検出でき、no-op 誤検出（＝効いているのに失敗扱い）を防ぐ。"""
     wb = openpyxl.load_workbook(path)
+    # ★ 止血3: truncated は「この snapshot が MAX_ROWS/MAX_COLS で切り詰められたか」を
+    #   保持する。diff_snapshots 後の表示で「先頭1000行しか見せていない」ことを正直に
+    #   注記するために使う（bench/realworld/BASELINE.md の B 検体所見の根治）。
     snap = {"sheets": list(wb.sheetnames), "charts": _charts_count(path),
-            "cells": {}, "merges": {}, "colw": {}, "rowh": {}}
+            "cells": {}, "merges": {}, "colw": {}, "rowh": {}, "truncated": False}
     for name in wb.sheetnames:
         ws = wb[name]
-        nrow = min(ws.max_row or 0, MAX_ROWS)
-        ncol = min(ws.max_column or 0, MAX_COLS)
+        true_nrow = ws.max_row or 0
+        true_ncol = ws.max_column or 0
+        if true_nrow > MAX_ROWS or true_ncol > MAX_COLS:
+            snap["truncated"] = True
+        nrow = min(true_nrow, MAX_ROWS)
+        ncol = min(true_ncol, MAX_COLS)
         for r in range(1, nrow + 1):
             for c in range(1, ncol + 1):
                 cell = ws.cell(row=r, column=c)
@@ -422,6 +429,23 @@ def diff_snapshots(before: dict, after: dict) -> tuple:
     changed = bool(added or removed or (after["charts"] != before["charts"])
                    or merge_changes or dim_changes or cell_changes)
     return changed, lines
+
+
+def _truncation_notice(before: dict, after: dict, exhaustive_postcondition: bool) -> str | None:
+    """★ 止血3: before/after どちらかの snapshot が MAX_ROWS/MAX_COLS で切り詰められて
+       いたら、無言で切らず正直な1行を返す（bench/realworld/BASELINE.md の B 検体所見）。
+       ★ 経路で文言を出し分ける:
+       - exhaustive_postcondition=True（DSL経路・cmd_run_dsl / cmd_run_plan の DSL 段）:
+         事後条件チェッカーは openpyxl で out ファイルを直接開き _scan_last_row で全行を
+         走査する（snapshot() の MAX_ROWS とは無関係）。表示だけが切り詰められている。
+       - exhaustive_postcondition=False（FREEFORM経路）: no-op ガード・advisories も
+         snapshot() 頼みなので、検証自体も先頭1000行までしか見ていない。
+       切り詰めが無ければ None。"""
+    if not (before.get("truncated") or after.get("truncated")):
+        return None
+    if exhaustive_postcondition:
+        return f"（表示は先頭 {MAX_ROWS} 行の変化のみ。検証・適用は全行に対して実施）"
+    return f"（表示は先頭 {MAX_ROWS} 行の変化のみ。検証も先頭 {MAX_ROWS} 行のみ）"
 
 
 # ---------------------------------------------------------------------------
@@ -1237,27 +1261,50 @@ def _apply_operator(a, b, operator: str):
     raise ValueError(operator)
 
 
+def _is_number(v) -> bool:
+    """★ 止血2: bool は int のサブクラスだが数値セルとしては扱わない（True/False混入対策）。"""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+# ★ 止血1/2 共通の文言。事後条件チェッカーは検証対象0件を絶対に「合格」にしない
+#   （D検体: no-opを『行数が少なく比較不要』で素通ししていた根治）。
+_ZERO_TARGET_REASON = "事後条件の検証対象が0件（何も検証できていない）"
+
+
 def check_sort(path: Path, args: dict) -> tuple:
+    """SORT の事後条件。戻り値は (status, reason)。status ∈ {"pass","warn","fail"}。
+       ★ 止血1: 検証対象が0件なら fail、1件（順序が定義できない）なら warn とし、
+       どちらも「機械検証済み」とは名乗らない。
+       ★ 止血2: 合計行等の非数値/None セルは比較から除外し、除外件数を表示する
+       （C②: None >= int の生トレースバックの根治）。全部除外なら0件と同じ扱い。"""
     wb = openpyxl.load_workbook(path)
     ws = wb[wb.sheetnames[0]]
     idx = _col_index_by_header(ws, args["col"])
     if idx is None:
         wb.close()
-        return False, f"列『{args['col']}』が見つからない"
+        return "fail", f"列『{args['col']}』が見つからない"
     last = _scan_last_row(ws)
-    vals = [ws.cell(row=r, column=idx).value for r in range(2, last + 1)]
+    raw_vals = [ws.cell(row=r, column=idx).value for r in range(2, last + 1)]
     wb.close()
-    if len(vals) < 2:
-        return True, "行数が少なく比較不要"
+    vals = [v for v in raw_vals if _is_number(v)]
+    excluded = len(raw_vals) - len(vals)
+    note = f"（数値でない {excluded} 行は対象外）" if excluded else ""
+    if len(vals) == 0:
+        return "fail", _ZERO_TARGET_REASON + note
+    if len(vals) == 1:
+        return "warn", f"検証対象が1行のみ（並べ替えの意味がありません）{note}"
     asc = args["order"] == "asc"
     ok = (all(vals[i] <= vals[i + 1] for i in range(len(vals) - 1)) if asc
           else all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)))
     if not ok:
-        return False, f"列『{args['col']}』が指定順（{args['order']}）に並んでいない"
-    return True, f"{len(vals)} 行が{'昇順' if asc else '降順'}"
+        return "fail", f"列『{args['col']}』が指定順（{args['order']}）に並んでいない{note}"
+    return "pass", f"{len(vals)} 行を検証（{'昇順' if asc else '降順'}）{note}"
 
 
 def check_compute_column(path: Path, args: dict) -> tuple:
+    """★ 止血1/2: 演算対象が非数値/None の行（合計行等）は「対象外」として除外し件数を
+       表示する。除外後に検証できた行が0件なら fail（機械検証済みと名乗らない）。
+       対象列(target)自体が非数値なのは演算が本当に効いていない証拠なので除外せず fail。"""
     wb = openpyxl.load_workbook(path)
     ws = wb[wb.sheetnames[0]]
     op1, op2 = args["operands"]
@@ -1269,73 +1316,91 @@ def check_compute_column(path: Path, args: dict) -> tuple:
     inew = _col_index_by_header(ws, newname)
     if i1 is None or i2 is None or inew is None:
         wb.close()
-        return False, f"演算対象または対象列『{newname}』が見つからない"
+        return "fail", f"演算対象または対象列『{newname}』が見つからない"
     last = _scan_last_row(ws)
+    checked = 0
+    excluded = 0
     for r in range(2, last + 1):
         a = ws.cell(row=r, column=i1).value
         b = ws.cell(row=r, column=i2).value
         got = ws.cell(row=r, column=inew).value
+        if not _is_number(a) or not _is_number(b):
+            excluded += 1   # 例: 合計行で演算対象セルが空欄
+            continue
         want = _apply_operator(a, b, args["operator"])
-        if got is None or abs(got - want) > 1e-6:
+        if not _is_number(got) or abs(got - want) > 1e-6:
             wb.close()
-            return False, f"{r}行目: 期待 {want} 実際 {got}"
+            return "fail", f"{r}行目: 期待 {want} 実際 {got}"
+        checked += 1
     wb.close()
-    return True, f"{last - 1} 行を検証"
+    note = f"（数値でない {excluded} 行は対象外）" if excluded else ""
+    if checked == 0:
+        return "fail", _ZERO_TARGET_REASON + note
+    return "pass", f"{checked} 行を検証{note}"
 
 
 def check_lookup_fill(path: Path, args: dict) -> tuple:
     wb = openpyxl.load_workbook(path)
     if args["target_sheet"] not in wb.sheetnames or args["source_sheet"] not in wb.sheetnames:
         wb.close()
-        return False, "対象/参照シートが無い"
+        return "fail", "対象/参照シートが無い"
     tws = wb[args["target_sheet"]]
     sws = wb[args["source_sheet"]]
     key_idx = _col_index_by_header(tws, args["key_col"])
     tgt_idx = _col_index_by_header(tws, args["target_col"])
     if key_idx is None or tgt_idx is None:
         wb.close()
-        return False, "対象シートにキー列/対象列が無い"
+        return "fail", "対象シートにキー列/対象列が無い"
     lookup = {}
     r = 2
     while sws.cell(row=r, column=1).value not in (None, ""):
         lookup[sws.cell(row=r, column=1).value] = sws.cell(row=r, column=2).value
         r += 1
+    scanned = 0   # ★ 止血1: 対象シートに行が1件も無い(0件)場合と、行はあるが1件も
+                  #   対応表に載っていない場合を別のメッセージで区別する。
     checked = 0
     r = 2
     while tws.cell(row=r, column=key_idx).value not in (None, ""):
+        scanned += 1
         key = tws.cell(row=r, column=key_idx).value
         if key in lookup:
             got = tws.cell(row=r, column=tgt_idx).value
             want = lookup[key]
             if got != want:
                 wb.close()
-                return False, f"{r}行目: キー『{key}』の転記値が不一致 (期待 {want!r} 実際 {got!r})"
+                return "fail", f"{r}行目: キー『{key}』の転記値が不一致 (期待 {want!r} 実際 {got!r})"
             checked += 1
         r += 1
     wb.close()
+    if scanned == 0:
+        return "fail", _ZERO_TARGET_REASON
     if checked == 0:
-        return False, "対応表に載っているキーが1件も転記されていない"
-    return True, f"{checked} 行を検証"
+        return "fail", "対応表に載っているキーが1件も転記されていない"
+    return "pass", f"{checked} 行を検証"
 
 
 def check_aggregate(path: Path, args: dict) -> tuple:
     wb = openpyxl.load_workbook(path)
     if "集計" not in wb.sheetnames:
         wb.close()
-        return False, "『集計』シートが無い"
+        return "fail", "『集計』シートが無い"
     src = wb[wb.sheetnames[0]]
     gi = _col_index_by_header(src, args["group_col"])
     vi = _col_index_by_header(src, args["value_col"])
     if gi is None or vi is None:
         wb.close()
-        return False, "分類列/集計列が見つからない"
+        return "fail", "分類列/集計列が見つからない"
     expect: dict = {}
     r = 2
     while src.cell(row=r, column=1).value not in (None, ""):
         k = src.cell(row=r, column=gi).value
-        v = src.cell(row=r, column=vi).value or 0
+        v = src.cell(row=r, column=vi).value
+        v = v if _is_number(v) else 0   # ★ 止血2: 非数値/None は0扱い（クラッシュさせない）
         expect[k] = expect.get(k, 0) + v
         r += 1
+    if not expect:
+        wb.close()
+        return "fail", _ZERO_TARGET_REASON   # ★ 止血1: 集計元データが0件を「合格」にしない
     out = wb["集計"]
     seen = set()
     r = 2
@@ -1343,16 +1408,17 @@ def check_aggregate(path: Path, args: dict) -> tuple:
         k = out.cell(row=r, column=1).value
         if k in (None, "") or k == "合計":
             break
-        v = out.cell(row=r, column=2).value or 0
+        v = out.cell(row=r, column=2).value
+        v = v if _is_number(v) else 0
         if k not in expect or abs(v - expect[k]) > 1e-6:
             wb.close()
-            return False, f"グループ『{k}』の合計が不一致 (期待 {expect.get(k)} 実際 {v})"
+            return "fail", f"グループ『{k}』の合計が不一致 (期待 {expect.get(k)} 実際 {v})"
         seen.add(k)
         r += 1
     wb.close()
     if seen != set(expect.keys()):
-        return False, "集計に含まれないグループがある"
-    return True, f"{len(expect)} グループを検証"
+        return "fail", "集計に含まれないグループがある"
+    return "pass", f"{len(expect)} グループを検証"
 
 
 def check_bold(path: Path, args: dict) -> tuple:
@@ -1368,15 +1434,18 @@ def check_bold(path: Path, args: dict) -> tuple:
         idx = _col_index_by_header(ws, val)
         if idx is None:
             wb.close()
-            return False, f"列『{val}』が見つからない"
+            return "fail", f"列『{val}』が見つからない"
         last_row = _scan_last_row(ws)
         cells = [ws.cell(row=r, column=idx) for r in range(1, last_row + 1)]
         label = f"列『{val}』"
+    if not cells:   # ★ 止血1: 検証対象0件（見出しすら無い空シート等）を合格にしない
+        wb.close()
+        return "fail", _ZERO_TARGET_REASON
     ok = all(c.font and c.font.bold for c in cells)
     wb.close()
     if not ok:
-        return False, f"{label} に太字でないセルがある"
-    return True, f"{len(cells)} セルが太字"
+        return "fail", f"{label} に太字でないセルがある"
+    return "pass", f"{len(cells)} セルが太字"
 
 
 def check_fill_color(path: Path, args: dict) -> tuple:
@@ -1393,10 +1462,13 @@ def check_fill_color(path: Path, args: dict) -> tuple:
         idx = _col_index_by_header(ws, val)
         if idx is None:
             wb.close()
-            return False, f"列『{val}』が見つからない"
+            return "fail", f"列『{val}』が見つからない"
         last_row = _scan_last_row(ws)
         cells = [ws.cell(row=r, column=idx) for r in range(1, last_row + 1)]
         label = f"列『{val}』"
+    if not cells:   # ★ 止血1
+        wb.close()
+        return "fail", _ZERO_TARGET_REASON
 
     def _matches(cell) -> bool:
         if cell.fill is None or not cell.fill.patternType:
@@ -1406,8 +1478,8 @@ def check_fill_color(path: Path, args: dict) -> tuple:
     ok = all(_matches(c) for c in cells)
     wb.close()
     if not ok:
-        return False, f"{label} に色『{args['color']}』が付いていないセルがある"
-    return True, f"{len(cells)} セルの背景色を確認"
+        return "fail", f"{label} に色『{args['color']}』が付いていないセルがある"
+    return "pass", f"{len(cells)} セルの背景色を確認"
 
 
 def check_number_format(path: Path, args: dict) -> tuple:
@@ -1416,16 +1488,16 @@ def check_number_format(path: Path, args: dict) -> tuple:
     idx = _col_index_by_header(ws, args["col"])
     if idx is None:
         wb.close()
-        return False, f"列『{args['col']}』が見つからない"
+        return "fail", f"列『{args['col']}』が見つからない"
     last = _scan_last_row(ws)
-    if last < 2:
+    if last < 2:   # ★ 止血1: データ行0件を合格にしない
         wb.close()
-        return False, "データ行が無い"
+        return "fail", _ZERO_TARGET_REASON
     ok = all("#,##0" in (ws.cell(row=r, column=idx).number_format or "") for r in range(2, last + 1))
     wb.close()
     if not ok:
-        return False, f"列『{args['col']}』に桁区切り書式が付いていないセルがある"
-    return True, f"{last - 1} 行に桁区切り書式を確認"
+        return "fail", f"列『{args['col']}』に桁区切り書式が付いていないセルがある"
+    return "pass", f"{last - 1} 行に桁区切り書式を確認"
 
 
 def check_merge(path: Path, args: dict) -> tuple:
@@ -1434,15 +1506,15 @@ def check_merge(path: Path, args: dict) -> tuple:
     ranges = {str(r) for r in ws.merged_cells.ranges}
     wb.close()
     if args["range"] not in ranges:
-        return False, f"範囲『{args['range']}』が結合されていない"
-    return True, f"{args['range']} の結合を確認"
+        return "fail", f"範囲『{args['range']}』が結合されていない"
+    return "pass", f"{args['range']} の結合を確認"
 
 
 def check_chart(path: Path, before_charts: int) -> tuple:
     after = _charts_count(path)
     if after != before_charts + 1:
-        return False, f"グラフ数が +1 でない（{before_charts} → {after}）"
-    return True, f"グラフ数 {before_charts} → {after}"
+        return "fail", f"グラフ数が +1 でない（{before_charts} → {after}）"
+    return "pass", f"グラフ数 {before_charts} → {after}"
 
 
 def check_center_align(path: Path, args: dict) -> tuple:
@@ -1459,15 +1531,18 @@ def check_center_align(path: Path, args: dict) -> tuple:
         idx = _col_index_by_header(ws, colname)
         if idx is None:
             wb.close()
-            return False, f"列『{colname}』が見つからない"
+            return "fail", f"列『{colname}』が見つからない"
         last_row = _scan_last_row(ws)
         cells = [ws.cell(row=r, column=idx) for r in range(1, last_row + 1)]
         label = f"列『{colname}』"
+    if not cells:   # ★ 止血1
+        wb.close()
+        return "fail", _ZERO_TARGET_REASON
     ok = all(c.alignment and c.alignment.horizontal == "center" for c in cells)
     wb.close()
     if not ok:
-        return False, f"{label} に中央揃えでないセルがある"
-    return True, f"{len(cells)} セルの中央揃えを確認"
+        return "fail", f"{label} に中央揃えでないセルがある"
+    return "pass", f"{len(cells)} セルの中央揃えを確認"
 
 
 POSTCONDITIONS = {
@@ -1480,13 +1555,20 @@ POSTCONDITIONS = {
 
 
 def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_charts: int = 0) -> tuple:
-    """⑥ op 別事後条件。(ok, reason)。CHART だけ before_charts と比較する専用の形。"""
-    if op == "CHART":
-        return check_chart(out_book, before_charts)
-    fn = POSTCONDITIONS.get(op)
-    if fn is None:
-        return False, f"未対応の op: {op}"
-    return fn(out_book, resolved_args)
+    """⑥ op 別事後条件。(status, reason)。status ∈ {"pass","warn","fail","error"}。
+       CHART だけ before_charts と比較する専用の形。
+       ★ 止血2: チェッカー内で予期しない例外が起きても生の Python トレースバックを
+       出さない。ここで必ず捕まえて "error" ステータス + 要約1行に変換する
+       （C②の教訓: 事後条件チェッカー自身のクラッシュがユーザーに未捕捉のまま漏れていた）。"""
+    try:
+        if op == "CHART":
+            return check_chart(out_book, before_charts)
+        fn = POSTCONDITIONS.get(op)
+        if fn is None:
+            return "fail", f"未対応の op: {op}"
+        return fn(out_book, resolved_args)
+    except Exception as e:
+        return "error", f"事後条件の検証に失敗: {type(e).__name__}: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -2085,22 +2167,38 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, book_meta: dict, op: str, raw
     print("\n変更点:" if changed else "\n（文書に変化は検出されなかった）")
     for ln in lines:
         print(ln)
+    # ★ 止血3: DSL 経路は事後条件チェッカーが openpyxl で out ファイルを直接・全行
+    #   読むため「表示だけ」が切り詰められている（適用・検証は全行）。
+    notice = _truncation_notice(before, after, exhaustive_postcondition=True)
+    if notice:
+        print(notice)
     advisories = build_advisories(a.task, before, after)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
     result["advisories"] = advisories
 
-    pcok, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"])
-    result["postcondition"] = "pass" if pcok else "fail"
-    if not pcok:
+    status, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"])
+    # ★ 止血1/2: status は "pass"/"warn"/"fail"/"error"。"error" はチェッカー内の
+    #   予期しない例外を捕まえた印（--json 上は "fail" に丸める）。
+    result["postcondition"] = "fail" if status == "error" else status
+    if status == "error":
+        print(f"\n× {reason}")
+        result["out"] = str(out_book)
+        _finish_run(a, book, result, "postcondition_error")
+        return 1
+    if status == "fail":
         print(f"\n× 適用されたが事後条件を満たさない: {reason}")
         result["out"] = str(out_book)
         _finish_run(a, book, result, "postcondition_fail")
         return 1
-
-    print(f"\n✓ 達成を機械検証済み（操作:{OP_LABELS.get(op, op)}）: {reason}")
-    result["ok"] = True
+    if status == "warn":
+        # ★ 止血1: 検証対象が少なすぎて意味を持たない場合、「機械検証済み」とは名乗らない。
+        print(f"\n⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
+        result["ok"] = True
+    else:
+        print(f"\n✓ 達成を機械検証済み（操作:{OP_LABELS.get(op, op)}）: {reason}")
+        result["ok"] = True
 
     if a.inplace:
         try:
@@ -2219,6 +2317,11 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path) -> int:
         print("\n✓ 適用され、文書が変化した。変更点:")
         for ln in lines:
             print(ln)
+        # ★ 止血3: FREEFORM 経路は no-op ガード/advisories も snapshot() 頼みなので、
+        #   検証自体が先頭1000行までしか見ていない（DSL経路より弱い正直さ）。
+        notice = _truncation_notice(before, after, exhaustive_postcondition=False)
+        if notice:
+            print(notice)
         advisories = build_advisories(a.task, before, after)
         for adv in advisories:
             print(adv)
@@ -2350,6 +2453,11 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
             continue
 
         advisories = build_advisories(task_text, before, after)
+        # ★ 止血3: 呼び出し元(cmd_run_plan)は lines をそのまま「  {ln}」で表示するだけ
+        #   なので、切り詰め注記はここで lines に混ぜて渡す。
+        notice = _truncation_notice(before, after, exhaustive_postcondition=False)
+        if notice:
+            lines = lines + [notice]
         return True, lines, advisories, "none", None
 
     detail = {
@@ -2364,7 +2472,10 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
 def format_plan_report(items: list) -> list:
     """複合計画の項目別報告を行のリストにする。items: [(idx, label, status, detail), ...]
        status は 'ok'/'warn'/'fail'。★ FREEFORM 段の成功は『機械検証済み』とは絶対に言わない
-       （✓ 適用され文書が変化した級に留める＝warn 表示の固定文言で担保）。"""
+       （✓ 適用され文書が変化した級に留める＝warn 表示の固定文言で担保）。
+       ★ 止血1: 'warn' は2種類の由来を持つ — 語彙外(FREEFORM)段は detail=None の
+       固定文言、DSL 段の事後条件が「検証対象が少なすぎる」場合は detail に理由が
+       入るのでそちらを見せる（どちらも『機械検証済み』とは言わない点は共通）。"""
     lines = []
     for idx, label, status, detail in items:
         mark = _ITEM_STATUS_MARK[status]
@@ -2372,7 +2483,10 @@ def format_plan_report(items: list) -> list:
             suffix = f"（{detail}）" if detail else ""
             lines.append(f"{idx}. {label} → {mark} 機械検証済み{suffix}")
         elif status == "warn":
-            lines.append(f"{idx}. {label} → {mark} 語彙外のため自由生成で実行（確認してください）")
+            if detail:
+                lines.append(f"{idx}. {label} → {mark} 機械検証できませんでした: {detail}")
+            else:
+                lines.append(f"{idx}. {label} → {mark} 語彙外のため自由生成で実行（確認してください）")
         else:
             lines.append(f"{idx}. {label} → {mark} 未対応: {detail}")
     return lines
@@ -2387,7 +2501,9 @@ def overall_verdict(items: list) -> tuple:
     if "fail" in statuses:
         return "× 一部の操作が未対応/失敗のため、達成できませんでした", "fail"
     if "warn" in statuses:
-        return "⚠ 一部は確認が必要です（語彙外の段は自由生成で実行・機械検証はしていません）", "warn"
+        # ★ 止血1: warn の由来は2種類（語彙外の自由生成／DSL段の検証対象不足）ある
+        #   ため、どちらにも当てはまる言い方にする。
+        return "⚠ 一部は確認が必要です（語彙外の自由生成、または検証対象不足の段があり、機械検証はしていません）", "warn"
     return "✓ すべて機械検証済み", "ok"
 
 
@@ -2522,10 +2638,19 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, book_meta: dict, plan: list)
             plan_json.append({"op": op, "command": line, "status": "fail", "postcondition": None})
             continue
 
-        pcok, reason = run_postcondition(op, out_book, resolved, before_charts=before_charts)
-        if not pcok:
+        status, reason = run_postcondition(op, out_book, resolved, before_charts=before_charts)
+        # ★ 止血1/2: status ∈ {"pass","warn","fail","error"}。"error" はチェッカー内の
+        #   例外を捕まえた印（段の報告上は fail 扱い・生トレースバックは出さない）。
+        if status in ("fail", "error"):
             items.append((i, label, "fail", reason))
             plan_json.append({"op": op, "command": line, "status": "fail", "postcondition": "fail"})
+            continue
+        if status == "warn":
+            # ★ 止血1: 検証対象が少なすぎて意味を持たない → 段の成功は名乗るが
+            #   『機械検証済み』とは言わない（format_plan_report の warn+detail 分岐）。
+            items.append((i, label, "warn", reason))
+            plan_json.append({"op": op, "command": line, "status": "warn", "postcondition": "warn"})
+            current_meta = build_book_meta(out_book)
             continue
 
         items.append((i, label, "ok", reason))

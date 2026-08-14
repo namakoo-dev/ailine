@@ -1445,6 +1445,12 @@ def test_codegen_dsl_compute_column_writes_new_column_at_end():
 
 
 # --- ⑥ op 別事後条件（達成の機械検証） ----------------------------------------
+# ★ 止血1/2（bench/realworld/BASELINE.md の D/C②検体の根治）: 各 check_* /
+#   run_postcondition の戻り値を (ok: bool, reason: str) から (status: str, reason: str)
+#   に変更した（status ∈ {"pass","warn","fail","error"}）。検証対象が0件/意味を
+#   持たない少数のケースを「合格(True)」で素通りさせないための3値化。
+#   以下の既存テストは ok is True/False を status == "pass"/"fail" に機械的に置換
+#   （通常ケース＝検証対象が十分ある場合は判定結果そのものは変わらない）。
 
 def _wb_save(tmp_path, build_fn, name="p.xlsx"):
     p = tmp_path / name
@@ -1455,37 +1461,37 @@ def _wb_save(tmp_path, build_fn, name="p.xlsx"):
 
 def test_check_sort_passes_when_sorted_desc(tmp_path):
     p = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
-    ok, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
-    assert ok is True
+    status, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
+    assert status == "pass"
 
 def test_check_sort_fails_when_not_sorted(tmp_path):
     p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 300], ["c", 200]])
-    ok, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
-    assert ok is False
+    status, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
+    assert status == "fail"
     assert "並んでいない" in reason
 
 def test_check_compute_column_passes_when_values_match(tmp_path):
     p = _book(tmp_path, [["売上", "原価", "売上-原価"], [500, 300, 200], [900, 400, 500]])
-    ok, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
-    assert ok is True
+    status, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert status == "pass"
 
 def test_check_compute_column_fails_when_value_wrong(tmp_path):
     p = _book(tmp_path, [["売上", "原価", "売上-原価"], [500, 300, 999]])
-    ok, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
-    assert ok is False
+    status, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert status == "fail"
 
 def test_check_compute_column_target_checks_existing_column(tmp_path):
     # ★ M2c: target 指定時は新規列名でなく target 列そのものを検証する。
     p = _book(tmp_path, [["数量", "単価", "小計"], [2, 100, 200], [3, 150, 450]])
-    ok, reason = ailine.check_compute_column(
+    status, reason = ailine.check_compute_column(
         p, {"operands": ["数量", "単価"], "operator": "*", "target": "小計"})
-    assert ok is True
+    assert status == "pass"
 
 def test_check_compute_column_target_fails_when_target_value_wrong(tmp_path):
     p = _book(tmp_path, [["数量", "単価", "小計"], [2, 100, 999]])
-    ok, reason = ailine.check_compute_column(
+    status, reason = ailine.check_compute_column(
         p, {"operands": ["数量", "単価"], "operator": "*", "target": "小計"})
-    assert ok is False
+    assert status == "fail"
 
 def test_check_lookup_fill_passes_when_all_transcribed(tmp_path):
     wb = openpyxl.Workbook()
@@ -1498,8 +1504,8 @@ def test_check_lookup_fill_passes_when_all_transcribed(tmp_path):
     p = tmp_path / "lookup.xlsx"
     wb.save(p)
     args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
-    ok, reason = ailine.check_lookup_fill(p, args)
-    assert ok is True
+    status, reason = ailine.check_lookup_fill(p, args)
+    assert status == "pass"
 
 def test_check_lookup_fill_fails_when_value_missing_a_row(tmp_path):
     wb = openpyxl.Workbook()
@@ -1512,8 +1518,8 @@ def test_check_lookup_fill_fails_when_value_missing_a_row(tmp_path):
     p = tmp_path / "lookup.xlsx"
     wb.save(p)
     args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
-    ok, reason = ailine.check_lookup_fill(p, args)
-    assert ok is False
+    status, reason = ailine.check_lookup_fill(p, args)
+    assert status == "fail"
 
 def test_check_aggregate_passes_when_sums_correct(tmp_path):
     wb = openpyxl.Workbook()
@@ -1527,8 +1533,8 @@ def test_check_aggregate_passes_when_sums_correct(tmp_path):
     out.append(["合計", 350])
     p = tmp_path / "agg.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
-    assert ok is True
+    status, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
+    assert status == "pass"
 
 def test_check_aggregate_fails_when_sum_wrong(tmp_path):
     wb = openpyxl.Workbook()
@@ -1540,13 +1546,13 @@ def test_check_aggregate_fails_when_sum_wrong(tmp_path):
     out.append(["営業", 999])
     p = tmp_path / "agg.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
-    assert ok is False
+    status, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
+    assert status == "fail"
 
 def test_check_aggregate_fails_when_sheet_missing(tmp_path):
     p = _book(tmp_path, [["部門", "金額"], ["営業", 100]])
-    ok, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
-    assert ok is False
+    status, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
+    assert status == "fail"
     assert "集計" in reason
 
 def test_check_bold_row_passes_when_all_bold(tmp_path):
@@ -1559,8 +1565,8 @@ def test_check_bold_row_passes_when_all_bold(tmp_path):
     ws["B1"].font = Font(bold=True)
     p = tmp_path / "b.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_bold(p, {"target": "row:1"})
-    assert ok is True
+    status, reason = ailine.check_bold(p, {"target": "row:1"})
+    assert status == "pass"
 
 def test_check_bold_row_fails_when_partial(tmp_path):
     from openpyxl.styles import Font
@@ -1570,8 +1576,8 @@ def test_check_bold_row_fails_when_partial(tmp_path):
     ws["A1"].font = Font(bold=True)   # B1 は太字にしない
     p = tmp_path / "b.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_bold(p, {"target": "row:1"})
-    assert ok is False
+    status, reason = ailine.check_bold(p, {"target": "row:1"})
+    assert status == "fail"
 
 def test_check_bold_col_passes_when_all_bold(tmp_path):
     from openpyxl.styles import Font
@@ -1584,8 +1590,8 @@ def test_check_bold_col_passes_when_all_bold(tmp_path):
         ws.cell(row=r, column=1).font = Font(bold=True)
     p = tmp_path / "b.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_bold(p, {"target": "col:商品"})
-    assert ok is True
+    status, reason = ailine.check_bold(p, {"target": "col:商品"})
+    assert status == "pass"
 
 def test_check_fill_color_passes_when_matching(tmp_path):
     from openpyxl.styles import PatternFill
@@ -1597,13 +1603,13 @@ def test_check_fill_color_passes_when_matching(tmp_path):
         ws.cell(row=r, column=2).fill = PatternFill("solid", fgColor="FFFF00")
     p = tmp_path / "b.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_fill_color(p, {"target": "col:在庫", "color": "yellow"})
-    assert ok is True
+    status, reason = ailine.check_fill_color(p, {"target": "col:在庫", "color": "yellow"})
+    assert status == "pass"
 
 def test_check_fill_color_fails_when_not_colored(tmp_path):
     p = _book(tmp_path, [["商品", "在庫"], ["a", 3]])
-    ok, reason = ailine.check_fill_color(p, {"target": "col:在庫", "color": "yellow"})
-    assert ok is False
+    status, reason = ailine.check_fill_color(p, {"target": "col:在庫", "color": "yellow"})
+    assert status == "fail"
 
 def test_check_number_format_passes_when_thousands_applied(tmp_path):
     wb = openpyxl.Workbook()
@@ -1613,13 +1619,13 @@ def test_check_number_format_passes_when_thousands_applied(tmp_path):
     ws["B2"].number_format = "#,##0"
     p = tmp_path / "b.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_number_format(p, {"col": "金額", "style": "thousands"})
-    assert ok is True
+    status, reason = ailine.check_number_format(p, {"col": "金額", "style": "thousands"})
+    assert status == "pass"
 
 def test_check_number_format_fails_when_not_applied(tmp_path):
     p = _book(tmp_path, [["商品", "金額"], ["a", 1000]])
-    ok, reason = ailine.check_number_format(p, {"col": "金額", "style": "thousands"})
-    assert ok is False
+    status, reason = ailine.check_number_format(p, {"col": "金額", "style": "thousands"})
+    assert status == "fail"
 
 def test_check_merge_passes_when_range_merged(tmp_path):
     wb = openpyxl.Workbook()
@@ -1628,27 +1634,27 @@ def test_check_merge_passes_when_range_merged(tmp_path):
     ws.merge_cells("A1:C1")
     p = tmp_path / "b.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_merge(p, {"range": "A1:C1"})
-    assert ok is True
+    status, reason = ailine.check_merge(p, {"range": "A1:C1"})
+    assert status == "pass"
 
 def test_check_merge_fails_when_not_merged(tmp_path):
     p = _book(tmp_path, [["a", "b", "c"]])
-    ok, reason = ailine.check_merge(p, {"range": "A1:C1"})
-    assert ok is False
+    status, reason = ailine.check_merge(p, {"range": "A1:C1"})
+    assert status == "fail"
 
 def test_check_chart_passes_when_count_plus_one(monkeypatch, tmp_path):
     p = tmp_path / "c.xlsx"
     p.write_bytes(b"dummy")
     monkeypatch.setattr(ailine, "_charts_count", lambda path: 1)
-    ok, reason = ailine.check_chart(p, 0)
-    assert ok is True
+    status, reason = ailine.check_chart(p, 0)
+    assert status == "pass"
 
 def test_check_chart_fails_when_count_unchanged(monkeypatch, tmp_path):
     p = tmp_path / "c.xlsx"
     p.write_bytes(b"dummy")
     monkeypatch.setattr(ailine, "_charts_count", lambda path: 0)
-    ok, reason = ailine.check_chart(p, 0)
-    assert ok is False
+    status, reason = ailine.check_chart(p, 0)
+    assert status == "fail"
 
 def test_check_center_align_all_passes(tmp_path):
     from openpyxl.styles import Alignment
@@ -1661,18 +1667,219 @@ def test_check_center_align_all_passes(tmp_path):
             ws.cell(row=r, column=c).alignment = Alignment(horizontal="center")
     p = tmp_path / "b.xlsx"
     wb.save(p)
-    ok, reason = ailine.check_center_align(p, {"target": "all"})
-    assert ok is True
+    status, reason = ailine.check_center_align(p, {"target": "all"})
+    assert status == "pass"
 
 def test_check_center_align_col_fails_when_not_centered(tmp_path):
     p = _book(tmp_path, [["a", "b"], [1, 2]])
-    ok, reason = ailine.check_center_align(p, {"target": "col:a"})
-    assert ok is False
+    status, reason = ailine.check_center_align(p, {"target": "col:a"})
+    assert status == "fail"
 
 def test_run_postcondition_dispatches_by_op(tmp_path):
     p = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200]])
-    ok, reason = ailine.run_postcondition("SORT", p, {"col": "金額", "order": "desc"})
-    assert ok is True
+    status, reason = ailine.run_postcondition("SORT", p, {"col": "金額", "order": "desc"})
+    assert status == "pass"
+
+
+# ---------------------------------------------------------------------------
+# ★ 止血: 空虚な検証合格の禁止（対象0件/少数を「合格」にしない）・None安全・
+#   MAX_ROWS 切り詰め表示の正直な出し分け（bench/realworld/BASELINE.md の D/C②/B 検体）
+# ---------------------------------------------------------------------------
+
+# --- check_sort: 0件/1件は「合格」にしない・非数値は除外して件数を表示 -----------
+
+def test_check_sort_fails_when_zero_data_rows(tmp_path):
+    # ★ D検体の根治対象: 見出しだけで実データ行が無い(=検証対象0件)を「行数が少なく
+    #   比較不要」で素通ししていた旧挙動を止める。
+    p = _book(tmp_path, [["商品", "金額"]])
+    status, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+
+def test_check_sort_warns_when_only_one_row(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    status, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
+    assert status == "warn"
+    assert "1行のみ" in reason
+
+def test_check_sort_excludes_non_numeric_rows_and_still_passes(tmp_path):
+    # ★ C②検体の根治対象: 合計行のように key_col(A列)は埋まっているが対象列が空欄
+    #   (None)の行は比較から除外し、除外件数を表示する。None>=int でクラッシュしない。
+    p = _book(tmp_path, [["商品", "数量"], ["a", 30], ["b", 20], ["c", 10], ["合計", None]])
+    status, reason = ailine.check_sort(p, {"col": "数量", "order": "desc"})
+    assert status == "pass"
+    assert "3 行を検証" in reason
+    assert "数値でない 1 行は対象外" in reason
+
+def test_check_sort_fails_when_all_rows_non_numeric(tmp_path):
+    p = _book(tmp_path, [["商品", "備考"], ["a", "x"], ["b", "y"]])
+    status, reason = ailine.check_sort(p, {"col": "備考", "order": "desc"})
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+    assert "数値でない 2 行は対象外" in reason
+
+# --- check_compute_column: 0件は合格にしない・演算対象が空欄の行は対象外 --------
+
+def test_check_compute_column_fails_when_zero_data_rows(tmp_path):
+    p = _book(tmp_path, [["売上", "原価", "売上-原価"]])
+    status, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+
+def test_check_compute_column_excludes_blank_total_row_and_still_passes(tmp_path):
+    p = _book(tmp_path, [["区分", "売上", "原価", "売上-原価"],
+                          ["a", 500, 300, 200], ["b", 900, 400, 500],
+                          ["合計", None, None, 700]])
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert status == "pass"
+    assert "2 行を検証" in reason
+    assert "数値でない 1 行は対象外" in reason
+
+def test_check_compute_column_fails_when_all_rows_blank(tmp_path):
+    p = _book(tmp_path, [["区分", "売上", "原価", "売上-原価"], ["合計", None, None, None]])
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+
+# --- check_lookup_fill: 対象シートに行が0件 --------------------------------------
+
+def test_check_lookup_fill_fails_when_target_sheet_has_no_rows(tmp_path):
+    wb = openpyxl.Workbook()
+    ws1 = wb.active; ws1.title = "明細"
+    ws1.append(["商品", "数量", "単価"])
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品", "単価"], ["りんご", 100]]:
+        ws2.append(row)
+    p = tmp_path / "lookup.xlsx"
+    wb.save(p)
+    args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
+    status, reason = ailine.check_lookup_fill(p, args)
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+
+# --- check_aggregate: 元データが0件 ----------------------------------------------
+
+def test_check_aggregate_fails_when_source_has_no_rows(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["部門", "金額"])
+    out = wb.create_sheet("集計")
+    out.append(["部門", "合計 - 金額"])
+    p = tmp_path / "agg.xlsx"
+    wb.save(p)
+    status, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+
+# --- check_bold/check_center_align: 検証対象0件(見出しすら無い空シート) ----------
+
+def test_check_bold_fails_when_sheet_completely_empty(tmp_path):
+    wb = openpyxl.Workbook()
+    p = tmp_path / "empty.xlsx"
+    wb.save(p)
+    status, reason = ailine.check_bold(p, {"target": "row:1"})
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+
+def test_check_center_align_fails_when_sheet_completely_empty(tmp_path):
+    wb = openpyxl.Workbook()
+    p = tmp_path / "empty.xlsx"
+    wb.save(p)
+    status, reason = ailine.check_center_align(p, {"target": "all"})
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+
+# --- check_number_format: データ行0件 --------------------------------------------
+
+def test_check_number_format_fails_when_zero_data_rows(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"]])
+    status, reason = ailine.check_number_format(p, {"col": "金額", "style": "thousands"})
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+
+# --- run_postcondition: チェッカー内例外は生トレースバックを出さず"error"に変換 --
+
+def test_run_postcondition_catches_checker_exception(tmp_path, monkeypatch):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 1]])
+
+    def boom(path, args):
+        raise TypeError("boom")
+
+    monkeypatch.setitem(ailine.POSTCONDITIONS, "SORT", boom)
+    status, reason = ailine.run_postcondition("SORT", p, {"col": "金額", "order": "desc"})
+    assert status == "error"
+    assert "事後条件の検証に失敗" in reason
+    assert "TypeError" in reason
+
+def test_cmd_run_dsl_postcondition_warn_does_not_claim_verified(tmp_path, monkeypatch, capsys):
+    # ★ 止血1: 検証対象が1行のみの SORT は「機械検証済み」と名乗らず ⚠ で報告する。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None:
+                        (True, None, "ok"))
+    ns = argparse.Namespace(
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "⚠" in captured.out
+    assert "機械検証済み" not in captured.out
+
+# --- MAX_ROWS 切り詰め表示の正直な出し分け（B検体所見の根治） --------------------
+
+def test_truncation_notice_is_none_when_not_truncated():
+    assert ailine._truncation_notice({"truncated": False}, {"truncated": False}, True) is None
+
+def test_truncation_notice_dsl_path_says_verification_covers_all_rows():
+    msg = ailine._truncation_notice({"truncated": False}, {"truncated": True},
+                                     exhaustive_postcondition=True)
+    assert "検証・適用は全行に対して実施" in msg
+
+def test_truncation_notice_freeform_path_says_verification_also_truncated():
+    msg = ailine._truncation_notice({"truncated": True}, {"truncated": False},
+                                     exhaustive_postcondition=False)
+    assert "検証も先頭" in msg
+    assert "行のみ" in msg
+
+def test_snapshot_marks_truncated_when_rows_exceed_max_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "MAX_ROWS", 3)
+    p = _book(tmp_path, [["a"], [1], [2], [3], [4], [5]])
+    snap = ailine.snapshot(p)
+    assert snap["truncated"] is True
+
+def test_snapshot_not_truncated_when_within_max_rows(tmp_path):
+    p = _book(tmp_path, [["a"], [1], [2]])
+    snap = ailine.snapshot(p)
+    assert snap["truncated"] is False
+
+def test_cmd_run_dsl_prints_truncation_notice_when_snapshot_truncated(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
+    monkeypatch.setattr(ailine, "MAX_ROWS", 2)   # 3行あるデータを2行に切り詰めさせる
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None:
+                        (True, None, "ok"))
+    ns = argparse.Namespace(
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "表示は先頭 2 行の変化のみ。検証・適用は全行に対して実施" in captured.out
 
 
 # --- run コマンド: 翻訳の分岐（CLARIFY exit 3 / DSL 経路の事後条件不合格） -------
