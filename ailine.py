@@ -13,6 +13,11 @@
 - ★ **検証をループに**: 適用の前後で文書が変化したかを見る **no-op ガード**。
   LibreOffice + LLM は「実行時エラー無しで成功と報告し、実際は何もしない」ことがある
   （もっともらしい UNO の幻覚）。変化ゼロなら失敗として修復に回す。
+- ★ **正規化パス（2026-08-14 修正・製品の心臓）**: before スナップショットの前に、
+  コピーを LibreOffice で一度（空マクロで）開いて保存する。openpyxl 製ブックは LO の
+  初回保存で行高（時に列幅）を実体化する副作用があり、これを先に済ませておかないと
+  no-op ガードが偽陽性になる（何もしないマクロでも「変化した」と誤って成功表示していた）。
+  コストは LO 往復 1 回（数秒）— 正しさ優先で受け入れる。
 - **コピー安全**: 原本は触らず `<book>.out.xlsx` に適用する（`--inplace` で上書き）。壊さない。
 - **参照ライブラリ**: `refs/*.bas` を few-shot に供給。苦手層（新シート・色）を補う。
   並べ替え・グラフ・ピボットなどの難所は `helpers/*.bas` の検証済みヘルパを `Call` で呼ばせる。
@@ -94,6 +99,13 @@ def ollama_generate(model: str, messages: list, temperature: float = 0.2) -> str
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
             d = json.load(r)
+    except urllib.error.HTTPError as e:
+        # ★ HTTPError は URLError のサブクラスなので先に拾う。
+        #   404 は「繋がっているがモデルが無い」で、接続不能とは原因も対処も別。
+        if e.code == 404:
+            sys.exit(f"ollama にモデル '{model}' が見つからない (HTTP 404)。\n"
+                     f"★ `ollama pull {model}` で取得してから再実行して。")
+        sys.exit(f"ollama がエラーを返した ({OLLAMA}): HTTP {e.code} {e.reason}")
     except urllib.error.URLError as e:
         sys.exit(f"ollama に繋がらない ({OLLAMA}): {e}\n"
                  "★ `ollama serve` が動いているか確認。外部送信はしない設計。")
@@ -253,8 +265,9 @@ def diff_snapshots(before: dict, after: dict) -> tuple:
             if before.get(key, {}).get(name) != after[key].get(name):
                 dim_changes += 1; lines.append(f"＊{label}変更: {name}")
 
-    # セル（値/書式/色/太字/罫線）
+    # セル（値/書式/色/太字/罫線）－ シートごとに自前の見出し→明細（他の種別と揃える）
     keys = set(before["cells"]) | set(after["cells"])
+    changed_by_sheet: dict = {}
     cell_changes = 0
     for k in sorted(keys):
         b = before["cells"].get(k)
@@ -262,10 +275,21 @@ def diff_snapshots(before: dict, after: dict) -> tuple:
         if b == a:
             continue
         cell_changes += 1
-        if cell_changes <= 12:  # 全部は出さない。多いときは件数で示す
-            lines.append(f"  {k}: {b} → {a}")
-    if cell_changes > 12:
-        lines.append(f"  …ほか {cell_changes - 12} セル")
+        sheet, rest = k.split("!", 1)
+        changed_by_sheet.setdefault(sheet, []).append(f"  {rest}: {b} → {a}")
+
+    shown = 0
+    for sheet, clines in changed_by_sheet.items():
+        if shown >= 12:  # 全部は出さない。多いときは件数で示す
+            break
+        lines.append(f"＊セル値変更: {sheet}")
+        for cl in clines:
+            if shown >= 12:
+                break
+            lines.append(cl)
+            shown += 1
+    if cell_changes > shown:
+        lines.append(f"  …ほか {cell_changes - shown} セル")
 
     changed = bool(added or removed or (after["charts"] != before["charts"])
                    or merge_changes or dim_changes or cell_changes)
@@ -295,6 +319,37 @@ def basrun_apply(book: Path, code: str, workdir: Path, helper_files=()) -> tuple
     return True, None, raw
 
 
+# ★ 正規化パス専用の空マクロ。何もしない（Call すら書かない）が、basrun_apply の
+#   `doc.store()` を一度通すことで LibreOffice 側の初回保存の実体化を先に済ませる。
+NOOP_MACRO = "Option VBASupport 1\nOption Explicit\n\nSub Run(oDoc As Object)\nEnd Sub\n"
+
+
+def normalize_book(book: Path, workdir: Path) -> Path:
+    """コピーを LibreOffice で一度（空マクロで）開いて保存する ＝ P0 の正規化パス。
+
+    LibreOffice は openpyxl 製（＝ LO で保存されたことがない）ブックを初回保存する際、
+    行高（時に列幅）を実体化する。before スナップショットをこの実体化の**前**に取ると、
+    その副作用が「マクロが変化させた」と誤検出される（no-op ガードの偽陽性・製品の心臓）。
+    先にこの正規化を一度済ませておけば、以降の before/after 比較はマクロの実際の効果
+    だけを見る。コストは LO 往復 1 回（数秒）— 正しさ優先で受け入れる。
+    参考: ailine-ts の tests/e/_harness.ts normalizeThroughLibreOffice が同じ手当てを
+    テスト側で先に実装していた（挙動の参考。製品経路に入れるのはこちらが初）。"""
+    normalized = workdir / ("normalized" + book.suffix)
+    shutil.copy2(book, normalized)
+    ok, err, _ = basrun_apply(normalized, NOOP_MACRO, workdir)
+    if not ok:
+        sys.exit(f"正規化パスに失敗した（LibreOffice で開けなかった）: {err}")
+    return normalized
+
+
+def success_message(result: dict) -> str | None:
+    """★ の注意書きは『変化を検出して適用が成功した』ときだけ出す。
+       失敗(exit 1)や --dry（何も適用していない）で出すのは不誠実（P1）。"""
+    if result.get("ok") and not result.get("dry"):
+        return "★ 変化は検出したが『正しいか』は上の差分を見て判断してください（no-op ガードは正しさを保証しない）。"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # run コマンド本体
 # ---------------------------------------------------------------------------
@@ -315,10 +370,16 @@ def cmd_run(a: argparse.Namespace) -> int:
     print(f"■ 参照ライブラリ: {refs_dir}  ({len(list(refs_dir.glob('*.bas'))) if refs_dir.is_dir() else 0} 例)")
     print(f"■ ヘルパ: {helpers_dir}  ({len(helper_files)} 本を同梱・Call で呼ばせる)")
 
-    before = None if a.dry else snapshot(book)
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
     out_book = book.with_name(book.stem + ".out" + book.suffix)
+
+    before = None
+    source_book = book
+    if not a.dry:
+        print("■ 正規化パス: LibreOffice で一度（空マクロで）開いて保存（初回保存の実体化を先に済ませる）")
+        source_book = normalize_book(book, workdir)
+        before = snapshot(source_book)
 
     result = {"ok": False, "attempts": 0, "task": a.task, "model": a.model}
     for attempt in range(a.repair + 1):
@@ -343,7 +404,7 @@ def cmd_run(a: argparse.Namespace) -> int:
             result["dry"] = True
             break
 
-        shutil.copy2(book, out_book)   # 原本は触らず、コピーに適用
+        shutil.copy2(source_book, out_book)   # 原本は触らず、正規化済みコピーに適用
         ok, err, rawout = basrun_apply(out_book, code, workdir, helper_files)
         if not ok:
             print(f"× 実行時エラー。修復する。\n{err[:400]}")
@@ -378,7 +439,9 @@ def cmd_run(a: argparse.Namespace) -> int:
 
     if a.json:
         print("\n" + json.dumps(result, ensure_ascii=False))
-    print("\n★ 変化は検出したが『正しいか』は上の差分を見て判断してください（no-op ガードは正しさを保証しない）。")
+    msg = success_message(result)
+    if msg:
+        print("\n" + msg)
     return 0 if result["ok"] else 1
 
 

@@ -2,6 +2,7 @@
    生成・適用の統合は実機（basrun_spike）で検証済み。ここは回帰用の土台。
 """
 import sys
+import urllib.error
 from pathlib import Path
 
 import openpyxl
@@ -153,6 +154,85 @@ def test_diff_detects_align_only_change(tmp_path):
     after = ailine.snapshot(p)
     changed, _ = ailine.diff_snapshots(before, after)
     assert changed is True
+
+
+# --- 差分見出し（P1: セル値変更が無見出しで続いていた不整合の修正） -----------
+
+def test_diff_cell_change_has_own_heading(tmp_path):
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p); wb.active.cell(1, 3, "new"); wb.save(p)
+    after = ailine.snapshot(p)
+    changed, lines = ailine.diff_snapshots(before, after)
+    assert changed is True
+    heading_idx = next(i for i, ln in enumerate(lines) if ln.startswith("＊セル値変更:"))
+    detail_idx = next(i for i, ln in enumerate(lines) if "new" in ln)
+    assert heading_idx < detail_idx   # 見出し → 明細の順
+
+def test_diff_cell_and_rowheight_each_get_own_heading(tmp_path):
+    # 行高変更とセル値変更が両方あるとき、セル値変更が行高見出しの下に
+    # 無見出しでぶら下がらず、自前の見出しを持つこと（修正前の不整合の再現）
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.row_dimensions[1].height = 30
+    wb.active.cell(1, 3, "new")
+    wb.save(p)
+    after = ailine.snapshot(p)
+    changed, lines = ailine.diff_snapshots(before, after)
+    assert changed is True
+    assert any(ln.startswith("＊行高変更:") for ln in lines)
+    assert any(ln.startswith("＊セル値変更:") for ln in lines)
+
+
+# --- ★ メッセージの条件（P1: 失敗/--dry でも無条件に出ていた不整合の修正） -----
+
+def test_success_message_on_real_success():
+    msg = ailine.success_message({"ok": True, "attempts": 1})
+    assert msg is not None
+    assert "no-op ガードは正しさを保証しない" in msg
+
+def test_success_message_none_on_dry():
+    assert ailine.success_message({"ok": True, "dry": True}) is None
+
+def test_success_message_none_on_failure():
+    assert ailine.success_message({"ok": False}) is None
+
+
+# --- ollama エラー分類（P1: 404 なのに ollama serve を疑わせる誤ヒントの修正） ---
+
+def test_ollama_generate_404_suggests_pull(monkeypatch):
+    def fake_urlopen(req, timeout=300):
+        raise urllib.error.HTTPError(url="http://x", code=404, msg="Not Found", hdrs=None, fp=None)
+    monkeypatch.setattr(ailine.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(SystemExit) as exc:
+        ailine.ollama_generate("qwen2.5-coder:7b", [{"role": "user", "content": "hi"}])
+    msg = str(exc.value)
+    assert "qwen2.5-coder:7b" in msg
+    assert "pull" in msg
+    assert "ollama serve" not in msg   # 接続不能の案内と混同しない
+
+def test_ollama_generate_connection_refused_suggests_serve(monkeypatch):
+    def fake_urlopen(req, timeout=300):
+        raise urllib.error.URLError("connection refused")
+    monkeypatch.setattr(ailine.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(SystemExit) as exc:
+        ailine.ollama_generate("qwen2.5-coder:7b", [{"role": "user", "content": "hi"}])
+    msg = str(exc.value)
+    assert "ollama serve" in msg
+    assert "pull" not in msg   # 404 の案内と混同しない
+
+def test_ollama_generate_other_http_error_is_distinct(monkeypatch):
+    # 404/接続不能のどちらの定型文にも紐付けない（誤誘導しない）
+    def fake_urlopen(req, timeout=300):
+        raise urllib.error.HTTPError(url="http://x", code=500, msg="Internal Error", hdrs=None, fp=None)
+    monkeypatch.setattr(ailine.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(SystemExit) as exc:
+        ailine.ollama_generate("qwen2.5-coder:7b", [{"role": "user", "content": "hi"}])
+    msg = str(exc.value)
+    assert "500" in msg
+    assert "pull" not in msg
+    assert "ollama serve" not in msg
 
 
 # --- 文書の説明 ------------------------------------------------------------
