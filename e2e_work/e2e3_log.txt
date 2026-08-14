@@ -1,0 +1,32 @@
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.2s)
+⏳ 初回準備（文書の正規化）… (0.6s)
+⏳ LibreOffice で適用中… (0.6s)
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=sample_e2e3.xlsx
+解釈: 操作:並べ替え 対象:金額 順:降順
+
+─ 生成した .bas（決定論・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Call SortByColumn(oDoc, 1, False)
+End Sub
+
+──────────────────────────────────────────
+
+変更点:
+＊セル値変更: Sheet
+  A2: 値 'りんご'→'バナナ'
+  B2: 値 300→900
+  A3: 値 'バナナ'→'ぶどう'
+  B3: 値 900→600
+  A4: 値 'みかん'→'りんご'
+  B4: 値 150→300
+  A5: 値 'ぶどう'→'みかん'
+  B5: 値 600→150
+
+✓ 達成を機械検証済み（操作:並べ替え）: 4 行が降順
+
+適用先: sample_e2e3.out.xlsx（原本 sample_e2e3.xlsx は無変更）
+
+{"ok": true, "attempts": 1, "task": "金額で降順に並べ替えて", "model": "qwen2.5-coder:7b", "path": "dsl", "command": "解釈: 操作:並べ替え 対象:金額 順:降順", "postcondition": "pass", "changes": ["＊セル値変更: Sheet", "  A2: 値 'りんご'→'バナナ'", "  B2: 値 300→900", "  A3: 値 'バナナ'→'ぶどう'", "  B3: 値 900→600", "  A4: 値 'みかん'→'りんご'", "  B4: 値 150→300", "  A5: 値 'ぶどう'→'みかん'", "  B5: 値 600→150"], "advisories": [], "out": "C:\\Dev\\ailine\\e2e_work\\sample_e2e3.out.xlsx"}

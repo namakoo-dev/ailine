@@ -1,8 +1,11 @@
 # M2b battery 再実行: bench/translation_spike.py と同じ battery（凍結済み・改変しない）・
 # 同じ採点基準（score_slots/norm）で、本実装 ailine.translate_task を直接叩く。
-# ★ 一段翻訳スパイク(translation_spike.py)とはプロンプトが違う（本実装は few-shot 3例つき・
+# ★ 一段翻訳スパイク(translation_spike.py)とはプロンプトが違う（本実装は few-shot 5例つき・
 #   nested {"op","args"} 形式）。凍結合格線（op90%/slot80%/誤断定20%）を本実装のプロンプトで
 #   再達成していることを確かめるのが目的。
+# ★ M2c: translate_task は常に {"plan": [...]} を返すようになった（複合依頼対応）。
+#   items(v1) は単一依頼のみなので、plan[0] を旧来どおりの単一 op 形式として採点する
+#   （後方互換: 単一依頼は長さ1の計画）。
 import sys
 from pathlib import Path
 
@@ -22,8 +25,13 @@ fails = []
 for item in BATTERY["items"]:
     headers = BATTERY["_meta"]["books"][item["book"]]["sheets"]
     book_meta = {"sheets": list(headers.keys()), "headers": headers}
-    got = ailine.translate_task(MODEL, item["text"], book_meta, temperature=0.1)
+    plan_result = ailine.translate_task(MODEL, item["text"], book_meta, temperature=0.1)
+    got = (plan_result.get("plan") or [{"op": "FREEFORM", "args": {}}])[0]
     got_op = str(got.get("op", "")).upper()
+    if got_op == "OUT_OF_VOCAB":
+        # ★ M2c: プロンプトが FREEFORM → OUT_OF_VOCAB に切り替わった（意味は同じ・語彙外）。
+        #   v1 battery の expect ラベル("freeform")と揃えて採点する（別ラベル扱いにしない）。
+        got_op = "FREEFORM"
     exp = item["expect"]
 
     if exp in ("clarify", "freeform"):

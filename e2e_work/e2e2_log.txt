@@ -1,0 +1,14 @@
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.5s)
+⏳ 初回準備（文書の正規化）… (0.6s)
+⏳ 1段目 LibreOffice で適用中… (0.6s)
+⏳ 2段目 LibreOffice で適用中… (0.6s)
+■ ailine（複合計画・2 段）  model=qwen2.5-coder:7b  book=sample_e2e.xlsx
+
+1. 操作:並べ替え 対象:金額 順:降順 → ✓ 機械検証済み（4 行が降順）
+2. 操作:太字 対象:row:1 → ✓ 機械検証済み（2 セルが太字）
+
+✓ すべて機械検証済み
+
+適用先: sample_e2e.out.xlsx（原本 sample_e2e.xlsx は無変更）
+
+{"ok": true, "attempts": 1, "task": "金額で降順に並べ替えて、見出し行を太字にして", "model": "qwen2.5-coder:7b", "path": "plan", "command": null, "postcondition": null, "plan": [{"op": "SORT", "command": "解釈: 操作:並べ替え 対象:金額 順:降順", "status": "ok", "postcondition": "pass"}, {"op": "BOLD", "command": "解釈: 操作:太字 対象:row:1", "status": "ok", "postcondition": "pass"}], "items": [{"idx": 1, "label": "操作:並べ替え 対象:金額 順:降順", "status": "ok", "detail": "4 行が降順"}, {"idx": 2, "label": "操作:太字 対象:row:1", "status": "ok", "detail": "2 セルが太字"}], "changes": ["＊セル値変更: Sheet", "  A1: 太字 False→True", "  B1: 太字 False→True", "  A2: 値 'りんご'→'バナナ'", "  B2: 値 300→900", "  A3: 値 'バナナ'→'ぶどう'", "  B3: 値 900→600", "  A4: 値 'みかん'→'りんご'", "  B4: 値 150→300", "  A5: 値 'ぶどう'→'みかん'", "  B5: 値 600→150"], "out": "C:\\Dev\\ailine\\e2e_work\\sample_e2e.out.xlsx"}

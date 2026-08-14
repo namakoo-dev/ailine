@@ -62,6 +62,7 @@ DEFAULT_APPLY_TIMEOUT = 180.0  # M1: 暴走マクロで無限ハングしない�
 HISTORY_DIR = Path.home() / ".ailine"
 HISTORY_FILE = HISTORY_DIR / "history.jsonl"
 BACKUP_DIR = HISTORY_DIR / "backups"
+DEFAULT_KEEP_BACKUPS = 10   # M2c: book ごとにこの世代数を超えたら古い順に削除する
 
 
 def _find_basrun_path() -> Path | None:
@@ -442,6 +443,26 @@ def _changed_cells(before: dict, after: dict) -> list:
     return out
 
 
+def _value_changed_cells(before: dict, after: dict) -> list:
+    """(sheet, row, col) のリスト。★ M2c: 値(idx0)が実際に変わったセルだけ
+       （書式(罫線・中央揃え等)だけが変わったセルは含めない）。
+       幽霊データ/一様埋め検出を『値変更』の部分集合だけで評価するための土台。
+       ★ 冷間再監査3回目の実測: 罫線+中央揃え+0埋めが混在すると、書式だけ変わった
+       セル（値は不変）が uniform 判定の対象に紛れ込み、一様埋めが見逃されていた。"""
+    keys = set(before["cells"]) | set(after["cells"])
+    out = []
+    for k in keys:
+        b = before["cells"].get(k)
+        a = after["cells"].get(k)
+        b_val = b[0] if b is not None else None
+        a_val = a[0] if a is not None else None
+        if b_val != a_val:
+            sheet, rc = k.split("!", 1)
+            r_str, c_str = rc.split(",")
+            out.append((sheet, int(r_str), int(c_str)))
+    return out
+
+
 def _used_range(before: dict, sheet: str) -> tuple | None:
     """原本(before snapshot)においてそのシートで実際に値が入っていたセルの矩形
        (min_row, max_row, min_col, max_col)。★ 近似: 値(idx0)が非空のセルだけを対象に
@@ -463,8 +484,9 @@ def _used_range(before: dict, sheet: str) -> tuple | None:
 def detect_ghost_data(before: dict, after: dict) -> str | None:
     """★ 幽霊データ検出: 変更セルが全部、原本の使用範囲（データが存在した矩形）の
        外に集中している場合だけ疑わしい旨を返す。1セルでも範囲内なら何も言わない
-       （保守的。使用範囲が不明なシートが混ざる場合も判定を保留する）。"""
-    changed = _changed_cells(before, after)
+       （保守的。使用範囲が不明なシートが混ざる場合も判定を保留する）。
+       ★ M2c: 判定対象は『値変更』の部分集合だけ（書式のみの変更は無視・保守性は部分集合内で維持）。"""
+    changed = _value_changed_cells(before, after)
     if not changed:
         return None
     outside = []
@@ -486,18 +508,21 @@ def detect_ghost_data(before: dict, after: dict) -> str | None:
 
 def detect_uniform_fill(before: dict, after: dict) -> str | None:
     """★ 一様埋め検出: 変更セルの全部で『変化前が空欄』かつ『変化後が全部同一値』
-       （特に 0/空文字）の場合だけ疑わしい旨を返す（保守的）。"""
+       （特に 0/空文字）の場合だけ疑わしい旨を返す（保守的）。
+       ★ M2c: 判定対象は『値変更』の部分集合だけ（罫線・中央揃えなど書式のみが変わった
+       セルは対象外にする — 混ざっていると後方の値だけ均一でも見逃していた実測不具合の修正）。"""
     keys = set(before["cells"]) | set(after["cells"])
     after_vals = []
     for k in keys:
         b = before["cells"].get(k)
         a = after["cells"].get(k)
-        if b == a:
-            continue
         b_val = b[0] if b is not None else None
+        a_val = a[0] if a is not None else None
+        if b_val == a_val:
+            continue  # 値は変わっていない（書式だけの変更は対象外）
         if b_val not in (None, ""):
             return None  # 変化前が空欄でないセルが1つでもある → 発火しない
-        after_vals.append(a[0] if a is not None else None)
+        after_vals.append(a_val)
     if not after_vals:
         return None
     if len(set(after_vals)) != 1:
@@ -678,7 +703,8 @@ OP_SCHEMA = {
 # ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、
 #   本番プロンプトはここが唯一の元）。
 OPS_DOC = """SORT: 並べ替え。args: col(列名), order(asc|desc)
-COMPUTE_COLUMN: 既存列同士の計算で新列を作る。args: operands(列名2つ), operator(+,-,*,/)
+COMPUTE_COLUMN: 既存列同士の計算。args: operands(列名2つ), operator(+,-,*,/), target(省略可・実在する列名。
+  依頼が「〜に」のように既存列を名指ししたらその列名を入れる。無指定なら新しい列を作る)
 LOOKUP_FILL: 別シートの対応表から値を転記。args: target_sheet, target_col, source_sheet, key_col
 AGGREGATE: グループ別に集計表を作る。args: group_col, value_col
 BOLD: 太字。args: target("row:行番号" か "col:列名")
@@ -688,30 +714,51 @@ MERGE: セル結合。args: range("A1:C1"形式)
 CHART: 棒グラフ。args: value_col(列名)
 CENTER_ALIGN: 中央揃え。args: target("all" か "col:列名")"""
 
-# ★ battery(v1) が実測で取り違えた3パターンの few-shot。同じ混同を別の言い回しで示す
-#   （battery の項目文そのままは使わない＝暗記でなく汎化を確かめる）。
+# ★ M2c: battery(v1) が実測で取り違えた基本パターンに加え、複合依頼(battery v2)を few-shot で
+#   教える。同じ混同/構造を別の言い回しで示す（battery の項目文そのままは使わない＝暗記でなく
+#   汎化を確かめる）。
 #   ①「引いてくる/転記」は LOOKUP_FILL であって COMPUTE_COLUMN（四則演算）ではない。
-#   ②③ 条件付き書式・集計行の追記は語彙に無い操作＝ FREEFORM（曖昧ではないので CLARIFY ではない）。
+#   ②③ 条件付き書式・集計行の追記は語彙に無い操作＝ OUT_OF_VOCAB（曖昧ではないので CLARIFY ではない）。
+#   ④ 語彙内(target 付き COMPUTE_COLUMN)＋語彙外の混在。⑤ 語彙内どうしの2連(依存なし)。
 TRANSLATION_FEWSHOT = [
     ('対象ブックの構成: {"Sheet": ["商品", "単価"], "商品マスタ": ["商品", "単価"]}\n'
      '依頼: 「商品マスタから商品名を引っ張ってきて明細に入れて」',
-     '{"op": "LOOKUP_FILL", "args": {"target_sheet": "Sheet", "target_col": "商品", '
-     '"source_sheet": "商品マスタ", "key_col": "商品"}}'),
+     '{"plan": [{"op": "LOOKUP_FILL", "args": {"target_sheet": "Sheet", "target_col": "商品", '
+     '"source_sheet": "商品マスタ", "key_col": "商品"}}]}'),
     ('対象ブックの構成: {"Sheet": ["商品", "金額", "在庫"]}\n'
      '依頼: 「金額が1000円未満の行を薄い黄色にして」',
-     '{"op": "FREEFORM"}'),
+     '{"plan": [{"op": "OUT_OF_VOCAB", "about": "条件付き書式"}]}'),
     ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
      '依頼: 「合計を一番下の行に追加して」',
-     '{"op": "FREEFORM"}'),
+     '{"plan": [{"op": "OUT_OF_VOCAB", "about": "集計行の追記"}]}'),
+    ('対象ブックの構成: {"Sheet": ["商品", "数量", "単価", "金額"]}\n'
+     '依頼: 「金額に数量×単価を入れて、割引後の金額も出して」',
+     '{"plan": ['
+     '{"op": "COMPUTE_COLUMN", "args": {"operands": ["数量", "単価"], "operator": "*", "target": "金額"}}, '
+     '{"op": "OUT_OF_VOCAB", "about": "割引後の金額"}]}'),
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「金額で昇順に並べ替えて、見出し行を太字にして」',
+     '{"plan": ['
+     '{"op": "SORT", "args": {"col": "金額", "order": "asc"}}, '
+     '{"op": "BOLD", "args": {"target": "row:1"}}]}'),
 ]
 
-TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙のどれか一つの JSON 命令に翻訳する。
-出力形式は必ず {{"op": "<語彙>", "args": {{...}}}} のいずれか一つ。それ以外は書かない。
+TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙を使った「計画」の JSON に翻訳する。
+出力形式は必ず {{"plan": [ {{...}}, {{...}}, ... ]}}。それ以外は書かない。
+依頼が複数の操作を含むなら、その全部を計画に順番どおり列挙すること。一部を省略してはいけない
+（黙って落とすことを禁止・単一の依頼なら要素数1の計画にする）。
+
+計画の各要素は次のどれか一つ:
+- {{"op": "<語彙>", "args": {{...}}}}  操作語彙のどれかに当てはまる場合
+- {{"op": "OUT_OF_VOCAB", "about": "<何についての依頼か、短く>"}}  操作語彙のどれにも当てはまらない部分
+  （条件付き書式・行/シートの削除やコピー・集計行の追記などは語彙外。必ずこの形で計画に残す）
+- {{"op": "CLARIFY", "question": "確認文"}}  依頼が曖昧で必須引数を確定できない場合。推測で断定しない
+
 重要な規則:
-- 列は必ず「対象ブックの構成」に実在する列名で指定する（番号ではなく）
-- 依頼が曖昧で必須引数を確定できないなら {{"op": "CLARIFY", "question": "確認文"}} を返す。推測で断定しない
-- 依頼の操作が語彙のどれにも当てはまらないなら {{"op": "FREEFORM"}}
-  （条件付き書式・行/シートの削除やコピー・集計行の追記などは語彙外）
+- 列は必ず「対象ブックの構成」に実在する列名で指定する（番号ではなく）。ただし直前の段が新規作成する
+  列を後続の段が参照する場合は、依頼文の言い方のままでよい（実行時に解決する）
+- 依頼が既存の列を名指し（「小計に」等）して値を入れる/書き換える場合、COMPUTE_COLUMN の args に
+  target(その実在列名) を入れる
 - JSON のみ出力（説明・markdown 柵は禁止）
 
 操作語彙:
@@ -750,34 +797,61 @@ def ollama_generate_json(model: str, messages: list, temperature: float = 0.1,
     return d.get("message", {}).get("content", "")
 
 
-def translate_task(model: str, task: str, book_meta: dict, temperature: float = 0.1) -> dict:
-    """① 翻訳。自然言語タスクを命令言語 JSON {"op", "args", "question"?} に翻訳する。
-       接地: book_meta の実在シート/列名だけを few-shot と一緒に渡す。
-       ★ 失敗（API 不通・JSON 不正・op が語彙外・必須 slot 欠落）は例外を投げずクラッシュ
-       させない。どれか一つでも起きたら op="FREEFORM" に退避し、呼び出し側が現行の
-       自由生成経路（M2a 助言つき）へフォールバックできるようにする。"""
-    try:
-        messages = build_translation_messages(task, book_meta)
-        raw = ollama_generate_json(model, messages, temperature=temperature)
-        data = json.loads(raw)
-    except Exception:
-        return {"op": "FREEFORM", "args": {}}
+def _normalize_plan_step(data) -> dict:
+    """計画の1要素を正規化する（① 翻訳の per-step 版・translate_task の旧 per-op ロジックを継承）。
+       ★ 黙って落とさない: 不明な形・語彙外・必須 slot 欠落は必ず何らかの op を持つ dict として
+       残す（呼び出し側がその段を FREEFORM(自由生成)/OUT_OF_VOCAB として扱えるように）。
+       - モデルが明示した op="OUT_OF_VOCAB" は about を保って素通し。
+       - op が語彙外・必須 slot 欠落・非 dict 要素は op="FREEFORM" にする
+        （旧 translate_task の『退避は FREEFORM』という分類をそのまま踏襲。単一依頼のときの
+        後方互換＝cmd_run の全面自由生成 retreat が変わらないようにするため）。"""
     if not isinstance(data, dict):
         return {"op": "FREEFORM", "args": {}}
     op = str(data.get("op", "")).upper()
     if op == "CLARIFY":
         question = data.get("question")
         return {"op": "CLARIFY", "question": question or "確認が必要です", "args": {}}
+    if op == "OUT_OF_VOCAB":
+        about = data.get("about")
+        return {"op": "OUT_OF_VOCAB", "about": str(about) if about else "内容不明の依頼", "args": {}}
     if op not in OP_SCHEMA:
         return {"op": "FREEFORM", "args": {}}
     args = data.get("args")
     if not isinstance(args, dict):
         # モデルが args で包まず op と slot をフラットに返した場合の救済（寛容に受ける）。
-        args = {k: v for k, v in data.items() if k != "op"}
+        args = {k: v for k, v in data.items() if k not in ("op", "about", "question")}
     required = OP_SCHEMA[op]
     if any(k not in args or args[k] in (None, "") for k in required):
         return {"op": "FREEFORM", "args": {}}
     return {"op": op, "args": args}
+
+
+def translate_task(model: str, task: str, book_meta: dict, temperature: float = 0.1) -> dict:
+    """① 翻訳。自然言語タスクを命令言語の「計画」 {"plan": [step, ...]} に翻訳する（M2c）。
+       接地: book_meta の実在シート/列名だけを few-shot と一緒に渡す。
+       ★ 複合依頼（複数の操作を含む依頼）は plan に全段を列挙する。★ 後方互換: 単一依頼は
+       長さ1の計画になる（モデルが "plan" で包まず1操作だけ返した場合もここで長さ1に正規化する）。
+       各 step は {"op": <語彙>, "args": {...}} / {"op": "OUT_OF_VOCAB", "about": ...} /
+       {"op": "CLARIFY", "question": ...} / {"op": "FREEFORM"}（退避）のいずれか。
+       ★ 失敗（API 不通・JSON 不正・空応答）は例外を投げずクラッシュさせない。
+       op="FREEFORM" 一段の計画に退避し、呼び出し側が現行の自由生成経路（M2a 助言つき）
+       へフォールバックできるようにする。"""
+    try:
+        messages = build_translation_messages(task, book_meta)
+        raw = ollama_generate_json(model, messages, temperature=temperature, num_predict=700)
+        data = json.loads(raw)
+    except Exception:
+        return {"plan": [{"op": "FREEFORM", "args": {}}]}
+    steps_raw = None
+    if isinstance(data, dict) and isinstance(data.get("plan"), list):
+        steps_raw = data["plan"]
+    elif isinstance(data, dict):
+        steps_raw = [data]   # 後方互換: モデルが plan で包まず単一 op を直接返した
+    elif isinstance(data, list):
+        steps_raw = data
+    if not steps_raw:
+        return {"plan": [{"op": "FREEFORM", "args": {}}]}
+    return {"plan": [_normalize_plan_step(s) for s in steps_raw]}
 
 
 # --- ② 検証（接地：実在するシート/列名かを機械照合） -------------------------
@@ -869,6 +943,15 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict) -> tuple:
         resolved["operands"] = new_operands
         if resolved.get("operator") not in ("+", "-", "*", "/"):
             return False, resolved, inferred, f"演算子『{resolved.get('operator')}』が不明です"
+        # ★ M2c: target(任意) — 依頼が既存列を名指し（「小計に」等）した場合はその列に書く。
+        #   無指定なら従来どおり新規列（codegen_dsl 側で分岐）。
+        if resolved.get("target"):
+            v, was_inferred, err = resolve_col_ref(resolved["target"], headers.get(first_sheet, []))
+            if err:
+                return False, resolved, inferred, err
+            resolved["target"] = v
+            if was_inferred:
+                inferred.add("target")
 
     elif op == "LOOKUP_FILL":
         if (err := check_sheet("target_sheet")):
@@ -937,7 +1020,8 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict) -> tuple:
 
 _CONFIRM_FIELDS = {
     "SORT": (("対象", "col", None), ("順", "order", lambda v: "降順" if v == "desc" else "昇順")),
-    "COMPUTE_COLUMN": (("演算対象", "operands", lambda v: " と ".join(v)), ("演算子", "operator", None)),
+    "COMPUTE_COLUMN": (("演算対象", "operands", lambda v: " と ".join(v)), ("演算子", "operator", None),
+                        ("対象列", "target", None)),
     "LOOKUP_FILL": (("対象シート", "target_sheet", None), ("対象列", "target_col", None),
                      ("参照シート", "source_sheet", None), ("キー列", "key_col", None)),
     "AGGREGATE": (("分類列", "group_col", None), ("集計列", "value_col", None)),
@@ -952,9 +1036,13 @@ _CONFIRM_FIELDS = {
 
 def format_confirmation_line(op: str, resolved_args: dict, inferred: set) -> str:
     """命令言語形式の確認行を1行で組む（例: 解釈: 操作:並べ替え 対象:金額 順:降順）。
-       推定で埋めた（数字表記から解決した等）引数には (推定) を付ける。"""
+       推定で埋めた（数字表記から解決した等）引数には (推定) を付ける。
+       ★ M2c: キー自体が resolved_args に無い任意項目（COMPUTE_COLUMN の target 等）は
+       そのフィールドを丸ごと省略する（必須項目は常に存在するので既存の表示は変わらない）。"""
     parts = [f"操作:{OP_LABELS.get(op, op)}"]
     for label, key, transform in _CONFIRM_FIELDS.get(op, ()):
+        if key not in resolved_args:
+            continue
         val = resolved_args.get(key)
         shown = transform(val) if transform else val
         tag = "(推定)" if key in inferred else ""
@@ -1081,13 +1169,21 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict) -> str:
         i1 = headers[first_sheet].index(op1)
         i2 = headers[first_sheet].index(op2)
         operator = resolved_args["operator"]
-        new_col = len(headers[first_sheet])   # 0起点で次の空き列
-        header_name = f"{op1}{operator}{op2}".replace('"', '""')
+        target = resolved_args.get("target")
+        # ★ M2c: target(実在列名) 指定時はその列に書く（新規列を作らない）。
+        #   無指定なら従来どおり次の空き列に新規列を作る。
+        if target:
+            new_col = headers[first_sheet].index(target)
+            header_write = ""   # 既存の見出しはそのまま（上書きしない）
+        else:
+            new_col = len(headers[first_sheet])   # 0起点で次の空き列
+            header_name = f"{op1}{operator}{op2}".replace('"', '""')
+            header_write = f"    oSheet.getCellByPosition({new_col}, 0).setString(\"{header_name}\")\n"
         body = ("    Dim oSheet As Object, lastRow As Long, i As Long\n"
                 "    oSheet = oDoc.Sheets.getByIndex(0)\n"
                 + _scan_last_row_basic()
-                + f"    oSheet.getCellByPosition({new_col}, 0).setString(\"{header_name}\")\n"
-                "    For i = 1 To lastRow\n"
+                + header_write
+                + "    For i = 1 To lastRow\n"
                 f"        oSheet.getCellByPosition({new_col}, i).setValue("
                 f"oSheet.getCellByPosition({i1}, i).getValue() {operator} "
                 f"oSheet.getCellByPosition({i2}, i).getValue())\n"
@@ -1167,11 +1263,13 @@ def check_compute_column(path: Path, args: dict) -> tuple:
     op1, op2 = args["operands"]
     i1 = _col_index_by_header(ws, op1)
     i2 = _col_index_by_header(ws, op2)
-    newname = f"{op1}{args['operator']}{op2}"
+    # ★ M2c: target(実在列名) 指定時はその列を検証する。無指定なら従来どおり自動命名の新列。
+    target = args.get("target")
+    newname = target or f"{op1}{args['operator']}{op2}"
     inew = _col_index_by_header(ws, newname)
     if i1 is None or i2 is None or inew is None:
         wb.close()
-        return False, f"演算対象または新列『{newname}』が見つからない"
+        return False, f"演算対象または対象列『{newname}』が見つからない"
     last = _scan_last_row(ws)
     for r in range(2, last + 1):
         a = ws.cell(row=r, column=i1).value
@@ -1476,6 +1574,17 @@ def basrun_apply(book: Path, code: str, workdir: Path, helper_files=(),
 NOOP_MACRO = "Option VBASupport 1\nOption Explicit\n\nSub Run(oDoc As Object)\nEnd Sub\n"
 
 
+def _stop_office() -> None:
+    """basrun.py stop を呼んで LibreOffice を落とす（M2c: normalize_book の自動リトライ用）。
+       ★ ここでの失敗は無視する（次の apply がどのみち再起動を試みる。taskkill 一括はしない
+       既存機構の外側なので、ここでは basrun 自身の stop に委譲するだけ）。"""
+    try:
+        subprocess.run([sys.executable, str(basrun_path()), "stop"],
+                        capture_output=True, encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def normalize_book(book: Path, workdir: Path,
                     timeout: float | None = DEFAULT_APPLY_TIMEOUT) -> Path:
     """コピーを LibreOffice で一度（空マクロで）開いて保存する ＝ P0 の正規化パス。
@@ -1486,10 +1595,19 @@ def normalize_book(book: Path, workdir: Path,
     先にこの正規化を一度済ませておけば、以降の before/after 比較はマクロの実際の効果
     だけを見る。コストは LO 往復 1 回（数秒）— 正しさ優先で受け入れる。
     参考: ailine-ts の tests/e/_harness.ts normalizeThroughLibreOffice が同じ手当てを
-    テスト側で先に実装していた（挙動の参考。製品経路に入れるのはこちらが初）。"""
+    テスト側で先に実装していた（挙動の参考。製品経路に入れるのはこちらが初）。
+
+    ★ M2c: 監査2回で2回再現した既知の摩擦（RuntimeException: Could not create system
+    bitmap! 等、LibreOffice 側の一時的な描画/接続不調）への低リスク対処。1回失敗しても
+    即座に落とさず、stop（LibreOffice を落とす）→ 再起動を挟んで1回だけ自動リトライする。
+    それでも失敗したら現行どおりのエラーで落ちる（無限リトライはしない）。"""
     normalized = workdir / ("normalized" + book.suffix)
     shutil.copy2(book, normalized)
     ok, err, _ = basrun_apply(normalized, NOOP_MACRO, workdir, timeout=timeout)
+    if not ok:
+        _stop_office()
+        shutil.copy2(book, normalized)   # 中途半端な保存状態を残さず作り直す
+        ok, err, _ = basrun_apply(normalized, NOOP_MACRO, workdir, timeout=timeout)
     if not ok:
         sys.exit(f"正規化パスに失敗した（LibreOffice で開けなかった）: {err}")
     return normalized
@@ -1524,12 +1642,32 @@ def backup_path_for(book: Path, ts: str | None = None) -> Path:
     return BACKUP_DIR / f"{book.stem}.{ts}{book.suffix}"
 
 
-def make_backup(book: Path) -> Path:
+def prune_backups(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> list:
+    """★ M2c: book の世代のうち keep 件を超える古いもの（list_backups は新しい順）を削除する。
+       戻り値は削除したパスのリスト。keep < 0 は「無制限（削除しない）」扱い。"""
+    if keep < 0:
+        return []
+    backups = list_backups(book)
+    stale = backups[keep:]
+    deleted = []
+    for p in stale:
+        try:
+            p.unlink()
+            deleted.append(p)
+        except OSError:
+            pass
+    return deleted
+
+
+def make_backup(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> Path:
     """book のバックアップを ~/.ailine/backups/ に作る。戻り値はバックアップ先。
-       ★ 失敗したら例外を投げる（呼び出し側が --inplace 中止の判断に使う）。"""
+       ★ 失敗したら例外を投げる（呼び出し側が --inplace 中止の判断に使う）。
+       ★ M2c: 新しいバックアップを作った後、keep 世代を超えた古いものを剪定する
+       （既定 DEFAULT_KEEP_BACKUPS=10。無制限にすると個人開発機のディスクを静かに食う）。"""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     dst = backup_path_for(book)
     shutil.copy2(book, dst)
+    prune_backups(book, keep=keep)
     return dst
 
 
@@ -1578,6 +1716,7 @@ def cmd_restore(a: argparse.Namespace) -> int:
         if not backups:
             print(f"{book.name} のバックアップは無い")
             return 0
+        print(f"{book.name} のバックアップ（{len(backups)} 世代・新しい順）:")
         for p in backups:
             print(p.name)
         return 0
@@ -1787,12 +1926,14 @@ def cmd_history(a: argparse.Namespace) -> int:
 
 def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: str,
                  error_detail: str | None = None) -> None:
-    """--json 出力・成功時の注意書き・履歴の記録。cmd_run_freeform / cmd_run_dsl の共通末尾。
-       ★ DSL 経路(path="dsl")は "✓ 達成を機械検証済み" を既に自分で出しているので、
-       success_message() の『正しいかは差分を見て判断』（自由生成向けの注意書き）は出さない。"""
+    """--json 出力・成功時の注意書き・履歴の記録。cmd_run_freeform / cmd_run_dsl / cmd_run_plan
+       の共通末尾。
+       ★ DSL 経路(path="dsl")・複合計画経路(path="plan")は達成/総合判定の行を既に自分で
+       出しているので、success_message() の『正しいかは差分を見て判断』（自由生成向けの
+       注意書き）はここでは出さない。"""
     if a.json:
         print("\n" + json.dumps(result, ensure_ascii=False))
-    if result.get("path") != "dsl":
+    if result.get("path") not in ("dsl", "plan"):
         msg = success_message(result)
         if msg:
             print("\n" + msg)
@@ -1806,9 +1947,13 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
 
 
 def cmd_run(a: argparse.Namespace) -> int:
-    """run コマンドの入口。① 翻訳 → CLARIFY なら質問して exit 3 / DSL 語彙なら②〜⑥の
-       決定論パイプライン(cmd_run_dsl) / それ以外(FREEFORM・翻訳失敗)は現行の自由生成
-       経路(cmd_run_freeform)へ retreat する。"""
+    """run コマンドの入口。① 翻訳（計画）→
+       - 計画が空/1段で CLARIFY → 質問して exit 3
+       - 計画が空/1段で DSL 語彙 → ②〜⑥の決定論パイプライン(cmd_run_dsl)
+       - 計画が空/1段でそれ以外(FREEFORM・翻訳失敗) → 現行の自由生成経路(cmd_run_freeform)
+       - 計画が2段以上(複合依頼) → 段ごとに honest な項目別実行(cmd_run_plan)（M2c）
+       ★ 後方互換: translate_task が "plan" で包まない旧形式（bare {"op":...}）を返した場合
+       （テストの monkeypatch を含む）も、その dict をそのまま単一段として扱う。"""
     book = Path(a.book).resolve()
     if not book.exists():
         sys.exit(f"文書が無い: {book}")
@@ -1818,14 +1963,60 @@ def cmd_run(a: argparse.Namespace) -> int:
     translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
     progress_end(t0)
 
-    op = translation.get("op")
-    if op == "CLARIFY":
-        question = translation.get("question") or "確認が必要です"
-        print(f"？ {question}")
-        return 3
-    if op in OP_SCHEMA:
-        return cmd_run_dsl(a, book, book_meta, op, translation.get("args", {}))
-    return cmd_run_freeform(a, book)
+    plan = translation.get("plan") if isinstance(translation, dict) else None
+    if not isinstance(plan, list) or not plan:
+        if isinstance(translation, dict) and translation.get("op"):
+            plan = [translation]
+        else:
+            plan = [{"op": "FREEFORM", "args": {}}]
+
+    if len(plan) == 1:
+        step = plan[0]
+        op = step.get("op")
+        if op == "CLARIFY":
+            question = step.get("question") or "確認が必要です"
+            print(f"？ {question}")
+            return 3
+        if op in OP_SCHEMA:
+            return cmd_run_dsl(a, book, book_meta, op, step.get("args", {}))
+        return cmd_run_freeform(a, book)
+
+    return cmd_run_plan(a, book, book_meta, plan)
+
+
+def _column_has_existing_values(book_path: Path, sheet_name: str, col_name: str) -> bool:
+    """★ M2c: target(既存列指定)列に、見出し行を除いてどれか値が入っているか。
+       上書き検知の明示用。読めない/列やシートが見つからない場合は False
+       （保守的に『無い』扱い＝誤って警告しない）。"""
+    try:
+        wb = openpyxl.load_workbook(book_path, read_only=True)
+        if sheet_name not in wb.sheetnames:
+            wb.close()
+            return False
+        ws = wb[sheet_name]
+        idx = _col_index_by_header(ws, col_name)
+        if idx is None:
+            wb.close()
+            return False
+        last = _scan_last_row(ws)
+        found = any(ws.cell(row=r, column=idx).value not in (None, "") for r in range(2, last + 1))
+        wb.close()
+        return found
+    except Exception:
+        return False
+
+
+def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_path: Path) -> str | None:
+    """★ M2c 項目2: COMPUTE_COLUMN の target(既存列指定)に既存値がある場合、
+       上書きになる旨の1行を返す（無ければ None・確認行に明示するため）。"""
+    if op != "COMPUTE_COLUMN" or not resolved.get("target"):
+        return None
+    sheets = book_meta.get("sheets") or []
+    if not sheets:
+        return None
+    if _column_has_existing_values(book_path, sheets[0], resolved["target"]):
+        return f"★ 対象列『{resolved['target']}』には既存値があります（上書きします）"
+    return None
 
 
 def cmd_run_dsl(a: argparse.Namespace, book: Path, book_meta: dict, op: str, raw_args: dict) -> int:
@@ -1838,6 +2029,9 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, book_meta: dict, op: str, raw
     line = format_confirmation_line(op, resolved, inferred)
     print(f"■ ailine（DSL 経路）  model={a.model}  book={book.name}")
     print(line)
+    warn_overwrite = _maybe_warn_target_overwrite(op, resolved, book_meta, book)
+    if warn_overwrite:
+        print(warn_overwrite)
 
     if a.ask:
         try:
@@ -1910,7 +2104,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, book_meta: dict, op: str, raw
 
     if a.inplace:
         try:
-            make_backup(book)
+            make_backup(book, keep=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
         except Exception as e:
             print(f"× バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}")
             print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
@@ -2034,7 +2228,7 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path) -> int:
         failure_kind = "none"
         if a.inplace:
             try:
-                make_backup(book)
+                make_backup(book, keep=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
             except Exception as e:
                 # ★ M2a: バックアップ失敗時は --inplace を中止する（安全側・原本は無変更）。
                 print(f"× バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}")
@@ -2054,6 +2248,327 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path) -> int:
 
     _finish_run(a, book, result, failure_kind)
     return 0 if result["ok"] else 1
+
+
+# ---------------------------------------------------------------------------
+# M2c: 複合依頼の計画実行と正直な範囲表示
+#   翻訳(①)が返した plan(長さ2以上)を段ごとに実行する。DSL 語彙の段は②〜⑥の決定論
+#   パイプライン、語彙外(OUT_OF_VOCAB/FREEFORM)の段は FREEFORM 経路（その段の依頼文だけ）。
+#   ★ 黙落ゼロ: 計画に載った段は必ず項目別報告の1行になる。
+#   ★ 総合判定は最弱の段に従う。「機械検証済み」の語は実際に機械検証が通った段にだけ付ける。
+# ---------------------------------------------------------------------------
+
+_ITEM_STATUS_MARK = {"ok": "✓", "warn": "⚠", "fail": "×"}
+
+# col系 slot を持つ op → その slot 名（依存つき連鎖の新規列フォールバック対象）。
+_COLUMN_ARG_KEYS = {
+    "SORT": ("col",), "NUMBER_FORMAT": ("col",), "CHART": ("value_col",),
+    "AGGREGATE": ("group_col", "value_col"),
+}
+
+
+def _apply_new_column_fallback(op: str, args: dict, headers: list, new_cols: list) -> dict:
+    """★ M2c 依存つき連鎖（battery v2 #107 型）: 直前までの段が新規作成した列がちょうど
+       1つあり、この段の列参照が現在の実列名のどれとも一致しない場合、その新規列を指して
+       いるとみなして args を書き換える（候補が0か2つ以上なら何もしない＝保守的）。
+       ★ 書き換えても最終的には verify_dsl_args が実在確認するので、誤った書き換えは
+       通常どおりのエラーで止まる（無条件に信じ切らない）。"""
+    if len(new_cols) != 1:
+        return args
+    only = new_cols[0]
+    patched = dict(args)
+    for k in _COLUMN_ARG_KEYS.get(op, ()):
+        v = patched.get(k)
+        if isinstance(v, str) and v not in headers and not re.fullmatch(r"\d+", v):
+            patched[k] = only
+    if op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
+        t = patched.get("target", "")
+        if isinstance(t, str) and t.startswith("col:"):
+            name = t[4:]
+            if name not in headers and not re.fullmatch(r"\d+", name):
+                patched["target"] = f"col:{only}"
+    return patched
+
+
+def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path, workdir: Path,
+                            refs_dir: Path, helpers_dir: Path, tag: str,
+                            apply_timeout: float | None) -> tuple:
+    """M2c: 複合計画の語彙外(OUT_OF_VOCAB/FREEFORM)段を FREEFORM 経路で実行する。
+       cmd_run_freeform と同じ生成→適用→署名/切断/no-op チェックのループを、
+       『その段の依頼文だけ』かつ『out_book の現在の状態』を起点に行う版。
+       ★ cmd_run_freeform 本体は変えない（既存の回帰リスクを避けるため意図的に複製する）。
+       戻り値: (ok, changes:list[str], advisories:list[str], failure_kind:str, detail:str|None)"""
+    helper_catalog, helper_files = load_helpers(helpers_dir)
+    system = CONTRACT + load_refs(refs_dir) + helper_catalog
+    desc = describe_book(out_book)
+    user = f"{desc}\n\nタスク:\n{task_text}\n\n`Sub Run(oDoc As Object)` を1つだけ書け。コードのみ。"
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    stepsource = workdir / f"{tag}_source{out_book.suffix}"
+    shutil.copy2(out_book, stepsource)
+    before = snapshot(stepsource)
+
+    failure_kind = "none"
+    for attempt in range(a.repair + 1):
+        t0 = progress_start(f"⏳ 生成中（語彙外段・{a.model}）…")
+        raw = ollama_generate(a.model, msgs, temperature=a.temperature)
+        progress_end(t0)
+        code = extract_bas(raw)
+        (workdir / f"{tag}_attempt{attempt}.bas").write_text(code, encoding="utf-8")
+
+        if not valid_signature(code):
+            failure_kind = "bad_signature"
+            msgs += [{"role": "assistant", "content": raw},
+                     {"role": "user", "content": "署名が違う。`Sub Run(oDoc As Object)` を1つだけ。コードのみ。"}]
+            continue
+        if is_truncated_code(code):
+            failure_kind = "truncated"
+            msgs += [{"role": "assistant", "content": raw},
+                     {"role": "user", "content":
+                      "コードが途中で切れている（End Sub まで書き切れていない）。"
+                      "最初から完全なコードを1つだけ書いて。コードのみ。"}]
+            continue
+
+        shutil.copy2(stepsource, out_book)
+        t0 = progress_start("⏳ LibreOffice で適用中…")
+        ok, err, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
+        progress_end(t0)
+        if not ok:
+            failure_kind = "runtime_error"
+            msgs += [{"role": "assistant", "content": raw},
+                     {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。コードのみ。"}]
+            continue
+
+        after = snapshot(out_book)
+        changed, lines = diff_snapshots(before, after)
+        if not changed:
+            failure_kind = "noop"
+            msgs += [{"role": "assistant", "content": raw},
+                     {"role": "user", "content":
+                      "実行は成功したが文書に一切変化が無かった（no-op）。"
+                      "設定した API が効いていない可能性がある。別の正しい方法で書き直して。コードのみ。"}]
+            continue
+
+        advisories = build_advisories(task_text, before, after)
+        return True, lines, advisories, "none", None
+
+    detail = {
+        "bad_signature": "生成コードの署名が不正でした",
+        "truncated": "生成コードが途中で切断されました",
+        "runtime_error": "実行時エラーが解消しませんでした",
+        "noop": "適用しても文書に変化がありませんでした",
+    }.get(failure_kind, "原因不明で失敗しました")
+    return False, [], [], failure_kind, detail
+
+
+def format_plan_report(items: list) -> list:
+    """複合計画の項目別報告を行のリストにする。items: [(idx, label, status, detail), ...]
+       status は 'ok'/'warn'/'fail'。★ FREEFORM 段の成功は『機械検証済み』とは絶対に言わない
+       （✓ 適用され文書が変化した級に留める＝warn 表示の固定文言で担保）。"""
+    lines = []
+    for idx, label, status, detail in items:
+        mark = _ITEM_STATUS_MARK[status]
+        if status == "ok":
+            suffix = f"（{detail}）" if detail else ""
+            lines.append(f"{idx}. {label} → {mark} 機械検証済み{suffix}")
+        elif status == "warn":
+            lines.append(f"{idx}. {label} → {mark} 語彙外のため自由生成で実行（確認してください）")
+        else:
+            lines.append(f"{idx}. {label} → {mark} 未対応: {detail}")
+    return lines
+
+
+def overall_verdict(items: list) -> tuple:
+    """(判定文, 総合status)。★ 総合判定は最弱の段に従う:
+       全段 ok → 「✓ すべて機械検証済み」/ fail 無しで warn を含む → 「⚠ 一部は確認が必要です」/
+       fail を含む → 失敗。『達成を機械検証済み』の語は機械検証が実際に通った段にだけ付ける
+       （ここでは全段が ok の時だけそう言う）。"""
+    statuses = {it[2] for it in items}
+    if "fail" in statuses:
+        return "× 一部の操作が未対応/失敗のため、達成できませんでした", "fail"
+    if "warn" in statuses:
+        return "⚠ 一部は確認が必要です（語彙外の段は自由生成で実行・機械検証はしていません）", "warn"
+    return "✓ すべて機械検証済み", "ok"
+
+
+def cmd_run_plan(a: argparse.Namespace, book: Path, book_meta: dict, plan: list) -> int:
+    """M2c: 複合依頼の計画実行本体。段ごとに②検証→③確認→④codegen→⑤適用→⑥事後条件
+       （DSL 語彙の段）または FREEFORM（語彙外の段・その段の依頼文だけを渡す）を順に実行し、
+       ★ 項目別の honest な報告を出す。総合判定は最弱の段に従う（cmd_run_plan 直上の
+       overall_verdict）。
+       ★ 依存つき連鎖: 各段の接地(verify_dsl_args)は直前までの段を実際に適用した後の
+       out_book を読み直した列構成(current_meta)で行う。列名が一致しない場合は
+       _apply_new_column_fallback が『直前段が作った新規列』への参照とみなして1回だけ
+       書き換えを試みる。"""
+    print(f"■ ailine（複合計画・{len(plan)} 段）  model={a.model}  book={book.name}")
+
+    workdir = book.parent / f".ailine_{book.stem}"
+    workdir.mkdir(exist_ok=True)
+    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    apply_timeout = a.timeout if a.timeout else None
+    helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
+    refs_dir = Path(a.refs).resolve() if a.refs else DEFAULT_REFS
+    _helper_catalog, helper_files = load_helpers(helpers_dir)
+
+    result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
+              "path": "plan", "command": None, "postcondition": None}
+
+    if a.dry:
+        print("\n（--dry プレビュー・語彙外の段は実行時に自由生成で対応します。未実行）")
+        preview_items = []
+        plan_json = []
+        for i, step in enumerate(plan, 1):
+            op = step.get("op")
+            if op == "CLARIFY":
+                q = step.get("question") or "確認が必要です"
+                preview_items.append((i, q, "fail", "計画の途中で確認が必要なため対応できません"))
+                plan_json.append({"op": "CLARIFY", "command": None, "status": "fail", "postcondition": None})
+            elif op not in OP_SCHEMA:
+                about = step.get("about") or "内容不明の依頼"
+                preview_items.append((i, about, "warn", None))
+                plan_json.append({"op": op, "command": about, "status": "warn", "postcondition": None})
+            else:
+                ok_v, resolved, inferred, err = verify_dsl_args(op, step.get("args", {}), book_meta)
+                if ok_v:
+                    label = format_confirmation_line(op, resolved, inferred)[len("解釈: "):]
+                    preview_items.append((i, label, "ok", "未実行・プレビューのみ"))
+                    plan_json.append({"op": op, "command": label, "status": "ok", "postcondition": None})
+                else:
+                    preview_items.append((i, f"操作:{OP_LABELS.get(op, op)}", "fail", err))
+                    plan_json.append({"op": op, "command": None, "status": "fail", "postcondition": None})
+        for ln in format_plan_report(preview_items):
+            print(ln)
+        print("\n（--dry: 適用しない。レビュー後に --dry を外して実行）")
+        result["ok"] = True
+        result["dry"] = True
+        result["plan"] = plan_json
+        _finish_run(a, book, result, "none")
+        return 0
+
+    t0 = progress_start("⏳ 初回準備（文書の正規化）…")
+    source_book = normalize_book(book, workdir, timeout=apply_timeout)
+    progress_end(t0)
+    shutil.copy2(source_book, out_book)
+
+    original_headers = {k: list(v) for k, v in book_meta["headers"].items()}
+    first_sheet = book_meta["sheets"][0] if book_meta.get("sheets") else None
+    before_all = snapshot(out_book)
+    before_charts = before_all["charts"]
+
+    current_meta = book_meta
+    items: list = []         # (idx, label, status, detail)
+    plan_json: list = []     # --json 用（既存キー不変・新規追加）
+
+    for i, step in enumerate(plan, 1):
+        op = step.get("op")
+
+        if op == "CLARIFY":
+            question = step.get("question") or "確認が必要です"
+            items.append((i, question, "fail", "計画の途中で確認が必要なため対応できません"))
+            plan_json.append({"op": "CLARIFY", "command": None, "status": "fail", "postcondition": None})
+            continue
+
+        if op not in OP_SCHEMA:
+            about = step.get("about") or "内容不明の依頼"
+            okf, changes, advisories, _fkind, detail = run_freeform_plan_step(
+                a, about, out_book, workdir, refs_dir, helpers_dir, f"plan{i}", apply_timeout)
+            if okf:
+                items.append((i, about, "warn", None))
+                for ln in changes:
+                    print(f"  {ln}")
+                for adv in advisories:
+                    print(f"  {adv}")
+            else:
+                items.append((i, about, "fail", detail))
+            plan_json.append({"op": op, "command": about,
+                               "status": "ok" if okf else "fail", "postcondition": None})
+            current_meta = build_book_meta(out_book)
+            continue
+
+        # 依存つき連鎖: 直前までの段の適用後の実列構成(current_meta)で接地する
+        new_cols = []
+        if first_sheet:
+            new_cols = [c for c in current_meta["headers"].get(first_sheet, [])
+                        if c not in original_headers.get(first_sheet, [])]
+        raw_args = step.get("args", {})
+        ok_v, resolved, inferred, err = verify_dsl_args(op, raw_args, current_meta)
+        if not ok_v and new_cols and first_sheet:
+            patched = _apply_new_column_fallback(
+                op, raw_args, current_meta["headers"].get(first_sheet, []), new_cols)
+            if patched != raw_args:
+                ok_v2, resolved2, inferred2, err2 = verify_dsl_args(op, patched, current_meta)
+                if ok_v2:
+                    ok_v, resolved, inferred, err = ok_v2, resolved2, inferred2, err2
+
+        if not ok_v:
+            items.append((i, f"操作:{OP_LABELS.get(op, op)}", "fail", err))
+            plan_json.append({"op": op, "command": None, "status": "fail", "postcondition": None})
+            continue
+
+        line = format_confirmation_line(op, resolved, inferred)
+        label = line[len("解釈: "):]
+        warn_overwrite = _maybe_warn_target_overwrite(op, resolved, current_meta, out_book)
+        if warn_overwrite:
+            print(f"  {i}段目: {warn_overwrite}")
+        code = codegen_dsl(op, resolved, current_meta)
+        (workdir / f"plan_step{i}.bas").write_text(code, encoding="utf-8")
+
+        t0 = progress_start(f"⏳ {i}段目 LibreOffice で適用中…")
+        okrun, err_apply, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
+        progress_end(t0)
+        if not okrun:
+            detail = f"実行時エラー: {short_error_summary(err_apply)}"
+            items.append((i, label, "fail", detail))
+            plan_json.append({"op": op, "command": line, "status": "fail", "postcondition": None})
+            continue
+
+        pcok, reason = run_postcondition(op, out_book, resolved, before_charts=before_charts)
+        if not pcok:
+            items.append((i, label, "fail", reason))
+            plan_json.append({"op": op, "command": line, "status": "fail", "postcondition": "fail"})
+            continue
+
+        items.append((i, label, "ok", reason))
+        plan_json.append({"op": op, "command": line, "status": "ok", "postcondition": "pass"})
+        current_meta = build_book_meta(out_book)
+
+    print()
+    for ln in format_plan_report(items):
+        print(ln)
+    verdict_line, verdict = overall_verdict(items)
+    print(f"\n{verdict_line}")
+
+    after_all = snapshot(out_book)
+    _changed, difflines = diff_snapshots(before_all, after_all)
+    result["plan"] = plan_json
+    result["items"] = [{"idx": idx, "label": label, "status": st, "detail": det}
+                        for idx, label, st, det in items]
+    result["changes"] = difflines
+
+    if verdict == "fail":
+        result["out"] = str(out_book)
+        _finish_run(a, book, result, "plan_step_failed")
+        return 1
+
+    result["ok"] = True
+    if a.inplace:
+        try:
+            make_backup(book, keep=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
+        except Exception as e:
+            print(f"\n× バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}")
+            print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
+            result["out"] = str(out_book)
+        else:
+            shutil.move(out_book, book)
+            print(f"\n適用先: {book.name}（--inplace で上書き）")
+            print(f"復元: ailine restore {book.name}")
+            result["out"] = str(book)
+    else:
+        print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
+        result["out"] = str(out_book)
+
+    _finish_run(a, book, result, "none")
+    return 0
 
 
 def cmd_stop(a: argparse.Namespace) -> int:
@@ -2081,6 +2596,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "0 で無効化=旧挙動の無制限)")
     r.add_argument("--ask", action="store_true",
                    help="DSL 経路の確認行の後に y/n で対話する（既定は表示して続行）")
+    r.add_argument("--keep-backups", dest="keep_backups", type=int, default=DEFAULT_KEEP_BACKUPS,
+                   help=f"--inplace のバックアップを book ごとに何世代残すか (既定 {DEFAULT_KEEP_BACKUPS}、"
+                        "負数で無制限)")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")

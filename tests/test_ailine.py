@@ -703,6 +703,45 @@ def test_detect_uniform_fill_none_when_values_differ(tmp_path):
     after = ailine.snapshot(p)
     assert ailine.detect_uniform_fill(before, after) is None
 
+def test_detect_uniform_fill_fires_when_mixed_with_border_and_center_align(tmp_path):
+    # ★ M2c 回帰: 冷間再監査3回目の実測ケース。罫線+中央揃え(値は不変)と、空欄への
+    #   3セル0埋め(値が変わる)が混在すると、旧実装は書式のみの変更セルまで一様性判定に
+    #   巻き込んで見逃していた（値変更の部分集合だけで評価するよう修正）。
+    from openpyxl.styles import Border, Side, Alignment
+    p = _book(tmp_path, [["商品", "金額", "備考"], ["a", 100, None], ["b", 200, None], ["c", 300, None]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    thin = Border(left=Side(style="thin"), right=Side(style="thin"),
+                   top=Side(style="thin"), bottom=Side(style="thin"))
+    center = Alignment(horizontal="center")
+    # 罫線+中央揃え(値は変えない・書式のみ) — A1:B4 全体
+    for r in range(1, 5):
+        for c in (1, 2):
+            cell = ws.cell(row=r, column=c)
+            cell.border = thin
+            cell.alignment = center
+    # 空欄だった備考列(C列)に0を一様書き込み(値が変わる)
+    ws.cell(row=2, column=3, value=0)
+    ws.cell(row=3, column=3, value=0)
+    ws.cell(row=4, column=3, value=0)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.detect_uniform_fill(before, after)
+    assert msg is not None
+    assert "値 0 × 3 セル" in msg
+
+def test_detect_ghost_data_ignores_format_only_changes(tmp_path):
+    # 値は変わらず書式だけ変わったセルは幽霊データ判定の対象外（誤検知を増やさない）。
+    from openpyxl.styles import Alignment
+    p = _book(tmp_path, [["a", 1], ["b", 2]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=1, column=1).alignment = Alignment(horizontal="center")   # 範囲内・書式のみ
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.detect_ghost_data(before, after) is None
+
 
 # --- ★ M2a: 件数の突き合わせ -------------------------------------------------
 
@@ -935,6 +974,104 @@ def test_restore_backup_raises_when_none_exist(tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError):
         ailine.restore_backup(tmp_path / "book.xlsx")
 
+# --- ★ M2c: バックアップのプルーニング -----------------------------------------
+
+def test_prune_backups_keeps_only_newest_n(tmp_path, monkeypatch):
+    backups = tmp_path / "backups"
+    backups.mkdir(parents=True)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = tmp_path / "book.xlsx"
+    for i in range(5):
+        (backups / f"book.2026010{i+1}T000000Z.xlsx").write_bytes(b"x")
+    deleted = ailine.prune_backups(book, keep=3)
+    remaining = ailine.list_backups(book)
+    assert len(remaining) == 3
+    assert len(deleted) == 2
+    assert [p.name for p in remaining] == [
+        "book.20260105T000000Z.xlsx", "book.20260104T000000Z.xlsx", "book.20260103T000000Z.xlsx"]
+
+def test_prune_backups_negative_keep_means_unlimited(tmp_path, monkeypatch):
+    backups = tmp_path / "backups"
+    backups.mkdir(parents=True)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = tmp_path / "book.xlsx"
+    for i in range(3):
+        (backups / f"book.2026010{i+1}T000000Z.xlsx").write_bytes(b"x")
+    deleted = ailine.prune_backups(book, keep=-1)
+    assert deleted == []
+    assert len(ailine.list_backups(book)) == 3
+
+def test_make_backup_prunes_beyond_keep(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"content")
+    for i in range(3):
+        monkeypatch.setattr(ailine, "_utc_ts", lambda i=i: f"2026010{i+1}T000000Z")
+        ailine.make_backup(book, keep=2)
+    remaining = ailine.list_backups(book)
+    assert len(remaining) == 2
+    assert remaining[0].name == "book.20260103T000000Z.xlsx"   # 最新が残る
+
+def test_make_backup_default_keep_is_ten(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"content")
+    for i in range(12):
+        monkeypatch.setattr(ailine, "_utc_ts", lambda i=i: f"202601{i+1:02d}T000000Z")
+        ailine.make_backup(book)   # keep 省略 = 既定 DEFAULT_KEEP_BACKUPS(=10)
+    assert len(ailine.list_backups(book)) == 10
+
+def test_cmd_restore_list_shows_generation_count(tmp_path, monkeypatch, capsys):
+    backups = tmp_path / "backups"
+    backups.mkdir(parents=True)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    (backups / "book.20200101T000000Z.xlsx").write_bytes(b"a")
+    (backups / "book.20200102T000000Z.xlsx").write_bytes(b"b")
+    ns = argparse.Namespace(book=str(tmp_path / "book.xlsx"), list=True)
+    rc = ailine.cmd_restore(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "2 世代" in captured.out
+
+# --- ★ M2c: 正規化パス失敗時の1回だけ自動リトライ ------------------------------
+
+def test_normalize_book_retries_once_after_stop_and_succeeds(tmp_path, monkeypatch):
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"x")
+    calls = {"apply": 0, "stop": 0}
+    def fake_apply(normalized, code, workdir, timeout=None):
+        calls["apply"] += 1
+        if calls["apply"] == 1:
+            return False, "RuntimeException: Could not create system bitmap!", "raw"
+        return True, None, "raw"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    monkeypatch.setattr(ailine, "_stop_office", lambda: calls.__setitem__("stop", calls["stop"] + 1))
+    result = ailine.normalize_book(book, tmp_path)
+    assert calls["apply"] == 2
+    assert calls["stop"] == 1
+    assert result.exists()
+
+def test_normalize_book_gives_up_after_second_failure(tmp_path, monkeypatch):
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"x")
+    monkeypatch.setattr(ailine, "basrun_apply", lambda *a, **k: (False, "boom", "raw"))
+    monkeypatch.setattr(ailine, "_stop_office", lambda: None)
+    with pytest.raises(SystemExit):
+        ailine.normalize_book(book, tmp_path)
+
+def test_normalize_book_succeeds_first_try_without_retry(tmp_path, monkeypatch):
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"x")
+    calls = {"apply": 0, "stop": 0}
+    def fake_apply(normalized, code, workdir, timeout=None):
+        calls["apply"] += 1
+        return True, None, "raw"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    monkeypatch.setattr(ailine, "_stop_office", lambda: calls.__setitem__("stop", calls["stop"] + 1))
+    ailine.normalize_book(book, tmp_path)
+    assert calls["apply"] == 1
+    assert calls["stop"] == 0
+
 def test_cmd_restore_list_shows_backups(tmp_path, monkeypatch, capsys):
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
@@ -987,11 +1124,12 @@ _SAMPLE_META = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額", "
 
 
 def test_translate_task_valid_json_nested_args(monkeypatch):
+    # ★ M2c: translate_task は常に {"plan": [...]} を返す。後方互換で単一 op は長さ1の計画。
     monkeypatch.setattr(ailine, "ollama_generate_json",
                         lambda model, msgs, temperature=0.1, num_predict=300:
                         '{"op": "SORT", "args": {"col": "金額", "order": "desc"}}')
     got = ailine.translate_task("qwen2.5-coder:7b", "金額で降順に並べ替えて", _SAMPLE_META)
-    assert got == {"op": "SORT", "args": {"col": "金額", "order": "desc"}}
+    assert got == {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}}]}
 
 def test_translate_task_flat_args_are_rescued(monkeypatch):
     # モデルが args で包まず op と slot をフラットに返した場合も救済する。
@@ -999,23 +1137,23 @@ def test_translate_task_flat_args_are_rescued(monkeypatch):
                         lambda model, msgs, temperature=0.1, num_predict=300:
                         '{"op": "SORT", "col": "金額", "order": "desc"}')
     got = ailine.translate_task("qwen2.5-coder:7b", "金額で降順に並べ替えて", _SAMPLE_META)
-    assert got["op"] == "SORT"
-    assert got["args"] == {"col": "金額", "order": "desc"}
+    assert got["plan"][0]["op"] == "SORT"
+    assert got["plan"][0]["args"] == {"col": "金額", "order": "desc"}
 
 def test_translate_task_clarify_passthrough(monkeypatch):
     monkeypatch.setattr(ailine, "ollama_generate_json",
                         lambda model, msgs, temperature=0.1, num_predict=300:
                         '{"op": "CLARIFY", "question": "どの列ですか？"}')
     got = ailine.translate_task("qwen2.5-coder:7b", "並べ替えて", _SAMPLE_META)
-    assert got["op"] == "CLARIFY"
-    assert got["question"] == "どの列ですか？"
+    assert got["plan"][0]["op"] == "CLARIFY"
+    assert got["plan"][0]["question"] == "どの列ですか？"
 
 def test_translate_task_invalid_json_falls_back_to_freeform(monkeypatch):
     monkeypatch.setattr(ailine, "ollama_generate_json",
                         lambda model, msgs, temperature=0.1, num_predict=300:
                         "これは JSON ではない")
     got = ailine.translate_task("qwen2.5-coder:7b", "いい感じにして", _SAMPLE_META)
-    assert got["op"] == "FREEFORM"
+    assert got["plan"][0]["op"] == "FREEFORM"
 
 def test_translate_task_missing_required_slot_falls_back_to_freeform(monkeypatch):
     # order 欠落 → 必須 slot 不足 → FREEFORM に退避（クラッシュしない）。
@@ -1023,21 +1161,59 @@ def test_translate_task_missing_required_slot_falls_back_to_freeform(monkeypatch
                         lambda model, msgs, temperature=0.1, num_predict=300:
                         '{"op": "SORT", "args": {"col": "金額"}}')
     got = ailine.translate_task("qwen2.5-coder:7b", "並べ替えて", _SAMPLE_META)
-    assert got["op"] == "FREEFORM"
+    assert got["plan"][0]["op"] == "FREEFORM"
 
 def test_translate_task_unknown_op_falls_back_to_freeform(monkeypatch):
     monkeypatch.setattr(ailine, "ollama_generate_json",
                         lambda model, msgs, temperature=0.1, num_predict=300:
                         '{"op": "DELETE_ROW", "args": {}}')
     got = ailine.translate_task("qwen2.5-coder:7b", "行を消して", _SAMPLE_META)
-    assert got["op"] == "FREEFORM"
+    assert got["plan"][0]["op"] == "FREEFORM"
 
 def test_translate_task_transport_failure_falls_back_to_freeform(monkeypatch):
     def boom(*a, **k):
         raise OSError("ollama 不通（テスト用）")
     monkeypatch.setattr(ailine, "ollama_generate_json", boom)
     got = ailine.translate_task("qwen2.5-coder:7b", "何かして", _SAMPLE_META)
-    assert got["op"] == "FREEFORM"
+    assert got["plan"][0]["op"] == "FREEFORM"
+
+# --- ★ M2c: 複合計画パース (plan 配列・OUT_OF_VOCAB 保持) -----------------------
+
+def test_translate_task_parses_multi_step_plan(monkeypatch):
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        '{"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}}, '
+                        '{"op": "BOLD", "args": {"target": "row:1"}}]}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "金額で降順に並べ替えて見出しを太字に", _SAMPLE_META)
+    assert len(got["plan"]) == 2
+    assert got["plan"][0]["op"] == "SORT"
+    assert got["plan"][1] == {"op": "BOLD", "args": {"target": "row:1"}}
+
+def test_translate_task_keeps_out_of_vocab_step_with_about_not_silently_dropped(monkeypatch):
+    # ★ 黙落禁止: 語彙外の段は about 付きの OUT_OF_VOCAB として必ず計画に残る。
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        '{"plan": [{"op": "COMPUTE_COLUMN", "args": {"operands": ["数量", "単価"], '
+                        '"operator": "*", "target": "小計"}}, '
+                        '{"op": "OUT_OF_VOCAB", "about": "税込み合計"}]}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "小計に数量×単価を入れて税込み合計も出して", _SAMPLE_META)
+    assert len(got["plan"]) == 2
+    assert got["plan"][0]["args"]["target"] == "小計"
+    assert got["plan"][1] == {"op": "OUT_OF_VOCAB", "about": "税込み合計", "args": {}}
+
+def test_translate_task_out_of_vocab_missing_about_gets_placeholder(monkeypatch):
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300:
+                        '{"plan": [{"op": "OUT_OF_VOCAB"}]}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "いい感じにして", _SAMPLE_META)
+    assert got["plan"][0]["op"] == "OUT_OF_VOCAB"
+    assert got["plan"][0]["about"]   # 空文字ではない
+
+def test_translate_task_empty_plan_array_falls_back_to_freeform(monkeypatch):
+    monkeypatch.setattr(ailine, "ollama_generate_json",
+                        lambda model, msgs, temperature=0.1, num_predict=300: '{"plan": []}')
+    got = ailine.translate_task("qwen2.5-coder:7b", "何かして", _SAMPLE_META)
+    assert got["plan"][0]["op"] == "FREEFORM"
 
 
 # --- ② 検証（接地・数字表記の両解釈） -----------------------------------------
@@ -1092,6 +1268,48 @@ def test_verify_dsl_args_compute_column_bad_operator():
         "COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "%"}, _SAMPLE_META)
     assert ok is False
     assert "演算子" in err
+
+# --- ★ M2c: COMPUTE_COLUMN の target(名指し列への書き込み) ----------------------
+
+def test_verify_dsl_args_compute_column_target_resolves_existing_column():
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["売上", "原価"], "operator": "-", "target": "金額"}, _SAMPLE_META)
+    assert ok is True
+    assert resolved["target"] == "金額"
+
+def test_verify_dsl_args_compute_column_target_unknown_column_errors():
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["売上", "原価"], "operator": "-", "target": "存在しない列"}, _SAMPLE_META)
+    assert ok is False
+    assert "存在しない列" in err
+
+def test_verify_dsl_args_compute_column_no_target_still_ok():
+    # target 無指定は従来どおり合格（新規列パス）。
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "-"}, _SAMPLE_META)
+    assert ok is True
+    assert "target" not in resolved
+
+def test_format_confirmation_line_compute_column_without_target_omits_field():
+    line = ailine.format_confirmation_line(
+        "COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "-"}, set())
+    assert "対象列" not in line
+
+def test_format_confirmation_line_compute_column_with_target_shows_it():
+    line = ailine.format_confirmation_line(
+        "COMPUTE_COLUMN", {"operands": ["売上", "原価"], "operator": "-", "target": "金額"}, set())
+    assert "対象列:金額" in line
+
+def test_codegen_dsl_compute_column_with_target_writes_into_existing_column():
+    code = ailine.codegen_dsl(
+        "COMPUTE_COLUMN",
+        {"operands": ["売上", "原価"], "operator": "-", "target": "金額"}, _SAMPLE_META)
+    # 金額は _SAMPLE_META の列1（0起点）。新規列(列5)には書かず、既存の列1に書く。
+    assert "getCellByPosition(1, i).setValue" in code
+    assert 'setString("売上-原価")' not in code   # 見出しは上書きしない(既存のまま)
+    assert ailine.valid_signature(code)
 
 def test_verify_dsl_args_lookup_fill_ok():
     meta = {"sheets": ["明細", "単価表"],
@@ -1254,6 +1472,19 @@ def test_check_compute_column_passes_when_values_match(tmp_path):
 def test_check_compute_column_fails_when_value_wrong(tmp_path):
     p = _book(tmp_path, [["売上", "原価", "売上-原価"], [500, 300, 999]])
     ok, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
+    assert ok is False
+
+def test_check_compute_column_target_checks_existing_column(tmp_path):
+    # ★ M2c: target 指定時は新規列名でなく target 列そのものを検証する。
+    p = _book(tmp_path, [["数量", "単価", "小計"], [2, 100, 200], [3, 150, 450]])
+    ok, reason = ailine.check_compute_column(
+        p, {"operands": ["数量", "単価"], "operator": "*", "target": "小計"})
+    assert ok is True
+
+def test_check_compute_column_target_fails_when_target_value_wrong(tmp_path):
+    p = _book(tmp_path, [["数量", "単価", "小計"], [2, 100, 999]])
+    ok, reason = ailine.check_compute_column(
+        p, {"operands": ["数量", "単価"], "operator": "*", "target": "小計"})
     assert ok is False
 
 def test_check_lookup_fill_passes_when_all_transcribed(tmp_path):
@@ -1511,3 +1742,219 @@ def test_cmd_run_dsl_postcondition_failure_returns_1(tmp_path, monkeypatch, caps
     captured = capsys.readouterr()
     assert rc == 1
     assert "事後条件を満たさない" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# ★ M2c: 複合依頼の計画実行と正直な範囲表示
+# ---------------------------------------------------------------------------
+
+# --- 項目別報告の整形 ---------------------------------------------------------
+
+def test_format_plan_report_ok_warn_fail_lines():
+    items = [
+        (1, "操作:計算列 対象列:小計", "ok", "3 行を検証"),
+        (2, "税込み合計", "warn", None),
+        (3, "操作:並べ替え", "fail", "列『在庫』がありません"),
+    ]
+    lines = ailine.format_plan_report(items)
+    assert lines[0] == "1. 操作:計算列 対象列:小計 → ✓ 機械検証済み（3 行を検証）"
+    assert lines[1] == "2. 税込み合計 → ⚠ 語彙外のため自由生成で実行（確認してください）"
+    assert lines[2] == "3. 操作:並べ替え → × 未対応: 列『在庫』がありません"
+
+def test_format_plan_report_ok_without_detail_omits_parens():
+    lines = ailine.format_plan_report([(1, "操作:太字", "ok", None)])
+    assert lines[0] == "1. 操作:太字 → ✓ 機械検証済み"
+
+# --- 総合判定規則 -------------------------------------------------------------
+
+def test_overall_verdict_all_ok():
+    line, v = ailine.overall_verdict([(1, "x", "ok", "r")])
+    assert v == "ok"
+    assert "すべて機械検証済み" in line
+
+def test_overall_verdict_warn_without_fail():
+    line, v = ailine.overall_verdict([(1, "x", "ok", "r"), (2, "y", "warn", None)])
+    assert v == "warn"
+    assert "確認が必要" in line
+
+def test_overall_verdict_fail_dominates_over_warn():
+    line, v = ailine.overall_verdict(
+        [(1, "x", "ok", "r"), (2, "y", "warn", None), (3, "z", "fail", "reason")])
+    assert v == "fail"
+
+# --- 依存つき連鎖(#107 型)の新規列フォールバック --------------------------------
+
+def test_apply_new_column_fallback_substitutes_sole_new_column():
+    args = ailine._apply_new_column_fallback(
+        "SORT", {"col": "利益", "order": "desc"},
+        ["商品", "売上", "原価", "売上-原価"], ["売上-原価"])
+    assert args["col"] == "売上-原価"
+
+def test_apply_new_column_fallback_noop_when_multiple_candidates():
+    args = ailine._apply_new_column_fallback(
+        "SORT", {"col": "利益", "order": "desc"}, ["商品", "a", "b"], ["a", "b"])
+    assert args["col"] == "利益"   # 候補2つ → 書き換えない(保守的)
+
+def test_apply_new_column_fallback_leaves_existing_reference_untouched():
+    args = ailine._apply_new_column_fallback(
+        "SORT", {"col": "商品", "order": "desc"}, ["商品", "売上-原価"], ["売上-原価"])
+    assert args["col"] == "商品"   # 既に実在する参照は書き換えない
+
+def test_apply_new_column_fallback_noop_when_no_new_columns():
+    args = ailine._apply_new_column_fallback(
+        "SORT", {"col": "利益", "order": "desc"}, ["商品", "売上"], [])
+    assert args["col"] == "利益"
+
+# --- cmd_run_plan: 複合計画の実行と honest な報告 -------------------------------
+
+def _plan_book(tmp_path, rows, name="plan_b.xlsx"):
+    p = tmp_path / name
+    wb = openpyxl.Workbook(); ws = wb.active
+    for r in rows:
+        ws.append(r)
+    wb.save(p)
+    return p
+
+def test_cmd_run_plan_all_dsl_steps_pass_gives_full_verdict(tmp_path, monkeypatch, capsys):
+    from openpyxl.styles import Font
+    p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    for c in (1, 2):
+        ws.cell(row=1, column=c).font = Font(bold=True)   # 見出し行を先に太字にしておく(pre-condition)
+    wb.save(p)
+
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                                  {"op": "BOLD", "args": {"target": "row:1"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None:
+                        (True, None, "ok"))
+    ns = argparse.Namespace(
+        book=str(p), task="金額で降順に並べ替えて見出しを太字に", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=True, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "1. " in captured.out and "✓ 機械検証済み" in captured.out
+    assert "2. " in captured.out
+    assert "✓ すべて機械検証済み" in captured.out
+    assert '"path": "plan"' in captured.out
+    assert '"status": "ok"' in captured.out
+
+def test_cmd_run_plan_mixes_dsl_success_and_freeform_warns(tmp_path, monkeypatch, capsys):
+    p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
+
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                                  {"op": "OUT_OF_VOCAB", "about": "条件付き書式"}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        cell = ws2.cell(row=1, column=10)   # postcondition が見ない列にダミーの変化を残す
+        cell.value = (cell.value or 0) + 1
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0   # ⚠ は失敗ではない
+    assert "✓ 機械検証済み" in captured.out
+    assert "条件付き書式" in captured.out
+    assert "⚠ 語彙外のため自由生成で実行（確認してください）" in captured.out
+    assert "⚠ 一部は確認が必要です" in captured.out
+    assert "すべて機械検証済み" not in captured.out
+
+def test_cmd_run_plan_all_steps_fail_grounding_gives_overall_failure(tmp_path, monkeypatch, capsys):
+    p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "存在しない列1", "order": "desc"}},
+                                  {"op": "BOLD", "args": {"target": "col:存在しない列2"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    ns = argparse.Namespace(
+        book=str(p), task="存在しない列で並べ替えて太字にして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out.count("× 未対応") == 2
+    assert "達成できませんでした" in captured.out
+
+def test_cmd_run_plan_dry_previews_without_applying(tmp_path, monkeypatch, capsys):
+    p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                                  {"op": "OUT_OF_VOCAB", "about": "条件付き書式"}]})
+    ns = argparse.Namespace(
+        book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=True, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "1. " in captured.out
+    assert "条件付き書式" in captured.out
+    out_book = p.with_name(p.stem + ".out" + p.suffix)
+    assert not out_book.exists()   # --dry は適用しない
+    assert '"path": "plan"' in captured.out
+    assert '"dry": true' in captured.out
+
+def test_cmd_run_plan_dependent_chaining_resolves_new_column_reference(tmp_path, monkeypatch, capsys):
+    # ★ battery v2 #107 型: 「利益列を作って、利益で降順に並べ替えて」。2段目の "利益" は
+    #   実在せず、1段目が作る自動命名列(売上-原価)を指す＝直前段の適用後の列構成で解決する。
+    p = _plan_book(tmp_path, [["商品", "売上", "原価"], ["a", 500, 300], ["b", 900, 400]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [
+                            {"op": "COMPUTE_COLUMN", "args": {"operands": ["売上", "原価"], "operator": "-"}},
+                            {"op": "SORT", "args": {"col": "利益", "order": "desc"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        if "SortByColumn" in code:
+            ws2.cell(row=1, column=1, value="商品"); ws2.cell(row=1, column=2, value="売上")
+            ws2.cell(row=1, column=3, value="原価"); ws2.cell(row=1, column=4, value="売上-原価")
+            ws2.cell(row=2, column=1, value="b"); ws2.cell(row=2, column=2, value=900)
+            ws2.cell(row=2, column=3, value=400); ws2.cell(row=2, column=4, value=500)
+            ws2.cell(row=3, column=1, value="a"); ws2.cell(row=3, column=2, value=500)
+            ws2.cell(row=3, column=3, value=300); ws2.cell(row=3, column=4, value=200)
+        else:
+            ws2.cell(row=1, column=4, value="売上-原価")
+            ws2.cell(row=2, column=4, value=200)   # a: 500-300
+            ws2.cell(row=3, column=4, value=500)   # b: 900-400
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(p), task="売上から原価を引いた利益列を作って、利益で降順に並べ替えて",
+        model="qwen2.5-coder:7b", refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "列『利益』がありません" not in captured.out
+    assert "✓ すべて機械検証済み" in captured.out

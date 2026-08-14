@@ -1,0 +1,20 @@
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.7s)
+⏳ 初回準備（文書の正規化）… (2.3s)
+⏳ 1段目 LibreOffice で適用中… (0.7s)
+⏳ 生成中（語彙外段・qwen2.5-coder:7b）… (16.2s)
+⏳ LibreOffice で適用中… (0.6s)
+■ ailine（複合計画・2 段）  model=qwen2.5-coder:7b  book=invoice_e2e.xlsx
+  ＊行高変更: 請求
+  ＊セル値変更: 請求
+    D5: 値 (空)→'税込み合計', 太字 False→True
+    E5: 値 (空)→395280, 太字 False→True
+  ★ 疑わしい: 変更が元データの範囲外です（D5:E5）
+
+1. 操作:計算列 演算対象:数量 と 単価 演算子:* 対象列:小計 → ✓ 機械検証済み（3 行を検証）
+2. 税込み合計 → ⚠ 語彙外のため自由生成で実行（確認してください）
+
+⚠ 一部は確認が必要です（語彙外の段は自由生成で実行・機械検証はしていません）
+
+適用先: invoice_e2e.out.xlsx（原本 invoice_e2e.xlsx は無変更）
+
+{"ok": true, "attempts": 1, "task": "小計に数量×単価を入れて、税込み合計を一番下に出して（消費税10%）", "model": "qwen2.5-coder:7b", "path": "plan", "command": null, "postcondition": null, "plan": [{"op": "COMPUTE_COLUMN", "command": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:* 対象列:小計", "status": "ok", "postcondition": "pass"}, {"op": "OUT_OF_VOCAB", "command": "税込み合計", "status": "ok", "postcondition": null}], "items": [{"idx": 1, "label": "操作:計算列 演算対象:数量 と 単価 演算子:* 対象列:小計", "status": "ok", "detail": "3 行を検証"}, {"idx": 2, "label": "税込み合計", "status": "warn", "detail": null}], "changes": ["＊行高変更: 請求", "＊セル値変更: 請求", "  D2: 値 (空)→150000", "  D3: 値 (空)→120000", "  D4: 値 (空)→96000", "  D5: 値 (空)→'税込み合計', 太字 False→True", "  E5: 値 (空)→395280, 太字 False→True"], "out": "C:\\Dev\\ailine\\e2e_work\\invoice_e2e.out.xlsx"}
