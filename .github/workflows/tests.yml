@@ -1,0 +1,23 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    # ★ この製品は Windows 前提（パス表現・LibreOffice の headless 起動）。
+    #   まずは確実に緑になる 1 OS で始める。多 OS 化は別途 CI 上で実測してから判断する。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run pure-logic tests (ollama / LibreOffice / basrun を要さない範囲)
+        run: python -m pytest tests -q -m "not local"

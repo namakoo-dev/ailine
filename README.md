@@ -6,8 +6,8 @@
 書いたコードは平文で残り、`git diff` で読める。外部にデータは送らない。
 
 > **状態: 骨格（PoC）。** 中核のパイプライン（生成 → 適用 → 検証 → 修復）は動き、
-> 純ロジックのユニットテスト 20 件は緑。参照ライブラリの拡充と、実機 LibreOffice を
-> 通した自動の通し試験はこれから。実運用の前に下の「限界」を必ず読むこと。
+> 純ロジックのユニットテスト 537 件は緑（CI で毎 push 確認）。参照ライブラリの拡充と、
+> 実機 LibreOffice を通した自動の通し試験はこれから。実運用の前に下の「限界」を必ず読むこと。
 
 > **姉妹版**: [ailine-ts](https://github.com/namakoo-dev/ailine-ts) — この repo の Python
 > ソースを一切読まずに、挙動コーパスだけから実装された TypeScript 移植（移行手法実験の
@@ -197,6 +197,28 @@ python ailine.py vocab list
 - Python 3.10+ と `openpyxl`
 - [ollama](https://ollama.com/) ＋ コード生成モデル（既定 `qwen2.5-coder:7b`）
 - LibreOffice ＋ [basrun](https://github.com/namakoo-dev/basrun)（環境変数 `BASRUN` で場所を指定可）
+- テストだけ回すなら上記は不要。`pip install -r requirements-dev.txt`（`openpyxl`/`pytest` を
+  実測で動く版に固定）で足りる（詳細は下の「CI」）。
+
+## CI
+
+`.github/workflows/tests.yml` が push / pull_request のたびに走る。Windows 1 本・Python 3.12
+（この製品はパス表現と LibreOffice が Windows 前提のため、まず確実に緑になる 1 OS で始めた。
+多 OS 化は別途 CI 上で実測してから判断する）。
+
+- **CI が見る範囲**: `tests/test_ailine.py` の純ロジック層。実測（`socket.socket.connect` を
+  差し替えて本物の接続を全部拒否した状態で再実行）で **537 本全部**が ollama への接続・
+  LibreOffice・basrun の実プロセス起動を一切要さないと確認済み
+  （`urllib.request.urlopen` / `subprocess.Popen` / `ailine.basrun_apply` の境界を
+  `monkeypatch` で全テストが差し替えている）。
+- **CI が見ない範囲**: 今のところ無い（ローカル依存 0 本）。`pytest.ini` に
+  `local` マーカーは登録済みだが、現時点でこのマーカーを付けたテストは無い。
+  今後、実機 LibreOffice を通す試験（README/ヘルパ規約の突合・太字の `.bas` 層試験など）
+  を足すときは `@pytest.mark.local` を付けて CI から外す想定（見えなくなった範囲は
+  ここに理由つきで書き足すこと）。
+- **全部（537 本）を人が回す**: `python -m pytest tests -q`
+- **CI と同じ範囲だけ人が回す**: `python -m pytest tests -q -m "not local"`
+- **ローカル依存だけ回す**（現状 0 本・将来のため）: `pytest -m local`
 
 ## 参照ライブラリ
 
