@@ -785,22 +785,49 @@ def detect_ghost_data(before: dict, after: dict) -> str | None:
 #   *意図した*操作でも毎回出ていた実測所見への対応。DSL 経路(COMPUTE_COLUMN・target
 #   無指定=新規列作成)に限り、detect_ghost_data が指す範囲が丸ごとその新規列に収まって
 #   いれば中立表示に落とす（新規列は原本の使用範囲外に出るのが当然＝誤警報）。
+# ★ W10d: COMPUTE_COLUMN 専用の if だったものを OP_WRITE_TARGET の宣言駆動へ一般化した
+#   （査定で名指しされたオオカミ少年: LOOKUP_FILL が新規列を作っても同じ誤警報が出ていた）。
+#   op ごとの if は増やさない — OP_WRITE_TARGET に既に登録済みの「書き込み先列」宣言を
+#   そのまま読み、その列が対象シートの既存見出しに無ければ『新規列を作る効果』とみなす
+#   （COMPUTE_COLUMN の target 無指定＝キーが空、LOOKUP_FILL の target_col 有指定だが
+#   対象シートにまだ無い列名＝どちらも実行時にその名前で新しい列を作るという同じ意味）。
 _GHOST_RANGE_RE = re.compile(r"^★ 疑わしい: 変更が元データの範囲外です（([A-Z]+)\d+(?::([A-Z]+)\d+)?）$")
+
+
+def _declared_new_column_letter(op: str, resolved: dict, book_meta: dict) -> str | None:
+    """op が今回、宣言済みの効果として新規列を作るなら、その列の文字（"C" 等）を返す。
+       作らない/対象シートが分からない場合は None。
+       ★ W10d 番人の土台: OP_WRITE_TARGET だけを見る。新しい op を足しても
+       OP_WRITE_TARGET へ登録さえすれば、ここへの追記なしで正しく判定される
+       （test_op_write_target_declares_all_ops が登録漏れ自体を防ぐ）。"""
+    write_target = OP_WRITE_TARGET.get(op)
+    if not write_target:
+        return None
+    col_key, sheet_key = write_target
+    if sheet_key:
+        sheet = resolved.get(sheet_key)
+    else:
+        sheets = book_meta.get("sheets") or []
+        sheet = sheets[0] if sheets else None
+    if not sheet:
+        return None
+    headers = book_meta.get("headers", {}).get(sheet, [])
+    col_name = resolved.get(col_key)
+    if col_name and col_name in headers:
+        return None   # 既存列への書き込み（上書き側の話・新規列ではない）
+    new_col_idx = len(headers)   # 0起点・新規列は既存見出しの直後
+    return get_column_letter(new_col_idx + 1)
 
 
 def _neutralize_new_column_ghost_warning(advisories: list, op: str, resolved: dict,
                                           book_meta: dict) -> list:
-    """op が COMPUTE_COLUMN で target 無指定（＝新規列を作成する宣言済みの効果）の場合、
-       advisories 中の『変更が元データの範囲外』行のうち、範囲が丸ごとその新規列1本に
-       収まっているものだけを中立表示に置き換える。範囲が他列にも及ぶ場合（保守的）や
-       op が別のものの場合は一切変えない。"""
-    if op != "COMPUTE_COLUMN" or resolved.get("target"):
+    """op が今回、宣言済みの効果として新規列1本を作る場合、advisories 中の
+       『変更が元データの範囲外』行のうち、範囲が丸ごとその新規列1本に収まっている
+       ものだけを中立表示に置き換える。範囲が他列にも及ぶ場合（保守的）や
+       op に新規列作成の宣言が無い場合は一切変えない。"""
+    new_col_letter = _declared_new_column_letter(op, resolved, book_meta)
+    if not new_col_letter:
         return advisories
-    first_sheet = book_meta["sheets"][0] if book_meta.get("sheets") else None
-    if not first_sheet:
-        return advisories
-    new_col_idx = len(book_meta["headers"].get(first_sheet, []))   # 0起点・新規列の位置
-    new_col_letter = get_column_letter(new_col_idx + 1)
     out = []
     for line in advisories:
         m = _GHOST_RANGE_RE.match(line)
@@ -1078,10 +1105,16 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
     return lines
 
 
-def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set | None = None) -> list:
-    """diff の後に表示する助言行を全部集める。
-       ①幽霊データ ②一様埋め ③件数の突き合わせ ④依頼文言との重なり
-       ⑤新規シートの中身（★ W6） ⑥依頼にないシート新設の申告（★ W6）。"""
+def _structural_advisories(before: dict, after: dict) -> list:
+    """助言のうち『この差分そのものが疑わしいか』を判定する部分だけ
+       （①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身・★ W6）。
+       依頼文言との重なり(④ mention_overlap_advisory)は含めない。
+       ★ W10d: 複合計画(cmd_run_plan)が段ごとの before/after にこの部分だけを
+       再利用するために build_advisories から切り出した。④は依頼文全体に対する
+       充足を問う質問なので、段ごとの局所的な before/after では判定できない
+       （他段が担当する言及まで『この段で変更されていない』と誤検知する）。
+       単発 op(build_advisories 経由)ではこれまでどおり④も同じ before/after で
+       評価する（そちらは1段しかないため局所=全体で一致し、挙動は不変）。"""
     lines = []
     for fn in (detect_ghost_data, detect_uniform_fill):
         msg = fn(before, after)
@@ -1091,6 +1124,15 @@ def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set |
     if recon:
         lines.append(recon)
     lines.extend(new_sheet_advisories(before, after))
+    return lines
+
+
+def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set | None = None) -> list:
+    """diff の後に表示する助言行を全部集める。
+       ①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身（★ W6・
+       _structural_advisories が担当） ⑥依頼にないシート新設の申告（★ W6）
+       ④依頼文言との重なり。"""
+    lines = list(_structural_advisories(before, after))
     lines.extend(unrequested_new_sheet_advisory(task, before, after))
     mentions = extract_task_mentions(task, before["sheets"])
     lines.extend(mention_overlap_advisory(mentions, before, after, exclude_sheets))
@@ -4804,6 +4846,38 @@ def overall_verdict(items: list) -> tuple:
     return "✓ すべて機械検証済み", "ok"
 
 
+# ★ W10d【本命】: 複合計画は段が増えるほど同じ助言（例: 幽霊データ検出）が段の数だけ
+#   並びうる。査定で名指しされたオオカミ少年化を避けるため、文言が同じものは1行に畳んで
+#   段番号を列挙する（初出順は保つ・文言そのものは変えない＝読み手が信じる根拠を削らない）。
+def _group_step_advisories(entries: list) -> list:
+    """entries: [(段番号 or None, 助言文言), ...]（None=計画全体に対する助言・段に紐付かない）
+       を文言でグルーピングし、初出順を保った [(段番号のリスト, 文言), ...] を返す。
+       印字用(_dedup_step_advisories)と --json 用(cmd_run_plan の result["advisories"])が
+       同じグルーピングを共有する（二重管理しない）。"""
+    order = []
+    by_text: dict = {}
+    for idx, text in entries:
+        if text not in by_text:
+            by_text[text] = []
+            order.append(text)
+        if idx is not None and idx not in by_text[text]:
+            by_text[text].append(idx)
+    return [(by_text[text], text) for text in order]
+
+
+def _dedup_step_advisories(entries: list) -> list:
+    """複合計画の全段から集めた助言を、印字用の行リストに整形する（同じ文言は1行に畳み、
+       該当する段番号を列挙する）。"""
+    lines = []
+    for idxs, text in _group_step_advisories(entries):
+        if idxs:
+            prefix = "・".join(f"{i}段目" for i in idxs)
+            lines.append(f"  {prefix}: {text}")
+        else:
+            lines.append(f"  {text}")
+    return lines
+
+
 def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta: dict,
                   plan: list) -> int:
     """M2c: 複合依頼の計画実行本体。段ごとに②検証→③確認→④codegen→⑤適用→⑥事後条件
@@ -4877,6 +4951,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     items: list = []         # (idx, label, status, detail)
     plan_json: list = []     # --json 用（既存キー不変・新規追加）
     plan_provenance: list = []   # ★ A': 段ごとの倍率等の出典（history.jsonl 用）
+    step_advisory_entries: list = []   # ★ W10d: [(段番号 or None, 助言文言), ...]
+    mention_exclude_sheets: set = set()   # ★ W10d: LOOKUP_FILL の参照専用シート（全段分の合算）
 
     for i, step in enumerate(plan, 1):
         op = step.get("op")
@@ -4901,8 +4977,10 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 items.append((i, about, "warn", None))
                 for ln in changes:
                     print(f"  {ln}")
-                for adv in advisories:
-                    print(f"  {adv}")
+                # ★ W10d: 段ごとに即印字せず、他段の助言と合わせてループの後で
+                #   重複を畳んでから出す（run_freeform_plan_step は既にこの段の
+                #   依頼文(about)だけを見た build_advisories を返しており、局所判定のまま流用できる）。
+                step_advisory_entries.extend((i, adv) for adv in advisories)
             else:
                 items.append((i, about, "fail", detail))
             plan_json.append({"op": op, "command": about,
@@ -4961,6 +5039,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
         #   同じ考え方・他 op には無害な余分なコピー1回）。
         stepsource = workdir / f"plan_step{i}_source{out_book.suffix}"
         shutil.copy2(out_book, stepsource)
+        step_before = snapshot(stepsource)   # ★ W10d: 助言計算用（この段の適用直前）
 
         t0 = progress_start(f"⏳ {i}段目 LibreOffice で適用中…")
         okrun, err_apply, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
@@ -4970,6 +5049,23 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             items.append((i, label, "fail", detail))
             plan_json.append({"op": op, "command": line, "status": "fail", "postcondition": None})
             continue
+
+        # ★ W10d【本命】: 単発 op(cmd_run_dsl)なら出る助言（幽霊データ/一様埋め/件数突き合わせ/
+        #   新規シート中身・申告）が、複合計画の DSL 段では丸ごと欠落していた（build_advisories
+        #   を一度も呼んでいなかった＝前任の W10c 報告の未処置の穴そのもの）。
+        #   ★ 依頼文言との重なり(mention_overlap_advisory)はここに含めない: 段ごとの
+        #   before/after だけでは複合依頼全体に対する充足を判定できない（他段が担当する
+        #   言及まで『この段で変更されていない』と誤検知する＝ W6 でシート混在に見つかった
+        #   ものと同じ「全部該当」崩れの再演）。ループの外で before_all/after_all に対して
+        #   一度だけ評価する。
+        step_after = snapshot(out_book)
+        if op == "LOOKUP_FILL" and resolved.get("source_sheet"):
+            mention_exclude_sheets.add(resolved["source_sheet"])
+        step_adv = _structural_advisories(step_before, step_after)
+        step_adv.extend(unrequested_new_sheet_advisory(a.task, step_before, step_after))
+        step_adv = _neutralize_new_column_ghost_warning(step_adv, op, resolved, current_meta)
+        step_adv = _neutralize_declared_new_sheet_warning(step_adv, op, step_before, step_after)
+        step_advisory_entries.extend((i, adv) for adv in step_adv)
 
         status, reason = run_postcondition(op, out_book, resolved, before_charts=before_charts,
                                             header_row=step_header_row, use_formula=use_formula,
@@ -4992,19 +5088,35 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
         plan_json.append({"op": op, "command": line, "status": "ok", "postcondition": "pass"})
         current_meta = build_book_meta(out_book, header_rows=header_rows)
 
+    # ★ W10d【本命】: 依頼文言との重なり(④ mention_overlap_advisory)は計画全体に対して
+    #   一度だけ評価する（段ごとの局所判定では『他段が担当する言及』を誤検知するため・
+    #   _structural_advisories のコメント参照）。exclude_sheets は全段の LOOKUP_FILL
+    #   source_sheet を合算する。
+    after_all = snapshot(out_book)
+    mentions = extract_task_mentions(a.task, before_all["sheets"])
+    final_mention_lines = mention_overlap_advisory(
+        mentions, before_all, after_all, mention_exclude_sheets or None)
+    step_advisory_entries.extend((None, ln) for ln in final_mention_lines)   # None=計画全体
+
     print()
     for ln in format_plan_report(items):
         print(ln)
+    dedup_advisories = _dedup_step_advisories(step_advisory_entries)   # ★ W10d: 重複を畳む
+    if dedup_advisories:
+        print("\n助言:")
+        for ln in dedup_advisories:
+            print(ln)
     verdict_line, verdict = overall_verdict(items)
     print(f"\n{verdict_line}")
 
-    after_all = snapshot(out_book)
     _changed, difflines = diff_snapshots(before_all, after_all)
     result["plan"] = plan_json
     result["provenance"] = plan_provenance or None
     result["items"] = [{"idx": idx, "label": label, "status": st, "detail": det}
                         for idx, label, st, det in items]
     result["changes"] = difflines
+    result["advisories"] = [{"steps": idxs, "text": text}
+                             for idxs, text in _group_step_advisories(step_advisory_entries)]
 
     if verdict == "fail":
         result["out"] = str(out_book)

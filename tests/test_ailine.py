@@ -1039,6 +1039,50 @@ def test_neutralize_new_column_ghost_warning_noop_for_other_ops():
     assert out == advisories
 
 
+# ★ W10d 項目2: COMPUTE_COLUMN 専用だった中立化を OP_WRITE_TARGET の宣言駆動へ一般化。
+#   LOOKUP_FILL が新規列を作る場合も同じ誤警報（査定で名指しされたオオカミ少年）が出ていた。
+
+def test_neutralize_new_column_ghost_warning_replaces_for_lookup_fill_new_column():
+    # 旧実装は COMPUTE_COLUMN 専用の if だったため、これは常に None のまま漏れていた。
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品コード", "数量"], "単価表": ["商品コード", "単価"]}}
+    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]   # 新規列は列C(3)
+    out = ailine._neutralize_new_column_ghost_warning(
+        advisories, "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"},
+        meta)
+    assert out == ["（新規列の追加は意図どおりです）"]
+
+def test_neutralize_new_column_ghost_warning_keeps_for_lookup_fill_existing_column():
+    # target_col が対象シートに既に実在する（上書き系）場合は新規列作成ではないので対象外
+    # （抑制しすぎない側＝安全器官の減衰は保守的に、が守られていることの確認）。
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品コード", "数量", "単価"], "単価表": ["商品コード", "単価"]}}
+    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]
+    out = ailine._neutralize_new_column_ghost_warning(
+        advisories, "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"},
+        meta)
+    assert out == advisories
+
+def test_declared_new_column_letter_driven_by_op_write_target():
+    # ★ W10d 番人: 新規列作成の判定が OP_WRITE_TARGET の宣言だけで決まり、op ごとの
+    #   個別 if を増やしていないことを全 op について機械的に確認する（宣言効果を持つ全 op が
+    #   中立化の対象として自動的に登録されている、ことの検査＝test_op_write_target_declares_all_ops
+    #   と対になる番人）。write_target が None の op は常に None（新規列を作らない）。
+    #   col_key があって resolved にその値が無い(=新規列作成)場合は必ず新規列の列文字が返る。
+    #   新しい op を OP_WRITE_TARGET へ登録しさえすれば、ここへの追記なしに正しく振る舞う。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["既存1", "既存2"]}}
+    for op, write_target in ailine.OP_WRITE_TARGET.items():
+        if write_target is None:
+            assert ailine._declared_new_column_letter(op, {}, meta) is None, op
+            continue
+        col_key, sheet_key = write_target
+        resolved = {sheet_key: "Sheet"} if sheet_key else {}
+        letter = ailine._declared_new_column_letter(op, resolved, meta)
+        assert letter == "C", f"{op}: 新規列作成のはずが列文字が返らなかった: {letter}"
+
+
 # --- ★ W8a 項目4: 率リテラルの機械スキャン（判断棚から昇格） -----------------------
 
 def test_scan_rate_literals_fires_when_rate_not_in_task():
@@ -3529,6 +3573,99 @@ def test_cmd_run_plan_dependent_chaining_resolves_new_column_reference(tmp_path,
     assert rc == 0
     assert "列『利益』がありません" not in captured.out
     assert "✓ すべて機械検証済み" in captured.out
+
+
+# --- ★ W10d【本命】: 複合計画の助言（単発では出る助言が丸ごと欠落していた欠陥の修正） ------
+
+def test_group_step_advisories_dedups_identical_text_keeps_first_seen_order():
+    entries = [(1, "A"), (2, "B"), (3, "A"), (1, "C")]
+    grouped = ailine._group_step_advisories(entries)
+    assert grouped == [([1, 3], "A"), ([2], "B"), ([1], "C")]
+
+def test_group_step_advisories_none_step_means_plan_wide_and_has_no_step_numbers():
+    entries = [(1, "A"), (None, "A"), (None, "B")]
+    grouped = ailine._group_step_advisories(entries)
+    assert grouped == [([1], "A"), ([], "B")]
+
+def test_dedup_step_advisories_formats_multi_step_prefix_and_plan_wide_line():
+    entries = [(1, "同じ助言"), (3, "同じ助言"), (None, "計画全体の助言")]
+    lines = ailine._dedup_step_advisories(entries)
+    assert lines == ["  1段目・3段目: 同じ助言", "  計画全体の助言"]
+
+def test_cmd_run_plan_dsl_steps_show_advisories_and_dedup_repeats(tmp_path, monkeypatch, capsys):
+    # ★ W10d【本命】: 前任の報告どおり cmd_run_plan は DSL 段に対して助言を一切
+    #   組み立てていなかった（build_advisories を呼んでいなかった）ことをまず自分で確認した
+    #   （着手前調査）。この回帰テストは単発と同じ助言が複合計画の DSL 段でも出ること・
+    #   同じ文言が複数段に渡って出ても1行に畳まれること・新規列の宣言どおりの効果は
+    #   中立化されること・宣言と一致しない疑わしい変化はちゃんと残ることを1本で確認する。
+    p = _plan_book(tmp_path, [["商品", "金額", "原価"],
+                               ["a", 300, 100], ["b", 200, 80], ["c", 100, 50]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [
+                            {"op": "COMPUTE_COLUMN", "args": {"operands": ["金額", "原価"], "operator": "-"}},
+                            {"op": "BOLD", "args": {"target": "row:1"}},
+                            {"op": "CENTER_ALIGN", "args": {"target": "all"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    call_count = {"n": 0}
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        call_count["n"] += 1
+        n = call_count["n"]
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        if n == 1:
+            # 1段目 COMPUTE_COLUMN(target無指定): 新規列D(利益)を作る＝宣言どおりの効果。
+            ws2.cell(row=1, column=4, value="利益")
+            ws2.cell(row=2, column=4, value=200)
+            ws2.cell(row=3, column=4, value=120)
+            ws2.cell(row=4, column=4, value=50)
+        elif n == 2:
+            from openpyxl.styles import Font
+            for c in (1, 2, 3, 4):
+                ws2.cell(row=1, column=c).font = Font(bold=True)
+            # 元データ範囲外の空欄に同一値0を一括書き込み（宣言に無い疑わしい副作用の再現）。
+            ws2.cell(row=10, column=1, value=0)
+            ws2.cell(row=10, column=2, value=0)
+        else:
+            from openpyxl.styles import Alignment
+            for row in ws2.iter_rows():
+                for cell in row:
+                    cell.alignment = Alignment(horizontal="center")
+            # 別の場所に *同じ形* の疑わしい書き込み（文言が2段目と一致する＝畳まれる対象）。
+            ws2.cell(row=11, column=1, value=0)
+            ws2.cell(row=11, column=2, value=0)
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(p), task="金額から原価を引いた利益列を作って、見出しを太字にして全体を中央揃えにして",
+        model="qwen2.5-coder:7b", refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=True, timeout=180.0, ask=False, values=True)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    # 人が読む表示部分だけを対象にする（末尾の --json 1行は別途 JSON として検証する）。
+    display_out = "\n".join(captured.out.strip().splitlines()[:-1])
+
+    # ①宣言どおりの新規列作成は中立表示（COMPUTE_COLUMN の新規列ゴースト誤警報の抑制）。
+    assert "（新規列の追加は意図どおりです）" in display_out
+    # ②宣言に無い疑わしい変化（空欄への同一値0書き込み）はちゃんと出る（抑制しすぎない）。
+    assert "空欄への同一値の一括書き込みです（値 0 × 2 セル）" in display_out
+    # ③同じ文言が2段(2段目・3段目)から出ても1行に畳まれている（オオカミ少年化しない）。
+    assert display_out.count("空欄への同一値の一括書き込みです（値 0 × 2 セル）") == 1
+    assert "2段目・3段目" in display_out
+    assert "助言:" in display_out
+
+    payload = json.loads(captured.out.strip().splitlines()[-1])
+    adv_texts = [entry["text"] for entry in payload["advisories"]]
+    assert any("新規列の追加は意図どおり" in t for t in adv_texts)
+    uniform_entries = [entry for entry in payload["advisories"]
+                        if "空欄への同一値" in entry["text"]]
+    assert len(uniform_entries) == 1
+    assert uniform_entries[0]["steps"] == [2, 3]
 
 
 # ---------------------------------------------------------------------------
