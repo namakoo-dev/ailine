@@ -6,8 +6,10 @@
 書いたコードは平文で残り、`git diff` で読める。外部にデータは送らない。
 
 > **状態: 骨格（PoC）。** 中核のパイプライン（生成 → 適用 → 検証 → 修復）は動き、
-> 純ロジックのユニットテスト 537 件は緑（CI で毎 push 確認）。参照ライブラリの拡充と、
-> 実機 LibreOffice を通した自動の通し試験はこれから。実運用の前に下の「限界」を必ず読むこと。
+> 純ロジックのユニットテスト 539 件は緑（CI で毎 push 確認）。参照ライブラリの拡充と、
+> 実機 LibreOffice を通した自動の通し試験は `@pytest.mark.local` 配下に1件着手済み
+> （太字の `.bas` 層が本当に効いているかの通し試験。詳細は下の「CI」）。
+> 実運用の前に下の「限界」を必ず読むこと。
 
 > **姉妹版**: [ailine-ts](https://github.com/namakoo-dev/ailine-ts) — この repo の Python
 > ソースを一切読まずに、挙動コーパスだけから実装された TypeScript 移植（移行手法実験の
@@ -206,19 +208,25 @@ python ailine.py vocab list
 （この製品はパス表現と LibreOffice が Windows 前提のため、まず確実に緑になる 1 OS で始めた。
 多 OS 化は別途 CI 上で実測してから判断する）。
 
-- **CI が見る範囲**: `tests/test_ailine.py` の純ロジック層。実測（`socket.socket.connect` を
-  差し替えて本物の接続を全部拒否した状態で再実行）で **537 本全部**が ollama への接続・
+- **CI が見る範囲**: `tests/test_ailine.py`（純ロジック層）＋ `tests/test_helper_catalog_sync.py`
+  （README ⇔ ailine.py のヘルパカタログ ⇔ helpers/*.bas 実体の三者突合と、太字ヘルパが
+  CharWeight/CharWeightAsian を両方セットしているかの静的検査。★どちらもファイル読み取り
+  だけで完結し ollama/LibreOffice を要さない）。実測（`socket.socket.connect` を
+  差し替えて本物の接続を全部拒否した状態で再実行）で **539 本全部**が ollama への接続・
   LibreOffice・basrun の実プロセス起動を一切要さないと確認済み
   （`urllib.request.urlopen` / `subprocess.Popen` / `ailine.basrun_apply` の境界を
   `monkeypatch` で全テストが差し替えている）。
-- **CI が見ない範囲**: 今のところ無い（ローカル依存 0 本）。`pytest.ini` に
-  `local` マーカーは登録済みだが、現時点でこのマーカーを付けたテストは無い。
-  今後、実機 LibreOffice を通す試験（README/ヘルパ規約の突合・太字の `.bas` 層試験など）
-  を足すときは `@pytest.mark.local` を付けて CI から外す想定（見えなくなった範囲は
-  ここに理由つきで書き足すこと）。
-- **全部（537 本）を人が回す**: `python -m pytest tests -q`
+- **CI が見ない範囲**: `tests/test_bold_local.py`（`@pytest.mark.local`・1本）。StyleBold
+  ヘルパを実際に basrun で日本語見出しに適用し、openpyxl の読み戻しで `Font.bold` が
+  立つかを見る通し試験（要 LibreOffice。数秒かかる）。
+  ★ **静的検査(test_helper_catalog_sync.py の CharWeightAsian チェック)の限界**:
+  あれは「CharWeight と CharWeightAsian を両方セットする行が書いてある」ことしか保証
+  しない。実際に xlsx へ効いているか（日本語の太字が本当に反映されるか）はこの
+  local 試験でしか測れない（実測: CharWeightAsian の1行を消すと openpyxl 読み戻しの
+  `Font.bold` が `False` になることを確認済み）。
+- **全部（540 本）を人が回す**: `python -m pytest tests -q`
 - **CI と同じ範囲だけ人が回す**: `python -m pytest tests -q -m "not local"`
-- **ローカル依存だけ回す**（現状 0 本・将来のため）: `pytest -m local`
+- **ローカル依存だけ回す**（現状1本）: `pytest -m local`
 
 ## 参照ライブラリ
 
@@ -242,17 +250,17 @@ python ailine.py vocab list
 
 | ヘルパ | モデルが書くのは | 隠している難所 |
 |---|---|---|
-| `SortByColumn(oDoc, col, ascending)` | `Call SortByColumn(oDoc, 1, False)` | 範囲検出・`SortFields`・`ContainsHeader=False` |
-| `InsertBarChart(oDoc, valCol)` | `Call InsertBarChart(oDoc, 1)` | 見栄えのする棒グラフ。タイトル・横軸・系列色を見出しから自動導出（データラベルは付けず縦軸で読ませる清潔な既定。LO native の表現力を自前で引き出す。項目名は列0固定） |
+| `SortByColumn(oDoc, headerRow, lastCol, col, ascending)` | `Call SortByColumn(oDoc, 0, 4, 1, False)` | 範囲検出・`SortFields`・`ContainsHeader=False` |
+| `InsertBarChart(oDoc, headerRow, valCol)` | `Call InsertBarChart(oDoc, 0, 1)` | 見栄えのする棒グラフ。タイトル・横軸・系列色を見出しから自動導出（データラベルは付けず縦軸で読ませる清潔な既定。LO native の表現力を自前で引き出す。項目名は列0固定） |
 | `MergeCells(oDoc, c1, r1, c2, r2)` | `Call MergeCells(oDoc, 0, 0, 1, 0)` | 範囲を渡さず単一セルに merge する誤りを封じる |
 | `InsertRows(oDoc, atRow, count)` | `Call InsertRows(oDoc, 1, 1)` | `Rows.insertByIndex`・0起点の位置 |
 | `DrawTableBorders(oDoc)` | `Call DrawTableBorders(oDoc)` | データ範囲を自動検出・`TableBorder2` の格子 |
 | `AutoFitColumns(oDoc)` | `Call AutoFitColumns(oDoc)` | 使用列を自動検出・`OptimalWidth` |
-| `AlignCenter(oDoc)` | `Call AlignCenter(oDoc)` | 表全体を中央揃え。セル配置は `HoriJustify`（`CharHorizontalAlignment` は段落用で効かず 7B が滑る罠を封じる） |
-| `FormatThousands(oDoc, col)` | `Call FormatThousands(oDoc, 4)` | 指定列に3桁区切り `#,##0`。`queryKey` の -1 を `addNew` で拾い Locale を正しく構築（7B は addNew を落として滑る） |
-| `VLookupFromTable(oDoc, keyCol, resultCol, lookupSheet)` | `Call VLookupFromTable(oDoc, 0, 2, "単価表")` | Basic 側で照合（数式 `=VLOOKUP` はこの経路で `#VALUE!`）。参照表は 列0=キー/列1=値 |
+| `AlignCenter(oDoc, headerRow, lastCol)` | `Call AlignCenter(oDoc, 0, 4)` | 表全体を中央揃え。セル配置は `HoriJustify`（`CharHorizontalAlignment` は段落用で効かず 7B が滑る罠を封じる） |
+| `FormatThousands(oDoc, headerRow, col)` | `Call FormatThousands(oDoc, 0, 4)` | 指定列に3桁区切り `#,##0`。`queryKey` の -1 を `addNew` で拾い Locale を正しく構築（7B は addNew を落として滑る） |
+| `VLookupFromTable(oDoc, headerRow, keyCol, resultCol, lookupSheet)` | `Call VLookupFromTable(oDoc, 0, 0, 2, "単価表")` | Basic 側で照合（数式 `=VLOOKUP` はこの経路で `#VALUE!`）。参照表は 列0=キー/列1=値 |
 | `PivotSum(oDoc, groupCol, valueCol)` | `Call PivotSum(oDoc, 0, 1)` | 本物のピボット（DataPilot）を新「ピボット」シートに。分類×合計を自動。★LO は開くたび再描画してセル書式を撥ねる（罫線・カンマが出ない）＝清潔な表が欲しければ下の `SummaryTable` |
-| `SummaryTable(oDoc, groupCol, valueCol)` | `Call SummaryTable(oDoc, 0, 1)` | 分類×合計を新「集計」シートに**普通の表**として出す（格子罫線・カンマ・中央揃え・見出し/合計太字を native で。DataPilot でないので全部残る） |
+| `SummaryTable(oDoc, headerRow, groupCol, valueCol)` | `Call SummaryTable(oDoc, 0, 0, 1)` | 分類×合計を新「集計」シートに**普通の表**として出す（格子罫線・カンマ・中央揃え・見出し/合計太字を native で。DataPilot でないので全部残る） |
 | `StyleBold(oDoc, c1, r1, c2, r2)` | `Call StyleBold(oDoc, 0, 0, 4, 0)` | native 太字。★`CharWeight`＋**`CharWeightAsian`**（日本語）＋`CharWeightComplex` をセルに直接。text cursor は数値を壊すので使わない |
 
 ユーザは `SortByColumn` を知らなくてよい。**「金額で降順に並べ替えて」と自然文で頼むだけ**で、
@@ -267,3 +275,10 @@ python ailine.py vocab list
 
 **ヘルパも必ず basrun で動作検証してから置くこと。** 呼び方は `Call 名前(引数)`
 （括弧つきで `Call` 無しは LibreOffice Basic が誤動作する）。
+
+★ **このヘルパ表 / ailine.py のカタログ / helpers/*.bas 実体は `tests/test_helper_catalog_sync.py`
+で自動突合している**（引数の個数が3者で食い違うと CI が落ちる。過去に headerRow 追加時、
+README だけ古いまま6件残った実例への回帰防止）。太字（`BoldRange` の `CharWeightAsian`）は
+CharWeight と揃ってセットされているかを同ファイルで静的検査するが、これは「書いてある」
+ことしか保証しない。実際に日本語へ効いているかは `tests/test_bold_local.py`
+（`@pytest.mark.local`・要 LibreOffice）で実測する。
