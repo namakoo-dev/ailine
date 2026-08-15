@@ -118,6 +118,14 @@
         "variance": "0（3回とも完全に同一結果・振れ幅なし）"
       },
       "note": "A' (factor を LLM から除去)適用後もこの数値を維持（回帰なし）。vocab={} 明示は不要だった — v1/v2 の実行経路はどこも vocab を読まない（factor 解決は verify_dsl_args 側のみで、translate_task は関与しない設計のため）。"
+    },
+    "v4": {
+      "frozen": "2026-08-15 (W9 実行前凍結)",
+      "bar": {
+        "op_accuracy": 0.9,
+        "slot_accuracy": 0.8,
+        "note": "W9: 検証済みヘルパ4種(INSERT_ROWS/DRAW_BORDERS/AUTOFIT/PIVOT)の語彙昇格後の翻訳精度。合格線は v1 と同じ op90%/slot80%。PIVOT/AGGREGATE の分岐（『ピボット』明示の有無）検体を含む。"
+      }
     }
   },
   "items": [
@@ -857,6 +865,110 @@
       "expect": {
         "clarify": false,
         "factor": 1.1
+      }
+    }
+  ],
+  "items_v4": [
+    {
+      "id": 401,
+      "book": "sales",
+      "text": "3行目の前に1行挿入して",
+      "expect": {
+        "op": "INSERT_ROWS",
+        "at": 3,
+        "count": 1
+      }
+    },
+    {
+      "id": 402,
+      "book": "sample",
+      "text": "5行目に3行挿入して",
+      "expect": {
+        "op": "INSERT_ROWS",
+        "at": 5,
+        "count": 3
+      }
+    },
+    {
+      "id": 403,
+      "book": "invoice",
+      "text": "2行目の前に1行入れて",
+      "expect": {
+        "op": "INSERT_ROWS",
+        "at": 2,
+        "count": 1
+      }
+    },
+    {
+      "id": 404,
+      "book": "sample",
+      "text": "表にけい線を引いて",
+      "expect": {
+        "op": "DRAW_BORDERS"
+      }
+    },
+    {
+      "id": 405,
+      "book": "sales",
+      "text": "全体に格子の罫線を付けて",
+      "expect": {
+        "op": "DRAW_BORDERS"
+      }
+    },
+    {
+      "id": 406,
+      "book": "sample",
+      "text": "列幅を内容に合わせて自動調整して",
+      "expect": {
+        "op": "AUTOFIT"
+      }
+    },
+    {
+      "id": 407,
+      "book": "sales",
+      "text": "各列の幅を中身に合わせて広げて",
+      "expect": {
+        "op": "AUTOFIT"
+      }
+    },
+    {
+      "id": 408,
+      "book": "sales",
+      "text": "部門ごとにピボットテーブルで集計して",
+      "expect": {
+        "op": "PIVOT",
+        "group_col": "部門",
+        "value_col": "金額"
+      }
+    },
+    {
+      "id": 409,
+      "book": "sample",
+      "text": "商品別にピボットで売上をまとめて",
+      "expect": {
+        "op": "PIVOT",
+        "group_col": "商品",
+        "value_col": "売上"
+      }
+    },
+    {
+      "id": 410,
+      "book": "sales",
+      "text": "部門ごとに金額を集計して",
+      "expect": {
+        "op": "AGGREGATE",
+        "group_col": "部門",
+        "value_col": "金額"
+      }
+    },
+    {
+      "id": 411,
+      "book": "sample",
+      "text": "商品ごとの売上を集計表にして",
+      "expect": {
+        "op": "AGGREGATE",
+        "group_col": "商品",
+        "value_col": "売上"
       }
     }
   ]

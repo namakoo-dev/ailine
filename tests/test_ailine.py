@@ -4361,3 +4361,345 @@ def test_b2_undo_remaining_count_matches_after_pruning_beyond_ten(tmp_path, monk
     assert rc == 0
     remaining_after = len(ailine.list_backups(book))
     assert f"あと {remaining_after} 回戻せます" in captured.out
+
+
+# ===========================================================================
+# ★ W9: 検証済みヘルパ4種の DSL 語彙昇格
+#   INSERT_ROWS / DRAW_BORDERS / AUTOFIT / PIVOT
+# ===========================================================================
+
+# --- op メタデータ宣言の整合 ---------------------------------------------------
+
+def test_op_meta_op_schema_confirm_fields_share_same_op_set():
+    assert set(ailine.OP_META.keys()) == set(ailine.OP_SCHEMA.keys())
+    assert set(ailine.OP_META.keys()) == set(ailine._CONFIRM_FIELDS.keys())
+
+def test_op_meta_entries_have_category_label_synonyms():
+    for op, meta in ailine.OP_META.items():
+        assert set(meta.keys()) == {"category", "label", "synonyms"}
+        assert isinstance(meta["category"], str) and meta["category"]
+        assert isinstance(meta["label"], str) and meta["label"]
+        assert isinstance(meta["synonyms"], list) and meta["synonyms"]
+
+def test_op_labels_is_derived_from_op_meta():
+    assert ailine.OP_LABELS == {op: meta["label"] for op, meta in ailine.OP_META.items()}
+
+def test_postconditions_cover_all_ops_except_chart_special_cased():
+    # CHART は run_postcondition() が before_charts 比較で特別扱いする（POSTCONDITIONS
+    # dict には入れない・既存挙動）。それ以外の全 op は POSTCONDITIONS に登録されていること。
+    assert set(ailine.POSTCONDITIONS.keys()) | {"CHART"} == set(ailine.OP_SCHEMA.keys())
+
+def test_op_meta_new_four_ops_present_with_expected_categories():
+    assert ailine.OP_META["INSERT_ROWS"]["category"] == "表を編集する"
+    assert ailine.OP_META["DRAW_BORDERS"]["category"] == "見た目を整える"
+    assert ailine.OP_META["AUTOFIT"]["category"] == "見た目を整える"
+    assert ailine.OP_META["PIVOT"]["category"] == "計算する"
+
+def test_ops_doc_mentions_all_four_new_ops():
+    for op in ("INSERT_ROWS", "DRAW_BORDERS", "AUTOFIT", "PIVOT"):
+        assert op in ailine.OPS_DOC
+
+
+# --- ② 検証（verify_dsl_args） -------------------------------------------------
+
+def test_verify_dsl_args_insert_rows_valid_defaults_count_to_one():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("INSERT_ROWS", {"at": "3"}, meta)
+    assert ok
+    assert resolved["at"] == 3
+    assert resolved["count"] == 1
+    assert "count" in inferred
+
+def test_verify_dsl_args_insert_rows_explicit_count():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("INSERT_ROWS", {"at": 3, "count": 2}, meta)
+    assert ok
+    assert resolved["count"] == 2
+    assert "count" not in inferred
+
+def test_verify_dsl_args_insert_rows_rejects_zero_at():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("INSERT_ROWS", {"at": 0}, meta)
+    assert not ok
+    assert "不正" in err
+
+def test_verify_dsl_args_insert_rows_rejects_non_numeric_at():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("INSERT_ROWS", {"at": "abc"}, meta)
+    assert not ok
+
+def test_verify_dsl_args_insert_rows_rejects_bad_count():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("INSERT_ROWS", {"at": 1, "count": "abc"}, meta)
+    assert not ok
+
+def test_verify_dsl_args_draw_borders_no_args_needed():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("DRAW_BORDERS", {}, meta)
+    assert ok and err is None
+
+def test_verify_dsl_args_autofit_no_args_needed():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("AUTOFIT", {}, meta)
+    assert ok and err is None
+
+def test_verify_dsl_args_pivot_resolves_columns():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "PIVOT", {"group_col": "部門", "value_col": "金額"}, meta)
+    assert ok
+    assert resolved["group_col"] == "部門" and resolved["value_col"] == "金額"
+
+def test_verify_dsl_args_pivot_unknown_column_is_clarify_error():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "PIVOT", {"group_col": "存在しない", "value_col": "金額"}, meta)
+    assert not ok
+    assert "がありません" in err
+
+def test_verify_dsl_args_pivot_accepts_digit_column_reference():
+    # ★ "0" は idx=0(0起点候補)しか実在範囲に収まらない一意なケースを使う
+    #   （resolve_col_ref は 0/1 起点の両解釈を試すため、両方が実在すると曖昧判定になる）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args("PIVOT", {"group_col": "0", "value_col": "金額"}, meta)
+    assert ok
+    assert resolved["group_col"] == "部門" and resolved["value_col"] == "金額"
+    assert "group_col" in inferred
+
+
+# --- ④ codegen（決定論・既存ヘルパへの Call） -----------------------------------
+
+def test_codegen_dsl_insert_rows_converts_1origin_to_0origin():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    code = ailine.codegen_dsl("INSERT_ROWS", {"at": 3, "count": 1}, meta)
+    assert "Call InsertRows(oDoc, 2, 1)" in code   # at=3(1起点) → atRow=2(0起点)
+
+def test_codegen_dsl_insert_rows_multi_count():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    code = ailine.codegen_dsl("INSERT_ROWS", {"at": 1, "count": 3}, meta)
+    assert "Call InsertRows(oDoc, 0, 3)" in code
+
+def test_codegen_dsl_draw_borders_calls_helper_no_args():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    code = ailine.codegen_dsl("DRAW_BORDERS", {}, meta)
+    assert "Call DrawTableBorders(oDoc)" in code
+
+def test_codegen_dsl_autofit_calls_helper_no_args():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    code = ailine.codegen_dsl("AUTOFIT", {}, meta)
+    assert "Call AutoFitColumns(oDoc)" in code
+
+def test_codegen_dsl_pivot_calls_helper_with_column_indices():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額", "在庫"]}}
+    code = ailine.codegen_dsl("PIVOT", {"group_col": "部門", "value_col": "在庫"}, meta)
+    assert "Call PivotSum(oDoc, 0, 2)" in code
+
+
+# --- ③ 確認行: PIVOT の既知の癖の案内 ------------------------------------------
+
+def test_format_confirmation_line_pivot_shows_group_and_value_cols():
+    line = ailine.format_confirmation_line("PIVOT", {"group_col": "部門", "value_col": "金額"}, set())
+    assert "分類列:部門" in line
+    assert "集計列:金額" in line
+
+def test_pivot_caveat_mentions_summary_table_alternative():
+    assert "集計表" in ailine.PIVOT_CAVEAT
+
+
+# --- ⑥ 事後条件 ---------------------------------------------------------------
+
+def test_check_draw_borders_pass_when_all_cells_bordered(tmp_path):
+    from openpyxl.styles import Border, Side
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    thin = Border(left=Side(style="thin"), right=Side(style="thin"),
+                   top=Side(style="thin"), bottom=Side(style="thin"))
+    for r in range(1, 4):
+        for c in (1, 2):
+            ws.cell(row=r, column=c).border = thin
+    wb.save(p)
+    status, reason = ailine.check_draw_borders(p, {})
+    assert status == "pass"
+
+def test_check_draw_borders_fail_when_partial(tmp_path):
+    from openpyxl.styles import Border, Side
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    thin = Border(left=Side(style="thin"), right=Side(style="thin"),
+                   top=Side(style="thin"), bottom=Side(style="thin"))
+    ws.cell(row=1, column=1).border = thin   # 1セルだけ罫線
+    wb.save(p)
+    status, reason = ailine.check_draw_borders(p, {})
+    assert status == "fail"
+
+def test_check_autofit_pass_when_width_changed_with_source_book(tmp_path):
+    before = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    import shutil as _sh
+    after = tmp_path / "after.xlsx"
+    _sh.copy2(before, after)
+    wb = openpyxl.load_workbook(after)
+    wb.active.column_dimensions["A"].width = 25
+    wb.active.column_dimensions["B"].width = 12
+    wb.save(after)
+    status, reason = ailine.check_autofit(after, {}, source_book=before)
+    assert status == "pass"
+
+def test_check_autofit_fail_when_width_unchanged_with_source_book(tmp_path):
+    before = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    status, reason = ailine.check_autofit(before, {}, source_book=before)
+    assert status == "fail"
+
+def test_check_autofit_warn_without_source_book(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    wb = openpyxl.load_workbook(p)
+    wb.active.column_dimensions["A"].width = 20
+    wb.active.column_dimensions["B"].width = 10
+    wb.save(p)
+    status, reason = ailine.check_autofit(p, {})
+    assert status == "warn"
+
+def test_check_insert_rows_pass_with_shift_verified_via_source_book(tmp_path):
+    before = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200], ["c", 300]])
+    import shutil as _sh
+    after = tmp_path / "after.xlsx"
+    _sh.copy2(before, after)
+    wb = openpyxl.load_workbook(after)
+    wb.active.insert_rows(2, amount=1)   # at=2(1起点) の前に1行挿入 = InsertRows(atRow=1,count=1)
+    wb.save(after)
+    status, reason = ailine.check_insert_rows(after, {"at": 2, "count": 1}, source_book=before)
+    assert status == "pass"
+
+def test_check_insert_rows_fail_when_no_shift_happened(tmp_path):
+    before = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    # after が before と同じ（何も挿入していない）
+    status, reason = ailine.check_insert_rows(before, {"at": 2, "count": 1}, source_book=before)
+    assert status == "fail"
+
+def test_check_insert_rows_fail_when_shift_amount_wrong(tmp_path):
+    before = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200], ["c", 300]])
+    import shutil as _sh
+    after = tmp_path / "after.xlsx"
+    _sh.copy2(before, after)
+    wb = openpyxl.load_workbook(after)
+    wb.active.insert_rows(2, amount=2)   # 2行挿入したのに count=1 を主張させる
+    wb.save(after)
+    status, reason = ailine.check_insert_rows(after, {"at": 2, "count": 1}, source_book=before)
+    assert status == "fail"
+
+def test_check_insert_rows_warn_without_source_book(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    wb = openpyxl.load_workbook(p)
+    wb.active.insert_rows(2, amount=1)
+    wb.save(p)
+    status, reason = ailine.check_insert_rows(p, {"at": 2, "count": 1})
+    assert status == "warn"
+
+def test_check_insert_rows_fail_without_source_book_when_target_not_empty(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    status, reason = ailine.check_insert_rows(p, {"at": 1, "count": 1})   # 行1(見出し)は空欄でない
+    assert status == "fail"
+
+def test_check_pivot_pass_when_sheet_and_pivot_table_exist(tmp_path):
+    # ★ 本物の DataPilot XML を openpyxl では作れないため、check_zip_fidelity_loss の
+    #   検体作りと同じ手法（zip 直書き）で xl/pivotTables/ の実体を模す。
+    p = _book(tmp_path, [["部門", "金額"], ["営業", 100], ["開発", 200]])
+    wb = openpyxl.load_workbook(p)
+    wb.create_sheet("ピボット")
+    wb.save(p)
+    import zipfile as _zf
+    items = {}
+    with _zf.ZipFile(p) as z:
+        for n in z.namelist():
+            items[n] = z.read(n)
+    items["xl/pivotTables/pivotTable1.xml"] = b"<pivotTableDefinition/>"
+    with _zf.ZipFile(p, "w") as z:
+        for n, data in items.items():
+            z.writestr(n, data)
+    status, reason = ailine.check_pivot(p, {})
+    assert status == "pass"
+    assert "集計表" in reason   # PIVOT_CAVEAT が結果表示にも添えられる
+
+def test_check_pivot_fail_when_sheet_missing(tmp_path):
+    p = _book(tmp_path, [["部門", "金額"], ["営業", 100]])
+    status, reason = ailine.check_pivot(p, {})
+    assert status == "fail"
+    assert "『ピボット』シートが無い" in reason
+
+def test_check_pivot_fail_when_sheet_exists_but_no_pivot_table_xml(tmp_path):
+    p = _book(tmp_path, [["部門", "金額"], ["営業", 100]])
+    wb = openpyxl.load_workbook(p)
+    wb.create_sheet("ピボット")   # シートだけ作って DataPilot 実体は無いケース
+    wb.save(p)
+    status, reason = ailine.check_pivot(p, {})
+    assert status == "fail"
+    assert "DataPilot" in reason
+
+
+# --- run_postcondition 経由（source_book の受け渡し） ---------------------------
+
+def test_run_postcondition_insert_rows_passes_source_book_through(tmp_path):
+    before = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    import shutil as _sh
+    after = tmp_path / "after.xlsx"
+    _sh.copy2(before, after)
+    wb = openpyxl.load_workbook(after)
+    wb.active.insert_rows(2, amount=1)
+    wb.save(after)
+    status, reason = ailine.run_postcondition("INSERT_ROWS", after, {"at": 2, "count": 1},
+                                               source_book=before)
+    assert status == "pass"
+
+def test_run_postcondition_autofit_without_source_book_still_warns_not_errors(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    wb = openpyxl.load_workbook(p)
+    wb.active.column_dimensions["A"].width = 15
+    wb.active.column_dimensions["B"].width = 15
+    wb.save(p)
+    status, reason = ailine.run_postcondition("AUTOFIT", p, {})
+    assert status == "warn"
+
+def test_run_postcondition_draw_borders_and_pivot_ignore_source_book_kwarg(tmp_path):
+    # DRAW_BORDERS/PIVOT のチェッカーは source_book を受け取らないので、run_postcondition
+    # が渡さないこと（渡すと TypeError になる）を確認する回帰。
+    p = _book(tmp_path, [["部門", "金額"], ["営業", 100]])
+    status, reason = ailine.run_postcondition("DRAW_BORDERS", p, {})
+    assert status in ("pass", "fail")   # エラーにならないことが主眼
+    status2, reason2 = ailine.run_postcondition("PIVOT", p, {"group_col": "部門", "value_col": "金額"})
+    assert status2 in ("pass", "fail")
+
+
+# --- cmd_run_dsl 統合（--dry・軽量） ---------------------------------------------
+
+def test_cmd_run_dsl_insert_rows_dry_shows_confirm_line(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "INSERT_ROWS", "args": {"at": 2, "count": 1}})
+    ns = argparse.Namespace(
+        book=str(book), task="2行目の前に1行挿入して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, copy=False, json=False, timeout=180.0, ask=False, values=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "挿入位置:2" in captured.out
+    assert "InsertRows" in captured.out
+
+def test_cmd_run_dsl_pivot_dry_shows_caveat(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["部門", "金額"], ["営業", 100], ["開発", 200]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "PIVOT", "args": {"group_col": "部門", "value_col": "金額"}})
+    ns = argparse.Namespace(
+        book=str(book), task="部門ごとにピボットテーブルで集計して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, copy=False, json=False, timeout=180.0, ask=False, values=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "集計表" in captured.out   # PIVOT_CAVEAT が確認行の直後にも出る
+    assert "PivotSum" in captured.out

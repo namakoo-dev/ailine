@@ -215,5 +215,12 @@ python ailine.py vocab list
 ユーザは `SortByColumn` を知らなくてよい。**「金額で降順に並べ替えて」と自然文で頼むだけ**で、
 モデルが列と向きを選んでヘルパを呼ぶ。難所に触れないので滑らない（実測で完全降順を確認）。
 
+★ **W9: `InsertRows`/`DrawTableBorders`/`AutoFitColumns`/`PivotSum` は DSL 語彙にも昇格済み**
+（`INSERT_ROWS`/`DRAW_BORDERS`/`AUTOFIT`/`PIVOT`）。「3行目の前に1行挿入して」「表にけい線を
+引いて」「列幅を内容に合わせて」「部門ごとにピボットテーブルで集計して」のように頼むと、
+自由生成(LLM任せ)でなく決定論の DSL パイプライン（②検証→③確認→④codegen→⑤適用→⑥事後条件）
+で機械検証まで通る。「ピボット」と明示しない集計依頼（「まとめて」「小計」等）は引き続き
+`AGGREGATE`（`SummaryTable`・書式つき）になる。
+
 **ヘルパも必ず basrun で動作検証してから置くこと。** 呼び方は `Call 名前(引数)`
 （括弧つきで `Call` 無しは LibreOffice Basic が誤動作する）。

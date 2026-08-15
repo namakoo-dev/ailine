@@ -1152,12 +1152,46 @@ def lookup_vocab_factor(text: str, vocab: dict) -> tuple:
 #   CLARIFY・語彙外(FREEFORM)・翻訳失敗は現行の自由生成経路（M2a 助言つき）へ retreat する。
 # ---------------------------------------------------------------------------
 
-OP_LABELS = {
-    "SORT": "並べ替え", "COMPUTE_COLUMN": "計算列", "LOOKUP_FILL": "転記",
-    "AGGREGATE": "集計", "BOLD": "太字", "FILL_COLOR": "背景色",
-    "NUMBER_FORMAT": "数値書式", "MERGE": "セル結合", "CHART": "グラフ",
-    "CENTER_ALIGN": "中央揃え", "APPEND_TOTAL": "合計追加",
+# ★ W9: op メタデータ（接地フォーム設計の確定分・今回は宣言だけで UI は変えない）。
+#   各 op に category(大分類・事務の言葉)・label(操作名・事務の言葉)・synonyms(依頼文で
+#   よく使う言い方の例・宣言のみ＝翻訳プロンプトへ機械的に注入はしない) を一箇所で持つ。
+#   OP_LABELS は後方互換のためこの dict から導出する（既存コードの OP_LABELS.get(op, op)
+#   はそのまま・値は完全に同じ）。
+OP_META = {
+    "SORT": {"category": "並べ替える", "label": "並べ替え",
+              "synonyms": ["並べ替え", "ソート", "順に並べる"]},
+    "COMPUTE_COLUMN": {"category": "計算する", "label": "計算列",
+                         "synonyms": ["計算", "掛け算・割り算", "列同士の演算"]},
+    "LOOKUP_FILL": {"category": "表を編集する", "label": "転記",
+                     "synonyms": ["引っ張ってくる", "転記", "VLOOKUP"]},
+    "AGGREGATE": {"category": "計算する", "label": "集計",
+                   "synonyms": ["集計", "まとめる", "グループごとに小計"]},
+    "BOLD": {"category": "見た目を整える", "label": "太字",
+              "synonyms": ["太字", "ボールド", "強調"]},
+    "FILL_COLOR": {"category": "見た目を整える", "label": "背景色",
+                    "synonyms": ["色を付ける", "塗りつぶす", "ハイライト"]},
+    "NUMBER_FORMAT": {"category": "見た目を整える", "label": "数値書式",
+                        "synonyms": ["桁区切り", "カンマ区切り", "3桁区切り"]},
+    "MERGE": {"category": "表を編集する", "label": "セル結合",
+               "synonyms": ["結合", "セルを繋げる", "セルをまとめる"]},
+    "CHART": {"category": "グラフを作る", "label": "グラフ",
+               "synonyms": ["グラフ", "棒グラフ", "チャート"]},
+    "CENTER_ALIGN": {"category": "見た目を整える", "label": "中央揃え",
+                       "synonyms": ["中央揃え", "センタリング", "真ん中に寄せる"]},
+    "APPEND_TOTAL": {"category": "計算する", "label": "合計追加",
+                       "synonyms": ["合計を出す", "税込み合計", "一番下に合計"]},
+    # ★ W9: 検証済みヘルパ4種の DSL 語彙昇格。
+    "INSERT_ROWS": {"category": "表を編集する", "label": "行挿入",
+                      "synonyms": ["行を挿入", "行を追加", "行を足す"]},
+    "DRAW_BORDERS": {"category": "見た目を整える", "label": "けい線",
+                       "synonyms": ["けい線を引く", "罫線を引く", "枠線を付ける"]},
+    "AUTOFIT": {"category": "見た目を整える", "label": "列幅自動調整",
+                 "synonyms": ["幅を内容に合わせる", "列幅調整", "列を自動調整"]},
+    "PIVOT": {"category": "計算する", "label": "ピボット",
+               "synonyms": ["ピボットテーブル", "ピボットで集計", "クロス集計"]},
 }
+
+OP_LABELS = {op: meta["label"] for op, meta in OP_META.items()}
 
 # op → 必須 slot 名のタプル。翻訳直後の slot 欠落チェックと確認行の項目順を兼ねる。
 OP_SCHEMA = {
@@ -1173,6 +1207,12 @@ OP_SCHEMA = {
     "CENTER_ALIGN": ("target",),
     # ★ W6: label/factor は既定値がある任意項目（無指定でも FREEFORM に退避させない）。
     "APPEND_TOTAL": ("col",),
+    # ★ W9: INSERT_ROWS は count が既定値ありの任意項目（at だけ必須）。
+    #   DRAW_BORDERS/AUTOFIT は引数無し（空タプル＝ any(...) が常に False で FREEFORM に落ちない）。
+    "INSERT_ROWS": ("at",),
+    "DRAW_BORDERS": (),
+    "AUTOFIT": (),
+    "PIVOT": ("group_col", "value_col"),
 }
 
 # ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、
@@ -1188,9 +1228,22 @@ NUMBER_FORMAT: 数値書式。args: col(列名), style("thousands")
 MERGE: セル結合。args: range("A1:C1"形式)
 CHART: 棒グラフ。args: value_col(列名)
 CENTER_ALIGN: 中央揃え。args: target("all" か "col:列名")
-APPEND_TOTAL: 列の合計を表の最終行の下に追加する（税込み合計等）。args: col(合計する列名),
+APPEND_TOTAL: 列の合計(SUM)を表の最終行の下に追加する（税込み合計等）。args: col(合計する列名),
   label(省略可・既定"合計"。表示ラベル。「税込み合計」等、依頼の言い方をそのまま入れる)
-  ★ 倍率(税率等)は入れない。数値化はここでは行わない（機械が別途確定する）"""
+  ★ 合計(SUM)専用。平均・最大・最小など他の統計量は語彙に無い（OUT_OF_VOCAB にする）。
+  倍率(税率等)は入れない。数値化はここでは行わない（機械が別途確定する）
+INSERT_ROWS: 行を挿入する。依頼文に具体的な行番号がある時だけ使う。
+  args: at(1起点の行番号。この行の位置に挿入され、既存行は下にずれる), count(省略可・既定1・挿入する行数)
+DRAW_BORDERS: 依頼文に「けい線/罫線/枠線」という言葉が明示された時だけ使う。表にけい線(格子線)を
+  引く。args不要（表全体が対象）★「整えて」「いい感じに」のような具体性の無い依頼には
+  絶対に使わない（曖昧なら CLARIFY で確認する）
+AUTOFIT: 依頼文に「列幅/幅」という言葉が明示された時だけ使う。列幅を内容に合わせて自動調整する。
+  args不要（全列が対象）★ 具体性の無い依頼には使わない（曖昧なら CLARIFY で確認する）
+PIVOT: 依頼文に「ピボット」「ピボットテーブル」という言葉が明示された時だけ使う。
+  本物のピボットテーブル(DataPilot)を作る。args: group_col(分類する列), value_col(合計する列)
+  ★「ピボット」の語が無いグループ別集計（「集計」「まとめる」「小計」「合計がみたい」等、
+  ピボットという語を伴わない言い方はすべて）は AGGREGATE を使う（PIVOT は LibreOffice で
+  開き直すたび書式が消える癖があるため、書式つきの見栄えが要るなら AGGREGATE の方が適する）"""
 
 # ★ M2c: battery(v1) が実測で取り違えた基本パターンに加え、複合依頼(battery v2)を few-shot で
 #   教える。同じ混同/構造を別の言い回しで示す（battery の項目文そのままは使わない＝暗記でなく
@@ -1230,6 +1283,34 @@ TRANSLATION_FEWSHOT = [
     ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
      '依頼: 「金額の合計を最後に」',
      '{"plan": [{"op": "APPEND_TOTAL", "args": {"col": "金額"}}]}'),
+    # ★ W9: 検証済みヘルパ4種の語彙昇格。PIVOT/AGGREGATE の分岐（「ピボット」と明示
+    #   された時だけ PIVOT・それ以外の集計語は AGGREGATE）と INSERT_ROWS を1例ずつ教える。
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「部門ごとにピボットテーブルで集計して」',
+     '{"plan": [{"op": "PIVOT", "args": {"group_col": "部門", "value_col": "金額"}}]}'),
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「部門ごとに金額をまとめて」',
+     '{"plan": [{"op": "AGGREGATE", "args": {"group_col": "部門", "value_col": "金額"}}]}'),
+    ('対象ブックの構成: {"Sheet": ["商品", "金額"]}\n'
+     '依頼: 「3行目の前に1行挿入して」',
+     '{"plan": [{"op": "INSERT_ROWS", "args": {"at": 3, "count": 1}}]}'),
+    # ★ W9 回帰対応（battery v1 再実測で実測）: DRAW_BORDERS/AUTOFIT が「引数不要」なぶん
+    #   曖昧な依頼の当てはめ先として誤って選ばれやすかった（「整えて」「いい感じにして」→
+    #   誤って DRAW_BORDERS を選ぶ誤断定が発生）。CLARIFY が正しい例を明示する。
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「整えて」',
+     '{"plan": [{"op": "CLARIFY", "question": "「整える」とは具体的に何をしますか"'
+     '"（例: けい線を引く／列幅を合わせる／太字にする）"}]}'),
+    # ★ W9 回帰対応: 「ピボット」の語が無いのに漠然とした集計依頼を PIVOT と誤断定した
+    #   実測（#14「部署別の売上合計がみたい」→ AGGREGATE が正しい）。同型の言い回しを直接教える。
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「部門別の金額合計がみたい」',
+     '{"plan": [{"op": "AGGREGATE", "args": {"group_col": "部門", "value_col": "金額"}}]}'),
+    # ★ W9 回帰対応: APPEND_TOTAL は合計(SUM)専用。平均等の他統計量は語彙外
+    #   （実測: 「平均値を追加」を誤って APPEND_TOTAL にした）。
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「金額の平均値を一番下に追加して」',
+     '{"plan": [{"op": "OUT_OF_VOCAB", "about": "平均値の追加"}]}'),
 ]
 
 TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙を使った「計画」の JSON に翻訳する。
@@ -1248,6 +1329,9 @@ TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の�
   列を後続の段が参照する場合は、依頼文の言い方のままでよい（実行時に解決する）
 - 依頼が既存の列を名指し（「小計に」等）して値を入れる/書き換える場合、COMPUTE_COLUMN の args に
   target(その実在列名) を入れる
+- 「整えて」「いい感じにして」のような、何をすればよいか具体的に書いていない依頼は、
+  引数が要らない操作(DRAW_BORDERS/AUTOFIT 等)であっても絶対に推測で当てはめない。
+  必ず CLARIFY で何をしたいか確認する
 - JSON のみ出力（説明・markdown 柵は禁止）
 
 操作語彙:
@@ -1567,6 +1651,35 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                     f"食い違うため機械抽出({mfactor:g})を採用しました"
                 ]
 
+    # --- ★ W9: 検証済みヘルパ4種の語彙昇格 -----------------------------------
+    elif op == "INSERT_ROWS":
+        at_raw = str(resolved.get("at", "")).strip()
+        if not (at_raw.isdigit() and int(at_raw) >= 1):
+            return False, resolved, inferred, f"行番号『{resolved.get('at')}』が不正です（1以上の整数）"
+        resolved["at"] = int(at_raw)
+        count_raw = resolved.get("count")
+        if count_raw in (None, ""):
+            resolved["count"] = 1
+            inferred.add("count")
+        else:
+            count_str = str(count_raw).strip()
+            if not (count_str.isdigit() and int(count_str) >= 1):
+                return False, resolved, inferred, f"挿入行数『{count_raw}』が不正です（1以上の整数）"
+            resolved["count"] = int(count_str)
+
+    elif op == "DRAW_BORDERS":
+        pass   # 引数無し・表全体が対象（検証することが無い）
+
+    elif op == "AUTOFIT":
+        pass   # 引数無し・全列が対象（検証することが無い）
+
+    elif op == "PIVOT":
+        # ★ AGGREGATE と同じ2 slot（group_col/value_col）。列名の実在確認だけ共有する。
+        if (err := resolve_in("group_col", first_sheet)):
+            return False, resolved, inferred, err
+        if (err := resolve_in("value_col", first_sheet)):
+            return False, resolved, inferred, err
+
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
 
@@ -1591,7 +1704,16 @@ _CONFIRM_FIELDS = {
     # ★ W8a 項目5: 表示ラベルのみ「倍率」→「率」（税率・掛け率の文脈での事務向け言い換え）。
     #   内部キー("factor")・関数名・コメントは不変。
     "APPEND_TOTAL": (("対象列", "col", None), ("ラベル", "label", None), ("率", "factor", None)),
+    # ★ W9: 検証済みヘルパ4種の語彙昇格。
+    "INSERT_ROWS": (("挿入位置", "at", None), ("行数", "count", None)),
+    "DRAW_BORDERS": (),
+    "AUTOFIT": (),
+    "PIVOT": (("分類列", "group_col", None), ("集計列", "value_col", None)),
 }
+
+# ★ W9 項目4: PIVOT(DataPilot) の既知の癖（README 記載・再描画で書式が撥ねる）を
+#   確認行・結果表示の両方に一言添える。AGGREGATE(SummaryTable) との使い分けを促す。
+PIVOT_CAVEAT = "書式なしの素の表になります。書式つきは『集計表』"
 
 
 def format_confirmation_line(op: str, resolved_args: dict, inferred: set) -> str:
@@ -1805,6 +1927,25 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                 + write_line
                 + "    Next i\n")
         return _wrap_basic(body)
+
+    # --- ★ W9: 検証済みヘルパ4種の語彙昇格。いずれも helpers/*.bas のヘルパは headerRow
+    #   引数を取らない（物理1行目を前提に自前走査する既存実装・ここでは変更しない）ため、
+    #   codegen 側も hr0 を渡さずそのまま Call するだけ。
+    if op == "INSERT_ROWS":
+        at0 = int(resolved_args["at"]) - 1   # 1起点(Excel行番号) → 0起点(Basic)
+        count = int(resolved_args.get("count", 1) or 1)
+        return _wrap_basic(f"    Call InsertRows(oDoc, {at0}, {count})\n")
+
+    if op == "DRAW_BORDERS":
+        return _wrap_basic("    Call DrawTableBorders(oDoc)\n")
+
+    if op == "AUTOFIT":
+        return _wrap_basic("    Call AutoFitColumns(oDoc)\n")
+
+    if op == "PIVOT":
+        g_idx = headers[first_sheet].index(resolved_args["group_col"])
+        v_idx = headers[first_sheet].index(resolved_args["value_col"])
+        return _wrap_basic(f"    Call PivotSum(oDoc, {g_idx}, {v_idx})\n")
 
     raise ValueError(f"未対応の op: {op}")
 
@@ -2275,21 +2416,179 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
     return "pass", f"{len(nums)} 行の合計を検証（式・キャッシュ値・ラベルとも一致）"
 
 
+# --- ★ W9: 検証済みヘルパ4種の事後条件 ---------------------------------------
+#   ヘルパ本体(helpers/*.bas)が headerRow を取らないのと同じ理由で、これらのチェッカーは
+#   openpyxl の生スキャン(_scan_last_row/_scan_last_col)で実データ範囲を都度見つける
+#   （header_row を渡しはするが、ヘルパが物理1行目前提で動く以上、通常は 1 のまま使う想定）。
+
+def check_insert_rows(path: Path, args: dict, header_row: int = 1,
+                       source_book: Path | None = None) -> tuple:
+    """INSERT_ROWS の事後条件。source_book(適用前のコピー)が渡されれば、
+       ①データ最終行が count 増えている ②挿入位置(at)以降の内容が、適用前の対応行から
+       count 行分ずれて現れている（シフト）③挿入された行自体が空欄、を突き合わせる。
+       ★ source_book が無い（複合計画の途中段等で before が用意できない経路）場合は、
+       挿入位置が空欄であることだけを見る warn 判定に落とす（保守的・断定しない）。"""
+    at = int(args["at"])
+    count = int(args.get("count", 1) or 1)
+
+    if source_book is None or not Path(source_book).exists():
+        wb = openpyxl.load_workbook(path)
+        ws = wb[wb.sheetnames[0]]
+        last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+        row_cells = [ws.cell(row=at, column=c).value for c in range(1, last_col + 1)]
+        wb.close()
+        if all(v in (None, "") for v in row_cells):
+            return "warn", "挿入位置が空欄であることのみ確認（適用前ファイルとの突き合わせ無し）"
+        return "fail", f"{at}行目が空欄でない（挿入されていない可能性）"
+
+    wb_before = openpyxl.load_workbook(source_book)
+    ws_before = wb_before[wb_before.sheetnames[0]]
+    last_before = _scan_last_row(ws_before, header_row=header_row)
+    last_col = _scan_last_col(ws_before, header_row=header_row)
+    if last_col < 1 or last_before < header_row + 1:
+        wb_before.close()
+        return "fail", _ZERO_TARGET_REASON
+
+    wb_after = openpyxl.load_workbook(path)
+    ws_after = wb_after[wb_after.sheetnames[0]]
+
+    # ★ 挿入は AFTER 側に意図的な空行（挿入行そのもの）を作るため、連続データを前提にする
+    #   _scan_last_row を AFTER 側の「最終行」検出には使わない（挿入行で即座に打ち切られて
+    #   しまう）。BEFORE の各データ行が「count 行下」に正しく現れているかを直接照合する。
+    mismatches = checked = 0
+    for r in range(max(at, header_row + 1), last_before + 1):
+        for c in range(1, last_col + 1):
+            checked += 1
+            if ws_before.cell(row=r, column=c).value != ws_after.cell(row=r + count, column=c).value:
+                mismatches += 1
+    inserted_ok = all(ws_after.cell(row=r, column=c).value in (None, "")
+                       for r in range(at, at + count) for c in range(1, last_col + 1))
+    # 期待される最終データ行のさらに1行下が空欄であること（想定外の余剰データが無いこと）。
+    expect_last_after = last_before + count
+    extra_row_empty = all(ws_after.cell(row=expect_last_after + 1, column=c).value in (None, "")
+                           for c in range(1, last_col + 1))
+    wb_before.close(); wb_after.close()
+
+    if checked == 0:
+        return "fail", _ZERO_TARGET_REASON
+    if mismatches:
+        return "fail", f"挿入位置以降のシフトが一致しない（不一致 {mismatches}/{checked} セル）"
+    if not inserted_ok:
+        return "fail", f"挿入された{count}行が空欄でない"
+    if not extra_row_empty:
+        return "fail", f"期待より多くの行にデータがある（{expect_last_after}行より下に想定外のデータ）"
+    return "pass", f"{count}行挿入・{checked}セル分のシフトを確認（挿入行は空欄・行数も+{count}ぴったり）"
+
+
+def check_draw_borders(path: Path, args: dict, header_row: int = 1) -> tuple:
+    """DRAW_BORDERS の事後条件。使用範囲の全セルに上下左右の罫線属性が付いているかを見る
+       （DrawTableBorders ヘルパは格子罫線を範囲全体に一括で付けるため、1セルでも
+       欠けていれば ヘルパが動いていないか範囲がずれている）。"""
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    last_row = _scan_last_row(ws, header_row=header_row)
+    last_col = _scan_last_col(ws, header_row=header_row)
+    if last_col < 1 or last_row < header_row:
+        wb.close()
+        return "fail", _ZERO_TARGET_REASON
+    cells = [ws.cell(row=r, column=c) for r in range(header_row, last_row + 1)
+             for c in range(1, last_col + 1)]
+    wb.close()
+    if not cells:
+        return "fail", _ZERO_TARGET_REASON
+
+    def _has_border(cell) -> bool:
+        bd = cell.border
+        return bool(bd and bd.top and bd.top.style and bd.bottom and bd.bottom.style
+                     and bd.left and bd.left.style and bd.right and bd.right.style)
+
+    ok = all(_has_border(c) for c in cells)
+    if not ok:
+        return "fail", "使用範囲の一部に罫線が無い"
+    return "pass", f"{len(cells)} セルの罫線を確認"
+
+
+def check_autofit(path: Path, args: dict, header_row: int = 1,
+                   source_book: Path | None = None) -> tuple:
+    """AUTOFIT の事後条件。source_book が渡されれば、使用中の各列の幅が適用前後で
+       変化した列数を数える（1列でも変化していれば pass）。source_book が無ければ、
+       AFTER 側で幅が明示的に設定されている列があることだけを見る warn 判定に落とす。"""
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    last_col = _scan_last_col(ws, header_row=header_row)
+    if last_col < 1:
+        wb.close()
+        return "fail", _ZERO_TARGET_REASON
+    after_widths = {}
+    for c in range(1, last_col + 1):
+        letter = get_column_letter(c)
+        dim = ws.column_dimensions.get(letter)
+        after_widths[letter] = dim.width if dim and dim.width else None
+    wb.close()
+
+    if source_book is not None and Path(source_book).exists():
+        wb_b = openpyxl.load_workbook(source_book)
+        ws_b = wb_b[wb_b.sheetnames[0]]
+        before_widths = {}
+        for c in range(1, last_col + 1):
+            letter = get_column_letter(c)
+            dim = ws_b.column_dimensions.get(letter)
+            before_widths[letter] = dim.width if dim and dim.width else None
+        wb_b.close()
+        changed = sum(1 for k in after_widths if after_widths[k] != before_widths.get(k))
+        if changed == 0:
+            return "fail", "列幅が変化していない"
+        return "pass", f"{changed}/{len(after_widths)} 列の幅が変化"
+
+    set_count = sum(1 for v in after_widths.values() if v)
+    if set_count == 0:
+        return "fail", "列幅が設定されていない（AutoFitColumns が効いていない可能性）"
+    return "warn", f"{set_count} 列に幅が設定されていることのみ確認（適用前ファイルとの突き合わせ無し）"
+
+
+def check_pivot(path: Path, args: dict, header_row: int = 1) -> tuple:
+    """PIVOT の事後条件。①『ピボット』シートが存在 ②xlsx zip 内に本物の DataPilot
+       (xl/pivotTables/) が実在するか、を見る（W8b の忠実度ゲートと同じ zip 直読み技法・
+       LO を再起動しない）。★ W9 項目4: DataPilot は開き直すたび再描画で値キャッシュが
+       変わりうる既知の癖があるため、集計値そのものの照合（check_aggregate 相当）はせず
+       構造の存在確認に留める（PIVOT_CAVEAT として案内も添える）。"""
+    wb = openpyxl.load_workbook(path, read_only=True)
+    has_sheet = "ピボット" in wb.sheetnames
+    wb.close()
+    if not has_sheet:
+        return "fail", "『ピボット』シートが無い"
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = [n.lower() for n in z.namelist()]
+    except Exception as e:
+        return "fail", f"xlsx を zip として読めない: {e}"
+    has_pivot_table = any(n.startswith("xl/pivottables/") for n in names)
+    if not has_pivot_table:
+        return "fail", "『ピボット』シートはあるが DataPilot(ピボットテーブル)の実体が無い"
+    return "pass", f"『ピボット』シートと DataPilot を確認（{PIVOT_CAVEAT}）"
+
+
 POSTCONDITIONS = {
     "SORT": check_sort, "COMPUTE_COLUMN": check_compute_column,
     "LOOKUP_FILL": check_lookup_fill, "AGGREGATE": check_aggregate,
     "BOLD": check_bold, "FILL_COLOR": check_fill_color,
     "NUMBER_FORMAT": check_number_format, "MERGE": check_merge,
     "CENTER_ALIGN": check_center_align, "APPEND_TOTAL": check_append_total,
+    # ★ W9: 検証済みヘルパ4種。
+    "INSERT_ROWS": check_insert_rows, "DRAW_BORDERS": check_draw_borders,
+    "AUTOFIT": check_autofit, "PIVOT": check_pivot,
 }
 
 
 def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_charts: int = 0,
-                       header_row: int = 1, use_formula: bool = False) -> tuple:
+                       header_row: int = 1, use_formula: bool = False,
+                       source_book: Path | None = None) -> tuple:
     """⑥ op 別事後条件。(status, reason)。status ∈ {"pass","warn","fail","error"}。
        CHART だけ before_charts と比較する専用の形。
        ★ W3: header_row（1起点、省略時1）を全チェッカーに一貫して渡す（『三層全部が
        同じ見出し推定を使う』の事後条件側）。use_formula は COMPUTE_COLUMN 専用（W3 Part3）。
+       ★ W9: source_book（適用前のコピー・無ければ None）は INSERT_ROWS/AUTOFIT だけが使う
+       （before/after の突き合わせが要る2op・他は無視される安全なキーワード引数）。
        ★ 止血2: チェッカー内で予期しない例外が起きても生の Python トレースバックを
        出さない。ここで必ず捕まえて "error" ステータス + 要約1行に変換する
        （C②の教訓: 事後条件チェッカー自身のクラッシュがユーザーに未捕捉のまま漏れていた）。"""
@@ -2301,6 +2600,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
             return "fail", f"未対応の op: {op}"
         if op == "COMPUTE_COLUMN":
             return fn(out_book, resolved_args, header_row, use_formula)
+        if op in ("INSERT_ROWS", "AUTOFIT"):
+            return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
         return "error", f"事後条件の検証に失敗: {type(e).__name__}: {e}"
@@ -3425,6 +3726,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     line = format_confirmation_line(op, resolved, inferred)
     print(f"■ ailine（DSL 経路）  model={a.model}  book={book.name}")
     print(line)
+    if op == "PIVOT":   # ★ W9 項目4: 確認行の直後にも既知の癖を一言添える。
+        print(f"（{PIVOT_CAVEAT}）")
     warn_overwrite = _maybe_warn_target_overwrite(op, resolved, book_meta, book)
     if warn_overwrite:
         print(warn_overwrite)
@@ -3495,7 +3798,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     result["advisories"] = advisories
 
     status, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"],
-                                        header_row=header_row, use_formula=use_formula)
+                                        header_row=header_row, use_formula=use_formula,
+                                        source_book=source_book)
     # ★ 止血1/2: status は "pass"/"warn"/"fail"/"error"。"error" はチェッカー内の
     #   予期しない例外を捕まえた印（--json 上は "fail" に丸める）。
     result["postcondition"] = "fail" if status == "error" else status
@@ -3994,6 +4298,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
         line = format_confirmation_line(op, resolved, inferred)
         label = line[len("解釈: "):]
+        if op == "PIVOT":   # ★ W9 項目4
+            print(f"  {i}段目: （{PIVOT_CAVEAT}）")
         warn_overwrite = _maybe_warn_target_overwrite(op, resolved, current_meta, out_book)
         if warn_overwrite:
             print(f"  {i}段目: {warn_overwrite}")
@@ -4005,6 +4311,12 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
         code = codegen_dsl(op, resolved, current_meta, use_formula=use_formula)
         (workdir / f"plan_step{i}.bas").write_text(code, encoding="utf-8")
 
+        # ★ W9: INSERT_ROWS/AUTOFIT の事後条件が段ごとの before/after を突き合わせられる
+        #   よう、この段の適用直前の out_book をコピーして残す（run_freeform_plan_step と
+        #   同じ考え方・他 op には無害な余分なコピー1回）。
+        stepsource = workdir / f"plan_step{i}_source{out_book.suffix}"
+        shutil.copy2(out_book, stepsource)
+
         t0 = progress_start(f"⏳ {i}段目 LibreOffice で適用中…")
         okrun, err_apply, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
         progress_end(t0)
@@ -4015,7 +4327,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             continue
 
         status, reason = run_postcondition(op, out_book, resolved, before_charts=before_charts,
-                                            header_row=step_header_row, use_formula=use_formula)
+                                            header_row=step_header_row, use_formula=use_formula,
+                                            source_book=stepsource)
         # ★ 止血1/2: status ∈ {"pass","warn","fail","error"}。"error" はチェッカー内の
         #   例外を捕まえた印（段の報告上は fail 扱い・生トレースバックは出さない）。
         if status in ("fail", "error"):
