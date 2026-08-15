@@ -3692,10 +3692,20 @@ def _inject_formula_cache(path, sheet_filename: str, addr_to_value: dict) -> Non
             if item.filename == sheet_filename:
                 text = data.decode("utf-8")
                 for addr, value in addr_to_value.items():
-                    # openpyxl は数式セルに空の <v></v> を既に書いていることがある（無い場合もある）。
-                    # どちらでも対応できるよう <v>...</v> の有無を任意にして丸ごと置き換える。
-                    pattern = re.compile(rf'(<c r="{addr}"[^>]*>.*?<f>.*?</f>)(?:<v>.*?</v>)?(</c>)')
-                    text = pattern.sub(rf'\1<v>{value}</v>\2', text, count=1)
+                    # 空の <v> の書かれ方は openpyxl の直列化系で 3 通りある。全部受ける:
+                    #   lxml あり          -> <v></v>   (開閉ペア)
+                    #   lxml なし(ET)      -> <v />     (自己閉じ)  ★これを取りこぼしていた
+                    #   そもそも書かれない -> (無し)
+                    # ★ 2026-08-15 の実測: ローカルには lxml が入っており CI には無いため、
+                    #   CI だけで 12 本落ちた。ローカル緑は「この機械で緑」でしかなかった。
+                    pattern = re.compile(
+                        rf'(<c r="{addr}"[^>]*>.*?<f>.*?</f>)(?:<v\s*/>|<v>.*?</v>)?(</c>)')
+                    text, n = pattern.subn(rf'\1<v>{value}</v>\2', text, count=1)
+                    # ★ 置換ゼロで黙って進まない。注入されなかったのに検証が走ると、
+                    #   「キャッシュ値が違う」でなく「小道具が壊れている」を測ることになる。
+                    assert n == 1, (
+                        f"_inject_formula_cache: {addr} に注入できなかった（xlsx の直列化の形が "
+                        f"想定外の可能性）。sheet={sheet_filename}")
                 data = text.encode("utf-8")
             zout.writestr(item, data)
     tmp.replace(path)
