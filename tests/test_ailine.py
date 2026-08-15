@@ -6211,3 +6211,347 @@ def test_build_parser_has_allow_freeform_flag():
 def test_build_parser_allow_freeform_defaults_false():
     args = ailine.build_parser().parse_args(["run", "book.xlsx", "task"])
     assert args.allow_freeform is False
+
+
+# ===========================================================================
+# W10e: ブラインド査定の致命3件（対象額 $15）
+#   致命1: 「機械検証済み」が計画どおりであって依頼どおりとは限らない（複合計画）
+#   致命2: 自由生成が既存シートの中身を静かにすり替えても検証層が無言
+#   致命3: 「列を一括で定数に書き換える」が DSL に無く常に自由生成へ落ちる
+# ===========================================================================
+
+# --- 致命1: 各段の解釈行の事前表示 + バナーの範囲表示 ---------------------------
+
+def test_maybe_warn_header_col_mismatch_fires_when_target_is_new_col_and_header_word():
+    warn = ailine._maybe_warn_header_col_mismatch(
+        "BOLD", {"target": "col:金額"}, ["金額"], "見出しを太字にして")
+    assert warn is not None
+    assert "金額" in warn and "見出し" in warn
+
+def test_maybe_warn_header_col_mismatch_silent_when_target_not_a_new_col():
+    # ★ 対象列がこの計画で新規作成された列でない（=最初から明示された既存列名）
+    #   通常の BOLD は発火しない（誤検知の芽を new_cols 所属の有無に限定する設計）。
+    warn = ailine._maybe_warn_header_col_mismatch(
+        "BOLD", {"target": "col:金額"}, [], "見出しを太字にして")
+    assert warn is None
+
+def test_maybe_warn_header_col_mismatch_silent_without_header_word():
+    warn = ailine._maybe_warn_header_col_mismatch(
+        "BOLD", {"target": "col:金額"}, ["金額"], "金額の列を太字にして")
+    assert warn is None
+
+def test_maybe_warn_header_col_mismatch_silent_for_row_target():
+    warn = ailine._maybe_warn_header_col_mismatch(
+        "BOLD", {"target": "row:1"}, ["金額"], "見出しを太字にして")
+    assert warn is None   # 既に row: なので食い違いが無い
+
+def test_maybe_warn_header_col_mismatch_only_for_style_ops():
+    warn = ailine._maybe_warn_header_col_mismatch(
+        "SORT", {"col": "金額"}, ["金額"], "見出しを並べ替えて")
+    assert warn is None   # 対象 op(BOLD/FILL_COLOR/CENTER_ALIGN)以外は無関係
+
+
+def test_cmd_run_plan_prints_interpretation_line_per_step_before_applying(tmp_path, monkeypatch, capsys):
+    # ★ 致命1 要求2: 単発(cmd_run_dsl)には元から「解釈:」行があるが、複合計画は
+    #   段が流れて気づけないのが査定所見だった。各段に「解釈:」が付くこと。
+    from openpyxl.styles import Font
+    p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    for c in (1, 2):
+        ws.cell(row=1, column=c).font = Font(bold=True)   # fake basrun_apply は何もしないので事前条件化
+    wb.save(p)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                                  {"op": "BOLD", "args": {"target": "row:1"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None:
+                        (True, None, "ok"))
+    ns = argparse.Namespace(
+        book=str(p), task="金額で降順に並べ替えて見出しを太字に", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "  1段目: 解釈: 操作:並べ替え" in captured.out
+    assert "  2段目: 解釈: 操作:太字" in captured.out
+
+
+def test_cmd_run_plan_reproduces_bold_target_leak_and_shows_mismatch_warning(tmp_path, monkeypatch, capsys):
+    # ★ 実測事故の再現: 「数量と単価をかけた金額列を作って、見出しを太字にして」型の複合
+    #   依頼で、翻訳が2段目の target に1段目の演算対象名(存在しない列名)を書いてしまい、
+    #   _apply_new_column_fallback が『直前段の新規列(金額)への参照』として救済してしまう
+    #   ケース。★ 致命1: この時 check_bold は「対象:col:金額」という*計画どおり*の検証には
+    #   合格するが、依頼の「見出し」とは無関係 — mismatch 助言が出て、範囲注記も出ること。
+    p = _plan_book(tmp_path, [["商品", "数量", "単価"], ["a", 2, 100], ["b", 3, 200]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [
+                            {"op": "COMPUTE_COLUMN",
+                             "args": {"operands": ["数量", "単価"], "operator": "*"}},
+                            # ★ 翻訳のバグそのもの: target が実在しない「数量*単価」になっている
+                            {"op": "BOLD", "args": {"target": "col:数量*単価"}},
+                        ]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        # ★ 実際の codegen_dsl と同じ結果を再現する軽量フェイク（LibreOffice を要さない）。
+        #   COMPUTE_COLUMN 段: D列(4列目)に「数量*単価」という*実在する*新規列を作る
+        #   （codegen_dsl の実際の見出し生成規則どおり＝この検体こそが実測事故の再現形）。
+        #   BOLD 段: StyleBold 呼び出しが D 列を指すコードなら D 列だけ太字にする
+        #   （見出し行だけ・全体は太字にならない＝実測どおり「新設列だけ太字になった」を再現）。
+        from openpyxl.styles import Font
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        if 'setString("数量*単価")' in code:
+            ws2.cell(row=1, column=4, value="数量*単価")
+            for r in range(2, ws2.max_row + 1):
+                q = ws2.cell(row=r, column=2).value
+                u = ws2.cell(row=r, column=3).value
+                ws2.cell(row=r, column=4, value=(q or 0) * (u or 0))
+        if "Call StyleBold(oDoc, 3, " in code:   # 0起点 col_idx=3 = D列
+            for r in range(1, ws2.max_row + 1):
+                c = ws2.cell(row=r, column=4)
+                if c.value not in (None, ""):
+                    c.font = Font(bold=True)
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    ns = argparse.Namespace(
+        book=str(p), task="数量と単価をかけた金額列を作って、見出しを太字にして",
+        model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        values=True)   # ★ --values（式でなく値ベタ書き）: フェイクが実データで postcondition
+                        #   を実際に pass させ、current_meta の再読込(次段の new_cols 検出)を
+                        #   正しく発火させる（fail 時は current_meta が更新されない既存仕様のため）。
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0   # 1段目(COMPUTE_COLUMN)は実データで pass し、2段目の new_cols 検出も動く
+    # 2段目の対象『数量*単価』は直前段(COMPUTE_COLUMN)が新規作成した実在列であり、
+    # 「見出し」と食い違う旨の助言が出ること。
+    assert "  2段目: 解釈: 操作:太字 対象:col:数量*単価" in captured.out
+    assert "新規作成された列です" in captured.out and "見出し" in captured.out
+    # ★ 致命1 要求1: 範囲注記（『機械検証済み』＝計画どおり、依頼どおりとは別）が出ること
+    assert ailine._VERIFY_SCOPE_NOTE_PLAN in captured.out
+
+
+def test_cmd_run_dsl_success_prints_scope_note(tmp_path, monkeypatch, capsys):
+    from openpyxl.styles import Font
+    p = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200]])
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    for c in (1, 2):
+        ws.cell(row=1, column=c).font = Font(bold=True)   # fake basrun_apply は何もしないので事前条件化
+    wb.save(p)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "BOLD", "args": {"target": "row:1"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None:
+                        (True, None, "ok"))
+    ns = argparse.Namespace(
+        book=str(p), task="見出し行を太字にして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert ailine._VERIFY_SCOPE_NOTE in captured.out
+
+
+# --- 致命2: 既存シートの中身が丸ごと置き換わったことの検出 ---------------------
+
+def _sheet_snapshot(cells: dict, sheets=("Sheet",)) -> dict:
+    """テスト用の最小 snapshot（cells は {"Sheet!r,c": (val, "General", None, False, None, None)}）。"""
+    return {"sheets": list(sheets), "charts": 0, "cells": dict(cells),
+            "merges": {s: [] for s in sheets}, "colw": {s: {} for s in sheets},
+            "rowh": {s: {} for s in sheets}, "truncated": False}
+
+def _v(val):
+    return (val, "General", None, False, None, None)
+
+def test_existing_sheet_replaced_advisory_fires_when_all_cells_change():
+    before = _sheet_snapshot({
+        "Sheet!1,1": _v("部署"), "Sheet!1,2": _v("合計"),
+        "Sheet!2,1": _v("営業"), "Sheet!2,2": _v(100),
+    })
+    after = _sheet_snapshot({
+        "Sheet!1,1": _v("日付"), "Sheet!1,2": _v("件数"),
+        "Sheet!2,1": _v("2026-01-01"), "Sheet!2,2": _v(5),
+    })
+    lines = ailine.existing_sheet_replaced_advisory(before, after)
+    assert len(lines) == 1
+    assert "既存シート『Sheet』の中身が置き換わりました" in lines[0]
+
+def test_existing_sheet_replaced_advisory_silent_on_partial_update():
+    # 一部だけの更新（再計算等）は対象外（保守的・オオカミ少年回避）。
+    before = _sheet_snapshot({
+        "Sheet!1,1": _v("部署"), "Sheet!1,2": _v("合計"),
+        "Sheet!2,1": _v("営業"), "Sheet!2,2": _v(100),
+    })
+    after = _sheet_snapshot({
+        "Sheet!1,1": _v("部署"), "Sheet!1,2": _v("合計"),
+        "Sheet!2,1": _v("営業"), "Sheet!2,2": _v(200),   # 値だけ再計算
+    })
+    assert ailine.existing_sheet_replaced_advisory(before, after) == []
+
+def test_existing_sheet_replaced_advisory_silent_when_no_before_data():
+    # 原本にデータが無かった（新規に埋まっただけ）シートは対象外。
+    before = _sheet_snapshot({}, sheets=("Sheet", "集計"))
+    after = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("営業")},
+                             sheets=("Sheet", "集計"))
+    assert ailine.existing_sheet_replaced_advisory(before, after) == []
+
+def test_neutralize_declared_sheet_replace_warning_for_aggregate():
+    before = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("旧")}, sheets=("Sheet", "集計"))
+    after = _sheet_snapshot({"集計!1,1": _v("日付"), "集計!2,1": _v("新")}, sheets=("Sheet", "集計"))
+    lines = ailine.existing_sheet_replaced_advisory(before, after)
+    assert len(lines) == 1
+    out = ailine._neutralize_declared_sheet_replace_warning(lines, "AGGREGATE", before, after)
+    assert out == ["（既存シート『集計』の更新は意図どおりです）"]
+
+def test_neutralize_declared_sheet_replace_warning_leaves_other_ops_alone():
+    before = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("旧")}, sheets=("Sheet", "集計"))
+    after = _sheet_snapshot({"集計!1,1": _v("日付"), "集計!2,1": _v("新")}, sheets=("Sheet", "集計"))
+    lines = ailine.existing_sheet_replaced_advisory(before, after)
+    # AGGREGATE/PIVOT 以外（例: 自由生成には op という概念が無いので FREEFORM 相当）は
+    # 何も変えない（このテストでは仮に SORT を渡して確認）。
+    out = ailine._neutralize_declared_sheet_replace_warning(lines, "SORT", before, after)
+    assert out == lines
+
+
+# --- 致命3: 一括定数書き換え(SET_COLUMN_VALUE) ---------------------------------
+
+def test_extract_quoted_literal_single_quote_ok():
+    assert ailine.extract_quoted_literal("備考列を全部『確認済み』にして") == "確認済み"
+    assert ailine.extract_quoted_literal('氏名の列を全部「退職済み」に書き換えて') == "退職済み"
+
+def test_extract_quoted_literal_none_when_zero_or_multiple():
+    assert ailine.extract_quoted_literal("備考列を全部確認済みにして") is None
+    assert ailine.extract_quoted_literal("『A』と『B』のどちらかにして") is None
+
+def test_verify_dsl_args_set_column_value_extracts_from_quotes():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "備考"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "SET_COLUMN_VALUE", {"col": "備考"}, meta, task="備考列を全部『確認済み』にして")
+    assert ok
+    assert resolved["value"] == "確認済み"
+    assert resolved["_sources"]["value"] == "依頼文: 「確認済み」"
+
+def test_verify_dsl_args_set_column_value_clarifies_without_quote():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "備考"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "SET_COLUMN_VALUE", {"col": "備考"}, meta, task="備考列を全部確認済みにして")
+    assert not ok
+    assert "「」" in err or "『』" in err
+
+def test_verify_dsl_args_set_column_value_task_wins_over_llm_value():
+    # ★ A' 原則: LLM が返した value は無視/検算対象（依頼文の引用が常に勝つ）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "備考"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "SET_COLUMN_VALUE", {"col": "備考", "value": "却下済み"}, meta,
+        task="備考列を全部『確認済み』にして")
+    assert ok
+    assert resolved["value"] == "確認済み"
+    assert resolved["_warnings"]
+
+def test_verify_dsl_args_set_column_value_col_must_exist():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "備考"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "SET_COLUMN_VALUE", {"col": "存在しない"}, meta, task="存在しない列を全部『x』にして")
+    assert not ok
+
+def test_codegen_set_column_value_writes_all_data_rows():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "備考"]}}
+    code = ailine.codegen_dsl("SET_COLUMN_VALUE", {"col": "備考", "value": "確認済み"}, meta)
+    assert 'setString("確認済み")' in code
+    assert "Sub Run(oDoc As Object)" in code
+
+def test_check_set_column_value_pass_and_fail(tmp_path):
+    p = _book(tmp_path, [["商品", "備考"], ["a", "確認済み"], ["b", "確認済み"]])
+    status, reason = ailine.check_set_column_value(p, {"col": "備考", "value": "確認済み"})
+    assert status == "pass"
+
+    p2 = _book(tmp_path, [["商品", "備考"], ["a", "確認済み"], ["b", "未確認"]])
+    status2, reason2 = ailine.check_set_column_value(p2, {"col": "備考", "value": "確認済み"})
+    assert status2 == "fail"
+
+def test_op_write_target_set_column_value_declares_column_write():
+    # ★ 既存列への一括書き込み＝破壊の関所の対象（宣言必須）。
+    assert ailine.OP_WRITE_TARGET["SET_COLUMN_VALUE"] == ("col", None)
+
+def test_set_column_value_end_to_end_via_cmd_run_dsl(tmp_path, monkeypatch, capsys):
+    # ★ DoD③: 既存値がある列への一括書き換えは破壊の関所(確認)を経由すること。
+    p = _book(tmp_path, [["商品", "備考"], ["a", "旧"], ["b", "旧"]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SET_COLUMN_VALUE", "args": {"col": "備考"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        for r in range(2, ws2.max_row + 1):
+            ws2.cell(row=r, column=2, value="確認済み")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = argparse.Namespace(
+        book=str(p), task="備考列を全部『確認済み』にして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    # 既存値(旧×2件)がある列への上書き＝破壊の関所が発火し、非対話では exit 7 で案内する
+    assert rc == 7
+    assert "上書き" in captured.out or "--overwrite" in captured.out
+
+
+# --- 致命3 項目①: 全列テキストの表で見出し行検出が CLARIFY に落ちる不具合の修正 -----
+
+def test_detect_header_row_all_text_table_picks_first_row():
+    # 実測: 氏名/部署/備考のような数値列が一つも無い表は、型混在の手がかりが一度も
+    # 起きないため、旧実装は pure_str_rows が複数になり CLARIFY に落ちていた。
+    sheet_struct = {"rows": {
+        1: {"nonempty": 3, "str": 3, "bold": 0},   # 氏名/部署/備考
+        2: {"nonempty": 2, "str": 2, "bold": 0},   # 備考が空欄の行（2セルのみ非空）
+        3: {"nonempty": 3, "str": 3, "bold": 0},
+    }}
+    row, confident = ailine.detect_header_row(sheet_struct)
+    assert (row, confident) == (1, True)
+
+def test_detect_header_row_all_text_table_with_wholly_blank_rows_between():
+    # 完全に空白の行（nonempty=0）が混ざっても先頭行を見出しとみなす。
+    sheet_struct = {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 0, "str": 0, "bold": 0},
+        3: {"nonempty": 2, "str": 2, "bold": 0},
+    }}
+    row, confident = ailine.detect_header_row(sheet_struct)
+    assert (row, confident) == (1, True)
+
+def test_detect_header_row_ambiguous_numeric_mixture_case_still_not_confident():
+    # 既存の「曖昧なら推測しない」挙動は変えない（型混在の手がかりがある通常のケース）。
+    sheet_struct = {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+        3: {"nonempty": 2, "str": 2, "bold": 0},
+        4: {"nonempty": 2, "str": 1, "bold": 0},
+    }}
+    row, confident = ailine.detect_header_row(sheet_struct)
+    assert confident is False
+    assert row is None

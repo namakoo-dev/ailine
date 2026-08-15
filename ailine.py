@@ -487,6 +487,20 @@ def detect_header_row(sheet_struct: dict) -> tuple:
         return with_mixture[0], True
     if not with_mixture and len(pure_str_rows) == 1:
         return pure_str_rows[0], True
+    # ★ 致命3(W10e) 項目①: 表の全列が文字列型（数値/日付列が一つも無い）の場合、
+    #   「型混在」の手がかりが構造的に一度も発生しない（with_mixture は必ず空）ため、
+    #   pure_str_rows が『先頭行から続く全データ行』になり、見出し行が一意に決まらず
+    #   毎回 CLARIFY に落ちていた（実測: 氏名/部署/備考のようなテキストのみの表）。
+    #   スキャン範囲内の非空行が『例外なく全部』文字列のみ（数値/日付の手がかりが
+    #   一つも無い）と確認できた場合に限り、最初の候補行（先頭・str>=2）を見出しと
+    #   みなす（型混在の手がかりが少しでもある通常のケースはこの分岐に来ない＝
+    #   test_detect_header_row_ambiguous_two_equally_valid_candidates_is_not_confident 等の
+    #   既存挙動は変えない）。
+    if not with_mixture and pure_str_rows:
+        no_type_mixture_possible = all(
+            info["nonempty"] == info["str"] for info in rows.values() if info["nonempty"] > 0)
+        if no_type_mixture_possible:
+            return pure_str_rows[0], True
     return None, False
 
 
@@ -1047,6 +1061,77 @@ def _neutralize_declared_new_sheet_warning(advisories: list, op: str, before: di
     return out
 
 
+# ★ 致命2(W10e): 「既存シートの中身が置き換わった」検出。自由生成が依頼と無関係な
+#   内容で既存シートを丸ごと上書きした実測事故（「集計」シートが日付別の無関係な内容に
+#   すり替わった）への対抗。detect_ghost_data/detect_uniform_fill と同じ保守的な方針
+#   （両条件とも『原本にあった非空セルが全部』変わった時だけ発火＝一部だけの更新・
+#   再計算は対象外＝誤検知回避優先）。
+def existing_sheet_replaced_advisory(before: dict, after: dict) -> list:
+    """before・after の両方に実在するシート（新規作成ではない）のうち、原本の使用範囲に
+       あった非空セルが【全部】別の値に変わっている場合だけ「中身が置き換わった」を返す。
+       一部のセルだけが変わった（値の再計算・部分更新等）場合は対象外（保守的）。
+       ★ 空欄への一様書き込み等は detect_uniform_fill が別途担当するので、ここでは
+       『置き換え後も何かしら値が残っている』ケースだけを見る（全消去は別の懸念）。"""
+    lines = []
+    for sheet in before["sheets"]:
+        if sheet not in after["sheets"]:
+            continue   # シート削除は diff_snapshots が別途拾う
+        rect = _used_range(before, sheet)
+        if rect is None:
+            continue   # 原本にデータが無かった（新規に埋まっただけ）→ここでは判定しない
+        min_r, max_r, min_c, max_c = rect
+        prefix = sheet + "!"
+        total = 0
+        changed = 0
+        after_has_content = False
+        for r in range(min_r, max_r + 1):
+            for c in range(min_c, max_c + 1):
+                key = f"{prefix}{r},{c}"
+                b = before["cells"].get(key)
+                b_val = b[0] if b is not None else None
+                if b_val in (None, ""):
+                    continue
+                total += 1
+                a = after["cells"].get(key)
+                a_val = a[0] if a is not None else None
+                if a_val not in (None, ""):
+                    after_has_content = True
+                if a_val != b_val:
+                    changed += 1
+        if total == 0 or changed != total or not after_has_content:
+            continue   # 一部だけの変更、または全消去（置き換えではない）→ 発火しない
+        lines.append(f"★ 疑わしい: 既存シート『{sheet}』の中身が置き換わりました"
+                      f"（元データ {total} セル分が別の内容に変わっています）")
+    return lines
+
+
+# ★ 致命2(W10e): AGGREGATE(集計)/PIVOT(ピボット) が既存の同名シートを宣言どおり
+#   再生成する場合（例: 既に「集計」シートがある状態で再度「部門ごとにまとめて」を頼む
+#   正常系）は、上の検出と同じ理屈で『中身が置き換わった』が誤って出る。W10c/W10d で
+#   確立した「op の宣言済み効果と一致する変化は中立」に乗せて中立化する
+#   （helpers/*.bas は出力シート名を固定で決め打つため、ここも固定表で対応づける）。
+OP_DECLARED_SHEET_NAME = {"AGGREGATE": "集計", "PIVOT": "ピボット"}
+
+
+def _neutralize_declared_sheet_replace_warning(advisories: list, op: str, before: dict, after: dict) -> list:
+    """op が OP_DECLARED_SHEET_EFFECT で、かつそのシートの『中身が置き換わりました』が
+       出ている場合に限り、中立表示に落とす（他シートの置き換え検出には触れない）。"""
+    if op not in OP_DECLARED_SHEET_EFFECT:
+        return advisories
+    sheet = OP_DECLARED_SHEET_NAME.get(op)
+    if not sheet:
+        return advisories
+    target_line = (f"★ 疑わしい: 既存シート『{sheet}』の中身が置き換わりました"
+                    f"（元データ ")
+    out = []
+    for line in advisories:
+        if line.startswith(target_line):
+            out.append(f"（既存シート『{sheet}』の更新は意図どおりです）")
+            continue
+        out.append(line)
+    return out
+
+
 def _changed_sheets(before: dict, after: dict) -> set:
     """何かしら変わったシート名の集合（セル・結合・列幅・行高・追加/削除）。"""
     changed = set()
@@ -1124,6 +1209,7 @@ def _structural_advisories(before: dict, after: dict) -> list:
     if recon:
         lines.append(recon)
     lines.extend(new_sheet_advisories(before, after))
+    lines.extend(existing_sheet_replaced_advisory(before, after))   # ★ 致命2(W10e)
     return lines
 
 
@@ -1288,6 +1374,31 @@ def lookup_vocab_factor(text: str, vocab: dict) -> tuple:
     return None, None
 
 
+# --- ★ A' 原則(致命3・W10e): SET_COLUMN_VALUE が書き込む定数値を LLM から切り離す ------
+#   依頼文の引用符（「」『』""''）で囲まれた文字列を機械抽出する。extract_rate_factor と
+#   同じ考え方 — ちょうど1つに絞れる時だけ確定・0件/2件以上は CLARIFY に委ねる（None）。
+_QUOTE_PATTERNS = (
+    re.compile(r"「([^」]+)」"),
+    re.compile(r"『([^』]+)』"),
+    re.compile(r'"([^"]+)"'),
+    re.compile(r"'([^']+)'"),
+)
+
+
+def extract_quoted_literal(text: str) -> str | None:
+    """依頼文全体を通して、引用符で囲まれた文字列がちょうど1つだけ見つかった場合に
+       その中身を返す。0個/2個以上は曖昧とみなし None（機械確定を諦める＝呼び出し側が
+       CLARIFY にする）。"""
+    if not text:
+        return None
+    found = []
+    for pat in _QUOTE_PATTERNS:
+        found.extend(m.group(1) for m in pat.finditer(text))
+    if len(found) == 1:
+        return found[0]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # M2b: 中間命令言語（DSL）パイプライン
 #   ①翻訳(LLM) → ②検証(接地) → ③確認行 → ④決定論 codegen(LLM不使用) → ⑤適用(既存機構)
@@ -1333,6 +1444,10 @@ OP_META = {
                  "synonyms": ["幅を内容に合わせる", "列幅調整", "列を自動調整"]},
     "PIVOT": {"category": "計算する", "label": "ピボット",
                "synonyms": ["ピボットテーブル", "ピボットで集計", "クロス集計"]},
+    # ★ 致命3(W10e): 「列を一括で定数に書き換える」の DSL 昇格（査定所見:総務事務が
+    #   最も頻繁に行う操作に信頼できる経路が無かった）。
+    "SET_COLUMN_VALUE": {"category": "表を編集する", "label": "一括書換",
+                           "synonyms": ["全部同じ値にする", "一括で書き換える", "列を統一する"]},
 }
 
 OP_LABELS = {op: meta["label"] for op, meta in OP_META.items()}
@@ -1357,6 +1472,10 @@ OP_SCHEMA = {
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": ("group_col", "value_col"),
+    # ★ 致命3(W10e): value は必須 slot に入れない（LLM に確定させない・A' 原則）。
+    #   実際に書き込む値は verify_dsl_args が依頼文の引用符から機械抽出する
+    #   （抽出できなければ CLARIFY）。翻訳直後の slot 欠落チェックは col だけを見る。
+    "SET_COLUMN_VALUE": ("col",),
 }
 
 # ★ W10c 致命1: 「破壊の関所」（既存列への上書き検知・下の _maybe_warn_target_overwrite）が
@@ -1387,6 +1506,8 @@ OP_WRITE_TARGET = {
     "DRAW_BORDERS": None,
     "AUTOFIT": None,
     "PIVOT": None,                         # 新規シートを作るだけ
+    # ★ 致命3(W10e): 既存列への一括書き込み＝破壊の関所の対象そのもの（宣言必須）。
+    "SET_COLUMN_VALUE": ("col", None),
 }
 
 # ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、
@@ -1423,7 +1544,12 @@ PIVOT: 依頼文に「ピボット」「ピボットテーブル」という言�
   本物のピボットテーブル(DataPilot)を作る。args: group_col(分類する列), value_col(合計する列)
   ★「ピボット」の語が無いグループ別集計（「集計」「まとめる」「小計」「合計がみたい」等、
   ピボットという語を伴わない言い方はすべて）は AGGREGATE を使う（PIVOT は LibreOffice で
-  開き直すたび書式が消える癖があるため、書式つきの見栄えが要るなら AGGREGATE の方が適する）"""
+  開き直すたび書式が消える癖があるため、書式つきの見栄えが要るなら AGGREGATE の方が適する）
+SET_COLUMN_VALUE: 既存列の値を全部、同じ1つの値に書き換える。args: col(書き換える既存列名)
+  ★ 実際に書き込む値(value)は依頼文の「」または『』で囲まれた引用を機械が抽出する
+  （ここに書いてもよいが、依頼文の引用と食い違えば依頼文側が優先される）。税率等の
+  倍率計算(COMPUTE_COLUMN)とは別物 — 依頼が「〜を掛けた」のような計算でなく、
+  同じ文字列/値をそのまま代入するだけの依頼はこちらを使う"""
 
 # ★ M2c: battery(v1) が実測で取り違えた基本パターンに加え、複合依頼(battery v2)を few-shot で
 #   教える。同じ混同/構造を別の言い回しで示す（battery の項目文そのままは使わない＝暗記でなく
@@ -1510,12 +1636,15 @@ TRANSLATION_FEWSHOT = [
     ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
      '依頼: 「金額に1.1を掛けた列を追加して」',
      '{"plan": [{"op": "COMPUTE_COLUMN", "args": {"operands": ["金額"], "operator": "*"}}]}'),
-    # ★ W10c 高: 「列を全部Xに書き換える」（数値の倍率ではなく文字列を一律に代入する）は、
-    #   税込み/税抜き（COMPUTE_COLUMN の1列×率パターン）と表現が似ているが別物＝語彙に無い
-    #   （実測: 「氏名の列を全部『退職済み』に書き換えて」が税率の話と誤認された事故）。
+    # ★ W10c 高 → 致命3(W10e) で語彙昇格: 「列を全部Xに書き換える」（数値の倍率ではなく
+    #   文字列を一律に代入する）は、税込み/税抜き（COMPUTE_COLUMN の1列×率パターン）と
+    #   表現が似ているが別物（実測: 「氏名の列を全部『退職済み』に書き換えて」が税率の話と
+    #   誤認された事故）。以前は語彙に無く OUT_OF_VOCAB へ退避させていたが、W10e で
+    #   SET_COLUMN_VALUE を新設したため、この例も新しい正解へ差し替える（既存 fewshot の
+    #   再利用＝件数を増やさない。W9 の教訓＝足しすぎは別 op の誤断定回帰を招く）。
     ('対象ブックの構成: {"Sheet": ["氏名", "部署", "金額"]}\n'
      '依頼: 「氏名の列を全部『退職済み』に書き換えて」',
-     '{"plan": [{"op": "OUT_OF_VOCAB", "about": "列を同じ文字列で一括上書き"}]}'),
+     '{"plan": [{"op": "SET_COLUMN_VALUE", "args": {"col": "氏名", "value": "退職済み"}}]}'),
 ]
 
 TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙を使った「計画」の JSON に翻訳する。
@@ -2014,6 +2143,25 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         if (err := resolve_in("value_col", first_sheet)):
             return False, resolved, inferred, err
 
+    # ★ 致命3(W10e): 一括定数書き換え。値は LLM に確定させない（A' 原則）。
+    elif op == "SET_COLUMN_VALUE":
+        if (err := resolve_in("col", first_sheet)):
+            return False, resolved, inferred, err
+        llm_value_raw = resolved.pop("value", None)
+        quoted = extract_quoted_literal(task)
+        if quoted is None:
+            return False, resolved, inferred, (
+                "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで"
+                "書いてください（例:「備考列を全部『確認済み』にして」）"
+            )
+        resolved["value"] = quoted
+        resolved["_sources"] = {**resolved.get("_sources", {}), "value": f"依頼文: 「{quoted}」"}
+        if llm_value_raw not in (None, "") and str(llm_value_raw) != quoted:
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"LLM が返した値('{llm_value_raw}')と依頼文の引用('{quoted}')が食い違うため"
+                f"依頼文側('{quoted}')を採用しました"
+            ]
+
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
 
@@ -2043,6 +2191,7 @@ _CONFIRM_FIELDS = {
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": (("分類列", "group_col", None), ("集計列", "value_col", None)),
+    "SET_COLUMN_VALUE": (("対象列", "col", None), ("値", "value", None)),
 }
 
 # ★ W9 項目4: PIVOT(DataPilot) の既知の癖（README 記載・再描画で書式が撥ねる）を
@@ -2326,6 +2475,19 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         g_idx = headers[first_sheet].index(resolved_args["group_col"])
         v_idx = headers[first_sheet].index(resolved_args["value_col"])
         return _wrap_basic(f"    Call PivotSum(oDoc, {g_idx}, {v_idx})\n")
+
+    if op == "SET_COLUMN_VALUE":
+        # ★ 致命3(W10e): ヘルパ無し・既存列のデータ行全部に同じ文字列を setString する
+        #   （CENTER_ALIGN の col: 分岐と同じ「走査してヘッダ直下から最終行まで」の作法）。
+        col_idx = headers[first_sheet].index(resolved_args["col"])
+        value = str(resolved_args["value"]).replace('"', '""')
+        body = ("    Dim oSheet As Object, lastRow As Long, r As Long\n"
+                "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                + _scan_last_row_basic(start_row=str(hr0 + 1))
+                + f"    For r = {hr0 + 1} To lastRow\n"
+                f"        oSheet.getCellByPosition({col_idx}, r).setString(\"{value}\")\n"
+                "    Next r\n")
+        return _wrap_basic(body)
 
     raise ValueError(f"未対応の op: {op}")
 
@@ -3021,6 +3183,28 @@ def check_pivot(path: Path, args: dict, header_row: int = 1) -> tuple:
     return "pass", f"『ピボット』シートと DataPilot を確認（{PIVOT_CAVEAT}）"
 
 
+def check_set_column_value(path: Path, args: dict, header_row: int = 1) -> tuple:
+    """★ 致命3(W10e): SET_COLUMN_VALUE の事後条件。対象列のデータ行が全部、機械抽出した
+       定数値(args["value"])と一致するかを見る（型を問わず文字列表現で比較 — codegen は
+       setString で書くため、読み戻しも文字列として揃える）。"""
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    idx = _col_index_by_header(ws, args["col"], header_row=header_row)
+    if idx is None:
+        wb.close()
+        return "fail", f"列『{args['col']}』が見つからない"
+    last = _scan_last_row(ws, header_row=header_row)
+    if last < header_row + 1:   # ★ 止血1: データ行0件を合格にしない
+        wb.close()
+        return "fail", _ZERO_TARGET_REASON
+    value = args["value"]
+    vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
+    wb.close()
+    if not all(str(v) == str(value) for v in vals):
+        return "fail", f"列『{args['col']}』に『{value}』でないセルがある"
+    return "pass", f"{len(vals)} 行を『{value}』に統一"
+
+
 POSTCONDITIONS = {
     "SORT": check_sort, "COMPUTE_COLUMN": check_compute_column,
     "LOOKUP_FILL": check_lookup_fill, "AGGREGATE": check_aggregate,
@@ -3030,6 +3214,8 @@ POSTCONDITIONS = {
     # ★ W9: 検証済みヘルパ4種。
     "INSERT_ROWS": check_insert_rows, "DRAW_BORDERS": check_draw_borders,
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
+    # ★ 致命3(W10e):
+    "SET_COLUMN_VALUE": check_set_column_value,
 }
 
 
@@ -4348,6 +4534,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     advisories = _neutralize_new_column_ghost_warning(advisories, op, resolved, book_meta)
     # ★ W10c 中: AGGREGATE/PIVOT の新規シート作成も同じ考え方で中立表示に落とす。
     advisories = _neutralize_declared_new_sheet_warning(advisories, op, before, after)
+    # ★ 致命2(W10e): AGGREGATE/PIVOT が既存の同名シートを宣言どおり再生成する場合も同じ考え方。
+    advisories = _neutralize_declared_sheet_replace_warning(advisories, op, before, after)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -4375,6 +4563,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         result["ok"] = True
     else:
         print(f"\n✓ 達成を機械検証済み（操作:{OP_LABELS.get(op, op)}）: {reason}")
+        print(_VERIFY_SCOPE_NOTE)   # ★ 致命1(W10e) 要求1: 「計画どおり」≠「依頼どおり」を明示
         result["ok"] = True
 
     # ★ W8b-2: DSL 経路はルールベース codegen（自由生成ではない）ので、postcondition が
@@ -4682,11 +4871,55 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
 
 _ITEM_STATUS_MARK = {"ok": "✓", "warn": "⚠", "fail": "×"}
 
+# ★ 致命1(W10e): 「機械検証済み」が保証する範囲を正直に言う一文。バナー自体の語は
+#   既存テストが厳密一致で見ている（format_plan_report/overall_verdict）ため変えず、
+#   この注記を別行として1回だけ添える方針にした（『計画どおり』と『依頼どおり』の
+#   同一視をやめる・出しすぎない＝行数を増やさない）。
+_VERIFY_SCOPE_NOTE = ("★「機械検証済み」は、上の「解釈:」行どおりに実行されたことの検証です。"
+                       "その解釈が依頼の意図と合っているかまでは含みません — 「解釈:」行を確認してください。")
+_VERIFY_SCOPE_NOTE_PLAN = ("★「機械検証済み」は各段の「◯段目: 解釈:」行どおりに実行されたことの検証です。"
+                            "各段の解釈が依頼の意図と合っているかまでは含みません"
+                            " — 各段の「解釈:」行を確認してください。")
+
 # col系 slot を持つ op → その slot 名（依存つき連鎖の新規列フォールバック対象）。
 _COLUMN_ARG_KEYS = {
     "SORT": ("col",), "NUMBER_FORMAT": ("col",), "CHART": ("value_col",),
     "AGGREGATE": ("group_col", "value_col"),
 }
+
+# ★ 致命1(W10e): 依頼文に「見出し」の語があるのに BOLD/FILL_COLOR/CENTER_ALIGN の対象が
+#   直前までの段が新規作成した列に解決された場合の食い違いを検出する。実測事故の再現形
+#   そのもの ―― COMPUTE_COLUMN は target 無指定(新規列作成)の見出しを式そのまま
+#   （例:「数量*単価」）で書く（codegen_dsl 参照）。「見出しを太字にして」の段が、
+#   複合依頼の翻訳で前段の演算対象名を引きずり、target がその「数量*単価」という
+#   *実在する*（が事務上は無関係な）新規列名に解決されてしまうと、check_bold は
+#   「対象:col:数量*単価」という*計画どおり*の検証には合格する（が依頼＝見出し行の
+#   太字化とは無関係）。★ 保守的: 対象列が『この計画で直前までに新規作成された列』
+#   （new_cols）であり、かつ依頼文に「見出し」とある場合だけ発火する（列名を最初から
+#   明示したふつうの BOLD/FILL_COLOR/CENTER_ALIGN では絶対に発火しない）。
+#   ★ _apply_new_column_fallback 経由(target が未解決語から救済された場合)・素の
+#   verify_dsl_args 直解決(target が最初から新規列の実名と一致した場合)のどちらでも
+#   同じ理屈で疑わしいため、fallback の発火有無ではなく new_cols 所属の有無で判定する
+#   （fallback 有無だけを見ると後者を取りこぼす＝実測の再現形はむしろ後者に近い）。
+_HEADER_WORD_RE = re.compile(r"見出し")
+
+
+def _maybe_warn_header_col_mismatch(op: str, resolved: dict, new_cols: list, task: str) -> str | None:
+    """★ 致命1: 上のコメント参照。target がこの計画の直前までに新規作成された列
+       （new_cols）を指していて、かつ依頼文に「見出し」とある場合だけ、非ブロッキングの
+       助言を返す（M2a と同じ思想＝保守的・ブロックしない・確認を促すだけ）。"""
+    if op not in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
+        return None
+    target = resolved.get("target", "")
+    if not (isinstance(target, str) and target.startswith("col:")):
+        return None
+    col_name = target[4:]
+    if col_name not in (new_cols or []):
+        return None
+    if not _HEADER_WORD_RE.search(task or ""):
+        return None
+    return (f"⚠ 対象の列『{col_name}』はこの計画の直前の段で新規作成された列です。"
+            "依頼に「見出し」とあるため、見出し行（行全体）を意図していないか確認してください")
 
 
 def _apply_new_column_fallback(op: str, args: dict, headers: list, new_cols: list) -> dict:
@@ -5012,8 +5245,17 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
         line = format_confirmation_line(op, resolved, inferred)
         label = line[len("解釈: "):]
+        # ★ 致命1(W10e) 要求2: 複合計画では段が流れて気づけない、が査定所見。単発 DSL
+        #   (cmd_run_dsl)は元から適用前にこの行を出しており、複合計画だけ抜けていた
+        #   （警告(_maybe_warn_target_overwrite)がある時だけ間接的に見えていた=不十分）。
+        #   ここで段番号付きで無条件に見せる（1段あたり1行・出しすぎない）。
+        print(f"  {i}段目: {line}")
         if op == "PIVOT":   # ★ W9 項目4
             print(f"  {i}段目: （{PIVOT_CAVEAT}）")
+        mismatch_warning = _maybe_warn_header_col_mismatch(op, resolved, new_cols, a.task)
+        if mismatch_warning:
+            print(f"  {i}段目: {mismatch_warning}")
+            step_advisory_entries.append((i, mismatch_warning))
         warn_overwrite = _maybe_warn_target_overwrite(op, resolved, current_meta, out_book)
         if warn_overwrite:
             summary = _interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
@@ -5065,6 +5307,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
         step_adv.extend(unrequested_new_sheet_advisory(a.task, step_before, step_after))
         step_adv = _neutralize_new_column_ghost_warning(step_adv, op, resolved, current_meta)
         step_adv = _neutralize_declared_new_sheet_warning(step_adv, op, step_before, step_after)
+        step_adv = _neutralize_declared_sheet_replace_warning(step_adv, op, step_before, step_after)
         step_advisory_entries.extend((i, adv) for adv in step_adv)
 
         status, reason = run_postcondition(op, out_book, resolved, before_charts=before_charts,
@@ -5108,6 +5351,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             print(ln)
     verdict_line, verdict = overall_verdict(items)
     print(f"\n{verdict_line}")
+    print(_VERIFY_SCOPE_NOTE_PLAN)   # ★ 致命1(W10e) 要求1: 「計画どおり」≠「依頼どおり」を明示
 
     _changed, difflines = diff_snapshots(before_all, after_all)
     result["plan"] = plan_json

@@ -1,0 +1,61 @@
+⏳ 初回準備（文書の正規化+構造読み取り）… (0.7s)
+⏳ 翻訳中 (qwen2.5-coder:7b)… (3.0s)
+⏳ 生成中 (qwen2.5-coder:7b)… (0.0s)
+⏳ LibreOffice で適用中… (0.6s)
+■ ailine（AI が直接作成・機械保証なし）  model=qwen2.5-coder:7b  book=scenario2.xlsx
+■ 参照ライブラリ: C:\Dev\ailine\refs  (3 例)
+■ ヘルパ: C:\Dev\ailine\helpers  (1 本を同梱・Call で呼ばせる)
+
+─ 試行 1 ─ 生成した .bas ───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Dim oSheets As Object, oPivot As Object, oAgg As Object
+    oSheets = oDoc.Sheets
+
+    ' 依頼(部署列の書き換え)は一度も実行しない。無関係な「ピボット」シートを新規作成する。
+    If Not oSheets.hasByName("ピボット") Then
+        oSheets.insertNewByName("ピボット", oSheets.Count)
+    End If
+    oPivot = oSheets.getByName("ピボット")
+    oPivot.getCellByPosition(0, 0).setString("日付")
+    oPivot.getCellByPosition(1, 0).setString("件数")
+    oPivot.getCellByPosition(0, 1).setString("2026-01-01")
+    oPivot.getCellByPosition(1, 1).setValue(3)
+
+    ' 既存の「集計」シート（部署別合計・正しい内容）を、日付別の無関係な内容で丸ごと上書きする。
+    oAgg = oSheets.getByName("集計")
+    oAgg.getCellByPosition(0, 0).setString("日付")
+    oAgg.getCellByPosition(1, 0).setString("件数")
+    oAgg.getCellByPosition(0, 1).setString("2026-01-01")
+    oAgg.getCellByPosition(1, 1).setValue(3)
+    oAgg.getCellByPosition(0, 2).setString("2026-01-02")
+    oAgg.getCellByPosition(1, 2).setValue(5)
+End Sub
+──────────────────────────────────────────
+
+⚠ AI が直接作成した処理です（機械保証なし）— 確認してください。変更点:
+＋シート追加: ['ピボット']
+＊列幅変更: ピボット
+＊行高変更: ピボット
+＊セル値変更: ピボット
+  A1: 値 (空)→'日付'
+  B1: 値 (空)→'件数'
+  A2: 値 (空)→'2026-01-01', 数値書式 'General'→'@'
+  B2: 値 (空)→3
+＊セル値変更: 集計
+  A1: 値 '部署'→'日付'
+  B1: 値 '合計'→'件数'
+  A2: 値 '営業'→'2026-01-01', 数値書式 'General'→'@'
+  B2: 値 3000→3
+  A3: 値 '総務'→'2026-01-02', 数値書式 'General'→'@'
+  B3: 値 500→5
+★ 疑わしい: 既存シート『集計』の中身が置き換わりました（元データ 6 セル分が別の内容に変わっています）
+★ 依頼にない新しいシートが作成されました（ピボット）
+
+適用先: scenario2.out.xlsx（原本 scenario2.xlsx は無変更）
+
+★ 変化は検出したが『正しいか』は上の差分を見て判断してください（no-op ガードは正しさを保証しない）。
+
+RC= 0
