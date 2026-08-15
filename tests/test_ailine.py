@@ -501,6 +501,27 @@ def test_doctor_checks_returns_seven_items():
         assert isinstance(ok, bool)
 
 
+# --- ★ W8a 項目5: doctor の事務向け一行説明（7項目全部・翻訳表示） -----------------
+
+def test_doctor_business_notes_cover_all_seven_real_check_names():
+    names = [
+        "python 3.10+", "openpyxl", f"ollama 到達 ({ailine.OLLAMA})",
+        f"モデル '{ailine.DEFAULT_MODEL}'", "LibreOffice", "basrun.py", "demo/",
+    ]
+    for name in names:
+        assert ailine._doctor_business_note(name) is not None
+
+def test_format_doctor_report_shows_business_note_for_ollama():
+    text, _ = ailine.format_doctor_report([(f"ollama 到達 ({ailine.OLLAMA})", True, "")])
+    assert "AI エンジン (ollama) に接続できています" in text
+
+def test_format_doctor_report_no_business_note_for_unknown_dummy_name():
+    # ★ 既存テスト(test_format_doctor_report_all_ok 等)のダミー名 "a"/"b" は
+    #   どの実プレフィックスにも一致しないため、従来どおり内部名のみ表示する。
+    text, _ = ailine.format_doctor_report([("a", True, "")])
+    assert text == "✓ a"
+
+
 # --- ★ M1: 実行履歴（最小版） ------------------------------------------------
 
 def test_build_history_entry_shape_and_truncation():
@@ -567,6 +588,33 @@ def test_format_history_table_success_has_no_kind_tag():
     text = ailine.format_history_table(entries)
     assert "[none]" not in text
     assert "✓" in text
+
+
+# --- ★ W8a 項目1: dry(下見) と実適用の履歴区別 ---------------------------------
+
+def test_build_history_entry_dry_field_defaults_false():
+    e = ailine.build_history_entry({"ok": True, "attempts": 1}, Path("a.xlsx"), "t", "m", "none")
+    assert e["dry"] is False
+
+def test_build_history_entry_dry_field_true_when_result_dry():
+    e = ailine.build_history_entry({"ok": True, "dry": True}, Path("a.xlsx"), "t", "m", "none")
+    assert e["dry"] is True
+
+def test_format_history_table_marks_dry_rows_with_kensaku_label():
+    # 「下見」= 事務の言葉。「dry-run」は表示に出さない。
+    entries = [{"ts": "2026-01-01T00:00:00+00:00", "ok": True, "attempts": 1, "dry": True,
+                "model": "m", "book": "b.xlsx", "task": "t", "failure_kind": "none"}]
+    text = ailine.format_history_table(entries)
+    assert "(下見)" in text
+    assert "dry" not in text.lower()
+
+def test_format_history_table_old_rows_without_dry_key_read_as_applied():
+    # ★ 後方互換: 旧 history.jsonl の行（"dry" キーが無い）は実適用扱いのまま読める
+    #   （dict.get("dry", False) で False にフォールバック）。
+    entries = [{"ts": "2026-01-01T00:00:00+00:00", "ok": True, "attempts": 1,
+                "model": "m", "book": "b.xlsx", "task": "t", "failure_kind": "none"}]
+    text = ailine.format_history_table(entries)
+    assert "(下見)" not in text
 
 def test_cmd_run_dry_survives_history_write_failure(tmp_path, monkeypatch, capsys):
     # ★ 履歴の書き込み失敗で run 本体を落とさない（try で包み WARN のみ）ことを
@@ -767,6 +815,52 @@ def test_count_reconciliation_none_when_multiple_columns_changed(tmp_path):
     after = ailine.snapshot(p)
     assert ailine.count_reconciliation(before, after) is None
 
+# --- ★ W8a 項目2: 件数突合の算数バグ（分子に見出し行が混入していた） ------------------
+
+def test_count_reconciliation_excludes_header_row_from_numerator(tmp_path):
+    # ★ 実測(e2e_work/w3_e2e3_log.txt): 新規列を作り見出し(F1)にもデータ全5行(F2-F6)にも
+    #   書く COMPUTE_COLUMN で「データ5行のうち6行を変更」という算数が壊れた表示になって
+    #   いた。見出し行は分子から除外し、別語「＋見出し行」で添える。
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200], ["c", 300], ["d", 400], ["e", 500]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    ws.cell(row=1, column=3, value="金額(税込)")   # 新規列の見出し
+    for r in range(2, 7):
+        ws.cell(row=r, column=3, value=f"=B{r}*1.1")
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.count_reconciliation(before, after)
+    assert msg == "列 C: データ 5 行のうち 5 行を変更（0 行は未変更）＋見出し行"
+
+def test_count_reconciliation_no_header_suffix_when_header_untouched(tmp_path):
+    # 見出し行に触れていない既存の回帰(りんご欠落型)には「＋見出し行」を付けない。
+    p = _book(tmp_path, [["商品", "金額"], ["りんご", 100], ["バナナ", 200], ["みかん", 300]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=2, value=999)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.count_reconciliation(before, after)
+    assert "＋見出し行" not in msg
+
+def test_count_reconciliation_invariant_denominator_never_less_than_numerator(tmp_path):
+    # ★ 不変条件: 「データ N 行のうち M 行を変更」で常に N >= M（分子=データ行のみ）。
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200], ["c", 300]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    ws.cell(row=1, column=2, value="金額(税込)")   # 見出しも変更
+    ws.cell(row=2, column=2, value=999)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.count_reconciliation(before, after)
+    import re as _re
+    m = _re.search(r"データ (\d+) 行のうち (\d+) 行を変更", msg)
+    data_rows, changed_rows = int(m.group(1)), int(m.group(2))
+    assert data_rows >= changed_rows
+    assert "＋見出し行" in msg
+
 
 # --- ★ M2a: 依頼文と変更範囲の重なりチェック ----------------------------------
 
@@ -853,6 +947,51 @@ def test_mention_overlap_empty_when_no_mentions(tmp_path):
     assert ailine.mention_overlap_advisory({"cols": set(), "rows": set(), "sheets": set()}, snap, snap) == []
 
 
+# --- ★ W8a 項目4: 率リテラルの機械スキャン（判断棚から昇格） -----------------------
+
+def test_scan_rate_literals_fires_when_rate_not_in_task():
+    code = "Sub Run(oDoc As Object)\n  x = 100 * 1.08\nEnd Sub"
+    out = ailine.scan_rate_literals(code, "税込み合計を出して")
+    assert len(out) == 1
+    assert "1.08" in out[0]
+    assert "検算してください" in out[0]
+
+def test_scan_rate_literals_silent_when_task_mentions_percentage():
+    code = "Sub Run(oDoc As Object)\n  x = 100 * 1.08\nEnd Sub"
+    out = ailine.scan_rate_literals(code, "消費税8%込みの合計を出して")
+    assert out == []
+
+def test_scan_rate_literals_silent_when_vocab_has_matching_rate():
+    code = "Sub Run(oDoc As Object)\n  x = 100 * 1.1\nEnd Sub"
+    out = ailine.scan_rate_literals(code, "税込み合計を出して", vocab={"消費税": 1.1})
+    assert out == []
+
+def test_scan_rate_literals_ignores_comment_lines():
+    code = "Sub Run(oDoc As Object)\n  ' 参考値 1.08 は例\n  x = 1\nEnd Sub"
+    out = ailine.scan_rate_literals(code, "合計を出して")
+    assert out == []
+
+def test_scan_rate_literals_ignores_integers():
+    code = "Sub Run(oDoc As Object)\n  x = 100 * 5\nEnd Sub"
+    out = ailine.scan_rate_literals(code, "合計を出して")
+    assert out == []
+
+def test_scan_rate_literals_ignores_out_of_range_decimals():
+    code = "Sub Run(oDoc As Object)\n  x = 3.14\nEnd Sub"
+    out = ailine.scan_rate_literals(code, "合計を出して")
+    assert out == []
+
+def test_scan_rate_literals_dedupes_repeated_literal():
+    code = "Sub Run(oDoc As Object)\n  x = 100 * 1.1\n  y = 200 * 1.1\nEnd Sub"
+    out = ailine.scan_rate_literals(code, "合計を出して")
+    assert len(out) == 1
+
+def test_scan_rate_literals_boundary_values_inclusive():
+    code = "Sub Run(oDoc As Object)\n  x = 100 * 0.05\n  y = 200 * 1.2\nEnd Sub"
+    out = ailine.scan_rate_literals(code, "合計を出して")
+    assert len(out) == 2
+
+
 # --- ★ M2a: 生成コードの切断検出 ---------------------------------------------
 
 @pytest.mark.parametrize("code,truncated", [
@@ -917,6 +1056,131 @@ def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, 
     assert "ValueError: bad state" in captured.out
     assert recorded["failure_kind"] == "runtime_error"
     assert recorded["error_detail"] == traceback_text
+
+
+# --- ★ W8a 項目4/5: 単段 FREEFORM の正直な⚠枠・率スキャン・語彙翻訳 ----------------
+
+def test_cmd_run_freeform_success_shows_honest_warning_not_checkmark(tmp_path, monkeypatch, capsys):
+    # ★ W8a 項目4: 単段 FREEFORM/OUT_OF_VOCAB は成功しても『✓』でなく『⚠ AI が直接
+    #   作成した処理です（機械保証なし）』の正直な枠で表示する
+    #   （実測: 8%仮定やラベル貼りが「✓できました」で素通りしていた）。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=3, value="税込合計")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "⚠ AI が直接作成した処理です（機械保証なし）— 確認してください" in captured.out
+    assert "✓ 適用され" not in captured.out
+
+def test_cmd_run_freeform_banner_uses_ai_direct_wording_not_jargon(tmp_path, monkeypatch, capsys):
+    # ★ W8a 項目5: 「自由生成経路」→「AI が直接作成（機械保証なし）」（operator の語彙翻訳）。
+    book = _book(tmp_path, [["a", 1]])
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False)
+    ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert "自由生成経路" not in captured.out
+    assert "AI が直接作成" in captured.out
+
+def test_cmd_run_freeform_rate_literal_scan_fires_when_task_silent_on_rate(tmp_path, monkeypatch, capsys):
+    # ★ W8a 項目4: 依頼文にも用語集にも率の出典が無いのに生成コードに率らしい数値が
+    #   あれば、検算を促す助言が変更点の後ろに出る。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    code = ("Sub Run(oDoc As Object)\n"
+            "  oDoc.Sheets.getByIndex(0).getCellByPosition(2, 0).setValue(100 * 1.08)\n"
+            "End Sub")
+    monkeypatch.setattr(ailine, "ollama_generate", lambda model, msgs, temperature=0.2: code)
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, c, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=3, value=108)
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "★ 率らしい数値 (1.08) が依頼に無いのに使われています — 検算してください" in captured.out
+
+def test_cmd_run_freeform_rate_literal_scan_silent_when_task_states_rate(tmp_path, monkeypatch, capsys):
+    # 対照: 依頼文に率(消費税8%)の出典があれば発火しない。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    code = ("Sub Run(oDoc As Object)\n"
+            "  oDoc.Sheets.getByIndex(0).getCellByPosition(2, 0).setValue(100 * 1.08)\n"
+            "End Sub")
+    monkeypatch.setattr(ailine, "ollama_generate", lambda model, msgs, temperature=0.2: code)
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, c, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=3, value=108)
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(book), task="消費税8%込みの合計を出して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "率らしい数値" not in captured.out
+
+def test_cmd_run_dsl_dry_banner_says_rule_conversion_not_deterministic(tmp_path, monkeypatch, capsys):
+    # ★ W8a 項目5: 「決定論」はユーザー向け文字列から排除（内部名・コメントは不変）。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
+    ns = argparse.Namespace(
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "決定論" not in captured.out
+    assert "ルール変換" in captured.out
 
 
 # --- ★ M2a: --inplace バックアップ + restore --------------------------------
@@ -2009,7 +2273,8 @@ def test_format_plan_report_ok_warn_fail_lines():
     ]
     lines = ailine.format_plan_report(items)
     assert lines[0] == "1. 操作:計算列 対象列:小計 → ✓ 機械検証済み（3 行を検証）"
-    assert lines[1] == "2. 税込み合計 → ⚠ 語彙外のため自由生成で実行（確認してください）"
+    # ★ W8a 項目5: 表示文言「自由生成」→「AI が直接作成（機械保証なし）」に追従。
+    assert lines[1] == "2. 税込み合計 → ⚠ 語彙外のため AI が直接作成（機械保証なし）で実行（確認してください）"
     assert lines[2] == "3. 操作:並べ替え → × 未対応: 列『在庫』がありません"
 
 def test_format_plan_report_ok_without_detail_omits_parens():
@@ -2127,7 +2392,8 @@ def test_cmd_run_plan_mixes_dsl_success_and_freeform_warns(tmp_path, monkeypatch
     assert rc == 0   # ⚠ は失敗ではない
     assert "✓ 機械検証済み" in captured.out
     assert "条件付き書式" in captured.out
-    assert "⚠ 語彙外のため自由生成で実行（確認してください）" in captured.out
+    # ★ W8a 項目5: 表示文言「自由生成」→「AI が直接作成（機械保証なし）」に追従。
+    assert "⚠ 語彙外のため AI が直接作成（機械保証なし）で実行（確認してください）" in captured.out
     assert "⚠ 一部は確認が必要です" in captured.out
     assert "すべて機械検証済み" not in captured.out
 
@@ -2327,7 +2593,9 @@ def test_resolve_header_rows_ambiguous_asks_clarify_with_exact_wording():
         4: {"nonempty": 2, "str": 1, "bold": 0},
     }}}}
     header_rows, clarify = ailine.resolve_header_rows(struct_dump, ["Sheet"])
-    assert clarify == "見出しは何行目ですか？（1 行目/3 行目 のように答えて）"
+    # ★ W8a 項目3: 旧文言は答え方が無い行き止まりだった。--header-row の使い方まで添える。
+    assert clarify == ("見出しが何行目か分かりません。"
+                        "`--header-row 3` のように指定して再実行してください")
     assert header_rows == {"Sheet": 1}   # 既定のまま(呼び出し側は CLARIFY で止まるので使われない)
 
 def test_resolve_header_rows_no_struct_dump_defaults_to_row1_no_clarify():
@@ -2363,8 +2631,68 @@ def test_cmd_run_clarify_on_ambiguous_header_before_translation(tmp_path, monkey
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 3
-    assert "見出しは何行目ですか" in captured.out
+    # ★ W8a 項目3: CLARIFY 文言更新（--header-row の使い方まで添える）に追従。
+    assert "見出しが何行目か分かりません" in captured.out
+    assert "--header-row" in captured.out
     assert called["n"] == 0   # 翻訳は一度も呼ばれていない
+
+def test_cmd_run_header_row_flag_bypasses_ambiguous_detection_no_clarify(tmp_path, monkeypatch, capsys):
+    # ★ W8a 項目3: 見出し検出が曖昧(CLARIFY相当)な帳票でも、--header-row を指定すれば
+    #   検出を丸ごとスキップしてその行を採用し、CLARIFY の行き止まりに落ちない。
+    #   接地(book_meta)経由で codegen/事後条件にも同じ header_row が伝わる（三層貫通）。
+    book = _book(tmp_path, [["x", 1], ["y", 2], ["商品", "金額"], ["a", 300], ["b", 100]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    ambiguous = {"sheets": {"Sheet": {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+        3: {"nonempty": 2, "str": 2, "bold": 0},
+        4: {"nonempty": 2, "str": 1, "bold": 0},
+    }}}}
+    monkeypatch.setattr(ailine, "build_struct_dump", lambda book, workdir: ambiguous)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None:
+                        (True, None, "ok"))
+    ns = argparse.Namespace(
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False, values=False,
+        header_row=3)
+    ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert "？" not in captured.out    # CLARIFY に落ちていない
+    assert "対象:金額" in captured.out   # 3行目を見出しとして『金額』列を解決できている
+
+def test_cmd_run_without_header_row_flag_still_clarifies_on_ambiguous(tmp_path, monkeypatch, capsys):
+    # 対照: --header-row を指定しなければ従来どおり曖昧な場合は CLARIFY のまま。
+    book = _book(tmp_path, [["x", 1], ["y", 2], ["商品", "金額"], ["a", 300], ["b", 100]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    ambiguous = {"sheets": {"Sheet": {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+        3: {"nonempty": 2, "str": 2, "bold": 0},
+        4: {"nonempty": 2, "str": 1, "bold": 0},
+    }}}}
+    monkeypatch.setattr(ailine, "build_struct_dump", lambda book, workdir: ambiguous)
+    called = {"n": 0}
+    def boom(*a, **k):
+        called["n"] += 1
+        return {"op": "SORT", "args": {"col": "金額", "order": "desc"}}
+    monkeypatch.setattr(ailine, "translate_task", boom)
+    ns = argparse.Namespace(
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False, values=False,
+        header_row=None)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "--header-row" in captured.out
+    assert called["n"] == 0
 
 def test_cmd_run_dry_skips_structdump_and_uses_physical_row1(tmp_path, monkeypatch, capsys):
     # ★ --dry は LibreOffice に触れない（既存の設計不変条件）。normalize_book が
@@ -2679,20 +3007,21 @@ def test_verify_dsl_args_append_total_unknown_column_is_clarify_error():
     assert "がありません" in err
 
 def test_format_confirmation_line_append_total_shows_col_label_factor():
+    # ★ W8a 項目5: 表示ラベルのみ「倍率」→「率」（内部キー"factor"は不変）。
     line = ailine.format_confirmation_line(
         "APPEND_TOTAL", {"col": "小計", "label": "税込み合計", "factor": 1.1}, set())
     assert "対象列:小計" in line
     assert "ラベル:税込み合計" in line
-    assert "倍率:1.1" in line
+    assert "率:1.1" in line
 
 def test_format_confirmation_line_append_total_shows_factor_source():
-    # ★ A': 来歴の可視化。倍率の出典を確認行に添える。
+    # ★ A': 来歴の可視化。率の出典を確認行に添える。★ W8a 項目5: 表示は「率」。
     line = ailine.format_confirmation_line(
         "APPEND_TOTAL",
         {"col": "小計", "label": "税込み合計", "factor": 1.1,
          "_sources": {"factor": "依頼文: 10%"}},
         set())
-    assert "倍率:1.1（依頼文: 10%）" in line
+    assert "率:1.1（依頼文: 10%）" in line
 
 
 # --- ④ codegen（決定論） ------------------------------------------------------
@@ -3024,7 +3353,8 @@ def test_cmd_run_dsl_append_total_shows_factor_source_from_task_text(tmp_path, m
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
-    assert "倍率:1.1（依頼文: 10%）" in captured.out
+    # ★ W8a 項目5: 表示ラベル「倍率」→「率」。
+    assert "率:1.1（依頼文: 10%）" in captured.out
 
 def test_cmd_run_dsl_append_total_clarify_hint_has_copy_paste_command(tmp_path, monkeypatch, capsys):
     book = _book(tmp_path, [["品目", "数量", "単価", "小計"], ["a", 3, 50000, 150000]])
@@ -3058,7 +3388,8 @@ def test_cmd_run_dsl_append_total_uses_registered_vocab(tmp_path, monkeypatch, c
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
-    assert "倍率:1.1（用語集: 消費税）" in captured.out
+    # ★ W8a 項目5: 表示ラベル「倍率」→「率」。
+    assert "率:1.1（用語集: 消費税）" in captured.out
 
 def test_cmd_run_dsl_append_total_warns_on_llm_factor_mismatch(tmp_path, monkeypatch, capsys):
     book = _book(tmp_path, [["品目", "数量", "単価", "小計"], ["a", 3, 50000, 150000]])

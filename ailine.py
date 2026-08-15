@@ -467,7 +467,10 @@ def detect_header_row(sheet_struct: dict) -> tuple:
     return None, False
 
 
-CLARIFY_HEADER_ROW_QUESTION = "見出しは何行目ですか？（1 行目/3 行目 のように答えて）"
+# ★ W8a 項目3: 旧文言は「答えて」と聞くだけで答え方(CLI で何を打てばいいか)が無い行き止まり
+#   だった（architect 発見）。--header-row フラグの使い方まで添えて、次のコマンドが打てる形にする。
+CLARIFY_HEADER_ROW_QUESTION = ("見出しが何行目か分かりません。"
+                                "`--header-row 3` のように指定して再実行してください")
 
 
 def resolve_header_rows(struct_dump: dict, sheets: list) -> tuple:
@@ -802,7 +805,14 @@ def _data_row_count(before: dict, sheet: str, key_col: int) -> int:
 
 def count_reconciliation(before: dict, after: dict) -> str | None:
     """変更が単一シート・単一列に集中している場合だけ「データ N 行のうち M 行を変更」
-       を添える（りんご欠落型のような『1行だけ抜けている』変更を1秒で見えるように）。"""
+       を添える（りんご欠落型のような『1行だけ抜けている』変更を1秒で見えるように）。
+       ★ W8a 項目2: 分子(M)は必ずデータ行のみに数える。_used_range/_data_row_count は
+       先頭行(min_r)を見出し行とみなして分母を数えているのに、分子側(changed_rows)は
+       全変更行をそのまま数えていたため、見出し行も対象列で変わった場合（例: 新規列を
+       作って見出し+データ全行に書く COMPUTE_COLUMN）に『データ5行のうち6行を変更』の
+       ような算数が壊れた表示になっていた（実測: e2e_work/w3_e2e3_log.txt）。
+       見出し行(min_r)自体の変更・原本の使用範囲より下の新規行の変更は、分子(データ行数)
+       には数えず、見出し行の変更だけ別語「＋見出し行」で添える。"""
     changed = _changed_cells(before, after)
     if not changed:
         return None
@@ -815,14 +825,22 @@ def count_reconciliation(before: dict, after: dict) -> str | None:
     rect = _used_range(before, sheet)
     if rect is None:
         return None
-    _min_r, _max_r, min_c, _max_c = rect
+    min_r, max_r, min_c, _max_c = rect
     key_col = col - 1 if col > min_c else col
     data_rows = _data_row_count(before, sheet, key_col)
-    changed_rows = len({r for _, r, _ in changed})
+    all_changed_rows = {r for _, r, _ in changed}
+    header_changed = min_r in all_changed_rows
+    # ★ 分子=データ行のみ: 見出し行(min_r)と、原本の使用範囲より下の新規行(> max_r)は
+    #   ここでは「データ行」として数えない（分母(data_rows)も同じ範囲の定義に揃える）。
+    data_changed_rows = {r for r in all_changed_rows if min_r < r <= max_r}
+    changed_rows = len(data_changed_rows)
     unchanged_rows = max(data_rows - changed_rows, 0)
     col_letter = get_column_letter(col)
-    return (f"列 {col_letter}: データ {data_rows} 行のうち {changed_rows} 行を変更"
-            f"（{unchanged_rows} 行は未変更）")
+    msg = (f"列 {col_letter}: データ {data_rows} 行のうち {changed_rows} 行を変更"
+           f"（{unchanged_rows} 行は未変更）")
+    if header_changed:
+        msg += "＋見出し行"
+    return msg
 
 
 # --- 依頼文言と変更範囲の重なりチェック（保守的・明示言及がある時だけ）--------
@@ -1557,7 +1575,9 @@ _CONFIRM_FIELDS = {
     "MERGE": (("範囲", "range", None),),
     "CHART": (("値列", "value_col", None),),
     "CENTER_ALIGN": (("対象", "target", None),),
-    "APPEND_TOTAL": (("対象列", "col", None), ("ラベル", "label", None), ("倍率", "factor", None)),
+    # ★ W8a 項目5: 表示ラベルのみ「倍率」→「率」（税率・掛け率の文脈での事務向け言い換え）。
+    #   内部キー("factor")・関数名・コメントは不変。
+    "APPEND_TOTAL": (("対象列", "col", None), ("ラベル", "label", None), ("率", "factor", None)),
 }
 
 
@@ -2606,17 +2626,41 @@ def doctor_checks(model: str = DEFAULT_MODEL) -> list:
     ]
 
 
+# ★ W8a 項目5: doctor の内部名（"ollama 到達 (URL)" 等）は operator（事務職）には
+#   意味が伝わらない。内部名は残したまま(技術者が追える)、事務向けの一行説明を併記する。
+#   prefix 一致（name には URL/モデル名など動的な値が混ざるため完全一致にしない）。
+#   ★ ダミー名（テストの "a"/"b" 等）はどれにも一致しないため従来どおり内部名のみ表示する。
+_DOCTOR_BUSINESS_NOTES = (
+    ("python 3.10+", "実行に必要なプログラム言語が使えます"),
+    ("openpyxl", "Excel ファイルを読み書きする部品が使えます"),
+    ("ollama 到達", "AI エンジン (ollama) に接続できています"),
+    ("モデル", "使う AI モデルの準備ができています"),
+    ("LibreOffice", "文書を開いて処理する土台があります"),
+    ("basrun.py", "文書に処理を適用する仕組みがあります"),
+    ("demo/", "動作確認用のサンプル文書があります"),
+)
+
+
+def _doctor_business_note(name: str) -> str | None:
+    for prefix, note in _DOCTOR_BUSINESS_NOTES:
+        if name.startswith(prefix):
+            return note
+    return None
+
+
 def format_doctor_report(results: list) -> tuple:
     """(表示テキスト, all_ok)。"""
     lines = []
     all_ok = True
     for name, ok, detail in results:
         mark = "✓" if ok else "×"
+        note = _doctor_business_note(name)
+        shown = f"{name}（{note}）" if note else name
         if ok:
-            line = f"{mark} {name}" + (f" ({detail})" if detail else "")
+            line = f"{mark} {shown}" + (f" ({detail})" if detail else "")
         else:
             all_ok = False
-            line = f"{mark} {name}" + (f" — {detail}" if detail else "")
+            line = f"{mark} {shown}" + (f" — {detail}" if detail else "")
         lines.append(line)
     return "\n".join(lines), all_ok
 
@@ -2635,13 +2679,18 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
                          error_detail: str | None = None) -> dict:
     """1 run の結果を history.jsonl の 1 行分の dict にする（純ロジック・テスト用に分離）。
        ★ M2a: error_detail は runtime_error 時の生エラー全文（端末には最終行だけ出す
-       ため、詳細を追いたい時の唯一の入り口になる）。"""
+       ため、詳細を追いたい時の唯一の入り口になる）。
+       ★ W8a 項目1: "dry" は --dry（見せるだけ・未適用）で走ったかどうか。result["dry"] を
+       そのまま bool 化する（result に無ければ False＝実適用と同じ扱い）。旧 history.jsonl
+       の行（このキーが無い）は read_history/format_history_table 側で dict.get("dry", False)
+       により実適用扱いのまま読める（後方互換・新旧を混在させても壊れない）。"""
     return {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "book": str(book),
         "task": task,
         "model": model,
         "ok": bool(result.get("ok")),
+        "dry": bool(result.get("dry")),
         "attempts": result.get("attempts", 0),
         "failure_kind": failure_kind,
         "error_detail": error_detail,
@@ -2684,7 +2733,10 @@ def read_history(path: Path | None = None, max_n: int = 10) -> list:
 
 
 def format_history_table(entries: list) -> str:
-    """人が読める表形式。履歴が無ければ「履歴はまだ無い」を返す。"""
+    """人が読める表形式。履歴が無ければ「履歴はまだ無い」を返す。
+       ★ W8a 項目1: dry(下見・未適用)の行は末尾に「(下見)」を付けて実適用と区別する
+       （「dry-run」は事務の言葉ではないため表示には出さない）。dict にキーが無い旧行は
+       dict.get("dry", False) で実適用扱いのまま読める（後方互換）。"""
     if not entries:
         return "履歴はまだ無い"
     header = f"{'日時':<20} {'結果':<4} {'試行':<4} {'モデル':<20} {'文書':<20} タスク"
@@ -2697,6 +2749,8 @@ def format_history_table(entries: list) -> str:
         book = Path(str(e.get("book", ""))).name
         task = str(e.get("task", ""))
         line = f"{ts:<20} {mark:<4} {attempts:<4} {model:<20} {book:<20} {task}"
+        if e.get("dry", False):
+            line += "  (下見)"
         kind = e.get("failure_kind")
         if not e.get("ok") and kind not in (None, "none"):
             line += f"  [{kind}]"
@@ -2762,6 +2816,8 @@ def cmd_run(a: argparse.Namespace) -> int:
        翻訳より前に一度だけ行う（『三層全部が同じ見出し推定を使う』ための土台。
        translate_task 自身の接地(book_meta)も検出した見出し行を使う）。
        --dry は従来どおり LibreOffice に触れない（見出しは物理1行目のまま・E2E 対象外）。
+       ★ W8a 項目3: --header-row N（1起点）が指定されていれば StructDump 検出を丸ごと
+       スキップしてその行を採用する（CLARIFY の行き止まりから抜ける唯一の入り口）。
        ① 見出し行推定（StructDump） → 自信不足なら CLARIFY して exit 3
        ② 翻訳（計画）→
        - 計画が空/1段で CLARIFY → 質問して exit 3
@@ -2787,7 +2843,17 @@ def cmd_run(a: argparse.Namespace) -> int:
         struct_dump = build_struct_dump(source_book, workdir)
 
     sheets = build_book_meta(source_book).get("sheets", [])
-    header_rows, clarify_q = resolve_header_rows(struct_dump, sheets)
+    forced_header_row = getattr(a, "header_row", None)
+    if forced_header_row:
+        # ★ W8a 項目3: --header-row 指定時は検出(StructDump ヒューリスティクス)を丸ごと
+        #   スキップし、その行を1枚目シートの見出しとして採用する（他シートは既定1行目のまま
+        #   ＝ resolve_header_rows の既定と同じ扱い）。CLARIFY には絶対に落ちない。
+        header_rows = {s: 1 for s in sheets}
+        if sheets:
+            header_rows[sheets[0]] = forced_header_row
+        clarify_q = None
+    else:
+        header_rows, clarify_q = resolve_header_rows(struct_dump, sheets)
     if clarify_q:
         print(f"？ {clarify_q}")
         return 3
@@ -2900,7 +2966,9 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
-    print(f"\n─ 生成した .bas（決定論・LLM不使用）───────────────")
+    # ★ W8a 項目5: 「決定論」はユーザー向け文字列から排除（内部の設計語彙のまま出すと
+    #   事務職には伝わらない）。内部名・コメント・関数名（codegen_dsl 等）は不変。
+    print(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────")
     print(code)
     print("──────────────────────────────────────────")
 
@@ -2986,6 +3054,69 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# ★ W8a 項目4: 率リテラルの機械スキャン（判断棚から昇格）
+#   自由生成(FREEFORM/OUT_OF_VOCAB・単段)された Basic コードに、依頼文にも用語集にも
+#   出典の無い『率らしい数値』（消費税8%のつもりの 0.08、税込計算の *1.1 等）が紛れて
+#   いないかを機械で見る。実測: 単段の自由生成では「8% 仮定」がノーチェックで
+#   「✓できました」を素通りしていた（勝手な税率仮定はモデルの幻覚と見分けがつかない）。
+#   ★ 保守的: コメント行(') は対象外・整数(小数点なし)は対象外。発火してもブロックはせず
+#   「検算してください」の助言止まり（no-op ガード等と違い、正しさの断定はしない）。
+# ---------------------------------------------------------------------------
+
+_BASIC_COMMENT_LINE_RE = re.compile(r"^\s*(?:'|REM\b)", re.I)
+_RATE_LITERAL_RE = re.compile(r"(?<![\w.])(\d+\.\d+)(?![\w.])")
+
+
+def _looks_like_rate(value: float) -> bool:
+    """0.05〜0.2（例: 消費税8%→0.08）または 1.05〜1.2（例: 税込計算の *1.1）の小数か。"""
+    return (0.05 <= value <= 0.2) or (1.05 <= value <= 1.2)
+
+
+def _rate_explained(value: float, task: str, vocab: dict) -> bool:
+    """率らしい数値が依頼文/用語集のどこかで説明されているか（保守的＝広めに許して
+       誤検知を避ける）。①コードの生の数字がそのまま依頼文にある ②%/％表記に換算した
+       値が依頼文にある ③用語集の登録値が同じ率を指す、のいずれか。"""
+    factor = value if value >= 1 else 1 + value
+    frac = value if value < 1 else value - 1
+    pct = frac * 100
+    if any(lit in task for lit in {f"{value:g}", f"{factor:g}", f"{frac:g}"} if lit):
+        return True
+    if any(f"{p}%" in task or f"{p}％" in task for p in {f"{pct:g}", f"{pct:.0f}"}):
+        return True
+    for v in vocab.values():
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if abs(fv - factor) < 1e-6:
+            return True
+    return False
+
+
+def scan_rate_literals(code: str, task: str, vocab: dict | None = None) -> list:
+    """生成 Basic コード中の『率らしい数値リテラル』のうち、依頼文にも用語集にも出典が
+       無いものを、検算を促す助言のリストにする（同じ数値は1回だけ報告）。"""
+    vocab = vocab or {}
+    seen: set = set()
+    out: list = []
+    for line in code.splitlines():
+        if _BASIC_COMMENT_LINE_RE.match(line):
+            continue
+        for m in _RATE_LITERAL_RE.finditer(line):
+            raw = m.group(1)
+            if raw in seen:
+                continue
+            value = float(raw)
+            if not _looks_like_rate(value):
+                continue
+            if _rate_explained(value, task, vocab):
+                continue
+            seen.add(raw)
+            out.append(f"★ 率らしい数値 ({raw}) が依頼に無いのに使われています — 検算してください")
+    return out
+
+
 def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> int:
     """自由生成経路（従来の cmd_run 本体そのまま。M2a の助言つき）。
        ① 翻訳が CLARIFY にも DSL 語彙にも決まらなかった（FREEFORM・翻訳失敗）ときに使う。
@@ -2999,7 +3130,9 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
     user = f"{desc}\n\nタスク:\n{a.task}\n\n`Sub Run(oDoc As Object)` を1つだけ書け。コードのみ。"
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
-    print(f"■ ailine（自由生成経路）  model={a.model}  book={book.name}")
+    # ★ W8a 項目5: 「自由生成経路」→「AI が直接作成（機械保証なし）」（operator の
+    #   検品リストの語彙翻訳。内部の変数名・関数名・コメントは不変）。
+    print(f"■ ailine（AI が直接作成・機械保証なし）  model={a.model}  book={book.name}")
     print(f"■ 参照ライブラリ: {refs_dir}  ({len(list(refs_dir.glob('*.bas'))) if refs_dir.is_dir() else 0} 例)")
     print(f"■ ヘルパ: {helpers_dir}  ({len(helper_files)} 本を同梱・Call で呼ばせる)")
 
@@ -3010,6 +3143,7 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
     apply_timeout = a.timeout if a.timeout else None   # 0 で無効化（旧挙動 = 無制限）
 
     before = None if a.dry else snapshot(source_book)
+    vocab = load_vocab()   # ★ W8a 項目4: 率リテラルスキャンが「用語集に説明があるか」を見る
 
     result = {"ok": False, "attempts": 0, "task": a.task, "model": a.model,
               "path": "freeform", "command": None, "postcondition": None}
@@ -3076,7 +3210,10 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
                       "設定した API が効いていない可能性がある。別の正しい方法で書き直して。コードのみ。"}]
             continue
 
-        print("\n✓ 適用され、文書が変化した。変更点:")
+        # ★ W8a 項目4: 単段の FREEFORM/OUT_OF_VOCAB は、成功しても『機械検証済み』の
+        #   ✓ ではなく複数段計画の語彙外段(format_plan_report)と同じ強度の正直な ⚠ 枠で
+        #   表示する（実測: 8% 仮定やラベル貼りが「✓できました」で素通りしていた）。
+        print("\n⚠ AI が直接作成した処理です（機械保証なし）— 確認してください。変更点:")
         for ln in lines:
             print(ln)
         # ★ 止血3: FREEFORM 経路は no-op ガード/advisories も snapshot() 頼みなので、
@@ -3085,6 +3222,8 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
         if notice:
             print(notice)
         advisories = build_advisories(a.task, before, after)
+        # ★ W8a 項目4: 率らしい数値リテラルの機械スキャン（判断棚から昇格）。
+        advisories = advisories + scan_rate_literals(code, a.task, vocab)
         for adv in advisories:
             print(adv)
         result["ok"] = True
@@ -3248,7 +3387,8 @@ def format_plan_report(items: list) -> list:
             if detail:
                 lines.append(f"{idx}. {label} → {mark} 機械検証できませんでした: {detail}")
             else:
-                lines.append(f"{idx}. {label} → {mark} 語彙外のため自由生成で実行（確認してください）")
+                # ★ W8a 項目5: 「自由生成」→「AI が直接作成（機械保証なし）」（operator の語彙翻訳）。
+                lines.append(f"{idx}. {label} → {mark} 語彙外のため AI が直接作成（機械保証なし）で実行（確認してください）")
         else:
             lines.append(f"{idx}. {label} → {mark} 未対応: {detail}")
     return lines
@@ -3265,7 +3405,9 @@ def overall_verdict(items: list) -> tuple:
     if "warn" in statuses:
         # ★ 止血1: warn の由来は2種類（語彙外の自由生成／DSL段の検証対象不足）ある
         #   ため、どちらにも当てはまる言い方にする。
-        return "⚠ 一部は確認が必要です（語彙外の自由生成、または検証対象不足の段があり、機械検証はしていません）", "warn"
+        # ★ W8a 項目5: 表示文言のみ「自由生成」→「AI が直接作成」（operator の語彙翻訳）。
+        return ("⚠ 一部は確認が必要です（語彙外で AI が直接作成した段、または検証対象不足の段があり、"
+                "機械検証はしていません）", "warn")
     return "✓ すべて機械検証済み", "ok"
 
 
@@ -3299,7 +3441,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
               "path": "plan", "command": None, "postcondition": None}
 
     if a.dry:
-        print("\n（--dry プレビュー・語彙外の段は実行時に自由生成で対応します。未実行）")
+        print("\n（--dry プレビュー・語彙外の段は実行時に AI が直接作成（機械保証なし）で対応します。未実行）")
         preview_items = []
         plan_json = []
         for i, step in enumerate(plan, 1):
@@ -3503,6 +3645,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "負数で無制限)")
     r.add_argument("--values", action="store_true",
                    help="COMPUTE_COLUMN を式でなく値ベタ書きにする（既定は式・W3 Part3）")
+    r.add_argument("--header-row", dest="header_row", type=int, default=None,
+                   help="見出し行を明示指定（1起点。指定時は自動検出をスキップしてこの行を採用）")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")
