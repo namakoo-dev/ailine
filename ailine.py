@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -63,6 +64,11 @@ HISTORY_DIR = Path.home() / ".ailine"
 HISTORY_FILE = HISTORY_DIR / "history.jsonl"
 BACKUP_DIR = HISTORY_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 10   # M2c: book ごとにこの世代数を超えたら古い順に削除する
+
+# ★ W8b 項目6: グローバル run ロック。基盤の LibreOffice(basrun 経由)が単一インスタンス
+#   (port 2002)前提のため、ブック単位でなく `ailine run` 全体で1本にする。
+RUN_LOCK_FILE = HISTORY_DIR / "run.lock"
+RUN_LOCK_STALE_SECONDS = 30 * 60   # 30分超のロックは stale とみなして奪取する
 
 # ★ A': 用語集（税率等の「現場の取り決め値」）。グローバルのみ・ブック別上書きは作らない
 #   （YAGNI・受信ファイル注入の予防。サイドカー自動読みは絶対にしない）。
@@ -2437,17 +2443,51 @@ def success_message(result: dict) -> str | None:
 #   restore は復元前の現状も退避してから上書きする＝復元自体も取り消せる。
 # ---------------------------------------------------------------------------
 
-_BACKUP_TS_RE = re.compile(r"^\d{8}T\d{6}Z$")
+# ★ W8b: 秒精度(旧・6桁)・マイクロ秒精度(新・12桁)・衝突回避の "-N" 連番つき、の
+#   いずれも受け付ける（後方互換）。
+_BACKUP_TS_RE = re.compile(r"^\d{8}T\d{6}(?:\d{6})?Z(?:-\d+)?$")
+_BACKUP_TS_SEQ_RE = re.compile(r"-(\d+)$")
 
 
 def _utc_ts() -> str:
-    """ファイル名に使える UTC タイムスタンプ（例: 20260814T120000Z）。"""
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    """ファイル名に使える UTC タイムスタンプ（例: 20260814T120000123456Z）。
+       ★ W8b: マイクロ秒まで含める（実測: それでも Windows の壁時計分解能は粗く
+       20万回の連続呼び出しで56通りしか値が変わらない。衝突自体は make_backup 側の
+       "-N" 連番フォールバックで最終的に防ぐ・ここは表示上の精度向上に留める）。"""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f") + "Z"
+
+
+def _ts_sort_key(ts: str):
+    """ts 文字列（秒/マイクロ秒精度・衝突回避の "-N" 連番つき）を新しい順ソート用の
+       比較可能な値 (datetime, 連番) にする。壊れた形式は最古扱い。"""
+    body = ts
+    seq = 0
+    m = _BACKUP_TS_SEQ_RE.search(body)
+    if m:
+        seq = int(m.group(1))
+        body = body[:m.start()]
+    if body.endswith("Z"):
+        body = body[:-1]
+    for fmt in ("%Y%m%dT%H%M%S%f", "%Y%m%dT%H%M%S"):
+        try:
+            return (datetime.strptime(body, fmt), seq)
+        except ValueError:
+            continue
+    return (datetime.min, seq)
+
+
+def _backup_namespace(book: Path) -> str:
+    """book が置かれているフォルダごとのバックアップ名前空間（sha1 の先頭8桁）。
+       ★ W8b 項目3: 同名ファイルが別フォルダにある場合（A\\見積.xlsx / B\\見積.xlsx）、
+       旧・フラットな BACKUP_DIR では stem+suffix だけで一致させていたため取り違え
+       （undo 混線）が起きえた。フォルダの絶対パスでハッシュ化した名前空間ディレクトリへ
+       分離する（book が相対パスで渡されても resolve() してから使う）。"""
+    return hashlib.sha1(str(Path(book).resolve().parent).encode("utf-8")).hexdigest()[:8]
 
 
 def backup_path_for(book: Path, ts: str | None = None) -> Path:
     ts = ts or _utc_ts()
-    return BACKUP_DIR / f"{book.stem}.{ts}{book.suffix}"
+    return BACKUP_DIR / _backup_namespace(book) / f"{book.stem}.{ts}{book.suffix}"
 
 
 def prune_backups(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> list:
@@ -2468,12 +2508,23 @@ def prune_backups(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> list:
 
 
 def make_backup(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> Path:
-    """book のバックアップを ~/.ailine/backups/ に作る。戻り値はバックアップ先。
+    """book のバックアップを ~/.ailine/backups/<名前空間>/ に作る。戻り値はバックアップ先。
        ★ 失敗したら例外を投げる（呼び出し側が --inplace 中止の判断に使う）。
        ★ M2c: 新しいバックアップを作った後、keep 世代を超えた古いものを剪定する
-       （既定 DEFAULT_KEEP_BACKUPS=10。無制限にすると個人開発機のディスクを静かに食う）。"""
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    dst = backup_path_for(book)
+       （既定 DEFAULT_KEEP_BACKUPS=10。無制限にすると個人開発機のディスクを静かに食う）。
+       ★ W8b 項目3: 新規のバックアップは必ず名前空間ディレクトリへ書く（フラット領域には
+       もう書かない・読み取り専用の後方互換は list_backups 側で担う）。
+       ★ W8b: Windows の壁時計分解能は実測で粗く（20万回の連続呼び出しで56通りしか
+       値が変わらない）、restore_backup が「復元前の現状」を退避する高速な連続呼び出し
+       等でファイル名が衝突しうる。衝突したら "-N" 連番を足して必ず別ファイルにする
+       （既存の世代を上書きで消さない・回帰テストで自己顕在化した実際の不具合の修正）。"""
+    ts = _utc_ts()
+    dst = backup_path_for(book, ts=ts)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    n = 2
+    while dst.exists():
+        dst = backup_path_for(book, ts=f"{ts}-{n}")
+        n += 1
     shutil.copy2(book, dst)
     prune_backups(book, keep=keep)
     return dst
@@ -2490,16 +2541,29 @@ def _parse_backup_name(name: str, stem: str, suffix: str) -> str | None:
 
 
 def list_backups(book: Path) -> list:
-    """book に対応するバックアップを新しい順(タイムスタンプ降順)で返す。"""
-    if not BACKUP_DIR.is_dir():
-        return []
+    """book に対応するバックアップを新しい順(タイムスタンプ降順)で返す。
+       ★ W8b 項目3: 名前空間ディレクトリ BACKUP_DIR/<ns>/ を主として見る。
+       旧フラット領域（BACKUP_DIR 直下・名前空間分離前の名残）も読み取り専用互換で
+       あわせて見る（新規はもう書かない・iterdir で拾うのはファイルだけ＝名前空間の
+       サブディレクトリ自体を誤ってバックアップと数えないよう is_file() で絞る）。"""
     stem, suffix = book.stem, book.suffix
     found = []
-    for p in BACKUP_DIR.iterdir():
-        ts = _parse_backup_name(p.name, stem, suffix)
-        if ts is not None:
-            found.append((ts, p))
-    found.sort(key=lambda pair: pair[0], reverse=True)   # ts は辞書順=時刻順
+    ns_dir = BACKUP_DIR / _backup_namespace(book)
+    if ns_dir.is_dir():
+        for p in ns_dir.iterdir():
+            ts = _parse_backup_name(p.name, stem, suffix)
+            if ts is not None:
+                found.append((ts, p))
+    if BACKUP_DIR.is_dir():
+        for p in BACKUP_DIR.iterdir():
+            if not p.is_file():
+                continue
+            ts = _parse_backup_name(p.name, stem, suffix)
+            if ts is not None:
+                found.append((ts, p))
+    # ★ W8b: 秒精度(旧)とマイクロ秒精度(新)が混在しうるため、生文字列の辞書順ではなく
+    #   _ts_sort_key() でパースした実時刻順に並べる（桁数違いの文字列比較は時刻順にならない）。
+    found.sort(key=lambda pair: _ts_sort_key(pair[0]), reverse=True)
     return [p for _ts, p in found]
 
 
@@ -2535,6 +2599,302 @@ def cmd_restore(a: argparse.Namespace) -> int:
         return 1
     print(f"✓ {book.name} を {used.name} から復元した")
     return 0
+
+
+def cmd_undo(a: argparse.Namespace) -> int:
+    """★ W8b 項目5: `restore` の昇格。真実の源はバックアップファイル自体
+       （history.jsonl には依存しない＝history が壊れていても undo できる）。
+       名前空間対応(item3)は list_backups/restore_backup 経由でそのまま効く。
+       復元後、まだ戻せる回数（＝現時点で使えるバックアップの総数）を添える。"""
+    book = Path(a.book).resolve()
+    if a.list:
+        backups = list_backups(book)
+        if not backups:
+            print(f"{book.name} のバックアップは無い")
+            return 0
+        print(f"{book.name} のバックアップ（{len(backups)} 世代・新しい順）:")
+        for p in backups:
+            print(p.name)
+        return 0
+    try:
+        used = restore_backup(book)
+    except FileNotFoundError as e:
+        print(f"× {e}")
+        return 1
+    remaining = len(list_backups(book))
+    print(f"✓ {book.name} を {used.name} から復元した（あと {remaining} 回戻せます）")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# ★ W8b: 安全器官（既定の反転は次コミット。今回は原本を直接書く危険を減らす下ごしらえ）
+# ---------------------------------------------------------------------------
+
+def check_excel_lock(book: Path) -> str | None:
+    """book が Excel 等で開かれている兆候を機械的に見る。開かれていそうなら理由の
+       文字列（人間可読）、そうでなければ None。
+       ★ W8b 項目2: ①同フォルダの Excel ロックファイル(~$<name>) の存在
+       ②open(book, 'r+b') を試みて PermissionError になるか、の2つを見る（保守的
+       ＝どちらかに該当したら『開かれている可能性』として止める。誤検知より、
+       書き込み中の文書を壊さない方を優先する）。run の最初（LO 起動・翻訳より前）
+       に呼ぶ（--copy 時も含め常に同じ判定にする＝整合性の観点で経路を分けない）。"""
+    lock_file = book.parent / f"~${book.name}"
+    if lock_file.exists():
+        return f"ロックファイル {lock_file.name} が存在します"
+    try:
+        with open(book, "r+b"):
+            pass
+    except PermissionError:
+        return "書き込みロックされています（他のアプリが開いている可能性）"
+    except OSError:
+        return None   # その他の I/O エラーはここでは判定しない（保守的・誤検知回避）
+    return None
+
+
+# --- ★ W8b 項目1: 往復忠実度ゲート -------------------------------------------
+#   normalize_book の LO 往復『だけ』で失われる飾り（原本にはあり、正規化後には無い）を
+#   検出する。マクロの効果とは無関係（normalize は何もしない空マクロで一度 LO を通す
+#   だけの工程）。喪失ゼロなら無言（体験は不変）。喪失があれば --inplace の直前で
+#   申告し、--accept-loss / --copy のどちらかを選ばせる（exit 4）。
+
+_FIDELITY_RELS_RE = re.compile(r"^xl/worksheets/_rels/.*\.rels$", re.I)
+
+
+def _fidelity_zip_members(path: Path) -> set:
+    try:
+        with zipfile.ZipFile(path) as z:
+            return {n.lower() for n in z.namelist()}
+    except Exception:
+        return set()
+
+
+def _classify_fidelity_member(name: str) -> str | None:
+    """xlsx zip 内の1エントリが『LO 往復で失われがちな飾り』のどのカテゴリか。
+       対象外（本文と無関係な構造ファイル等）なら None。"""
+    if name.startswith("xl/pivotcache") or name.startswith("xl/pivottables/"):
+        return "ピボットテーブル"
+    if name.startswith("xl/drawings/"):
+        return "図形/描画"
+    if name.startswith("xl/media/"):
+        return "画像"
+    if name == "xl/vbaproject.bin":
+        return "VBA マクロ"
+    if _FIDELITY_RELS_RE.match(name):
+        return "リンク情報(_rels)"
+    return None
+
+
+def check_zip_fidelity_loss(original: Path, normalized: Path) -> list:
+    """(a) original の zip 構成要素のうち normalized で消えたものをカテゴリ別に集計する。
+       戻り値: [(カテゴリ, 消えた件数), ...]（件数0のカテゴリは含めない・カテゴリ名順）。
+       ★ zip として読めない（xlsx でない・壊れている）場合は空リスト（保守的・誤検知しない）。"""
+    before = _fidelity_zip_members(original)
+    if not before:
+        return []
+    after = _fidelity_zip_members(normalized)
+    lost = before - after
+    counts: dict = {}
+    for name in lost:
+        cat = _classify_fidelity_member(name)
+        if cat:
+            counts[cat] = counts.get(cat, 0) + 1
+    return sorted(counts.items())
+
+
+def _count_cf_and_dv(wb) -> tuple:
+    """ブック全体の(条件付き書式の件数, 入力規則の件数)を合計する。"""
+    cf_total = 0
+    dv_total = 0
+    for name in wb.sheetnames:
+        ws = wb[name]
+        cf = getattr(ws, "conditional_formatting", None)
+        if cf is not None:
+            cf_total += sum(1 for _ in cf)
+        dv = getattr(ws, "data_validations", None)
+        if dv is not None:
+            dv_total += len(dv.dataValidation)
+    return cf_total, dv_total
+
+
+def check_openpyxl_fidelity_loss(original: Path, normalized: Path) -> list:
+    """(b) openpyxl で条件付き書式/入力規則の件数が正規化後に減っていないかを見る。
+       戻り値: [(カテゴリ, before件数, after件数), ...]（減っていないカテゴリは含めない）。
+       ★ どちらか一方でも開けない場合は空リスト（保守的・誤検知しない）。"""
+    try:
+        wb_b = openpyxl.load_workbook(original)
+        cf_b, dv_b = _count_cf_and_dv(wb_b)
+        wb_b.close()
+        wb_a = openpyxl.load_workbook(normalized)
+        cf_a, dv_a = _count_cf_and_dv(wb_a)
+        wb_a.close()
+    except Exception:
+        return []
+    out = []
+    if cf_a < cf_b:
+        out.append(("条件付き書式", cf_b, cf_a))
+    if dv_a < dv_b:
+        out.append(("入力規則", dv_b, dv_a))
+    return out
+
+
+def check_round_trip_fidelity(original: Path, normalized: Path) -> dict:
+    """往復忠実度ゲート本体。{"lost": bool, "items": [{"label":str,"count":int}, ...]}。
+       ★ history.jsonl の fidelity フィールドにそのまま記録する形（機械可読）。"""
+    items = []
+    for cat, n in check_zip_fidelity_loss(original, normalized):
+        items.append({"label": cat, "count": n})
+    for cat, b, a in check_openpyxl_fidelity_loss(original, normalized):
+        items.append({"label": cat, "count": b - a, "before": b, "after": a})
+    return {"lost": bool(items), "items": items}
+
+
+def format_fidelity_warning(fidelity: dict) -> str:
+    """人間可読の申告文（例:「⚠ このファイルには、処理すると失われる飾りがあります
+       （条件付き書式 3 件・図形/描画 1 件）」）。"""
+    parts = "・".join(f"{it['label']} {it['count']} 件" for it in fidelity.get("items", []))
+    return f"⚠ このファイルには、処理すると失われる飾りがあります（{parts}）"
+
+
+# --- ★ W8b 項目4: アトミック置換（--inplace の torn-write 窓の根治） --------------
+
+def atomic_replace_inplace(book: Path, out_book: Path, workdir: Path,
+                            keep_backups: int = DEFAULT_KEEP_BACKUPS) -> tuple:
+    """--inplace の実体。(ok: bool, error_message: str|None)。ok=False の場合、
+       out_book はそのまま残り、原本(book)は無変更（呼び出し側が『--inplace は中止』
+       として表示する）。
+       ★ 手順: ①バックアップ（失敗したら即中止・原本は触らない）
+       ②原本と同じボリューム上の staging(workdir/staged<suffix>)へコピー
+       ③os.replace(staging, book) で原子的に置換（POSIX rename(2)/Windows
+       MoveFileEx の原子性保証＝torn write の窓が無い。同一ボリュームである
+       ことは staging を book と同じ親フォルダ配下(workdir)に置くことで保証する）。
+       os.replace が失敗したら（バックアップは既に確保済みの上で）shutil.copy2
+       へフォールバックし、その旨を1行表示する。成功時は out_book を削除する
+       （原本に反映済みの内容と同じものを残しておく理由が無い＝旧 shutil.move
+       と同じ最終状態）。"""
+    try:
+        make_backup(book, keep=keep_backups)
+    except Exception as e:
+        return False, f"バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}"
+
+    staging = workdir / f"staged{book.suffix}"
+    try:
+        shutil.copy2(out_book, staging)
+        os.replace(staging, book)
+    except OSError as e:
+        try:
+            shutil.copy2(out_book, book)
+        except OSError as e2:
+            return False, f"置換に失敗した（バックアップは確保済み）: {e2}"
+        print(f"⚠ 原子的な置換に失敗したため copy2 へフォールバックした（バックアップは確保済み）: {e}")
+    finally:
+        if staging.exists():
+            try:
+                staging.unlink()
+            except OSError:
+                pass
+
+    try:
+        if out_book.exists() and out_book != book:
+            out_book.unlink()
+    except OSError:
+        pass
+    return True, None
+
+
+# --- ★ W8b 項目6: グローバル run ロック --------------------------------------
+
+def _pid_alive(pid: int) -> bool:
+    """PID が生きているか（確実な保証は無いが十分・追加の依存(psutil 等)は増やさない）。
+       判定できない場合は「生きている」扱い（安全側＝奪取しない）。"""
+    if os.name == "nt":
+        try:
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace")
+            return str(pid) in out.stdout
+        except Exception:
+            return True
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True
+
+
+def _read_lock_info(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _lock_is_stale(info: dict | None) -> bool:
+    """既存ロックが奪取してよい(stale)か。①壊れた/読めないロック ②pid が自分自身
+       （同一プロセス内の前回呼び出しが解放し損ねた・テスト等で頻出）
+       ③pid が既に存在しない ④30分超、のいずれか。"""
+    if info is None:
+        return True
+    pid = info.get("pid")
+    if not isinstance(pid, int):
+        return True
+    if pid == os.getpid():
+        return True
+    if not _pid_alive(pid):
+        return True
+    try:
+        ts = datetime.fromisoformat(info.get("ts", ""))
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        if age > RUN_LOCK_STALE_SECONDS:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def acquire_run_lock(path: Path | None = None) -> tuple:
+    """(acquired: bool, message: str|None)。O_EXCL でグローバル実行ロックを取る。
+       ★ W8b 項目6: 基盤の LibreOffice は単一インスタンス(port 2002)前提のため、
+       ブック単位でなく ailine run 全体で1本にする。stale（pid が既に無い/自分自身/
+       30分超）なら奪取して新規取得する。"""
+    p = path or RUN_LOCK_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    info = {"pid": os.getpid(), "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+    def _try_create() -> bool:
+        try:
+            fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return False
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(info))
+        return True
+
+    if _try_create():
+        return True, None
+
+    existing = _read_lock_info(p)
+    if not _lock_is_stale(existing):
+        pid = existing.get("pid") if existing else "?"
+        ts = existing.get("ts") if existing else "?"
+        return False, f"別の ailine が実行中です（pid={pid}・{ts}）"
+
+    try:
+        p.unlink()
+    except OSError:
+        pass
+    if _try_create():
+        return True, None
+    return False, "別の ailine が実行中です（ロック取得の競合）"
+
+
+def release_run_lock(path: Path | None = None) -> None:
+    p = path or RUN_LOCK_FILE
+    try:
+        p.unlink()
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -2683,7 +3043,10 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
        ★ W8a 項目1: "dry" は --dry（見せるだけ・未適用）で走ったかどうか。result["dry"] を
        そのまま bool 化する（result に無ければ False＝実適用と同じ扱い）。旧 history.jsonl
        の行（このキーが無い）は read_history/format_history_table 側で dict.get("dry", False)
-       により実適用扱いのまま読める（後方互換・新旧を混在させても壊れない）。"""
+       により実適用扱いのまま読める（後方互換・新旧を混在させても壊れない）。
+       ★ W8b 項目1: "fidelity" は往復忠実度ゲートの検出結果（--inplace が要求され、
+       かつ --dry でない run でのみ実際に計算される）。ゲートを走らせなかった run は
+       None のまま（既存キーと同じ形＝無ければ None）。"""
     return {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "book": str(book),
@@ -2703,6 +3066,7 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         "postcondition": result.get("postcondition"),
         # ★ A': 用語集/依頼文から機械確定した値（APPEND_TOTAL の倍率等）の出典。無ければ None。
         "provenance": result.get("provenance"),
+        "fidelity": result.get("fidelity"),
     }
 
 
@@ -2796,6 +3160,10 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
        ★ DSL 経路(path="dsl")・複合計画経路(path="plan")は達成/総合判定の行を既に自分で
        出しているので、success_message() の『正しいかは差分を見て判断』（自由生成向けの
        注意書き）はここでは出さない。"""
+    # ★ W8b 項目1: 往復忠実度ゲートの検出結果（cmd_run 側で計算済みなら a._fidelity に
+    #   乗っている）を history に写す。ゲートを走らせなかった run は None のまま。
+    if "fidelity" not in result:
+        result["fidelity"] = getattr(a, "_fidelity", None)
     if a.json:
         print("\n" + json.dumps(result, ensure_ascii=False))
     if result.get("path") not in ("dsl", "plan"):
@@ -2812,12 +3180,32 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
 
 
 def cmd_run(a: argparse.Namespace) -> int:
-    """run コマンドの入口。★ W3: 正規化パス(＋StructDump による見出し行推定)を
+    """run コマンドの入口。★ W8b 項目6: 実処理(_cmd_run_body)の前後をグローバル run
+       ロックで挟む（基盤の LibreOffice が単一インスタンス前提のため、ブック単位でなく
+       ailine run 全体で1本）。取得できなければ即 exit 6（LO 起動・翻訳より前）。
+       finally で確実に解放する（sys.exit も SystemExit 例外なので finally は通る）。"""
+    acquired, msg = acquire_run_lock()
+    if not acquired:
+        print(f"× {msg}")
+        return 6
+    try:
+        return _cmd_run_body(a)
+    finally:
+        release_run_lock()
+
+
+def _cmd_run_body(a: argparse.Namespace) -> int:
+    """run コマンドの本体。★ W3: 正規化パス(＋StructDump による見出し行推定)を
        翻訳より前に一度だけ行う（『三層全部が同じ見出し推定を使う』ための土台。
        translate_task 自身の接地(book_meta)も検出した見出し行を使う）。
        --dry は従来どおり LibreOffice に触れない（見出しは物理1行目のまま・E2E 対象外）。
        ★ W8a 項目3: --header-row N（1起点）が指定されていれば StructDump 検出を丸ごと
        スキップしてその行を採用する（CLARIFY の行き止まりから抜ける唯一の入り口）。
+       ★ W8b 項目2: Excel ロック検出は LO 起動・翻訳より前（一番最初）に行う。
+       ★ W8b 項目1: --inplace が要求され --dry でない場合だけ、正規化直後に往復忠実度
+       ゲートを見る（原本にまだ一切触れていない段階＝『原本に触る前に申告と選択』）。
+       ★ W8b 項目4: 自分の workdir(.ailine_<stem>/) は run の終了時に必ず掃除する
+       （成功・失敗とも・GC の作り込みはしない＝自分の後始末だけ）。
        ① 見出し行推定（StructDump） → 自信不足なら CLARIFY して exit 3
        ② 翻訳（計画）→
        - 計画が空/1段で CLARIFY → 質問して exit 3
@@ -2830,8 +3218,20 @@ def cmd_run(a: argparse.Namespace) -> int:
     if not book.exists():
         sys.exit(f"文書が無い: {book}")
 
+    lock_reason = check_excel_lock(book)
+    if lock_reason:
+        print(f"× Excel で開かれています。閉じてから実行してください。（{lock_reason}）")
+        return 5
+
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
+    try:
+        return _cmd_run_dispatch(a, book, workdir)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
     apply_timeout = a.timeout if a.timeout else None   # 0 で無効化（旧挙動 = 無制限）
 
     source_book = book
@@ -2841,6 +3241,24 @@ def cmd_run(a: argparse.Namespace) -> int:
         source_book = normalize_book(book, workdir, timeout=apply_timeout)
         progress_end(t0)
         struct_dump = build_struct_dump(source_book, workdir)
+
+        # ★ W8b 項目1: --inplace が要求されている時だけ、原本にまだ触れていないこの
+        #   時点で往復忠実度を見る（喪失ゼロなら無言・体験は不変）。
+        if a.inplace:
+            fidelity = check_round_trip_fidelity(book, source_book)
+            a._fidelity = fidelity
+            if fidelity["lost"]:
+                print(format_fidelity_warning(fidelity))
+                if getattr(a, "copy", False):
+                    print("→ --copy 指定のため .out へ切り替えて続行します（原本は無変更）")
+                    a.inplace = False
+                elif getattr(a, "accept_loss", False):
+                    print("→ --accept-loss 指定のため続行します（失われても ailine undo で元に戻せます）")
+                else:
+                    print("この処理を続けるには、以下のいずれかを指定して再実行してください:")
+                    print("  --accept-loss  失われてよい（バックアップから ailine undo で復元可能）")
+                    print("  --copy         原本には触らず .out に結果を作る（原本は無変更）")
+                    return 4
 
     sheets = build_book_meta(source_book).get("sheets", [])
     forced_header_row = getattr(a, "header_row", None)
@@ -3035,16 +3453,16 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         result["ok"] = True
 
     if a.inplace:
-        try:
-            make_backup(book, keep=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
-        except Exception as e:
-            print(f"× バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}")
+        # ★ W8b 項目4: バックアップ+原子的置換(os.replace)は atomic_replace_inplace に集約。
+        ok_ip, err_ip = atomic_replace_inplace(
+            book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
+        if not ok_ip:
+            print(f"× {err_ip}")
             print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
             result["out"] = str(out_book)
         else:
-            shutil.move(out_book, book)
             print(f"\n適用先: {book.name}（--inplace で上書き）")
-            print(f"復元: ailine restore {book.name}")
+            print(f"復元: ailine undo {book.name}")
             result["out"] = str(book)
     else:
         print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
@@ -3231,17 +3649,16 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
         result["advisories"] = advisories
         failure_kind = "none"
         if a.inplace:
-            try:
-                make_backup(book, keep=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
-            except Exception as e:
-                # ★ M2a: バックアップ失敗時は --inplace を中止する（安全側・原本は無変更）。
-                print(f"× バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}")
+            # ★ W8b 項目4: バックアップ+原子的置換(os.replace)は atomic_replace_inplace に集約。
+            ok_ip, err_ip = atomic_replace_inplace(
+                book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
+            if not ok_ip:
+                print(f"× {err_ip}")
                 print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
                 result["out"] = str(out_book)
             else:
-                shutil.move(out_book, book)
                 print(f"\n適用先: {book.name}（--inplace で上書き）")
-                print(f"復元: ailine restore {book.name}")
+                print(f"復元: ailine undo {book.name}")
                 result["out"] = str(book)
         else:
             print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
@@ -3596,16 +4013,16 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
     result["ok"] = True
     if a.inplace:
-        try:
-            make_backup(book, keep=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
-        except Exception as e:
-            print(f"\n× バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}")
+        # ★ W8b 項目4: バックアップ+原子的置換(os.replace)は atomic_replace_inplace に集約。
+        ok_ip, err_ip = atomic_replace_inplace(
+            book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
+        if not ok_ip:
+            print(f"\n× {err_ip}")
             print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
             result["out"] = str(out_book)
         else:
-            shutil.move(out_book, book)
             print(f"\n適用先: {book.name}（--inplace で上書き）")
-            print(f"復元: ailine restore {book.name}")
+            print(f"復元: ailine undo {book.name}")
             result["out"] = str(book)
     else:
         print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
@@ -3647,6 +4064,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="COMPUTE_COLUMN を式でなく値ベタ書きにする（既定は式・W3 Part3）")
     r.add_argument("--header-row", dest="header_row", type=int, default=None,
                    help="見出し行を明示指定（1起点。指定時は自動検出をスキップしてこの行を採用）")
+    r.add_argument("--accept-loss", dest="accept_loss", action="store_true",
+                   help="往復忠実度ゲートが検出した喪失を承知の上で --inplace を続行する"
+                        "（ailine undo で戻せる）")
+    r.add_argument("--copy", action="store_true",
+                   help="往復忠実度ゲート発動時、--inplace をあきらめて .out に結果を作る"
+                        "（原本は無変更）")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")
@@ -3660,10 +4083,15 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--max", type=int, default=10, help="表示件数（既定 10、新しい順）")
     h.set_defaults(func=cmd_history)
 
-    rs = sub.add_parser("restore", help="--inplace のバックアップから復元する")
+    rs = sub.add_parser("restore", help="--inplace のバックアップから復元する（ailine undo と同じ）")
     rs.add_argument("book", help="対象の文書 (.xlsx / .ods)")
     rs.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
     rs.set_defaults(func=cmd_restore)
+
+    u = sub.add_parser("undo", help="--inplace のバックアップから復元する（あと何回戻せるかを表示）")
+    u.add_argument("book", help="対象の文書 (.xlsx / .ods)")
+    u.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
+    u.set_defaults(func=cmd_undo)
 
     v = sub.add_parser("vocab", help="用語集（税率等の取り決め値）を編集・表示する")
     vsub = v.add_subparsers(dest="vocab_cmd", required=True)

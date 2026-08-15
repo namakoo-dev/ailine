@@ -3,6 +3,7 @@
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -1186,13 +1187,36 @@ def test_cmd_run_dsl_dry_banner_says_rule_conversion_not_deterministic(tmp_path,
 # --- ★ M2a: --inplace バックアップ + restore --------------------------------
 
 def test_utc_ts_format():
+    # ★ W8b: マイクロ秒まで含む（秒精度だけの同名衝突を避けるための拡張・後方互換は
+    #   _BACKUP_TS_RE/_ts_sort_key が旧6桁形式も受け付けることで担保）。
     import re as _re
-    assert _re.match(r"^\d{8}T\d{6}Z$", ailine._utc_ts())
+    assert _re.match(r"^\d{8}T\d{12}Z$", ailine._utc_ts())
+
+def test_ts_sort_key_orders_old_and_new_format_correctly():
+    # 旧(秒精度)・新(マイクロ秒精度)が混在しても実時刻順に並ぶこと。
+    old = "20260101T120000Z"
+    new_earlier = "20260101T115959500000Z"
+    new_later = "20260101T120000500000Z"
+    keys = sorted([old, new_earlier, new_later], key=ailine._ts_sort_key)
+    assert keys == [new_earlier, old, new_later]
+
+def test_ts_sort_key_broken_format_sorts_as_oldest():
+    assert ailine._ts_sort_key("not-a-timestamp") == (ailine.datetime.min, 0)
+
+def test_ts_sort_key_seq_suffix_breaks_ties_within_same_timestamp():
+    # ★ W8b: make_backup の "-N" 衝突回避連番は、同一 ts 内でも新しい順に並ぶこと。
+    base = "20260101T120000000000Z"
+    keys = sorted([f"{base}-2", base, f"{base}-3"], key=ailine._ts_sort_key)
+    assert keys == [base, f"{base}-2", f"{base}-3"]
 
 def test_backup_path_for_uses_stem_ts_suffix(tmp_path, monkeypatch):
+    # ★ W8b 項目3: バックアップは book の親フォルダごとの名前空間ディレクトリの下に置く
+    #   （同名ファイルが別フォルダにあっても取り違えない・undo 混線の根治）。
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
-    p = ailine.backup_path_for(Path("demo/sample.xlsx"), ts="20260814T120000Z")
-    assert p == tmp_path / "backups" / "sample.20260814T120000Z.xlsx"
+    book = Path("demo/sample.xlsx")
+    ns = ailine._backup_namespace(book)
+    p = ailine.backup_path_for(book, ts="20260814T120000Z")
+    assert p == tmp_path / "backups" / ns / "sample.20260814T120000Z.xlsx"
 
 def test_make_backup_copies_content(tmp_path, monkeypatch):
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
@@ -1201,7 +1225,8 @@ def test_make_backup_copies_content(tmp_path, monkeypatch):
     dst = ailine.make_backup(book)
     assert dst.exists()
     assert dst.read_bytes() == b"HELLO"
-    assert dst.parent == tmp_path / "backups"
+    # ★ W8b 項目3: 新規バックアップは名前空間ディレクトリの下（フラット直下ではない）。
+    assert dst.parent == tmp_path / "backups" / ailine._backup_namespace(book)
 
 def test_list_backups_sorted_newest_first_and_filters_by_stem_suffix(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
@@ -1240,6 +1265,102 @@ def test_restore_backup_raises_when_none_exist(tmp_path, monkeypatch):
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     with pytest.raises(FileNotFoundError):
         ailine.restore_backup(tmp_path / "book.xlsx")
+
+
+# --- ★ W8b 項目3: バックアップの名前空間化（同名別フォルダの undo 混線の根治） ------
+
+def test_backup_namespace_differs_by_parent_folder(tmp_path):
+    a = tmp_path / "A" / "見積.xlsx"
+    b = tmp_path / "B" / "見積.xlsx"
+    assert ailine._backup_namespace(a) != ailine._backup_namespace(b)
+
+def test_backup_namespace_stable_for_same_folder(tmp_path):
+    p1 = tmp_path / "見積.xlsx"
+    p2 = tmp_path / "見積.xlsx"
+    assert ailine._backup_namespace(p1) == ailine._backup_namespace(p2)
+
+def test_backup_and_restore_two_same_named_files_in_different_folders_do_not_cross(tmp_path, monkeypatch):
+    # ★ 回帰テスト（architect 指摘）: A\見積.xlsx と B\見積.xlsx を交互に backup→restore
+    #   しても混線しない（名前空間分離前は同名+フラット領域のため取り違えが起きえた）。
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    dir_a = tmp_path / "A"; dir_a.mkdir()
+    dir_b = tmp_path / "B"; dir_b.mkdir()
+    book_a = dir_a / "見積.xlsx"
+    book_b = dir_b / "見積.xlsx"
+    book_a.write_bytes(b"A-ORIGINAL")
+    book_b.write_bytes(b"B-ORIGINAL")
+
+    ailine.make_backup(book_a)
+    ailine.make_backup(book_b)
+    book_a.write_bytes(b"A-EDITED")
+    book_b.write_bytes(b"B-EDITED")
+
+    ailine.restore_backup(book_a)
+    ailine.restore_backup(book_b)
+
+    assert book_a.read_bytes() == b"A-ORIGINAL"
+    assert book_b.read_bytes() == b"B-ORIGINAL"
+    # A のバックアップ一覧に B の内容(B-ORIGINAL 等)が紛れ込んでいないこと
+    a_contents = {p.read_bytes() for p in ailine.list_backups(book_a)}
+    assert b"B-ORIGINAL" not in a_contents and b"B-EDITED" not in a_contents
+
+def test_list_backups_reads_legacy_flat_area_read_only(tmp_path, monkeypatch):
+    # ★ 旧フラット領域（名前空間分離前の名残）は読み取りのみ互換。
+    backups = tmp_path / "backups"
+    backups.mkdir(parents=True)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    (backups / "legacy.20200101T000000Z.xlsx").write_bytes(b"old-flat")
+    book = tmp_path / "legacy.xlsx"
+    found = ailine.list_backups(book)
+    assert [p.name for p in found] == ["legacy.20200101T000000Z.xlsx"]
+
+def test_make_backup_never_writes_to_legacy_flat_area(tmp_path, monkeypatch):
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"x")
+    ailine.make_backup(book)
+    flat_files = [p for p in backups.iterdir() if p.is_file()] if backups.is_dir() else []
+    assert flat_files == []   # 新規バックアップは名前空間ディレクトリの下だけ
+
+
+# --- ★ W8b 項目5: ailine undo（restore の昇格） --------------------------------
+
+def test_cmd_undo_restores_and_shows_remaining_count(tmp_path, monkeypatch, capsys):
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"CURRENT")
+    ailine.make_backup(book)   # 1世代目
+    book.write_bytes(b"EDITED")
+
+    rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert book.read_bytes() == b"CURRENT"
+    assert "あと" in captured.out and "回戻せます" in captured.out
+
+def test_cmd_undo_list_shows_backups_without_restoring(tmp_path, monkeypatch, capsys):
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"CURRENT")
+    ailine.make_backup(book)
+    rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=True))
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert book.read_bytes() == b"CURRENT"   # --list は復元しない
+    assert "世代" in captured.out
+
+def test_cmd_undo_fails_honestly_when_no_backup(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"x")
+    rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "×" in captured.out
+
 
 # --- ★ M2c: バックアップのプルーニング -----------------------------------------
 
@@ -1299,6 +1420,511 @@ def test_cmd_restore_list_shows_generation_count(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert rc == 0
     assert "2 世代" in captured.out
+
+
+# ===========================================================================
+# ★ W8b 項目2: Excel ロックの事前検出
+# ===========================================================================
+
+def test_check_excel_lock_none_when_free(tmp_path):
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"x")
+    assert ailine.check_excel_lock(book) is None
+
+def test_check_excel_lock_detects_tilde_dollar_lock_file(tmp_path):
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"x")
+    (tmp_path / "~$book.xlsx").write_bytes(b"lock")
+    reason = ailine.check_excel_lock(book)
+    assert reason is not None
+    assert "ロックファイル" in reason
+
+def test_check_excel_lock_detects_exclusively_opened_file(tmp_path):
+    # ★ 実際の Excel の排他 open を模す。Python の open() 二重呼び出しは Windows
+    #   既定の共有モードでは失敗しないため、CreateFileW を dwShareMode=0 で直接呼ぶ
+    #   （Excel 相当の排他アクセス）。
+    import ctypes
+    from ctypes import wintypes
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"x")
+    GENERIC_READ = 0x80000000
+    GENERIC_WRITE = 0x40000000
+    OPEN_EXISTING = 3
+    CreateFileW = ctypes.windll.kernel32.CreateFileW
+    CreateFileW.restype = wintypes.HANDLE
+    CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                             wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    handle = CreateFileW(str(book), GENERIC_READ | GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None)
+    assert handle not in (0, -1)
+    try:
+        reason = ailine.check_excel_lock(book)
+        assert reason is not None
+        assert "ロック" in reason
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+def test_cmd_run_exits_5_when_excel_lock_detected(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["商品", "金額"], ["a", 1]])
+    (tmp_path / f"~${book.name}").write_bytes(b"lock")
+    called = {"n": 0}
+    def boom(*a, **k):
+        called["n"] += 1
+        return {"op": "FREEFORM", "args": {}}
+    monkeypatch.setattr(ailine, "translate_task", boom)
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 5
+    assert "Excel で開かれています" in captured.out
+    assert called["n"] == 0   # LO 起動・翻訳より前に止まっている
+
+
+# ===========================================================================
+# ★ W8b 項目1: 往復忠実度ゲート
+# ===========================================================================
+
+def _make_fake_zip(tmp_path, name, members):
+    import zipfile as _zf
+    p = tmp_path / name
+    with _zf.ZipFile(p, "w") as z:
+        for m in members:
+            z.writestr(m, b"x")
+    return p
+
+def test_check_zip_fidelity_loss_detects_categories(tmp_path):
+    original = _make_fake_zip(tmp_path, "orig.xlsx", [
+        "xl/workbook.xml", "xl/worksheets/sheet1.xml",
+        "xl/drawings/drawing1.xml", "xl/media/image1.png", "xl/media/image2.png",
+        "xl/vbaProject.bin", "xl/pivotCache/pivotCacheDefinition1.xml",
+        "xl/pivotTables/pivotTable1.xml", "xl/worksheets/_rels/sheet1.xml.rels",
+    ])
+    normalized = _make_fake_zip(tmp_path, "norm.xlsx", ["xl/workbook.xml", "xl/worksheets/sheet1.xml"])
+    result = dict(ailine.check_zip_fidelity_loss(original, normalized))
+    assert result["図形/描画"] == 1
+    assert result["画像"] == 2
+    assert result["VBA マクロ"] == 1
+    assert result["ピボットテーブル"] == 2   # pivotCache + pivotTables
+    assert result["リンク情報(_rels)"] == 1
+
+def test_check_zip_fidelity_loss_empty_when_nothing_lost(tmp_path):
+    members = ["xl/workbook.xml", "xl/worksheets/sheet1.xml", "xl/media/image1.png"]
+    original = _make_fake_zip(tmp_path, "orig.xlsx", members)
+    normalized = _make_fake_zip(tmp_path, "norm.xlsx", members)
+    assert ailine.check_zip_fidelity_loss(original, normalized) == []
+
+def test_check_zip_fidelity_loss_ignores_unrelated_removed_members(tmp_path):
+    original = _make_fake_zip(tmp_path, "orig.xlsx", ["xl/workbook.xml", "docProps/core.xml"])
+    normalized = _make_fake_zip(tmp_path, "norm.xlsx", ["xl/workbook.xml"])
+    assert ailine.check_zip_fidelity_loss(original, normalized) == []
+
+def test_check_zip_fidelity_loss_empty_when_original_not_a_zip(tmp_path):
+    p = tmp_path / "not_a_zip.xlsx"
+    p.write_bytes(b"not a zip file")
+    normalized = _make_fake_zip(tmp_path, "norm.xlsx", ["xl/workbook.xml"])
+    assert ailine.check_zip_fidelity_loss(p, normalized) == []
+
+def _cf_dv_book(tmp_path, name, add_cf=True, add_dv=True):
+    # ★ 見出し(1行目)+データ(2行以降・型混在)を持たせる。単一セルだけの本だと
+    # detect_header_row が確信を持てず、cmd_run 統合テストが CLARIFY に落ちてしまう。
+    from openpyxl.formatting.rule import CellIsRule
+    from openpyxl.worksheet.datavalidation import DataValidation
+    p = tmp_path / name
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["商品", "金額"])
+    ws.append(["りんご", 100])
+    ws.append(["バナナ", 200])
+    if add_cf:
+        ws.conditional_formatting.add("B2:B3", CellIsRule(operator="greaterThan", formula=["150"]))
+    if add_dv:
+        dv = DataValidation(type="list", formula1='"a,b,c"')
+        ws.add_data_validation(dv)
+        dv.add("C2")
+    wb.save(p)
+    return p
+
+def test_check_openpyxl_fidelity_loss_detects_lost_cf_and_dv(tmp_path):
+    original = _cf_dv_book(tmp_path, "orig.xlsx", add_cf=True, add_dv=True)
+    normalized = _cf_dv_book(tmp_path, "norm.xlsx", add_cf=False, add_dv=False)
+    result = ailine.check_openpyxl_fidelity_loss(original, normalized)
+    labels = {r[0] for r in result}
+    assert labels == {"条件付き書式", "入力規則"}
+
+def test_check_openpyxl_fidelity_loss_empty_when_unchanged(tmp_path):
+    original = _cf_dv_book(tmp_path, "orig.xlsx")
+    normalized = _cf_dv_book(tmp_path, "norm.xlsx")
+    assert ailine.check_openpyxl_fidelity_loss(original, normalized) == []
+
+def test_check_openpyxl_fidelity_loss_empty_when_unreadable(tmp_path):
+    p = tmp_path / "bad.xlsx"
+    p.write_bytes(b"not xlsx")
+    normalized = _cf_dv_book(tmp_path, "norm.xlsx")
+    assert ailine.check_openpyxl_fidelity_loss(p, normalized) == []
+
+def test_check_round_trip_fidelity_combines_both_checks(tmp_path):
+    original = _cf_dv_book(tmp_path, "orig.xlsx", add_cf=True, add_dv=False)
+    normalized = _cf_dv_book(tmp_path, "norm.xlsx", add_cf=False, add_dv=False)
+    fidelity = ailine.check_round_trip_fidelity(original, normalized)
+    assert fidelity["lost"] is True
+    assert any(it["label"] == "条件付き書式" and it["count"] == 1 for it in fidelity["items"])
+
+def test_check_round_trip_fidelity_silent_when_nothing_lost(tmp_path):
+    original = _cf_dv_book(tmp_path, "orig.xlsx")
+    normalized = _cf_dv_book(tmp_path, "norm.xlsx")
+    assert ailine.check_round_trip_fidelity(original, normalized) == {"lost": False, "items": []}
+
+def test_format_fidelity_warning_lists_categories_and_counts():
+    fidelity = {"lost": True, "items": [{"label": "条件付き書式", "count": 3}]}
+    msg = ailine.format_fidelity_warning(fidelity)
+    assert msg == "⚠ このファイルには、処理すると失われる飾りがあります（条件付き書式 3 件）"
+
+
+def _fidelity_gate_ns(book, **overrides):
+    base = dict(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=True, json=False, timeout=180.0, ask=False,
+        accept_loss=False, copy=False)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+def _patch_lossy_normalize(monkeypatch):
+    """normalize_book を『CF が消える正規化』に差し替える（実際の LO を使わない）。
+       値・見出しは原本と同じ形に保つ（header 検出が CLARIFY に落ちないように）。"""
+    def fake_normalize(book, workdir, timeout=None):
+        norm = workdir / ("normalized" + book.suffix)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["商品", "金額"])
+        ws.append(["りんご", 100])
+        ws.append(["バナナ", 200])   # CF/DV なし
+        wb.save(norm)
+        return norm
+    monkeypatch.setattr(ailine, "normalize_book", fake_normalize)
+
+def test_cmd_run_inplace_fidelity_gate_blocks_without_flag(tmp_path, monkeypatch, capsys):
+    book = _cf_dv_book(tmp_path, "book.xlsx", add_cf=True, add_dv=False)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    _patch_lossy_normalize(monkeypatch)
+    called = {"n": 0}
+    def boom(*a, **k):
+        called["n"] += 1
+        return {"op": "FREEFORM", "args": {}}
+    monkeypatch.setattr(ailine, "translate_task", boom)
+    rc = ailine.cmd_run(_fidelity_gate_ns(book))
+    captured = capsys.readouterr()
+    assert rc == 4
+    assert "失われる飾りがあります" in captured.out
+    assert "--accept-loss" in captured.out
+    assert "--copy" in captured.out
+    assert called["n"] == 0   # ゲートで止まる＝翻訳より前
+
+def test_cmd_run_inplace_fidelity_gate_accept_loss_continues(tmp_path, monkeypatch, capsys):
+    book = _cf_dv_book(tmp_path, "book.xlsx", add_cf=True, add_dv=False)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    _patch_lossy_normalize(monkeypatch)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=2, value="changed")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    rc = ailine.cmd_run(_fidelity_gate_ns(book, accept_loss=True))
+    captured = capsys.readouterr()
+    assert "続行します" in captured.out
+    assert f"適用先: {book.name}" in captured.out   # 原本へ実際に適用された
+
+def test_cmd_run_inplace_fidelity_gate_copy_flag_downgrades_to_out(tmp_path, monkeypatch, capsys):
+    book = _cf_dv_book(tmp_path, "book.xlsx", add_cf=True, add_dv=False)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    _patch_lossy_normalize(monkeypatch)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=2, value="changed")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    rc = ailine.cmd_run(_fidelity_gate_ns(book, copy=True))
+    captured = capsys.readouterr()
+    assert "--copy 指定のため .out へ切り替え" in captured.out
+    assert book.read_bytes() == original_bytes   # 原本は無変更
+    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    assert out_book.exists()
+
+def test_cmd_run_inplace_fidelity_gate_silent_when_no_loss(tmp_path, monkeypatch, capsys):
+    # 喪失ゼロなら --inplace でも無言で通る（体験は不変）。ゲート自体は --dry では
+    # 走らない（LibreOffice に一切触れない設計不変条件）ので、ここは非 dry で確認する。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 1]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "normalize_book", lambda b, workdir, timeout=None: b)   # 変化なし＝喪失ゼロ
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=3, value="new")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    ns = _fidelity_gate_ns(book, dry=False)
+    ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert "失われる飾り" not in captured.out
+
+def test_cmd_run_inplace_fidelity_records_history_field(tmp_path, monkeypatch, capsys):
+    book = _cf_dv_book(tmp_path, "book.xlsx", add_cf=True, add_dv=False)
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    _patch_lossy_normalize(monkeypatch)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=2, value="changed")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    recorded = {}
+    monkeypatch.setattr(ailine, "append_history", lambda entry, path=None: recorded.update(entry))
+    ailine.cmd_run(_fidelity_gate_ns(book, accept_loss=True))
+    assert recorded["fidelity"]["lost"] is True
+    assert any(it["label"] == "条件付き書式" for it in recorded["fidelity"]["items"])
+
+def test_cmd_run_inplace_no_fidelity_field_when_gate_not_run(tmp_path, monkeypatch, capsys):
+    # --inplace すら要求していない run では、ゲートは走らず fidelity は None のまま。
+    book = _book(tmp_path, [["a", 1], ["b", 2]])
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    recorded = {}
+    monkeypatch.setattr(ailine, "append_history", lambda entry, path=None: recorded.update(entry))
+    ns = _fidelity_gate_ns(book, inplace=False, dry=True)
+    ailine.cmd_run(ns)
+    assert recorded["fidelity"] is None
+
+
+# ===========================================================================
+# ★ W8b 項目4: アトミック置換
+# ===========================================================================
+
+def test_atomic_replace_inplace_success_replaces_book_and_cleans_up(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"ORIGINAL")
+    out_book = tmp_path / "book.out.xlsx"
+    out_book.write_bytes(b"NEW-CONTENT")
+    workdir = tmp_path / ".ailine_book"
+    workdir.mkdir()
+    ok, err = ailine.atomic_replace_inplace(book, out_book, workdir)
+    assert ok is True
+    assert err is None
+    assert book.read_bytes() == b"NEW-CONTENT"
+    assert not out_book.exists()          # 置換後は .out を残さない（旧 shutil.move と同じ終状態）
+    assert not (workdir / f"staged{book.suffix}").exists()   # staging は片付く
+    backups = ailine.list_backups(book)
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"ORIGINAL"   # 置換前の原本がバックアップされている
+
+def test_atomic_replace_inplace_backup_failure_aborts_without_touching_book(tmp_path, monkeypatch):
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"ORIGINAL")
+    out_book = tmp_path / "book.out.xlsx"
+    out_book.write_bytes(b"NEW-CONTENT")
+    workdir = tmp_path / ".ailine_book"
+    workdir.mkdir()
+    monkeypatch.setattr(ailine, "make_backup", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    ok, err = ailine.atomic_replace_inplace(book, out_book, workdir)
+    assert ok is False
+    assert "バックアップに失敗" in err
+    assert book.read_bytes() == b"ORIGINAL"   # 原本は無変更
+    assert out_book.exists()                   # .out はそのまま残る
+
+def test_atomic_replace_inplace_falls_back_to_copy2_when_os_replace_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"ORIGINAL")
+    out_book = tmp_path / "book.out.xlsx"
+    out_book.write_bytes(b"NEW-CONTENT")
+    workdir = tmp_path / ".ailine_book"
+    workdir.mkdir()
+    monkeypatch.setattr(ailine.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
+    ok, err = ailine.atomic_replace_inplace(book, out_book, workdir)
+    assert ok is True
+    assert err is None
+    assert book.read_bytes() == b"NEW-CONTENT"   # copy2 フォールバックで反映されている
+    backups = ailine.list_backups(book)
+    assert len(backups) == 1   # バックアップは os.replace 失敗の前に既に確保済み
+
+def test_atomic_replace_inplace_both_replace_and_fallback_fail_reports_honestly(tmp_path, monkeypatch):
+    import shutil as _shutil
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"ORIGINAL")
+    out_book = tmp_path / "book.out.xlsx"
+    out_book.write_bytes(b"NEW-CONTENT")
+    workdir = tmp_path / ".ailine_book"
+    workdir.mkdir()
+    monkeypatch.setattr(ailine.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
+    real_copy2 = _shutil.copy2
+    calls = {"n": 0}
+    def fake_copy2(src, dst):
+        calls["n"] += 1
+        # 1回目=バックアップ作成の内部コピー・2回目=staging へのコピー は成功させ、
+        # 3回目=os.replace 失敗後のフォールバック copy2(out_book, book) だけ失敗させる。
+        if calls["n"] <= 2:
+            return real_copy2(src, dst)
+        raise OSError("also locked")
+    monkeypatch.setattr(ailine.shutil, "copy2", fake_copy2)
+    ok, err = ailine.atomic_replace_inplace(book, out_book, workdir)
+    assert ok is False
+    assert "置換に失敗した" in err
+
+
+# ===========================================================================
+# ★ W8b 項目6: グローバル run ロック
+# ===========================================================================
+
+def test_acquire_and_release_run_lock_roundtrip(tmp_path):
+    lock = tmp_path / "run.lock"
+    acquired, msg = ailine.acquire_run_lock(lock)
+    assert acquired is True
+    assert msg is None
+    assert lock.exists()
+    ailine.release_run_lock(lock)
+    assert not lock.exists()
+
+def test_acquire_run_lock_fails_when_held_by_live_other_process(tmp_path, monkeypatch):
+    lock = tmp_path / "run.lock"
+    other_pid = 999999   # 実在しないふりをする pid（_pid_alive を差し替えて『生きている』にする）
+    lock.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
+                                 .isoformat(timespec="seconds")}), encoding="utf-8")
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: pid == other_pid)
+    acquired, msg = ailine.acquire_run_lock(lock)
+    assert acquired is False
+    assert "別の ailine が実行中です" in msg
+    assert lock.exists()   # 奪取していない
+
+def test_acquire_run_lock_reclaims_when_pid_is_dead(tmp_path, monkeypatch):
+    lock = tmp_path / "run.lock"
+    lock.write_text(json.dumps({"pid": 999999, "ts": ailine.datetime.now(ailine.timezone.utc)
+                                 .isoformat(timespec="seconds")}), encoding="utf-8")
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: False)
+    acquired, msg = ailine.acquire_run_lock(lock)
+    assert acquired is True
+    info = json.loads(lock.read_text(encoding="utf-8"))
+    assert info["pid"] == os.getpid()
+
+def test_acquire_run_lock_reclaims_when_stale_by_age(tmp_path, monkeypatch):
+    import datetime as _dt
+    lock = tmp_path / "run.lock"
+    old_ts = (ailine.datetime.now(ailine.timezone.utc) - _dt.timedelta(hours=1)).isoformat(timespec="seconds")
+    lock.write_text(json.dumps({"pid": 999999, "ts": old_ts}), encoding="utf-8")
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: True)   # pid 自体は生きている
+    acquired, msg = ailine.acquire_run_lock(lock)
+    assert acquired is True   # 30分超の age で stale 判定・奪取できる
+
+def test_acquire_run_lock_reclaims_own_leftover_lock_same_pid(tmp_path):
+    # ★ 同一プロセス内で前回の呼び出しが解放し損ねた場合も自己修復する
+    #   （テスト実行のようにシーケンシャルに同じ pid で cmd_run が繰り返し走る状況の安全網）。
+    lock = tmp_path / "run.lock"
+    lock.write_text(json.dumps({"pid": os.getpid(), "ts": ailine.datetime.now(ailine.timezone.utc)
+                                 .isoformat(timespec="seconds")}), encoding="utf-8")
+    acquired, msg = ailine.acquire_run_lock(lock)
+    assert acquired is True
+
+def test_acquire_run_lock_broken_file_is_stale(tmp_path):
+    lock = tmp_path / "run.lock"
+    lock.write_text("not json", encoding="utf-8")
+    acquired, msg = ailine.acquire_run_lock(lock)
+    assert acquired is True
+
+def test_cmd_run_exits_6_when_run_lock_busy(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["a", 1], ["b", 2]])
+    lock_path = tmp_path / "run.lock"
+    monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
+    other_pid = 999999
+    lock_path.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
+                                     .isoformat(timespec="seconds")}), encoding="utf-8")
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: pid == other_pid)
+    called = {"n": 0}
+    monkeypatch.setattr(ailine, "check_excel_lock", lambda b: called.__setitem__("n", called["n"] + 1) or None)
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 6
+    assert "別の ailine が実行中です" in captured.out
+    assert called["n"] == 0   # ロックで止まった＝本体は一切呼ばれていない
+
+def test_cmd_run_releases_lock_even_on_early_sys_exit(tmp_path, monkeypatch):
+    # book が無い場合は sys.exit() する経路（SystemExit）。それでも lock は解放されること。
+    lock_path = tmp_path / "run.lock"
+    monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
+    ns = argparse.Namespace(
+        book=str(tmp_path / "nope.xlsx"), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False)
+    with pytest.raises(SystemExit):
+        ailine.cmd_run(ns)
+    assert not lock_path.exists()
+
+
+# ===========================================================================
+# ★ W8b 項目4: run 終了時に自分の workdir を掃除する
+# ===========================================================================
+
+def test_cmd_run_cleans_up_workdir_after_success(tmp_path, monkeypatch):
+    book = _book(tmp_path, [["a", 1], ["b", 2]])
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False)
+    ailine.cmd_run(ns)
+    assert not (book.parent / f".ailine_{book.stem}").exists()
+
+def test_cmd_run_cleans_up_workdir_after_clarify_exit(tmp_path, monkeypatch):
+    book = _book(tmp_path, [["a", 1], ["b", 2]])
+    ambiguous = {"sheets": {"Sheet": {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0},
+        2: {"nonempty": 2, "str": 1, "bold": 0},
+        3: {"nonempty": 2, "str": 2, "bold": 0},
+        4: {"nonempty": 2, "str": 1, "bold": 0},
+    }}}}
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "build_struct_dump", lambda book, workdir: ambiguous)
+    ns = argparse.Namespace(
+        book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    assert rc == 3
+    assert not (book.parent / f".ailine_{book.stem}").exists()
 
 # --- ★ M2c: 正規化パス失敗時の1回だけ自動リトライ ------------------------------
 

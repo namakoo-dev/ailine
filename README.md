@@ -42,6 +42,12 @@ python ailine.py run demo/sample.xlsx "..." --dry
 # 原本を上書きしてよいとき（上書き前に自動でバックアップを作る）
 python ailine.py run demo/sample.xlsx "..." --inplace
 
+# ★ W8b: --inplace で、LibreOffice 往復だけで失われる飾り（条件付き書式・図形・
+# ピボット・VBA 等）を検出したら申告して止まる（exit 4）。承知の上で続けるか
+# （バックアップから ailine undo で戻せる）、原本には触らず .out に切り替えるか選ぶ
+python ailine.py run demo/sample.xlsx "..." --inplace --accept-loss
+python ailine.py run demo/sample.xlsx "..." --inplace --copy
+
 # 別のモデルに載せ替える（天井を上げたいとき）
 python ailine.py run demo/sample.xlsx "..." --model qwen2.5-coder:32b
 
@@ -67,9 +73,10 @@ python ailine.py doctor
 # 実行履歴を見る（新しい順。既定 10 件）
 python ailine.py history --max 20
 
-# --inplace のバックアップから復元する（復元前の現状も自動で退避＝復元自体も可逆）
-python ailine.py restore demo/sample.xlsx
-python ailine.py restore demo/sample.xlsx --list   # 一覧だけ表示（復元しない）
+# --inplace のバックアップから復元する（復元前の現状も自動で退避＝復元自体も可逆）。
+# ailine undo が restore の昇格版（あと何回戻せるかを表示・restore は互換のため残す）
+python ailine.py undo demo/sample.xlsx
+python ailine.py undo demo/sample.xlsx --list   # 一覧だけ表示（復元しない）
 
 # 用語集（税率等の取り決め値）に語を登録する。「税込み合計」等で率が本文にも
 # 用語集にも無い場合、この形のコピペ可能な1行が CLARIFY のメッセージに出る
@@ -97,7 +104,17 @@ python ailine.py vocab list
   （構造や装飾だけの変更も取りこぼさない）。LibreOffice + LLM は
   **「実行時エラー無しで成功と報告し、実際は何もしない」**ことがある（もっともらしい
   UNO の幻覚）。変化ゼロなら失敗として修復に回す。
-- **コピー安全** — 原本は触らず `<book>.out.xlsx` に適用する。壊さない。
+- **コピー安全** — 原本は触らず `<book>.out.xlsx` に適用する。壊さない
+  （既定は変えていない・下の「安全器官」は将来 `--inplace` を既定にする前段の下ごしらえ）。
+- ★ **安全器官（W8b）** — `--inplace` で原本に触る前だけ働く4つの機械的な安全網。
+  ①**往復忠実度ゲート**: LibreOffice に一度通すだけ(何もしないマクロ)で失われる飾り
+  （条件付き書式・入力規則・図形・ピボット・VBA・_rels）を検出したら申告して止まる
+  （`--accept-loss`/`--copy` で選ぶ・喪失ゼロなら無言）。②**Excel ロック検出**:
+  同フォルダの `~$` ロックファイルと書き込み可否を run の最初に見る。③**バックアップの
+  名前空間化**: 同名ファイルが別フォルダにあっても取り違えない
+  （`~/.ailine/backups/<フォルダのハッシュ>/`）。④**原子的な置換**: `os.replace()` で
+  torn write（書きかけの状態が外から見える窓）を塞ぐ。⑤**グローバル run ロック**:
+  基盤の LibreOffice が単一インスタンス前提のため、`ailine run` は同時に1本だけ。
 - **参照ライブラリ** — `refs/*.bas` を few-shot に供給。苦手な操作（並べ替え・
   グラフ・新シート）の**動作検証済みの正解例**を渡して補う。追加は `refs/` に置くだけ。
 - ★ **達成検証層（M2a）** — 「✓ の下に隠れた失敗」（幽霊データ・無関係なすり替え・
