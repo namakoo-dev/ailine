@@ -65,6 +65,59 @@
     "v2_1": {
       "changed": "2026-08-15 (実行前凍結の改訂・透明に記録)",
       "note": "APPEND_TOTAL 語彙昇格（2026-08-15・監査 3 連続失敗の実測による昇格経済学）に伴い #102 の期待を [COMPUTE_COLUMN, APPEND_TOTAL] に改訂"
+    },
+    "v3": {
+      "frozen": "2026-08-15 (A' 実行前凍結)",
+      "bar": {
+        "clarify_true_positive": 0.9,
+        "clarify_false_positive": 0.1,
+        "note": "APPEND_TOTAL の倍率(factor)は machine が確定（extract_rate_factor/lookup_vocab_factor・regex のみ・LLM不使用）。ここで測るのは LLM 依存の唯一の残り: label が依頼文の「税込み/消費税」等の言い回しを機械の税/込語チェックが拾える形で保持しているか。真CLARIFY(率が本当に無い時に聞く) 90%+・誤CLARIFY(率が明記/用語集にあるのに聞く) 10%以下。"
+      },
+      "note": "translate_task(本番プロンプト・factorを求めない) → verify_dsl_args(task文字列+vocabで機械確定) を通しで実測する。抽出そのもの(regex)は決定論なので単体テストが担保・ここではLLMのlabel生成品質だけを見る。"
+    },
+    "noise_floor_20260815": {
+      "what": "A' 実装直前の回帰確認を兼ねて、v1/v2 battery を同一条件(qwen2.5-coder:7b, temperature=0.1)で3回連続実行し、run間の振れ幅を実測（今後の効果主張の土台）。",
+      "v1": {
+        "runs": [
+          {
+            "op_accuracy": "51/52=98.1%",
+            "slot_accuracy": "72/72=100.0%",
+            "misassert": "0/11"
+          },
+          {
+            "op_accuracy": "51/52=98.1%",
+            "slot_accuracy": "72/72=100.0%",
+            "misassert": "0/11"
+          },
+          {
+            "op_accuracy": "51/52=98.1%",
+            "slot_accuracy": "72/72=100.0%",
+            "misassert": "0/11"
+          }
+        ],
+        "variance": "0（3回とも完全に同一結果・振れ幅なし）"
+      },
+      "v2": {
+        "runs": [
+          {
+            "plan_completeness": "15/15=100.0%",
+            "silent_drop": 0,
+            "target": "2/2=100.0%"
+          },
+          {
+            "plan_completeness": "15/15=100.0%",
+            "silent_drop": 0,
+            "target": "2/2=100.0%"
+          },
+          {
+            "plan_completeness": "15/15=100.0%",
+            "silent_drop": 0,
+            "target": "2/2=100.0%"
+          }
+        ],
+        "variance": "0（3回とも完全に同一結果・振れ幅なし）"
+      },
+      "note": "A' (factor を LLM から除去)適用後もこの数値を維持（回帰なし）。vocab={} 明示は不要だった — v1/v2 の実行経路はどこも vocab を読まない（factor 解決は verify_dsl_args 側のみで、translate_task は関与しない設計のため）。"
     }
   },
   "items": [
@@ -701,6 +754,110 @@
           "about": "条件付き書式"
         }
       ]
+    }
+  ],
+  "items_v3": [
+    {
+      "id": 301,
+      "book": "invoice",
+      "vocab": {},
+      "text": "小計に数量×単価を入れて、税込み合計を一番下に出して（消費税10%）",
+      "expect": {
+        "clarify": false,
+        "factor": 1.1
+      }
+    },
+    {
+      "id": 302,
+      "book": "invoice",
+      "vocab": {},
+      "text": "税込み合計を一番下に出して（消費税8%で）",
+      "expect": {
+        "clarify": false,
+        "factor": 1.08
+      }
+    },
+    {
+      "id": 303,
+      "book": "invoice",
+      "vocab": {},
+      "text": "税込み合計を一番下に出して(1.1倍)",
+      "expect": {
+        "clarify": false,
+        "factor": 1.1
+      }
+    },
+    {
+      "id": 304,
+      "book": "invoice",
+      "vocab": {
+        "消費税": 1.1
+      },
+      "text": "消費税込みの合計を出して",
+      "expect": {
+        "clarify": false,
+        "factor": 1.1
+      }
+    },
+    {
+      "id": 305,
+      "book": "invoice",
+      "vocab": {},
+      "text": "税込み合計を一番下に出して",
+      "expect": {
+        "clarify": true
+      }
+    },
+    {
+      "id": 306,
+      "book": "sales",
+      "vocab": {},
+      "text": "金額の合計を最後に",
+      "expect": {
+        "clarify": false,
+        "factor": 1.0
+      }
+    },
+    {
+      "id": 307,
+      "book": "invoice",
+      "vocab": {},
+      "text": "税込み合計を出して（消費税１０％）",
+      "expect": {
+        "clarify": false,
+        "factor": 1.1
+      }
+    },
+    {
+      "id": 308,
+      "book": "invoice",
+      "vocab": {},
+      "text": "消費税10%引き後、8%の手数料込みで税込み合計を出して",
+      "expect": {
+        "clarify": true
+      }
+    },
+    {
+      "id": 309,
+      "book": "invoice",
+      "vocab": {
+        "軽減税率": 1.08
+      },
+      "text": "軽減税率込みの合計を一番下に",
+      "expect": {
+        "clarify": false,
+        "factor": 1.08
+      }
+    },
+    {
+      "id": 310,
+      "book": "invoice",
+      "vocab": {},
+      "text": "税率0.1で税込み合計を出して",
+      "expect": {
+        "clarify": false,
+        "factor": 1.1
+      }
     }
   ]
 }

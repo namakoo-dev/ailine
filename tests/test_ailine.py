@@ -2,6 +2,7 @@
    生成・適用の統合は実機（basrun_spike）で検証済み。ここは回帰用の土台。
 """
 import argparse
+import json
 import subprocess
 import sys
 import urllib.error
@@ -2547,6 +2548,9 @@ def test_ops_doc_and_fewshot_mention_append_total():
     assert any("APPEND_TOTAL" in assistant_ex for _u, assistant_ex in ailine.TRANSLATION_FEWSHOT)
 
 def test_translate_task_parses_append_total_with_label_and_factor(monkeypatch):
+    # ★ A': プロンプトはもう factor を求めないが、translate_task 自体は仮に LLM が
+    #   余計な factor を返しても素通しする（黙って落とさない・verify_dsl_args 側で
+    #   factor は無視され機械抽出に置き換わる。ここは翻訳層のJSON解析の頑健性テスト）。
     monkeypatch.setattr(
         ailine, "ollama_generate_json",
         lambda model, msgs, temperature=0.1, num_predict=300:
@@ -2557,6 +2561,13 @@ def test_translate_task_parses_append_total_with_label_and_factor(monkeypatch):
     step = result["plan"][0]
     assert step["op"] == "APPEND_TOTAL"
     assert step["args"] == {"col": "小計", "label": "税込み合計", "factor": 1.1}
+
+def test_ops_doc_does_not_ask_llm_for_factor():
+    # ★ A': factor は machine-determined。プロンプトが LLM に数値化を求めないことを固定する。
+    assert "factor" not in ailine.OPS_DOC
+    for _u, assistant_ex in ailine.TRANSLATION_FEWSHOT:
+        if "APPEND_TOTAL" in assistant_ex:
+            assert '"factor"' not in assistant_ex
 
 def test_translate_task_parses_append_total_without_optional_args(monkeypatch):
     monkeypatch.setattr(
@@ -2580,25 +2591,83 @@ def test_verify_dsl_args_append_total_defaults_label_and_factor():
     assert resolved["label"] == "合計"
     assert resolved["factor"] == 1.0
 
-def test_verify_dsl_args_append_total_resolves_explicit_label_and_factor():
+def test_verify_dsl_args_append_total_resolves_factor_from_task_text_percent():
+    # ★ A': factor は LLM でなく、依頼文の明示率を machine が抽出する。
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
     ok, resolved, inferred, err = ailine.verify_dsl_args(
-        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計", "factor": 1.1}, meta)
+        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計"}, meta,
+        task="税込み合計を一番下に出して（消費税10%）")
     assert ok
     assert resolved["label"] == "税込み合計"
     assert resolved["factor"] == 1.1
+    assert resolved["_sources"]["factor"] == "依頼文: 10%"
 
-def test_verify_dsl_args_append_total_rejects_non_numeric_factor():
+def test_verify_dsl_args_append_total_resolves_factor_from_vocab():
+    # 用語集の語が依頼文に部分一致で含まれる場合だけ引く（無関係な語を勝手に当てない）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計"}, meta,
+        task="消費税込みの合計を出して", vocab={"消費税": 1.1})
+    assert ok
+    assert resolved["factor"] == 1.1
+    assert resolved["_sources"]["factor"] == "用語集: 消費税"
+
+def test_verify_dsl_args_append_total_task_text_wins_over_vocab():
+    # 依頼文に明示率があれば、用語集より依頼文を優先する。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計"}, meta,
+        task="税込み合計を出して（消費税8%で）", vocab={"消費税": 1.1})
+    assert ok
+    assert resolved["factor"] == 1.08
+    assert "依頼文" in resolved["_sources"]["factor"]
+
+def test_verify_dsl_args_append_total_llm_factor_ignored_but_warns_on_mismatch():
+    # LLM が(旧仕様の名残や幻覚で)factor を返しても機械抽出が常に勝つ。食い違いは WARN。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計", "factor": 1.08}, meta,
+        task="税込み合計を一番下に出して（消費税10%）")
+    assert ok
+    assert resolved["factor"] == 1.1
+    assert resolved["_warnings"]
+    assert "1.08" in resolved["_warnings"][0] and "1.1" in resolved["_warnings"][0]
+
+def test_verify_dsl_args_append_total_non_tax_label_defaults_without_clarify():
+    # label が税/込を含まなければ、倍率がどこにも無くても既定1.0で通す
+    # （恒真式の番人は「税/込ラベルなのに倍率不明」の場合だけに絞る）。
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
     ok, resolved, inferred, err = ailine.verify_dsl_args(
-        "APPEND_TOTAL", {"col": "金額", "factor": "abc"}, meta)
+        "APPEND_TOTAL", {"col": "金額"}, meta, task="金額の合計を最後に")
+    assert ok
+    assert resolved["factor"] == 1.0
+    assert "_sources" not in resolved
+
+def test_verify_dsl_args_append_total_clarifies_when_label_implies_tax_but_no_rate():
+    # ★ 恒真式の番人（最優先）: label が税/込を含むのに倍率がどこにも無いと CLARIFY へ倒す
+    #   （税抜き金額に「税込み」ラベルが付く恒真の誤りを機械で止める）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "小計", "label": "税込み合計"}, meta, task="税込み合計を出して")
     assert not ok
-    assert "数値ではありません" in err
+    assert "倍率が分かりません" in err
+    assert "ailine vocab add" in err
 
-def test_verify_dsl_args_append_total_rejects_zero_or_negative_factor():
+def test_verify_dsl_args_append_total_ignores_non_numeric_llm_factor():
+    # ★ A': factor はもう「ユーザー入力のエラー」ではない。LLM が壊れた値を返しても
+    #   単に無視して機械確定（既定1.0）にフォールバックする（float() できない値は
+    #   食い違いWARNの対象にもしない＝比較不能なので黙って無視）。
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
     ok, resolved, inferred, err = ailine.verify_dsl_args(
-        "APPEND_TOTAL", {"col": "金額", "factor": 0}, meta)
+        "APPEND_TOTAL", {"col": "金額", "factor": "abc"}, meta, task="金額の合計を最後に")
+    assert ok
+    assert resolved["factor"] == 1.0
+    assert "_warnings" not in resolved
+
+def test_verify_dsl_args_append_total_rejects_zero_factor_from_text_extraction():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "APPEND_TOTAL", {"col": "金額"}, meta, task="0倍の合計を出して")
     assert not ok
     assert "正の数" in err
 
@@ -2616,22 +2685,33 @@ def test_format_confirmation_line_append_total_shows_col_label_factor():
     assert "ラベル:税込み合計" in line
     assert "倍率:1.1" in line
 
+def test_format_confirmation_line_append_total_shows_factor_source():
+    # ★ A': 来歴の可視化。倍率の出典を確認行に添える。
+    line = ailine.format_confirmation_line(
+        "APPEND_TOTAL",
+        {"col": "小計", "label": "税込み合計", "factor": 1.1,
+         "_sources": {"factor": "依頼文: 10%"}},
+        set())
+    assert "倍率:1.1（依頼文: 10%）" in line
+
 
 # --- ④ codegen（決定論） ------------------------------------------------------
 
 def test_codegen_dsl_append_total_places_label_left_of_value_and_formula_with_factor():
+    # ★ B: 挿入耐性式（SUM(D2:INDEX(D:D;ROW()-1))型・LO方言のセミコロンで setFormula する。
+    #   保存後はカンマ形に自動変換される・formula spike で実測済み）。
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
     code = ailine.codegen_dsl(
         "APPEND_TOTAL", {"col": "小計", "label": "税込み合計", "factor": 1.1}, meta)
     # 小計=列3(0起点)。ラベルはその左隣=列2に置く（既存構造を壊さない置き方）。
     assert 'getCellByPosition(2, totalRow).setString("税込み合計")' in code
     assert 'getCellByPosition(3, totalRow).setFormula(' in code
-    assert '"=SUM(" & "D" & 2 & ":" & "D" & (lastRow + 1) & ")" & "*1.1"' in code
+    assert ('"=SUM(" & "D" & 2 & ":INDEX(" & "D" & ":" & "D" & ";ROW()-1))" & "*1.1"') in code
 
 def test_codegen_dsl_append_total_omits_factor_tail_when_factor_is_one():
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["部門", "金額"]}}
     code = ailine.codegen_dsl("APPEND_TOTAL", {"col": "金額", "label": "合計", "factor": 1}, meta)
-    assert '"=SUM(" & "B" & 2 & ":" & "B" & (lastRow + 1) & ")" & ""' in code
+    assert ('"=SUM(" & "B" & 2 & ":INDEX(" & "B" & ":" & "B" & ";ROW()-1))" & ""') in code
 
 def test_codegen_dsl_append_total_leftmost_column_skips_label():
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["金額", "部門"]}}
@@ -2642,6 +2722,8 @@ def test_codegen_dsl_append_total_leftmost_column_skips_label():
 # --- ⑥ 事後条件（二層: 式文字列 + キャッシュ値、ラベル一致） -------------------
 
 def test_check_append_total_passes_with_factor_and_label(tmp_path):
+    # ★ B: 保存後のカンマ形(=SUM(D2:INDEX(D:D,ROW()-1))*1.1)と照合する（codegen が
+    #   LO 方言(;)で書いても、basrun 保存後はこの形に変換される・formula spike で実測済み）。
     p = tmp_path / "inv.xlsx"
     wb = openpyxl.Workbook(); ws = wb.active
     ws.append(["品目", "数量", "単価", "小計"])
@@ -2649,7 +2731,7 @@ def test_check_append_total_passes_with_factor_and_label(tmp_path):
     ws.append(["b", 1, 120000, 120000])
     ws.append(["c", 12, 8000, 96000])
     ws["C5"] = "税込み合計"
-    ws["D5"] = "=SUM(D2:D4)*1.1"
+    ws["D5"] = "=SUM(D2:INDEX(D:D,ROW()-1))*1.1"
     wb.save(p)
     _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"D5": 402600})
     status, reason = ailine.check_append_total(
@@ -2675,7 +2757,7 @@ def test_check_append_total_fails_when_cache_value_wrong(tmp_path):
     ws.append(["a", 100])
     ws.append(["b", 200])
     ws["A4"] = "合計"
-    ws["B4"] = "=SUM(B2:B3)"
+    ws["B4"] = "=SUM(B2:INDEX(B:B,ROW()-1))"
     wb.save(p)
     _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"B4": 999})
     status, reason = ailine.check_append_total(p, {"col": "金額", "label": "合計", "factor": 1})
@@ -2689,7 +2771,7 @@ def test_check_append_total_fails_when_label_wrong(tmp_path):
     ws.append(["a", 100])
     ws.append(["b", 200])
     ws["A4"] = "TOTAL"   # 期待ラベルは「合計」
-    ws["B4"] = "=SUM(B2:B3)"
+    ws["B4"] = "=SUM(B2:INDEX(B:B,ROW()-1))"
     wb.save(p)
     _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"B4": 300})
     status, reason = ailine.check_append_total(p, {"col": "金額", "label": "合計", "factor": 1})
@@ -2711,11 +2793,26 @@ def test_check_append_total_leftmost_column_skips_label_check(tmp_path):
     ws.append(["金額", "備考"])
     ws.append([100, "x"])
     ws.append([200, "y"])
-    ws["A4"] = "=SUM(A2:A3)"
+    ws["A4"] = "=SUM(A2:INDEX(A:A,ROW()-1))"
     wb.save(p)
     _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"A4": 300})
     status, reason = ailine.check_append_total(p, {"col": "金額", "label": "合計", "factor": 1})
     assert status == "pass"
+
+def test_check_append_total_fails_on_old_static_range_formula(tmp_path):
+    # ★ B: 静的な "=SUM(B2:B3)" 型（挿入耐性が無い旧形）はもう合格させない。
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["部門", "金額"])
+    ws.append(["a", 100])
+    ws.append(["b", 200])
+    ws["A4"] = "合計"
+    ws["B4"] = "=SUM(B2:B3)"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"B4": 300})
+    status, reason = ailine.check_append_total(p, {"col": "金額", "label": "合計", "factor": 1})
+    assert status == "fail"
+    assert "期待形" in reason
 
 def test_run_postcondition_dispatches_append_total(tmp_path):
     p = tmp_path / "inv.xlsx"
@@ -2723,12 +2820,277 @@ def test_run_postcondition_dispatches_append_total(tmp_path):
     ws.append(["部門", "金額"])
     ws.append(["a", 100])
     ws["A3"] = "合計"
-    ws["B3"] = "=SUM(B2:B2)"
+    ws["B3"] = "=SUM(B2:INDEX(B:B,ROW()-1))"
     wb.save(p)
     _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"B3": 100})
     status, reason = ailine.run_postcondition(
         "APPEND_TOTAL", p, {"col": "金額", "label": "合計", "factor": 1})
     assert status == "pass"
+
+
+# ===========================================================================
+# ★ A': factor の機械抽出（依頼文の明示率・regex のみ・LLM不使用）
+# ===========================================================================
+
+def test_extract_rate_factor_percent():
+    assert ailine.extract_rate_factor("税込み合計を出して（消費税10%）") == (1.1, "10%")
+
+def test_extract_rate_factor_percent_with_space_and_zenkaku():
+    assert ailine.extract_rate_factor("8 ％引きで") == (1.08, "8 ％")
+
+def test_extract_rate_factor_bai_suffix():
+    assert ailine.extract_rate_factor("1.1倍にして合計を出して") == (1.1, "1.1倍")
+
+def test_extract_rate_factor_bare_decimal_near_tax_keyword():
+    # 税/倍率の語の近傍だけにある裸の小数（0-1未満は 1+n として解釈）
+    assert ailine.extract_rate_factor("税率が0.1です") == (1.1, "0.1")
+
+def test_extract_rate_factor_bare_decimal_far_from_keyword_is_ignored():
+    # 無関係な数値の誤爆を避ける（税/倍率の語から離れた裸の小数は拾わない）
+    factor, snippet = ailine.extract_rate_factor("0.1個くらい余分に買って集計して")
+    assert factor is None and snippet is None
+
+def test_extract_rate_factor_no_mention_returns_none():
+    assert ailine.extract_rate_factor("金額の合計を最後に") == (None, None)
+
+def test_extract_rate_factor_conflicting_values_returns_none():
+    # 複数の異なる値が出たら断定しない（CLARIFY に委ねる）
+    factor, snippet = ailine.extract_rate_factor("消費税10%か8%のどちらかで")
+    assert factor is None and snippet is None
+
+def test_extract_rate_factor_same_value_repeated_is_not_conflicting():
+    factor, _ = ailine.extract_rate_factor("消費税10%(10%)込みで")
+    assert factor == 1.1
+
+def test_extract_rate_factor_empty_text():
+    assert ailine.extract_rate_factor("") == (None, None)
+
+
+# ===========================================================================
+# ★ A': 用語集（vocab）
+# ===========================================================================
+
+def test_load_vocab_missing_file_returns_empty_dict(tmp_path):
+    assert ailine.load_vocab(tmp_path / "nope.json") == {}
+
+def test_save_and_load_vocab_roundtrip(tmp_path):
+    p = tmp_path / "vocab.json"
+    ailine.save_vocab({"消費税": 1.1, "軽減税率": 1.08}, path=p)
+    assert ailine.load_vocab(p) == {"消費税": 1.1, "軽減税率": 1.08}
+
+def test_load_vocab_corrupt_json_returns_empty_dict_not_crash(tmp_path):
+    p = tmp_path / "vocab.json"
+    p.write_text("{not valid json", encoding="utf-8")
+    assert ailine.load_vocab(p) == {}
+
+def test_load_vocab_non_dict_json_returns_empty_dict(tmp_path):
+    p = tmp_path / "vocab.json"
+    p.write_text("[1, 2, 3]", encoding="utf-8")
+    assert ailine.load_vocab(p) == {}
+
+def test_load_vocab_skips_non_numeric_values(tmp_path):
+    p = tmp_path / "vocab.json"
+    p.write_text('{"消費税": 1.1, "壊れた語": "abc", "null値": null}', encoding="utf-8")
+    assert ailine.load_vocab(p) == {"消費税": 1.1}
+
+def test_load_vocab_skips_control_character_terms(tmp_path):
+    # ★ codegen へ渡る経路の防御。改行を含む語は読み捨てる。
+    p = tmp_path / "vocab.json"
+    p.write_text(json.dumps({"改行\n入り": 1.1, "消費税": 1.1}, ensure_ascii=False),
+                encoding="utf-8")
+    assert ailine.load_vocab(p) == {"消費税": 1.1}
+
+def test_load_vocab_skips_overlong_terms(tmp_path):
+    p = tmp_path / "vocab.json"
+    long_term = "あ" * (ailine.DEFAULT_VOCAB_MAX_TERM_LEN + 1)
+    p.write_text(json.dumps({long_term: 1.1, "消費税": 1.1}, ensure_ascii=False),
+                encoding="utf-8")
+    assert ailine.load_vocab(p) == {"消費税": 1.1}
+
+def test_load_vocab_caps_entry_count(tmp_path):
+    p = tmp_path / "vocab.json"
+    many = {f"語{i}": 1.0 + i / 1000 for i in range(ailine.DEFAULT_VOCAB_MAX_ENTRIES + 20)}
+    p.write_text(json.dumps(many, ensure_ascii=False), encoding="utf-8")
+    assert len(ailine.load_vocab(p)) == ailine.DEFAULT_VOCAB_MAX_ENTRIES
+
+def test_vocab_add_new_term(tmp_path):
+    p = tmp_path / "vocab.json"
+    ok, msg = ailine.vocab_add("消費税", "1.1", path=p)
+    assert ok
+    assert ailine.load_vocab(p) == {"消費税": 1.1}
+
+def test_vocab_add_updates_existing_term(tmp_path):
+    p = tmp_path / "vocab.json"
+    ailine.vocab_add("消費税", 1.08, path=p)
+    ailine.vocab_add("消費税", 1.1, path=p)
+    assert ailine.load_vocab(p) == {"消費税": 1.1}
+
+def test_vocab_add_rejects_non_numeric_value(tmp_path):
+    p = tmp_path / "vocab.json"
+    ok, msg = ailine.vocab_add("消費税", "abc", path=p)
+    assert not ok
+    assert "数値ではありません" in msg
+    assert ailine.load_vocab(p) == {}
+
+def test_vocab_add_rejects_control_character_term(tmp_path):
+    p = tmp_path / "vocab.json"
+    ok, msg = ailine.vocab_add("改行\n入り", 1.1, path=p)
+    assert not ok
+
+def test_vocab_add_rejects_empty_term(tmp_path):
+    p = tmp_path / "vocab.json"
+    ok, msg = ailine.vocab_add("   ", 1.1, path=p)
+    assert not ok
+
+def test_vocab_add_rejects_when_entry_cap_reached_for_new_term(tmp_path):
+    p = tmp_path / "vocab.json"
+    many = {f"語{i}": 1.0 for i in range(ailine.DEFAULT_VOCAB_MAX_ENTRIES)}
+    ailine.save_vocab(many, path=p)
+    ok, msg = ailine.vocab_add("新語", 1.1, path=p)
+    assert not ok
+    assert "上限" in msg
+    # 既存語の更新は上限に関係なく可能
+    ok2, _ = ailine.vocab_add("語0", 2.0, path=p)
+    assert ok2
+
+def test_lookup_vocab_factor_matches_substring():
+    assert ailine.lookup_vocab_factor("消費税込みの合計を出して", {"消費税": 1.1}) == (1.1, "消費税")
+
+def test_lookup_vocab_factor_no_match_returns_none():
+    assert ailine.lookup_vocab_factor("金額の合計を出して", {"消費税": 1.1}) == (None, None)
+
+def test_lookup_vocab_factor_conflicting_terms_returns_none():
+    factor, term = ailine.lookup_vocab_factor(
+        "消費税と軽減税率どちらか", {"消費税": 1.1, "軽減税率": 1.08})
+    assert factor is None and term is None
+
+def test_lookup_vocab_factor_empty_vocab_returns_none():
+    assert ailine.lookup_vocab_factor("消費税込み", {}) == (None, None)
+
+
+# ===========================================================================
+# ★ A': vocab CLI (`ailine vocab add` / `ailine vocab list`)
+# ===========================================================================
+
+def test_cmd_vocab_add_success(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    ns = argparse.Namespace(vocab_cmd="add", term="消費税", value="1.1")
+    rc = ailine.cmd_vocab(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "登録" in captured.out
+    assert ailine.load_vocab(tmp_path / "vocab.json") == {"消費税": 1.1}
+
+def test_cmd_vocab_add_failure_returns_1(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    ns = argparse.Namespace(vocab_cmd="add", term="消費税", value="abc")
+    rc = ailine.cmd_vocab(ns)
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "×" in captured.out
+
+def test_cmd_vocab_list_empty(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    rc = ailine.cmd_vocab(argparse.Namespace(vocab_cmd="list"))
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "空" in captured.out
+
+def test_cmd_vocab_list_shows_entries(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "vocab.json"
+    monkeypatch.setattr(ailine, "VOCAB_FILE", p)
+    ailine.save_vocab({"消費税": 1.1}, path=p)
+    rc = ailine.cmd_vocab(argparse.Namespace(vocab_cmd="list"))
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "消費税 = 1.1" in captured.out
+
+
+# ===========================================================================
+# ★ A': cmd_run_dsl 統合（APPEND_TOTAL の倍率解決を通しで確認）
+# ===========================================================================
+
+def test_cmd_run_dsl_append_total_shows_factor_source_from_task_text(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["品目", "数量", "単価", "小計"], ["a", 3, 50000, 150000]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")   # 実 vocab を汚さない
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "APPEND_TOTAL", "args": {"col": "小計", "label": "税込み合計"}})
+    ns = argparse.Namespace(
+        book=str(book), task="税込み合計を一番下に出して（消費税10%）", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "倍率:1.1（依頼文: 10%）" in captured.out
+
+def test_cmd_run_dsl_append_total_clarify_hint_has_copy_paste_command(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["品目", "数量", "単価", "小計"], ["a", 3, 50000, 150000]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")   # 空の用語集
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "APPEND_TOTAL", "args": {"col": "小計", "label": "税込み合計"}})
+    ns = argparse.Namespace(
+        book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "ailine vocab add" in captured.out
+
+def test_cmd_run_dsl_append_total_uses_registered_vocab(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["品目", "数量", "単価", "小計"], ["a", 3, 50000, 150000]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    vocab_path = tmp_path / "vocab.json"
+    monkeypatch.setattr(ailine, "VOCAB_FILE", vocab_path)
+    ailine.vocab_add("消費税", 1.1, path=vocab_path)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "APPEND_TOTAL", "args": {"col": "小計", "label": "税込み合計"}})
+    ns = argparse.Namespace(
+        book=str(book), task="消費税込みの合計を出して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "倍率:1.1（用語集: 消費税）" in captured.out
+
+def test_cmd_run_dsl_append_total_warns_on_llm_factor_mismatch(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["品目", "数量", "単価", "小計"], ["a", 3, 50000, 150000]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "APPEND_TOTAL",
+                         "args": {"col": "小計", "label": "税込み合計", "factor": 1.08}})
+    ns = argparse.Namespace(
+        book=str(book), task="税込み合計を一番下に出して（消費税10%）", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "⚠" in captured.out
+    assert "1.08" in captured.out and "1.1" in captured.out
+
+
+# ===========================================================================
+# ★ A': history.jsonl の provenance
+# ===========================================================================
+
+def test_build_history_entry_includes_provenance():
+    result = {"ok": True, "attempts": 1, "provenance": {"factor": "依頼文: 10%"}}
+    e = ailine.build_history_entry(result, Path("book.xlsx"), "タスク", "モデル", "none")
+    assert e["provenance"] == {"factor": "依頼文: 10%"}
+
+def test_build_history_entry_provenance_defaults_to_none():
+    e = ailine.build_history_entry({"ok": True}, Path("book.xlsx"), "タスク", "モデル", "none")
+    assert e["provenance"] is None
 
 
 # --- CONTRACT: 自由生成に「新規シートを作らない」誘導が入っている ----------------

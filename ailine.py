@@ -64,6 +64,12 @@ HISTORY_FILE = HISTORY_DIR / "history.jsonl"
 BACKUP_DIR = HISTORY_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 10   # M2c: book ごとにこの世代数を超えたら古い順に削除する
 
+# ★ A': 用語集（税率等の「現場の取り決め値」）。グローバルのみ・ブック別上書きは作らない
+#   （YAGNI・受信ファイル注入の予防。サイドカー自動読みは絶対にしない）。
+VOCAB_FILE = HISTORY_DIR / "vocab.json"
+DEFAULT_VOCAB_MAX_ENTRIES = 200     # 個人利用の上限。無制限にしない
+DEFAULT_VOCAB_MAX_TERM_LEN = 40     # 語（キー）の最大長
+
 
 def _find_basrun_path() -> Path | None:
     """basrun.py の場所。環境変数 BASRUN > ailine と並びの checkout の順で探す。
@@ -982,6 +988,132 @@ def build_advisories(task: str, before: dict, after: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+# ★ A': 用語集（vocab）— 税率等の「現場の取り決め値」を LLM でなく辞書に持たせる。
+#   ~/.ailine/vocab.json（グローバルのみ）に {"語": 値} の平坦な dict で持つ。
+#   設定ファイル経由で唯一「自由入力」がコード生成に届く経路なので、他のどの入力より
+#   厳しく検疫する（float() 関門・制御文字禁止・件数/長さ上限。壊れたファイルは
+#   クラッシュせず空辞書として扱う）。
+# ---------------------------------------------------------------------------
+
+def _sanitize_vocab_term(term) -> str | None:
+    """語（キー）が登録可能な形か。空・制御文字・長すぎるものは None（拒否）。"""
+    s = str(term).strip()
+    if not s or len(s) > DEFAULT_VOCAB_MAX_TERM_LEN:
+        return None
+    if re.search(r"[\x00-\x1f\x7f]", s):   # 改行等の制御文字禁止（codegen へ渡る経路の防御）
+        return None
+    return s
+
+
+def load_vocab(path: Path | None = None) -> dict:
+    """~/.ailine/vocab.json を読む。無い/壊れている/形が違う場合は空の辞書を返す
+       （★ クラッシュしない・battery や pytest からは path 明示で差し替えて再現性を保つ）。
+       エントリごとに語をサニタイズし、値は float() を通ったものだけを採用する。
+       件数が上限を超えた分は読み捨てる（先着順・ファイルの並び順に依存）。"""
+    p = path or VOCAB_FILE
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    vocab: dict = {}
+    for term, value in raw.items():
+        if len(vocab) >= DEFAULT_VOCAB_MAX_ENTRIES:
+            break
+        clean_term = _sanitize_vocab_term(term)
+        if clean_term is None:
+            continue
+        try:
+            vocab[clean_term] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return vocab
+
+
+def save_vocab(vocab: dict, path: Path | None = None) -> None:
+    """vocab を ~/.ailine/vocab.json に上書き保存する。"""
+    p = path or VOCAB_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(vocab, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def vocab_add(term: str, value, path: Path | None = None) -> tuple:
+    """(ok, message)。term/value を検証してから登録・保存する。
+       未登録の新規語で件数が上限に達している場合は拒否する（既存語の値更新は上限に関係なく可）。"""
+    clean_term = _sanitize_vocab_term(term)
+    if clean_term is None:
+        return False, f"語『{term}』は登録できません（空/制御文字/{DEFAULT_VOCAB_MAX_TERM_LEN}文字超）"
+    try:
+        fval = float(value)
+    except (TypeError, ValueError):
+        return False, f"値『{value}』が数値ではありません"
+    vocab = load_vocab(path)
+    if clean_term not in vocab and len(vocab) >= DEFAULT_VOCAB_MAX_ENTRIES:
+        return False, f"用語集が上限（{DEFAULT_VOCAB_MAX_ENTRIES}件）に達しています"
+    vocab[clean_term] = fval
+    save_vocab(vocab, path)
+    return True, f"登録: {clean_term} = {fval:g}"
+
+
+# --- ★ A': APPEND_TOTAL の倍率(factor)を LLM から切り離し、機械が確定する ------------
+#   ①依頼文の明示率を regex で抽出 ②無ければ用語集を引く ③どちらも無く label が税/込を
+#   含むなら CLARIFY。LLM が factor を返しても、ここが常に勝つ（verify_dsl_args 側で
+#   食い違いを WARN として記録する）。
+
+_RATE_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]")
+_RATE_BAI_RE = re.compile(r"(\d+(?:\.\d+)?)\s*倍")
+_RATE_KEYWORD_RE = re.compile(r"税|倍率")
+_RATE_BARE_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
+
+
+def extract_rate_factor(text: str) -> tuple:
+    """依頼文から明示の倍率を抽出する。戻り値は (factor, 出典スニペット) か (None, None)。
+       ①「10%」「8 ％」型 → 1+n/100 ②「1.1倍」型 → n そのまま ③「税」「倍率」という語の
+       前後8文字だけにある裸の小数（例:「税率0.1」）→ 1未満なら 1+n・1以上ならそのまま
+       （無関係な数値の誤爆を避けるため、③だけは税/倍率の語の近傍に絞る）。
+       複数の異なる値が見つかった場合は断定しない（None, None・CLARIFY に委ねる）。"""
+    if not text:
+        return None, None
+    candidates: dict = {}   # factor -> 出典スニペット（最初に見つかったもの）
+    for m in _RATE_PCT_RE.finditer(text):
+        f = round(1 + float(m.group(1)) / 100, 6)
+        candidates.setdefault(f, m.group(0))
+    for m in _RATE_BAI_RE.finditer(text):
+        f = round(float(m.group(1)), 6)
+        candidates.setdefault(f, m.group(0))
+    if not candidates:
+        for km in _RATE_KEYWORD_RE.finditer(text):
+            window = text[max(0, km.start() - 8): km.end() + 8]
+            nm = _RATE_BARE_NUM_RE.search(window)
+            if nm:
+                n = float(nm.group(1))
+                f = round((1 + n) if n < 1 else n, 6)
+                candidates.setdefault(f, nm.group(0))
+    if len(candidates) == 1:
+        f, snippet = next(iter(candidates.items()))
+        return f, snippet
+    return None, None
+
+
+def lookup_vocab_factor(text: str, vocab: dict) -> tuple:
+    """依頼文に用語集の語が部分一致で含まれるかを見る。戻り値は (factor, 用語) か
+       (None, None)。複数の異なる語（異なる値）がヒットした場合は断定しない。"""
+    if not text or not vocab:
+        return None, None
+    hits: dict = {}
+    for term, value in vocab.items():
+        if term and term in text:
+            hits.setdefault(value, term)
+    if len(hits) == 1:
+        value, term = next(iter(hits.items()))
+        return value, term
+    return None, None
+
+
+# ---------------------------------------------------------------------------
 # M2b: 中間命令言語（DSL）パイプライン
 #   ①翻訳(LLM) → ②検証(接地) → ③確認行 → ④決定論 codegen(LLM不使用) → ⑤適用(既存機構)
 #   → ⑥op別事後条件(openpyxl で機械検証)
@@ -1026,7 +1158,8 @@ MERGE: セル結合。args: range("A1:C1"形式)
 CHART: 棒グラフ。args: value_col(列名)
 CENTER_ALIGN: 中央揃え。args: target("all" か "col:列名")
 APPEND_TOTAL: 列の合計を表の最終行の下に追加する（税込み合計等）。args: col(合計する列名),
-  label(省略可・既定"合計"。表示ラベル), factor(省略可・既定1。消費税10%込みなら1.1)"""
+  label(省略可・既定"合計"。表示ラベル。「税込み合計」等、依頼の言い方をそのまま入れる)
+  ★ 倍率(税率等)は入れない。数値化はここでは行わない（機械が別途確定する）"""
 
 # ★ M2c: battery(v1) が実測で取り違えた基本パターンに加え、複合依頼(battery v2)を few-shot で
 #   教える。同じ混同/構造を別の言い回しで示す（battery の項目文そのままは使わない＝暗記でなく
@@ -1057,10 +1190,12 @@ TRANSLATION_FEWSHOT = [
      '{"op": "BOLD", "args": {"target": "row:1"}}]}'),
     # ★ W6: APPEND_TOTAL 語彙昇格（監査3回連続失敗の実測による）。
     #   ①明示的な倍率(消費税等)つき ②単純な合計、の両方を教える。
+    #   ★ A': 倍率の数値化(1.1等)は LLM に求めない（factor は machine-determined。
+    #   verify_dsl_args の extract_rate_factor/lookup_vocab_factor が依頼文から確定する）。
     ('対象ブックの構成: {"Sheet": ["品目", "数量", "単価", "小計"]}\n'
      '依頼: 「税込み合計を一番下に出して（消費税10%）」',
      '{"plan": [{"op": "APPEND_TOTAL", "args": '
-     '{"col": "小計", "label": "税込み合計", "factor": 1.1}}]}'),
+     '{"col": "小計", "label": "税込み合計"}}]}'),
     ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
      '依頼: 「金額の合計を最後に」',
      '{"plan": [{"op": "APPEND_TOTAL", "args": {"col": "金額"}}]}'),
@@ -1218,10 +1353,14 @@ def resolve_col_ref(raw, headers: list) -> tuple:
     return None, False, f"列『{s}』がありません。ある列: {known}"
 
 
-def verify_dsl_args(op: str, args: dict, book_meta: dict) -> tuple:
+def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab: dict | None = None) -> tuple:
     """② 検証。(ok, resolved_args, inferred_keys, error_message)。
        args のシート/列名が実在するかを機械照合し、実在名に解決する。実在しなければ
-       CLARIFY 相当のエラーメッセージを返す（呼び出し側が確認質問として表示する）。"""
+       CLARIFY 相当のエラーメッセージを返す（呼び出し側が確認質問として表示する）。
+       ★ A': task/vocab は APPEND_TOTAL の倍率(factor)確定専用（他の op は使わない・
+       既定値のままで後方互換）。倍率の出典は resolved["_sources"]["factor"] に、
+       LLM 由来の値との食い違いは resolved["_warnings"] に積む（戻り値のタプル形は
+       変えない＝呼び出し側の unpack を壊さない）。"""
     sheets = book_meta["sheets"]
     headers = book_meta["headers"]
     if not sheets:
@@ -1345,17 +1484,57 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict) -> tuple:
     elif op == "APPEND_TOTAL":
         if (err := resolve_in("col", first_sheet)):
             return False, resolved, inferred, err
-        # ★ W6: label/factor は既定値を持つ任意項目。ここで確定させ、codegen/事後条件/
+        # ★ W6: label は既定値を持つ任意項目。ここで確定させ、codegen/事後条件/
         #   確認行の全部に同じ既定解決を一貫して渡す。
         resolved["label"] = str(resolved.get("label") or "合計")
-        factor_raw = resolved.get("factor", 1)
-        try:
-            factor = float(factor_raw) if factor_raw not in (None, "") else 1.0
-        except (TypeError, ValueError):
-            return False, resolved, inferred, f"倍率『{factor_raw}』が数値ではありません"
-        if factor <= 0:
-            return False, resolved, inferred, f"倍率『{factor_raw}』は正の数でなければなりません"
-        resolved["factor"] = factor
+        label = resolved["label"]
+
+        # ★ A': factor は LLM から受け取らない。LLM が返した値(あれば)はいったん取り出して
+        #   おき、機械抽出/用語集の結果と食い違う場合だけ WARN として記録する（常に機械が勝つ）。
+        llm_factor_raw = resolved.pop("factor", None)
+
+        text_factor, text_snippet = extract_rate_factor(task)
+        vocab_factor, vocab_term = (None, None)
+        if text_factor is None:
+            vocab_factor, vocab_term = lookup_vocab_factor(task, vocab or {})
+
+        sources: dict = {}
+        if text_factor is not None:
+            resolved["factor"] = text_factor
+            sources["factor"] = f"依頼文: {text_snippet}"
+        elif vocab_factor is not None:
+            resolved["factor"] = vocab_factor
+            sources["factor"] = f"用語集: {vocab_term}"
+        else:
+            resolved["factor"] = 1.0
+
+        if resolved["factor"] <= 0:
+            return False, resolved, inferred, f"倍率『{resolved['factor']}』は正の数でなければなりません"
+
+        # ★ 恒真式の番人（最優先）: label が「税」/「込」を含むのに倍率が確定できず既定
+        #   1.0 のままだと、税抜き金額に「税込み」ラベルが付いた恒真の誤りを事後条件が
+        #   pass にしてしまう（args 基準の検証だから）。ここで機械的に CLARIFY へ倒す
+        #   （語リストは 税/込 の2語で凍結・むやみに増やさない）。
+        if resolved["factor"] == 1.0 and any(k in label for k in ("税", "込")):
+            return False, resolved, inferred, (
+                f"ラベル『{label}』は税/込を含みますが倍率が分かりません。"
+                "依頼文に税率を書く（例:「消費税10%」）か、用語集に登録してください"
+                "（例: ailine vocab add 消費税 1.1）"
+            )
+
+        if sources:
+            resolved["_sources"] = sources
+        if llm_factor_raw not in (None, ""):
+            try:
+                llm_factor = float(llm_factor_raw)
+            except (TypeError, ValueError):
+                llm_factor = None
+            if llm_factor is not None and abs(llm_factor - resolved["factor"]) > 1e-9:
+                mfactor = resolved["factor"]
+                resolved["_warnings"] = [
+                    f"LLM が返した倍率({llm_factor:g})と機械抽出の倍率({mfactor:g})が"
+                    f"食い違うため機械抽出({mfactor:g})を採用しました"
+                ]
 
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
@@ -1386,7 +1565,10 @@ def format_confirmation_line(op: str, resolved_args: dict, inferred: set) -> str
     """命令言語形式の確認行を1行で組む（例: 解釈: 操作:並べ替え 対象:金額 順:降順）。
        推定で埋めた（数字表記から解決した等）引数には (推定) を付ける。
        ★ M2c: キー自体が resolved_args に無い任意項目（COMPUTE_COLUMN の target 等）は
-       そのフィールドを丸ごと省略する（必須項目は常に存在するので既存の表示は変わらない）。"""
+       そのフィールドを丸ごと省略する（必須項目は常に存在するので既存の表示は変わらない）。
+       ★ A': resolved_args["_sources"] に該当キーの出典があれば（例: 倍率:1.1）
+       末尾に「（用語集: 消費税）」のように出典を添える（verify_dsl_args の APPEND_TOTAL が積む）。"""
+    sources = resolved_args.get("_sources") or {}
     parts = [f"操作:{OP_LABELS.get(op, op)}"]
     for label, key, transform in _CONFIRM_FIELDS.get(op, ()):
         if key not in resolved_args:
@@ -1394,6 +1576,8 @@ def format_confirmation_line(op: str, resolved_args: dict, inferred: set) -> str
         val = resolved_args.get(key)
         shown = transform(val) if transform else val
         tag = "(推定)" if key in inferred else ""
+        if key in sources:
+            tag += f"（{sources[key]}）"
         parts.append(f"{label}:{shown}{tag}")
     return "解釈: " + " ".join(parts)
 
@@ -1476,6 +1660,13 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         #   ラベルは対象列の左隣に置く（既存の帳票では『合計』の文字が金額の左に来るのが自然
         #   で、対象列自体を上書きしない＝既存構造を壊さない置き方）。対象列が表の最左端
         #   （col_idx=0）の場合は左隣が無いため、値のみを書きラベルは省略する。
+        # ★ B: 挿入耐性式（bench/formula_spike_work2 で実測）。SUM(D2:INDEX(D:D;ROW()-1))
+        #   型で書く。INDEX(D:D;ROW()-1) は「この式自身の1行上」を指すので、後でデータ行を
+        #   1本挿入しても SUM 範囲が自動で追従する（静的な "D2:D5" 型は追従しない）。
+        #   ★ setFormula は LO 方言＝INDEX の2引数区切りはセミコロン(;)。カンマ(,)で
+        #   書くと #VALUE!/#NAME? になる（実測: formula_spike_RESULTS.md 追記分）。
+        #   保存後は自動でカンマ形 "=SUM(D2:INDEX(D:D,ROW()-1))*1.1" に変換される
+        #   （check_append_total はこの保存後カンマ形と照合する）。
         col_idx = headers[first_sheet].index(resolved_args["col"])
         label = str(resolved_args.get("label", "合計")).replace('"', '""')
         factor = float(resolved_args.get("factor", 1) or 1)
@@ -1489,8 +1680,8 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         if col_idx > 0:
             body += f'    oSheet.getCellByPosition({col_idx - 1}, totalRow).setString("{label}")\n'
         body += (f'    oSheet.getCellByPosition({col_idx}, totalRow).setFormula('
-                 f'"=SUM(" & "{col_letter}" & {start_excel_row} & ":" & "{col_letter}" & '
-                 f'(lastRow + 1) & ")" & "{factor_tail}")\n')
+                 f'"=SUM(" & "{col_letter}" & {start_excel_row} & ":INDEX(" & "{col_letter}" & '
+                 f'":" & "{col_letter}" & ";ROW()-1))" & "{factor_tail}")\n')
         return _wrap_basic(body)
 
     if op == "CENTER_ALIGN":
@@ -1974,12 +2165,19 @@ def check_center_align(path: Path, args: dict, header_row: int = 1) -> tuple:
     return "pass", f"{len(cells)} セルの中央揃えを確認"
 
 
+_APPEND_TOTAL_FORMULA_RE = re.compile(
+    r"^=SUM\([A-Za-z]{1,3}\d+:INDEX\([A-Za-z]{1,3}:[A-Za-z]{1,3},ROW\(\)-1\)\)(\*[\d.]+)?$",
+    re.IGNORECASE)
+
+
 def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
     """★ W6: APPEND_TOTAL の事後条件（二層・COMPUTE_COLUMN の use_formula 版と同じ考え方）。
-       ①式文字列が期待形『=SUM(...)』（factor!=1 のときは末尾に *factor が付く）
-       ②data_only 読みのキャッシュ値が「列合計×factor」と一致（浮動小数は丸め許容）。
-       対象列が表の最左端でない場合は、その左隣セルに期待ラベルが立っていることも確認する
-       （codegen_dsl の配置と対）。
+       ①式文字列が期待形『=SUM(<列><行>:INDEX(<列>:<列>,ROW()-1))』（★ B: 挿入耐性式・
+       factor!=1 のときは末尾に *factor が付く）②data_only 読みのキャッシュ値が
+       「列合計×factor」と一致（浮動小数は丸め許容）。対象列が表の最左端でない場合は、
+       その左隣セルに期待ラベルが立っていることも確認する（codegen_dsl の配置と対）。
+       ★ B: codegen は LO 方言（INDEX の引数区切りがセミコロン）で書くが、保存後は
+       カンマ区切りに自動変換される（実測）ので、ここではその保存後のカンマ形と照合する。
 
        ★ 合計行の位置は『対象列そのものに "=SUM(" で始まる式が最初に現れた行』として直接
        探す（生読み・型判定はしない）。実測で分かった罠が2つあり、どちらもこの探し方だけ
@@ -2014,9 +2212,11 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
         return "fail", _ZERO_TARGET_REASON
     total_row = r
     got_formula = ws.cell(row=total_row, column=idx).value
-    if not isinstance(got_formula, str) or not got_formula.replace(" ", "").startswith("=SUM("):
+    got_formula_norm = got_formula.replace(" ", "") if isinstance(got_formula, str) else ""
+    if not _APPEND_TOTAL_FORMULA_RE.match(got_formula_norm):
         wb.close()
-        return "fail", f"{total_row}行目: 合計の式が期待形（=SUM(...)）でない (実際 {got_formula!r})"
+        detail = f"{total_row}行目: 合計の式が期待形(挿入耐性 SUM 型)でない (実際 {got_formula!r})"
+        return "fail", detail
     label_ok = True
     want_label = str(args.get("label") or "合計")
     got_label = None
@@ -2452,6 +2652,8 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         "path": result.get("path", "freeform"),
         "command": result.get("command"),
         "postcondition": result.get("postcondition"),
+        # ★ A': 用語集/依頼文から機械確定した値（APPEND_TOTAL の倍率等）の出典。無ければ None。
+        "provenance": result.get("provenance"),
     }
 
 
@@ -2505,6 +2707,27 @@ def format_history_table(entries: list) -> str:
 def cmd_history(a: argparse.Namespace) -> int:
     entries = read_history(max_n=a.max)
     print(format_history_table(entries))
+    return 0
+
+
+# --- ★ A': 用語集(vocab) コマンド --------------------------------------------
+
+def cmd_vocab(a: argparse.Namespace) -> int:
+    """`ailine vocab add <語> <値>` / `ailine vocab list`。
+       ★ remove は作らない（今の実需では add/list の2本で足りる。壊れたら vocab.json を
+       直接編集すればよい）。"""
+    if a.vocab_cmd == "add":
+        ok, msg = vocab_add(a.term, a.value)
+        print(("✓ " if ok else "× ") + msg)
+        return 0 if ok else 1
+    # list
+    vocab = load_vocab()
+    if not vocab:
+        print(f"（用語集は空。{VOCAB_FILE} に登録するか `ailine vocab add <語> <値>` で追加）")
+        return 0
+    print(f"用語集（{VOCAB_FILE}・{len(vocab)}件）:")
+    for term in sorted(vocab):
+        print(f"  {term} = {vocab[term]:g}")
     return 0
 
 
@@ -2640,7 +2863,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
        ★ W3: source_book は cmd_run が翻訳より前に正規化済み（同じ LO 往復で StructDump も
        済ませてある）。ここでは正規化をやり直さない（二重 LO 起動を避ける）。
        book_meta["header_rows"] を codegen/事後条件へ一貫して渡す（三層とも同じ見出し推定）。"""
-    ok, resolved, inferred, err = verify_dsl_args(op, raw_args, book_meta)
+    vocab = load_vocab()
+    ok, resolved, inferred, err = verify_dsl_args(op, raw_args, book_meta, task=a.task, vocab=vocab)
     if not ok:
         print(f"？ {err}")
         return 3
@@ -2655,6 +2879,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     warn_overwrite = _maybe_warn_target_overwrite(op, resolved, book_meta, book)
     if warn_overwrite:
         print(warn_overwrite)
+    for w in resolved.get("_warnings", []):   # ★ A': LLM由来の値と機械抽出の食い違い
+        print(f"⚠ {w}")
 
     if a.ask:
         try:
@@ -2679,7 +2905,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     print("──────────────────────────────────────────")
 
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
-              "path": "dsl", "command": line, "postcondition": None}
+              "path": "dsl", "command": line, "postcondition": None,
+              "provenance": resolved.get("_sources")}
 
     if a.dry:
         print("（--dry: 適用しない。レビュー後に --dry を外して実行）")
@@ -3066,6 +3293,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     _helper_catalog, helper_files = load_helpers(helpers_dir)
     header_rows = book_meta.get("header_rows", {})
     use_formula = not getattr(a, "values", False)
+    vocab = load_vocab()
 
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
               "path": "plan", "command": None, "postcondition": None}
@@ -3085,7 +3313,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 preview_items.append((i, about, "warn", None))
                 plan_json.append({"op": op, "command": about, "status": "warn", "postcondition": None})
             else:
-                ok_v, resolved, inferred, err = verify_dsl_args(op, step.get("args", {}), book_meta)
+                ok_v, resolved, inferred, err = verify_dsl_args(
+                    op, step.get("args", {}), book_meta, task=a.task, vocab=vocab)
                 if ok_v:
                     label = format_confirmation_line(op, resolved, inferred)[len("解釈: "):]
                     preview_items.append((i, label, "ok", "未実行・プレビューのみ"))
@@ -3112,6 +3341,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     current_meta = book_meta
     items: list = []         # (idx, label, status, detail)
     plan_json: list = []     # --json 用（既存キー不変・新規追加）
+    plan_provenance: list = []   # ★ A': 段ごとの倍率等の出典（history.jsonl 用）
 
     for i, step in enumerate(plan, 1):
         op = step.get("op")
@@ -3145,12 +3375,14 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             new_cols = [c for c in current_meta["headers"].get(first_sheet, [])
                         if c not in original_headers.get(first_sheet, [])]
         raw_args = step.get("args", {})
-        ok_v, resolved, inferred, err = verify_dsl_args(op, raw_args, current_meta)
+        ok_v, resolved, inferred, err = verify_dsl_args(
+            op, raw_args, current_meta, task=a.task, vocab=vocab)
         if not ok_v and new_cols and first_sheet:
             patched = _apply_new_column_fallback(
                 op, raw_args, current_meta["headers"].get(first_sheet, []), new_cols)
             if patched != raw_args:
-                ok_v2, resolved2, inferred2, err2 = verify_dsl_args(op, patched, current_meta)
+                ok_v2, resolved2, inferred2, err2 = verify_dsl_args(
+                    op, patched, current_meta, task=a.task, vocab=vocab)
                 if ok_v2:
                     ok_v, resolved, inferred, err = ok_v2, resolved2, inferred2, err2
 
@@ -3164,6 +3396,10 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
         warn_overwrite = _maybe_warn_target_overwrite(op, resolved, current_meta, out_book)
         if warn_overwrite:
             print(f"  {i}段目: {warn_overwrite}")
+        for w in resolved.get("_warnings", []):   # ★ A': LLM由来の値と機械抽出の食い違い
+            print(f"  {i}段目: ⚠ {w}")
+        if resolved.get("_sources"):
+            plan_provenance.append({"step": i, **resolved["_sources"]})
         step_header_row = current_meta.get("header_rows", {}).get(first_sheet, 1) if first_sheet else 1
         code = codegen_dsl(op, resolved, current_meta, use_formula=use_formula)
         (workdir / f"plan_step{i}.bas").write_text(code, encoding="utf-8")
@@ -3206,6 +3442,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     after_all = snapshot(out_book)
     _changed, difflines = diff_snapshots(before_all, after_all)
     result["plan"] = plan_json
+    result["provenance"] = plan_provenance or None
     result["items"] = [{"idx": idx, "label": label, "status": st, "detail": det}
                         for idx, label, st, det in items]
     result["changes"] = difflines
@@ -3283,6 +3520,14 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("book", help="対象の文書 (.xlsx / .ods)")
     rs.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
     rs.set_defaults(func=cmd_restore)
+
+    v = sub.add_parser("vocab", help="用語集（税率等の取り決め値）を編集・表示する")
+    vsub = v.add_subparsers(dest="vocab_cmd", required=True)
+    va = vsub.add_parser("add", help="語を登録する（例: ailine vocab add 消費税 1.1）")
+    va.add_argument("term", help="語（例: 消費税）")
+    va.add_argument("value", help="値（倍率。例: 1.1）")
+    vl = vsub.add_parser("list", help="登録済みの語を一覧表示する")
+    v.set_defaults(func=cmd_vocab)
     return ap
 
 
