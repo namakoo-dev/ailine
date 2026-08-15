@@ -2058,6 +2058,7 @@ def test_cmd_run_cleans_up_workdir_after_clarify_exit(tmp_path, monkeypatch):
 
 # --- ★ M2c: 正規化パス失敗時の1回だけ自動リトライ ------------------------------
 
+@pytest.mark.real_normalize_book
 def test_normalize_book_retries_once_after_stop_and_succeeds(tmp_path, monkeypatch):
     book = tmp_path / "book.xlsx"
     book.write_bytes(b"x")
@@ -2074,6 +2075,7 @@ def test_normalize_book_retries_once_after_stop_and_succeeds(tmp_path, monkeypat
     assert calls["stop"] == 1
     assert result.exists()
 
+@pytest.mark.real_normalize_book
 def test_normalize_book_gives_up_after_second_failure(tmp_path, monkeypatch):
     book = tmp_path / "book.xlsx"
     book.write_bytes(b"x")
@@ -2082,6 +2084,7 @@ def test_normalize_book_gives_up_after_second_failure(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         ailine.normalize_book(book, tmp_path)
 
+@pytest.mark.real_normalize_book
 def test_normalize_book_succeeds_first_try_without_retry(tmp_path, monkeypatch):
     book = tmp_path / "book.xlsx"
     book.write_bytes(b"x")
@@ -2392,6 +2395,71 @@ def test_verify_dsl_args_compute_column_single_operand_clarifies_when_no_rate():
     assert "倍率" in err and "分かりません" in err
     assert "ailine vocab add" in err
 
+def test_verify_dsl_args_compute_column_single_operand_no_rate_signal_questions_classification():
+    # ★ W10c 高: 依頼文に率らしい語が一切無いのに「1列×率」へ分類されたのは、分類自体が
+    #   誤っている可能性が高い（実測: 「氏名の列を全部『退職済み』に書き換えて」が税率の
+    #   話と誤認された事故の再現）。旧来の「倍率が分かりません」ではなく、分類を疑う
+    #   文言に変わること・元の「倍率が分かりません」定型文はもう出ないこと。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["氏名", "部署", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["氏名"], "operator": "*"}, meta,
+        task="氏名の列を全部『退職済み』に書き換えて")
+    assert not ok
+    assert "倍率らしき手がかりが見当たりません" in err
+    assert "倍率（税率等）が分かりません" not in err
+
+def test_verify_dsl_args_compute_column_single_operand_with_rate_signal_keeps_old_message():
+    # 率らしい語（税/倍/掛け等）が依頼文にあれば、従来どおりの「倍率が分かりません」を返す
+    # （regression: test_verify_dsl_args_compute_column_single_operand_clarifies_when_no_rate
+    # と同じ入力・上の新しい番人が誤って一般ケースまで飲み込んでいないことの確認）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*"}, meta,
+        task="税込みの列を追加して")
+    assert not ok
+    assert "倍率（税率等）が分かりません" in err
+
+def test_verify_dsl_args_compute_column_single_operand_labels_new_column_for_tax_inclusive():
+    # ★ W10c 中: 依頼文が「税込」と明言していれば、新規列の見出しに使う自然なラベルを
+    #   resolved["_new_col_label"] として渡す（A' 原則: LLM を使わず正規表現のみ）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*"}, meta,
+        task="税込み金額の列を追加して（消費税10%）")
+    assert ok
+    assert resolved["_new_col_label"] == "税込金額"
+
+def test_verify_dsl_args_compute_column_single_operand_labels_new_column_for_tax_exclusive():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "/"}, meta,
+        task="税抜き金額の列を追加して（消費税10%）")
+    assert ok
+    assert resolved["_new_col_label"] == "税抜金額"
+
+def test_verify_dsl_args_compute_column_single_operand_no_label_when_target_explicit():
+    # target 指定（既存列）時は新規列を作らないので _new_col_label は要らない。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額", "税込み金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "target": "税込み金額"}, meta,
+        task="消費税10%を金額に掛けて税込み金額に入れて")
+    assert ok
+    assert "_new_col_label" not in resolved
+
+def test_codegen_dsl_compute_column_single_operand_uses_new_col_label_when_present():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    code = ailine.codegen_dsl(
+        "COMPUTE_COLUMN",
+        {"operands": ["金額"], "operator": "*", "factor": 1.1, "_new_col_label": "税込金額"}, meta)
+    assert 'setString("税込金額")' in code
+    assert 'setString("金額*1.1")' not in code
+
+def test_check_compute_column_single_factor_uses_new_col_label_when_present(tmp_path):
+    p = _book(tmp_path, [["品目", "金額", "税込金額"], ["a", 100, 110.0], ["b", 200, 220.0]])
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["金額"], "operator": "*", "factor": 1.1, "_new_col_label": "税込金額"})
+    assert status == "pass"
+
 def test_verify_dsl_args_compute_column_single_operand_llm_factor_ignored_but_warns():
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
     ok, resolved, inferred, err = ailine.verify_dsl_args(
@@ -2515,6 +2583,59 @@ def test_verify_dsl_args_lookup_fill_rejects_non_first_sheet_target():
     assert ok is False
     assert "1枚目" in err
 
+# ★ W10c 致命2: target_col が対象シートに実在しない場合の扱い。
+#   実測の再現: 対象シートに『単価』列が無い状態で「単価表を見て単価を入れて」を依頼すると、
+#   LLM が依頼に無い別の実在列（『数量』）を勝手に代わりに返すことがあった
+#   （resolve_col_ref は実在列名なら無条件で通すため、これだけでは見分けられない）。
+
+def test_verify_dsl_args_lookup_fill_missing_target_col_creates_new_when_task_names_it():
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品コード", "数量"], "単価表": ["商品コード", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"},
+        meta, task="単価表を見て単価を入れて")
+    assert ok is True
+    assert resolved["target_col"] == "単価"   # 依頼文にある名前のまま＝新規列名として使う
+
+def test_verify_dsl_args_lookup_fill_existing_target_col_without_grounds_clarifies():
+    # ★ 監査事故の再現そのもの: LLM が返した『数量』は実在するが、依頼文のどこにも
+    # 現れず、転記元（単価表）の値列（単価）とも一致しない＝黙って信用せず CLARIFY
+    # （無関係な既存列を上書き対象にしない）。
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品コード", "数量"], "単価表": ["商品コード", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "数量", "source_sheet": "単価表", "key_col": "商品コード"},
+        meta, task="単価表を見て単価を入れて")
+    assert ok is False
+    assert "取り違えている" in err
+    assert "数量" in err
+
+def test_verify_dsl_args_lookup_fill_existing_target_col_matching_source_value_col_trusted():
+    # target_col が実在し、依頼文には無くても、転記元の値列と同じ名前なら信用してよい
+    # （VLookupFromTable は常に参照表の列1を値として転記するため、一番自然な対応）。
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品", "数量", "単価"], "単価表": ["商品", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"},
+        meta, task="埋めて")
+    assert ok is True
+    assert resolved["target_col"] == "単価"
+
+def test_verify_dsl_args_lookup_fill_missing_target_col_digit_reference_still_resolves():
+    # 数字表記の推定（従来どおり）は維持する（一意に決まる場合のみ）。
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品コード", "数量"], "単価表": ["商品コード", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "0", "source_sheet": "単価表", "key_col": "商品コード"},
+        meta, task="単価表を見て入れて")
+    assert ok is True
+    assert resolved["target_col"] == "商品コード"
+    assert "target_col" in inferred
+
 def test_verify_dsl_args_fill_color_unknown_color():
     ok, resolved, inferred, err = ailine.verify_dsl_args(
         "FILL_COLOR", {"target": "col:金額", "color": "虹色"}, _SAMPLE_META)
@@ -2574,6 +2695,17 @@ def test_codegen_dsl_lookup_fill_calls_helper():
     code = ailine.codegen_dsl(
         "LOOKUP_FILL",
         {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}, meta)
+    assert 'Call VLookupFromTable(oDoc, 0, 0, 2, "単価表")' in code
+
+def test_codegen_dsl_lookup_fill_creates_new_column_when_target_col_missing():
+    # ★ W10c 致命2: target_col が対象シートに実在しない場合、末尾に新しい列を作ってから
+    #   転記する（COMPUTE_COLUMN の新規列作成と同じ考え方）。
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品コード", "数量"], "単価表": ["商品コード", "単価"]}}
+    code = ailine.codegen_dsl(
+        "LOOKUP_FILL",
+        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"}, meta)
+    assert 'getCellByPosition(2, 0).setString("単価")' in code
     assert 'Call VLookupFromTable(oDoc, 0, 0, 2, "単価表")' in code
 
 def test_codegen_dsl_aggregate_calls_helper():
@@ -4480,7 +4612,44 @@ def test_unrequested_new_sheet_advisory_empty_when_no_new_sheet():
     after = {"sheets": ["Sheet"]}
     assert ailine.unrequested_new_sheet_advisory("金額を並べ替えて", before, after) == []
 
-def test_cmd_run_dsl_aggregate_flags_unrequested_new_sheet(tmp_path, monkeypatch, capsys):
+
+# ===========================================================================
+# ★ W10c 中: AGGREGATE/PIVOT の新規シート作成は宣言どおりの効果（中立表示に落とす）
+# ===========================================================================
+
+@pytest.mark.parametrize("op", ["AGGREGATE", "PIVOT"])
+def test_neutralize_declared_new_sheet_warning_replaces_for_declared_ops(op):
+    before = {"sheets": ["Sheet"]}
+    after = {"sheets": ["Sheet", "集計"]}
+    advisories = ailine.unrequested_new_sheet_advisory("部門ごとに金額を集計して", before, after)
+    out = ailine._neutralize_declared_new_sheet_warning(advisories, op, before, after)
+    assert out == ["（新規シート『集計』の作成は意図どおりです）"]
+
+def test_neutralize_declared_new_sheet_warning_noop_for_other_ops():
+    before = {"sheets": ["Sheet"]}
+    after = {"sheets": ["Sheet", "集計"]}
+    advisories = ["★ 依頼にない新しいシートが作成されました（集計）"]
+    out = ailine._neutralize_declared_new_sheet_warning(advisories, "COMPUTE_COLUMN", before, after)
+    assert out == advisories   # 対象外の op は一切変えない
+
+def test_neutralize_declared_new_sheet_warning_conservative_when_multiple_new_sheets():
+    # 保守的（安全器官の減衰は迷ったら出す側）: 新規シートが2枚以上できたら宣言どおりの
+    # 単一効果と断定できないので、警告はそのまま残す。
+    before = {"sheets": ["Sheet"]}
+    after = {"sheets": ["Sheet", "集計", "もう一枚"]}
+    advisories = ["★ 依頼にない新しいシートが作成されました（集計）",
+                  "★ 依頼にない新しいシートが作成されました（もう一枚）"]
+    out = ailine._neutralize_declared_new_sheet_warning(advisories, "AGGREGATE", before, after)
+    assert out == advisories
+
+def test_cmd_run_dsl_aggregate_neutralizes_unrequested_new_sheet_warning(tmp_path, monkeypatch, capsys):
+    # ★ W10c 中（査定で名指し）: この検体は「シート/ピボット/別に」のどれも言わない依頼
+    #   （「部門ごとに金額を集計して」）で、旧実装は AGGREGATE が新規シートを作るたびに
+    #   「★ 依頼にない新しいシートが作成されました」が出ていた（AGGREGATE は定義上・毎回
+    #   新規シートを作るのが宣言済みの効果なので、これは常に誤警報だった）。
+    #   今回 _neutralize_declared_new_sheet_warning を追加し、中立表示に変わる
+    #   （旧テスト名 test_..._flags_unrequested_new_sheet はこの検体名を維持したまま
+    #   期待を更新。旧警告文そのものが出ないことは下のアサーションで別途担保）。
     book = _book(tmp_path, [["部門", "金額"], ["a", 100], ["a", 200], ["b", 300]])
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "translate_task",
@@ -4506,7 +4675,8 @@ def test_cmd_run_dsl_aggregate_flags_unrequested_new_sheet(tmp_path, monkeypatch
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
-    assert "★ 依頼にない新しいシートが作成されました（集計）" in captured.out
+    assert "★ 依頼にない新しいシートが作成されました" not in captured.out
+    assert "（新規シート『集計』の作成は意図どおりです）" in captured.out
 
 def test_cmd_run_dsl_aggregate_silent_when_task_mentions_sheet_keyword(tmp_path, monkeypatch, capsys):
     book = _book(tmp_path, [["部門", "金額"], ["a", 100], ["b", 300]])
@@ -5053,6 +5223,34 @@ def test_maybe_warn_target_overwrite_none_when_no_existing_values(tmp_path):
 def test_maybe_warn_target_overwrite_none_for_non_compute_column_ops():
     assert ailine._maybe_warn_target_overwrite("SORT", {"col": "金額"}, {"sheets": ["S"]}, Path(".")) is None
 
+# ★ W10c 致命1: 破壊の関所を op ごとの if から OP_WRITE_TARGET 宣言読み取りへ一般化した
+#   ことの中核テスト。旧実装は `if op != "COMPUTE_COLUMN": return None` の1行で
+#   LOOKUP_FILL がこの関所を素通りしていた（監査実測の事故そのもの）。
+
+def test_op_write_target_declares_all_ops():
+    # ★ 再発防止の本体: OP_SCHEMA に op を足したのに OP_WRITE_TARGET への宣言を忘れると
+    #   このテストが落ちる（宣言漏れ＝黙って関所を素通りする新しい op、を機械的に防ぐ）。
+    missing = [op for op in ailine.OP_SCHEMA if op not in ailine.OP_WRITE_TARGET]
+    assert missing == [], f"OP_WRITE_TARGET に書き込み先列の宣言が無い op: {missing}"
+
+def test_maybe_warn_target_overwrite_fires_for_lookup_fill_existing_target_col(tmp_path):
+    # ★ 致命1の再現そのもの: 旧実装はここが常に None だった（op != COMPUTE_COLUMN のため）。
+    p = _book(tmp_path, [["商品", "数量", "単価"], ["りんご", 2, 999], ["バナナ", 3, 999]])
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "数量", "単価"]}}
+    msg = ailine._maybe_warn_target_overwrite(
+        "LOOKUP_FILL", {"target_sheet": "Sheet", "target_col": "単価",
+                         "source_sheet": "単価表", "key_col": "商品"}, meta, p)
+    assert msg == "★ 対象列『単価』には既存の値が 2 件あります（上書きします）"
+
+def test_maybe_warn_target_overwrite_none_for_lookup_fill_new_column(tmp_path):
+    # target_col が対象シートにまだ無い（新規作成）場合は件数0なので警告なし
+    # （COMPUTE_COLUMN の新規列と同じ扱い）。
+    p = _book(tmp_path, [["商品", "数量"], ["りんご", 2], ["バナナ", 3]])
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "数量"]}}
+    assert ailine._maybe_warn_target_overwrite(
+        "LOOKUP_FILL", {"target_sheet": "Sheet", "target_col": "単価",
+                         "source_sheet": "単価表", "key_col": "商品"}, meta, p) is None
+
 
 # --- 解釈要約（実行前の可視化） --------------------------------------------------
 
@@ -5182,6 +5380,23 @@ def _overwrite_book(tmp_path, name="book.xlsx"):
         ["みかん", 800, 25, 4000, 3500],
     ])
 
+def _fake_apply_new_column(out_book, code, workdir, helper_files=(), timeout=None):
+    """COMPUTE_COLUMN(売上-原価→新規列) の実際の計算結果を書き込む fake_apply。
+    ★ W10c 追加項目（CI 落ち対応）: この2テストはもともと basrun_apply を monkeypatch
+    せず real LibreOffice（basrun.py 経由）に実際の適用をやらせていた（開発機に basrun が
+    隣接していたため気づかず緑になっていた・CI では basrun.py が無く落ちる）。
+    tests/conftest.py の既定（normalize_book だけ pass-through）だけでは、この2テストは
+    事後条件チェッカーが実際の新規列を要求するため緑にならない。COMPUTE_COLUMN の新規列
+    作成（target 無指定）の codegen と同じ結果（列F=売上-原価）をここで直接書く
+    （_fake_apply_overwrite_target と同じ作法）。"""
+    wb2 = openpyxl.load_workbook(out_book)
+    ws2 = wb2.active
+    ws2.cell(row=1, column=6, value="売上-原価")
+    ws2.cell(row=2, column=6, value=5000 - 3000)
+    ws2.cell(row=3, column=6, value=4000 - 3500)
+    wb2.save(out_book)
+    return True, None, "ok"
+
 def test_cmd_run_dsl_new_column_creation_skips_gate_entirely(tmp_path, monkeypatch, capsys):
     # 新規列作成（target 無指定）は「破壊だけ関所」の対象外・従来どおり素通り。
     book = _overwrite_book(tmp_path)
@@ -5190,7 +5405,8 @@ def test_cmd_run_dsl_new_column_creation_skips_gate_entirely(tmp_path, monkeypat
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "COMPUTE_COLUMN", "args": {"operands": ["売上", "原価"], "operator": "-"}})
-    ns = _overwrite_scenario_ns(book)
+    monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_new_column)
+    ns = _overwrite_scenario_ns(book, values=True)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -5199,16 +5415,15 @@ def test_cmd_run_dsl_new_column_creation_skips_gate_entirely(tmp_path, monkeypat
 
 def test_cmd_run_dsl_new_column_creation_neutralizes_ghost_warning(tmp_path, monkeypatch, capsys):
     # ★ W10b 項目4a(摩擦): 新規列作成(target無指定)は宣言どおりの効果として『範囲外』の
-    #   ★疑わしい表示を出さない（中立表示に落ちる）。COMPUTE_COLUMN の実適用は基盤の
-    #   codegen_dsl(ルールベース)なので basrun_apply も実際に走らせて確かめる
-    #   （既存の new_column_creation_skips_gate テストと同じ作法・real LibreOffice）。
+    #   ★疑わしい表示を出さない（中立表示に落ちる）。
     book = _overwrite_book(tmp_path)
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "COMPUTE_COLUMN", "args": {"operands": ["売上", "原価"], "operator": "-"}})
-    ns = _overwrite_scenario_ns(book)
+    monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_new_column)
+    ns = _overwrite_scenario_ns(book, values=True)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -5386,6 +5601,114 @@ def test_cmd_run_dsl_overwrite_gate_no_summary_line_when_target_explicit(tmp_pat
     assert rc == 7
     assert "既存の値が" in captured.out
     assert "と解釈しました" not in captured.out
+
+
+# --- cmd_run_dsl 統合（LOOKUP_FILL・W10c 致命1/2 の通し確認） --------------------
+
+def _lookup_gate_book(tmp_path, target_values=(999, 999)):
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "明細"
+    ws1.append(["商品", "数量", "単価"])
+    ws1.append(["りんご", 2, target_values[0]])
+    ws1.append(["バナナ", 3, target_values[1]])
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品", "単価"], ["りんご", 100], ["バナナ", 200]]:
+        ws2.append(row)
+    book = tmp_path / "lookup_gate.xlsx"
+    wb.save(book)
+    return book
+
+def _lookup_gate_ns(book, **overrides):
+    base = dict(
+        book=str(book), task="単価表から単価を引いてきて明細に入れて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False, overwrite=False,
+        values=False)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+def test_cmd_run_dsl_lookup_fill_overwrite_gate_blocks_noninteractive_exit7(tmp_path, monkeypatch, capsys):
+    # ★ W10c 致命1: LOOKUP_FILL は旧実装で破壊の関所が構造的に発火しなかった
+    #   （op != "COMPUTE_COLUMN" の1行のせい）。既存の『単価』列に値がある状態で転記を
+    #   依頼すると、非対話では exit 7 で止まり原本は無傷であること。
+    book = _lookup_gate_book(tmp_path)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "LOOKUP_FILL", "args": {
+                            "target_sheet": "明細", "target_col": "単価",
+                            "source_sheet": "単価表", "key_col": "商品"}})
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = _lookup_gate_ns(book)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 7
+    assert "既存の値が 2 件あります" in captured.out
+    assert "--overwrite" in captured.out
+    assert book.read_bytes() == original_bytes   # 原本は無傷
+
+def test_cmd_run_dsl_lookup_fill_overwrite_gate_bypassed_with_overwrite_flag(tmp_path, monkeypatch, capsys):
+    book = _lookup_gate_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "LOOKUP_FILL", "args": {
+                            "target_sheet": "明細", "target_col": "単価",
+                            "source_sheet": "単価表", "key_col": "商品"}})
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws = wb2["明細"]
+        ws.cell(row=2, column=3, value=100)
+        ws.cell(row=3, column=3, value=200)
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    ns = _lookup_gate_ns(book, overwrite=True)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert "上書きしますか" not in captured.out   # 関所自体をスキップ
+    assert rc == 0
+    assert "✓ 反映しました" in captured.out
+
+def test_cmd_run_dsl_lookup_fill_missing_column_does_not_corrupt_unrelated_column(tmp_path, monkeypatch, capsys):
+    # ★ W10c 致命2 の通し確認（査定の再現そのもの）: 明細シートに『単価』列がまだ無い状態
+    #   で「単価表を見て単価を入れて」を依頼したとき、無関係な既存列（数量）が黙って
+    #   潰されないこと。LLM が誤って「数量」を返すケースを直接シミュレートする。
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "明細"
+    ws1.append(["商品コード", "数量"])
+    ws1.append(["A001", 5])
+    ws1.append(["A002", 3])
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品コード", "単価"], ["A001", 450], ["A002", 300]]:
+        ws2.append(row)
+    book = tmp_path / "lookup_missing_col.xlsx"
+    wb.save(book)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    # 実測どおりの誤り: LLM が依頼に無い『数量』を target_col として返す。
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "LOOKUP_FILL", "args": {
+                            "target_sheet": "明細", "target_col": "数量",
+                            "source_sheet": "単価表", "key_col": "商品コード"}})
+    def _boom(prompt=""):
+        raise AssertionError("verify_dsl_args が CLARIFY で止まるはずで input まで来ない")
+    monkeypatch.setattr("builtins.input", _boom)
+    ns = _lookup_gate_ns(book, task="単価表を見て単価を入れて")
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 3   # CLARIFY 相当（取り違えの疑いありの質問で止まる）
+    assert "取り違えている" in captured.out
+    assert book.read_bytes() == original_bytes   # 原本は無傷（数量列は一切触られない）
 
 
 # --- cmd_run_plan 統合（複合計画の段ごとの関所） ---------------------------------

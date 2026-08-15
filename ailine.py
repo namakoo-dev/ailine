@@ -990,6 +990,36 @@ def unrequested_new_sheet_advisory(task: str, before: dict, after: dict) -> list
     return [f"★ 依頼にない新しいシートが作成されました（{s}）" for s in new_sheets]
 
 
+# ★ W10c 中: AGGREGATE(SummaryTable)/PIVOT(DataPilot) は定義上・毎回新規シートを作る
+#   のが op の宣言済みの効果。依頼文が「シート」「ピボット」「別に」のどれも使わない
+#   言い方（例:「部門ごとに金額をまとめて」）だと _NEW_SHEET_MENTION_RE の言及ベース抑制は
+#   効かず、意図した新設のたびに「★ 依頼にない新しいシートが作成されました」が出ていた
+#   （査定で名指しされた摩擦・W10b 項目4a で COMPUTE_COLUMN の新規列にやったのと同じ処置）。
+OP_DECLARED_SHEET_EFFECT = {"AGGREGATE", "PIVOT"}
+
+
+def _neutralize_declared_new_sheet_warning(advisories: list, op: str, before: dict, after: dict) -> list:
+    """op が OP_DECLARED_SHEET_EFFECT（新規シート作成が宣言済みの効果）で、かつ実際に
+       ちょうど1枚だけ新規シートができた場合に限り、その1枚についての
+       『依頼にない新しいシートが作成されました』を中立表示に落とす。
+       ★ 保守的（安全器官の減衰は迷ったら出す側）: 新規シートが2枚以上できた場合や
+       op が対象外の場合は一切変えない（宣言どおりの効果と断定できないケースは残す）。"""
+    if op not in OP_DECLARED_SHEET_EFFECT:
+        return advisories
+    new_sheets = _new_sheets(before, after)
+    if len(new_sheets) != 1:
+        return advisories
+    sheet = new_sheets[0]
+    target_line = f"★ 依頼にない新しいシートが作成されました（{sheet}）"
+    out = []
+    for line in advisories:
+        if line == target_line:
+            out.append(f"（新規シート『{sheet}』の作成は意図どおりです）")
+            continue
+        out.append(line)
+    return out
+
+
 def _changed_sheets(before: dict, after: dict) -> set:
     """何かしら変わったシート名の集合（セル・結合・列幅・行高・追加/削除）。"""
     changed = set()
@@ -1152,6 +1182,15 @@ _RATE_KAKE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:を|に)?\s*掛け")
 _RATE_WARI_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:で|に)?\s*割っ")
 _RATE_KEYWORD_RE = re.compile(r"税|倍率")
 _RATE_BARE_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
+# ★ W10c 高: 依頼文に「率らしい語」が一切無いのに COMPUTE_COLUMN の「1列×率」パターン
+#   （税込み/税抜き専用）へ誤分類された時に分類そのものを疑うための、より広い信号語。
+#   上の各 _RATE_*_RE より緩い（数値を伴わなくても良い）— 「倍率を求める話かどうか」
+#   だけを見る。
+_RATE_SIGNAL_RE = re.compile(r"[%％]|倍|掛け|割っ|税")
+# ★ W10c 中: 新規列の見出しを自然な日本語にするための語（A' 原則: LLM を使わず正規表現の
+#   有無判定だけで決める。査定で名指しされた「金額*1.1」という数式風の見出しの対応）。
+_TAX_INCLUSIVE_RE = re.compile(r"税込")
+_TAX_EXCLUSIVE_RE = re.compile(r"税抜")
 
 
 def extract_rate_factor(text: str) -> tuple:
@@ -1278,6 +1317,36 @@ OP_SCHEMA = {
     "PIVOT": ("group_col", "value_col"),
 }
 
+# ★ W10c 致命1: 「破壊の関所」（既存列への上書き検知・下の _maybe_warn_target_overwrite）が
+#   守る対象を op ごとの if 分岐で持たず宣言駆動にする。旧実装は
+#   `if op != "COMPUTE_COLUMN": return None` の1行で、COMPUTE_COLUMN 以外（LOOKUP_FILL 等）
+#   は関所が構造的に発火しなかった（監査実測: 存在しない転記先列が無関係な既存列へ
+#   解決され、確認なしで上書きされた事故）。
+#   値は (書き込み先列の resolved args キー, 対象シート名の resolved args キー or None)、
+#   または「この op には既存列の値を上書きする効果が無い」ことを示す明示の None。
+#   None は「安全だから省略した」のではなく「対象が無いと確認した」宣言 — 新しい op を
+#   足すたびにここへの追記が必須になる（test_op_write_target_declares_all_ops が
+#   OP_SCHEMA の全 op に対する宣言漏れを機械的に検査する＝再発防止の本体）。
+#   sheet_key が None のときは book_meta の先頭シート（現行 DSL が書き込み対象にする
+#   唯一のシート）を指す。LOOKUP_FILL だけ target_sheet で別シートを明示できる。
+OP_WRITE_TARGET = {
+    "SORT": None,                          # 並べ替えのみ・値そのものは保存される
+    "COMPUTE_COLUMN": ("target", None),    # target 無指定時は新規列（resolved に無い＝安全)
+    "LOOKUP_FILL": ("target_col", "target_sheet"),
+    "AGGREGATE": None,                     # 新規シートを作るだけ（既存列は書かない）
+    "BOLD": None,                          # 書式のみ・値を書かない
+    "FILL_COLOR": None,
+    "NUMBER_FORMAT": None,
+    "MERGE": None,
+    "CHART": None,
+    "CENTER_ALIGN": None,
+    "APPEND_TOTAL": None,                  # データ末尾の新規行に追記するだけ（W6・既存列は不可侵）
+    "INSERT_ROWS": None,                   # 行を挿入するだけ・既存値は下にずれるだけで残る
+    "DRAW_BORDERS": None,
+    "AUTOFIT": None,
+    "PIVOT": None,                         # 新規シートを作るだけ
+}
+
 # ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、
 #   本番プロンプトはここが唯一の元）。
 OPS_DOC = """SORT: 並べ替え。args: col(列名), order(asc|desc)
@@ -1287,6 +1356,9 @@ COMPUTE_COLUMN: 既存列同士の計算。args: operands(列名2つ), operator(
   operator は * (税込み等、掛ける) か / (税抜き等、割る)。倍率(税率等)の数値はここに入れない
   （数値化はここでは行わない・機械が別途確定する。APPEND_TOTAL の倍率と同じ扱い）
 LOOKUP_FILL: 別シートの対応表から値を転記。args: target_sheet, target_col, source_sheet, key_col
+  ★ target_col は target_sheet に実在する列名が望ましいが、無ければ依頼文に書かれている
+  そのままの列名を入れてよい（実行時にその名前で新しい列を作る）。実在しない列名を
+  依頼文に無い別の実在列名に置き換えて誤魔化してはいけない（無関係な列を上書きする事故になる）
 AGGREGATE: グループ別に集計表を作る。args: group_col, value_col
 BOLD: 太字。args: target("row:行番号" か "col:列名")
 FILL_COLOR: 背景色。args: target("row:N"か"col:列名"), color(英語色名)
@@ -1322,6 +1394,12 @@ TRANSLATION_FEWSHOT = [
      '依頼: 「商品マスタから商品名を引っ張ってきて明細に入れて」',
      '{"plan": [{"op": "LOOKUP_FILL", "args": {"target_sheet": "Sheet", "target_col": "商品", '
      '"source_sheet": "商品マスタ", "key_col": "商品"}}]}'),
+    # ★ W10c 致命2: target_col が対象シートにまだ無いケース（監査実測: これを教えないと
+    #   LLM が依頼に無い別の実在列名（この例なら「数量」）を勝手に代入することがあった）。
+    ('対象ブックの構成: {"明細": ["商品コード", "数量"], "単価表": ["商品コード", "単価"]}\n'
+     '依頼: 「単価表を見て単価を入れて」',
+     '{"plan": [{"op": "LOOKUP_FILL", "args": {"target_sheet": "明細", "target_col": "単価", '
+     '"source_sheet": "単価表", "key_col": "商品コード"}}]}'),
     ('対象ブックの構成: {"Sheet": ["商品", "金額", "在庫"]}\n'
      '依頼: 「金額が1000円未満の行を薄い黄色にして」',
      '{"plan": [{"op": "OUT_OF_VOCAB", "about": "条件付き書式"}]}'),
@@ -1390,6 +1468,12 @@ TRANSLATION_FEWSHOT = [
     ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
      '依頼: 「金額に1.1を掛けた列を追加して」',
      '{"plan": [{"op": "COMPUTE_COLUMN", "args": {"operands": ["金額"], "operator": "*"}}]}'),
+    # ★ W10c 高: 「列を全部Xに書き換える」（数値の倍率ではなく文字列を一律に代入する）は、
+    #   税込み/税抜き（COMPUTE_COLUMN の1列×率パターン）と表現が似ているが別物＝語彙に無い
+    #   （実測: 「氏名の列を全部『退職済み』に書き換えて」が税率の話と誤認された事故）。
+    ('対象ブックの構成: {"Sheet": ["氏名", "部署", "金額"]}\n'
+     '依頼: 「氏名の列を全部『退職済み』に書き換えて」',
+     '{"plan": [{"op": "OUT_OF_VOCAB", "about": "列を同じ文字列で一括上書き"}]}'),
 ]
 
 TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙を使った「計画」の JSON に翻訳する。
@@ -1620,6 +1704,21 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 resolved["factor"] = vocab_factor
                 sources["factor"] = f"用語集: {vocab_term}"
             else:
+                # ★ W10c 高: 依頼文に率らしい語が一切無いのに「1列×率」（税込み/税抜き専用）へ
+                #   分類されているのは、分類そのものが誤っている可能性が高い（実測: 「氏名の
+                #   列を全部『退職済み』に書き換えて」のような値の一括書き換え依頼が、税率の
+                #   話と誤認されて COMPUTE_COLUMN の単列モードに落ちることがあった）。
+                #   その場合は「倍率が分からない」でなく、分類自体を疑う文言に変える
+                #   （率を要求する op に分類されたのに率の手がかりが無い＝CLARIFY の理由を
+                #   正直に言い換える。指示は意図・保証は機械＝プロンプト側だけに頼らない）。
+                if not _RATE_SIGNAL_RE.search(task or ""):
+                    return False, resolved, inferred, (
+                        f"依頼「{task}」は『{v}』列に何らかの倍率（税率等）を掛ける操作として"
+                        "解釈しましたが、依頼文に倍率らしき手がかりが見当たりません。"
+                        "列の値をそのまま書き換える操作は今のところ対応していません。"
+                        "倍率を掛ける処理であれば、依頼文に率を書く（例:「消費税10%」）か、"
+                        "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
+                    )
                 return False, resolved, inferred, (
                     "倍率（税率等）が分かりません。依頼文に率を書く（例:「消費税10%」）か、"
                     "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
@@ -1628,6 +1727,18 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 return False, resolved, inferred, f"倍率『{resolved['factor']}』は正の数でなければなりません"
             if sources:
                 resolved["_sources"] = sources
+            # ★ W10c 中: 新規列の見出しの自然化。旧実装は見出しを f"{op1}{operator}{factor:g}"
+            #   （例:「金額*1.1」）という数式風の文字列にしていた（査定で名指し）。target
+            #   無指定(新規列作成)かつ依頼文が税込み/税抜きと分かる言い方の場合だけ、
+            #   その日本語ラベルを見出しに使う（A' 原則: LLM を使わず正規表現の有無のみで
+            #   決める。手がかりが無ければ従来どおりの数式風見出しにフォールバック）。
+            if not resolved.get("target"):
+                if _TAX_INCLUSIVE_RE.search(task or ""):
+                    resolved["_new_col_label"] = f"税込{v}"
+                elif _TAX_EXCLUSIVE_RE.search(task or ""):
+                    resolved["_new_col_label"] = f"税抜{v}"
+                elif _RATE_KEYWORD_RE.search(task or ""):
+                    resolved["_new_col_label"] = f"税込{v}" if resolved["operator"] == "*" else f"税抜{v}"
             if llm_factor_raw not in (None, ""):
                 try:
                     llm_factor = float(llm_factor_raw)
@@ -1681,8 +1792,54 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return False, resolved, inferred, err
         if resolved["target_sheet"] != first_sheet:
             return False, resolved, inferred, f"対象シートは1枚目（{first_sheet}）のみ対応しています"
-        if (err := resolve_in("target_col", resolved["target_sheet"])):
-            return False, resolved, inferred, err
+        # ★ W10c 致命2: target_col は COMPUTE_COLUMN の target と違い OP_SCHEMA 上は必須
+        #   slot なので、LLM は「存在しないなら空にする」を選べない。実測（監査再現）:
+        #   対象シートに『単価』列がまだ無いのに転記を頼むと、LLM がそれと無関係な
+        #   *実在する*既存列（例:「数量」）の名前を代わりに返すことがある。resolve_col_ref
+        #   は実在列名なら無条件で素通しするため、これだけでは見分けられない（そのまま
+        #   進めると「数量」が確認なしで上書きされる事故になる）。
+        #   ここでは「実在するから信用する」をやめ、根拠を要求する:
+        #   ①依頼文にその列名が書かれている ②転記元（source_sheet）の値列
+        #   （VLookupFromTable ヘルパの仕様どおり常に列1＝2番目の列）と同じ名前
+        #   のどちらかが無いと、実在列であっても信用しない。
+        target_headers = headers.get(resolved["target_sheet"], [])
+        source_headers = headers.get(resolved["source_sheet"], [])
+        value_col_hint = source_headers[1] if len(source_headers) > 1 else None
+        raw_target_col = resolved.get("target_col")
+        raw_str = str(raw_target_col) if raw_target_col not in (None, "") else ""
+        exists = raw_str in target_headers
+        mentioned = bool(raw_str) and raw_str in task
+        matches_value_col = value_col_hint is not None and raw_str == value_col_hint
+
+        if exists and (mentioned or matches_value_col):
+            pass   # 根拠つきで実在列を指名＝そのまま使う（上書き注意は破壊の関所が別途担当）
+        elif not exists:
+            cands = _digit_candidates(raw_str, target_headers)
+            if len(cands) == 1:
+                resolved["target_col"] = cands[0]   # 数字表記の推定は従来どおり許容
+                inferred.add("target_col")
+            elif mentioned:
+                # ★ 依頼文にも同じ列名が書かれている＝新規作成が正しい解釈（COMPUTE_COLUMN の
+                #   target 無指定＝新規列と同じ考え方）。target_col はそのまま残し、
+                #   codegen_dsl 側で新規列として作る。
+                pass
+            else:
+                known = ", ".join(target_headers) if target_headers else "(無し)"
+                return False, resolved, inferred, (
+                    f"転記先の列『{raw_target_col}』が『{resolved['target_sheet']}』シートに"
+                    f"見つかりません。ある列: {known}。新しい列として作る場合は、依頼文に"
+                    f"その列名を書いてください（例:「{raw_target_col}という列を作って転記して」）"
+                )
+        else:
+            # ★ 実測の事故そのもの: exists=True だが根拠が無い（依頼文にも書かれておらず、
+            #   転記元の値列とも一致しない）＝上書き対象を取り違えている可能性が高い。
+            hint = f"（参照表『{resolved['source_sheet']}』の値の列は『{value_col_hint}』です）" \
+                if value_col_hint else ""
+            return False, resolved, inferred, (
+                f"転記先の列『{raw_target_col}』は実在しますが、依頼文にその列名が見当たらず、"
+                f"転記元の値とも対応が確認できません{hint}。上書き対象を取り違えている"
+                "可能性があるため、意図した列名を依頼文に明記してください"
+            )
         if (err := resolve_in("key_col", resolved["target_sheet"])):
             return False, resolved, inferred, err
 
@@ -1919,9 +2076,21 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
     if op == "LOOKUP_FILL":
         theaders = headers[resolved_args["target_sheet"]]
         key_idx = theaders.index(resolved_args["key_col"])
-        tgt_idx = theaders.index(resolved_args["target_col"])
         src = resolved_args["source_sheet"].replace('"', '""')
-        return _wrap_basic(f'    Call VLookupFromTable(oDoc, {hr0}, {key_idx}, {tgt_idx}, "{src}")\n')
+        target_col_name = resolved_args["target_col"]
+        # ★ W10c 致命2: target_col が対象シートに実在しない場合（verify_dsl_args が依頼文に
+        #   同じ列名があると確認済み）は、COMPUTE_COLUMN の新規列作成と同じ考え方で
+        #   末尾に新しい列を作ってから転記する（無関係な既存列を上書きしない）。
+        if target_col_name in theaders:
+            tgt_idx = theaders.index(target_col_name)
+            header_write = ""
+        else:
+            tgt_idx = len(theaders)   # 0起点・次の空き列
+            header_name = str(target_col_name).replace('"', '""')
+            header_write = (f'    oDoc.Sheets.getByIndex(0).getCellByPosition({tgt_idx}, {hr0})'
+                             f'.setString("{header_name}")\n')
+        return _wrap_basic(header_write +
+                            f'    Call VLookupFromTable(oDoc, {hr0}, {key_idx}, {tgt_idx}, "{src}")\n')
 
     if op == "AGGREGATE":
         g_idx = headers[first_sheet].index(resolved_args["group_col"])
@@ -2042,7 +2211,10 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                 header_write = ""
             else:
                 new_col = len(headers[first_sheet])
-                header_name = f"{op1}{operator}{factor:g}".replace('"', '""')
+                # ★ W10c 中: verify_dsl_args が税込み/税抜きと判定できていれば自然な
+                #   日本語見出し（例:「税込金額」）を使う。無ければ従来どおりの数式風見出し。
+                header_name = str(resolved_args.get("_new_col_label")
+                                   or f"{op1}{operator}{factor:g}").replace('"', '""')
                 header_write = f"    oSheet.getCellByPosition({new_col}, {hr0}).setString(\"{header_name}\")\n"
             if use_formula:
                 col1_letter = get_column_letter(i1 + 1)
@@ -2304,7 +2476,8 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
     factor = float(args.get("factor", 1) or 1)
     i1 = _col_index_by_header(ws, op1, header_row=header_row)
     target = args.get("target")
-    newname = target or f"{op1}{operator}{factor:g}"
+    # ★ W10c 中: codegen_dsl と同じ見出し名決定（_new_col_label があれば自然な日本語見出し）。
+    newname = target or args.get("_new_col_label") or f"{op1}{operator}{factor:g}"
     inew = _col_index_by_header(ws, newname, header_row=header_row)
     if i1 is None or inew is None:
         wb.close()
@@ -3968,19 +4141,31 @@ def _column_has_existing_values(book_path: Path, sheet_name: str, col_name: str,
 
 
 def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_path: Path) -> str | None:
-    """★ M2c 項目2: COMPUTE_COLUMN の target(既存列指定)に既存値がある場合、
+    """★ M2c 項目2 / W10c 致命1: OP_WRITE_TARGET が宣言する書き込み先列に既存値がある場合、
        上書きになる旨の1行を返す（無ければ None・確認行に明示するため）。
+       ★ W10c: 対象を COMPUTE_COLUMN 専用の if から OP_WRITE_TARGET の宣言読み取りへ
+       一般化した（監査実測: LOOKUP_FILL がこの関所を素通りしていた事故の再発防止。
+       OP_WRITE_TARGET のコメント参照）。
        ★ W10a 項目1: この検出（と件数）を「破壊の関所」（原本適用時に確認を挟む・
        cmd_run_dsl/cmd_run_plan 側）がそのまま流用する（検出ロジックを二重管理しない）。"""
-    if op != "COMPUTE_COLUMN" or not resolved.get("target"):
+    write_target = OP_WRITE_TARGET.get(op)
+    if not write_target:
         return None
-    sheets = book_meta.get("sheets") or []
-    if not sheets:
+    col_key, sheet_key = write_target
+    col_name = resolved.get(col_key)
+    if not col_name:
         return None
-    header_row = book_meta.get("header_rows", {}).get(sheets[0], 1)
-    count = _column_existing_value_count(book_path, sheets[0], resolved["target"], header_row=header_row)
+    if sheet_key:
+        sheet_name = resolved.get(sheet_key)
+    else:
+        sheets = book_meta.get("sheets") or []
+        sheet_name = sheets[0] if sheets else None
+    if not sheet_name:
+        return None
+    header_row = book_meta.get("header_rows", {}).get(sheet_name, 1)
+    count = _column_existing_value_count(book_path, sheet_name, col_name, header_row=header_row)
     if count > 0:
-        return f"★ 対象列『{resolved['target']}』には既存の値が {count} 件あります（上書きします）"
+        return f"★ 対象列『{col_name}』には既存の値が {count} 件あります（上書きします）"
     return None
 
 
@@ -4119,6 +4304,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     # ★ W10b 項目4a(摩擦): COMPUTE_COLUMN の新規列作成は宣言どおりの効果なので、
     #   その新規列1本に収まる『範囲外』警報は中立表示に落とす。
     advisories = _neutralize_new_column_ghost_warning(advisories, op, resolved, book_meta)
+    # ★ W10c 中: AGGREGATE/PIVOT の新規シート作成も同じ考え方で中立表示に落とす。
+    advisories = _neutralize_declared_new_sheet_warning(advisories, op, before, after)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
