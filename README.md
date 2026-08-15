@@ -24,7 +24,8 @@
     LibreOffice Basic  Sub Run(oDoc As Object)   ← 平文。レビューできる
         │  basrun apply（LibreOffice を headless で駆動）
         ▼
-    文書に適用（★ 原本でなくコピー .out に）
+    文書に適用（★ 既定=原本に直接。検品ゲート+世代バックアップ+undo の3重安全網つき。
+                --copy で従来のコピー .out 方式も選べる）
         │  適用の前後で snapshot して差分を取る
         ▼
     ★ 変化したか？ ── しなければ「何もしていない」とみなし修復に回す
@@ -39,14 +40,18 @@ python ailine.py run demo/sample.xlsx "各行の 列5 に 売上(列3) − 原�
 # 生成して見せるだけ（レビュー用。適用しない）
 python ailine.py run demo/sample.xlsx "..." --dry
 
-# 原本を上書きしてよいとき（上書き前に自動でバックアップを作る）
-python ailine.py run demo/sample.xlsx "..." --inplace
+# ★ W8b-2: 既定で原本に直接反映する（反映前に自動でバックアップを作る）。
+# 何もつけなくてよい
+python ailine.py run demo/sample.xlsx "..."
 
-# ★ W8b: --inplace で、LibreOffice 往復だけで失われる飾り（条件付き書式・図形・
-# ピボット・VBA 等）を検出したら申告して止まる（exit 4）。承知の上で続けるか
-# （バックアップから ailine undo で戻せる）、原本には触らず .out に切り替えるか選ぶ
-python ailine.py run demo/sample.xlsx "..." --inplace --accept-loss
-python ailine.py run demo/sample.xlsx "..." --inplace --copy
+# 原本には触らず <book>.out に結果を作りたいとき（旧既定・原本は無変更）
+python ailine.py run demo/sample.xlsx "..." --copy
+
+# LibreOffice 往復だけで失われる飾り（条件付き書式・図形・ピボット・VBA 等）を
+# 検出したら、原本に触る前に申告して止まる（exit 4）。承知の上で続けるか
+# （バックアップから ailine undo で戻せる）、.out に切り替えるか選ぶ
+python ailine.py run demo/sample.xlsx "..." --accept-loss
+python ailine.py run demo/sample.xlsx "..." --copy   # ゲートも走らせず原本に触らない
 
 # 別のモデルに載せ替える（天井を上げたいとき）
 python ailine.py run demo/sample.xlsx "..." --model qwen2.5-coder:32b
@@ -73,7 +78,7 @@ python ailine.py doctor
 # 実行履歴を見る（新しい順。既定 10 件）
 python ailine.py history --max 20
 
-# --inplace のバックアップから復元する（復元前の現状も自動で退避＝復元自体も可逆）。
+# 原本への反映前のバックアップから復元する（復元前の現状も自動で退避＝復元自体も可逆）。
 # ailine undo が restore の昇格版（あと何回戻せるかを表示・restore は互換のため残す）
 python ailine.py undo demo/sample.xlsx
 python ailine.py undo demo/sample.xlsx --list   # 一覧だけ表示（復元しない）
@@ -104,17 +109,22 @@ python ailine.py vocab list
   （構造や装飾だけの変更も取りこぼさない）。LibreOffice + LLM は
   **「実行時エラー無しで成功と報告し、実際は何もしない」**ことがある（もっともらしい
   UNO の幻覚）。変化ゼロなら失敗として修復に回す。
-- **コピー安全** — 原本は触らず `<book>.out.xlsx` に適用する。壊さない
-  （既定は変えていない・下の「安全器官」は将来 `--inplace` を既定にする前段の下ごしらえ）。
-- ★ **安全器官（W8b）** — `--inplace` で原本に触る前だけ働く4つの機械的な安全網。
-  ①**往復忠実度ゲート**: LibreOffice に一度通すだけ(何もしないマクロ)で失われる飾り
-  （条件付き書式・入力規則・図形・ピボット・VBA・_rels）を検出したら申告して止まる
-  （`--accept-loss`/`--copy` で選ぶ・喪失ゼロなら無言）。②**Excel ロック検出**:
-  同フォルダの `~$` ロックファイルと書き込み可否を run の最初に見る。③**バックアップの
-  名前空間化**: 同名ファイルが別フォルダにあっても取り違えない
-  （`~/.ailine/backups/<フォルダのハッシュ>/`）。④**原子的な置換**: `os.replace()` で
-  torn write（書きかけの状態が外から見える窓）を塞ぐ。⑤**グローバル run ロック**:
-  基盤の LibreOffice が単一インスタンス前提のため、`ailine run` は同時に1本だけ。
+- ★ **既定で原本にそのまま反映（W8b-2）** — 「壊さない」の担保は、もう「コピーにしか
+  書かない」ことではなく、3重の安全網でまかなう:
+  ①**検品ゲート（往復忠実度ゲート）** — LibreOffice に一度通すだけ(何もしないマクロ)
+  で失われる飾り（条件付き書式・入力規則・図形・ピボット・VBA・_rels）を検出したら、
+  原本に触る前に申告して止まる（exit 4。`--accept-loss`/`--copy` で選ぶ・喪失ゼロなら
+  無言）。②**世代バックアップ + `ailine undo`** — 反映のたびに自動でバックアップし、
+  何段でも `ailine undo` で1段ずつ遡れる（`~/.ailine/backups/<フォルダのハッシュ>/`
+  ＝同名ファイルが別フォルダにあっても取り違えない）。③**機械検証** — no-op ガード・
+  事後条件チェッカーで「変化したか」「（DSL経路は）正しいか」を見る。原本には触らず
+  従来どおりコピーで試したい時は `--copy` を使う（`<book>.out.xlsx` に生成・原本は無変更・
+  ゲートも走らせない）。
+- ★ **その他の安全機構（W8b）** — ①**Excel ロック検出**: 同フォルダの `~$`
+  ロックファイルと書き込み可否を run の最初に見る。②**原子的な置換**: `os.replace()`
+  で torn write（書きかけの状態が外から見える窓）を塞ぐ（失敗時は copy2 にフォールバック
+  し、その旨を表示）。③**グローバル run ロック**: 基盤の LibreOffice が単一インスタンス
+  前提のため、`ailine run` は同時に1本だけ（別プロセスが実行中なら待たせず即エラー）。
 - **参照ライブラリ** — `refs/*.bas` を few-shot に供給。苦手な操作（並べ替え・
   グラフ・新シート）の**動作検証済みの正解例**を渡して補う。追加は `refs/` に置くだけ。
 - ★ **達成検証層（M2a）** — 「✓ の下に隠れた失敗」（幽霊データ・無関係なすり替え・

@@ -2,8 +2,10 @@
 """ailine — 自然言語のタスクを、ローカル LLM が LibreOffice Basic に書き起こし、
    basrun で文書に適用し、★ 効果を読み戻して検証する（「走った ≠ できた」）。
 
-    ailine run  <book> "<タスク>"          生成 → 適用(コピー) → 変化検証 → 修復 → 差分表示
+    ailine run  <book> "<タスク>"          生成 → 検品ゲート → 原本に反映 → 変化検証 → 修復 → 差分表示
     ailine run  <book> "<タスク>" --dry     生成して見せるだけ（適用しない・レビュー用）
+    ailine run  <book> "<タスク>" --copy    原本には触らず <book>.out に結果を作る（旧既定）
+    ailine undo <book>                      直前の反映を取り消す（世代バックアップから復元）
     ailine stop                             起動した LibreOffice を落とす（basrun に委譲）
 
 ## 設計判断（basrun_spike 2026-08-10 の実証に基づく）
@@ -18,7 +20,12 @@
   初回保存で行高（時に列幅）を実体化する副作用があり、これを先に済ませておかないと
   no-op ガードが偽陽性になる（何もしないマクロでも「変化した」と誤って成功表示していた）。
   コストは LO 往復 1 回（数秒）— 正しさ優先で受け入れる。
-- **コピー安全**: 原本は触らず `<book>.out.xlsx` に適用する（`--inplace` で上書き）。壊さない。
+- ★ **既定=原本にそのまま反映（W8b-2）**: `<book>` に直接書く。「壊さない」の担保は
+  もう「コピーにしか書かない」ことではなく、3重の安全網でまかなう:
+  ①往復忠実度ゲート（LO 往復だけで失われる飾りを検品して申告・`--accept-loss`/`--copy` で選ぶ）
+  ②世代バックアップ+`ailine undo`（反映前に必ず退避・いつでも戻せる）
+  ③ no-op ガード＋事後条件などの機械検証（変化・正しさを見る）。
+  従来の「コピーにしか書かない」挙動は `--copy` で選べる（原本は無変更・`<book>.out.xlsx` に生成）。
 - **参照ライブラリ**: `refs/*.bas` を few-shot に供給。苦手層（新シート・色）を補う。
   並べ替え・グラフ・ピボットなどの難所は `helpers/*.bas` の検証済みヘルパを `Call` で呼ばせる。
 - **レビュー導線**: 生成した .bas と、変わったセルの差分を必ず表示する。
@@ -2568,17 +2575,38 @@ def list_backups(book: Path) -> list:
 
 
 def restore_backup(book: Path) -> Path:
-    """book を最新バックアップから復元する。★ 復元前の現状も退避してからコピーする
-       （復元自体も取り消せるように）。戻り値は使ったバックアップの Path。
-       バックアップが1つも無ければ例外を投げる。"""
-    backups = list_backups(book)
+    """book を「1つ前の世代」から復元する。戻り値は使ったバックアップの Path。
+       バックアップが1つも無ければ例外を投げる。
+       ★ W8b-2: 連続 undo が実編集履歴を1段ずつ正しく遡れるようにする（B2 事故バッテリ
+       ①で実測: 素朴に『常に最新のバックアップを使う』実装だと、undo が作る『復元前の
+       現状の退避』が次回の undo で『最新』として選ばれてしまい、2回目の undo が
+       1段先(=1回目の undo を打ち消す)に進んでしまっていた＝多段 undo が成立しない）。
+       book の現在の中身と一致するバックアップがあれば、そのすぐ内側(より古い方)を
+       復元先にする（＝現在地がバックアップ履歴のどこかに『既にいる』とみなし、そこから
+       もう1段遡る）。一致するものが無ければ（＝直前の実編集の直後・通常の最初の undo）
+       最新のバックアップを復元する。復元前の現状は必ず退避する（undo 自体も可逆）。"""
+    backups = list_backups(book)   # 新しい順
     if not backups:
         raise FileNotFoundError(f"{book.name} のバックアップが無い")
-    latest = backups[0]
+
+    target = backups[0]
     if book.exists():
+        try:
+            current_bytes = book.read_bytes()
+        except OSError:
+            current_bytes = None
+        if current_bytes is not None:
+            for i, p in enumerate(backups):
+                try:
+                    matched = p.read_bytes() == current_bytes
+                except OSError:
+                    continue
+                if matched:
+                    target = backups[i + 1] if i + 1 < len(backups) else backups[i]
+                    break
         make_backup(book)   # 復元前の現状も退避＝restore 自体も可逆にする
-    shutil.copy2(latest, book)
-    return latest
+    shutil.copy2(target, book)
+    return target
 
 
 def cmd_restore(a: argparse.Namespace) -> int:
@@ -3179,6 +3207,37 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
         print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
 
 
+# ★ W8b-2 項目1: 既定=原本直接適用の終端メッセージを一箇所に集約する
+#   （cmd_run_dsl/cmd_run_freeform/cmd_run_plan の3箇所が同じ形だったのを統合）。
+#   pending/confirm の中間状態は作らない — undo 一本（architect 判定）。
+def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Path,
+                   result: dict, machine_verified: bool) -> bool:
+    """--copy（a.inplace が False）なら .out のまま（原本は無変更）。既定(a.inplace)なら
+       backup+原子的置換(atomic_replace_inplace)で原本へ反映する。
+       machine_verified=True（DSL/plan・ルールベース）→「✓ 反映しました」、
+       False（自由生成・機械保証なし）→「⚠ 反映しましたが機械保証はありません」。
+       戻り値: 置換が成功した(または --copy で置換不要だった)か。"""
+    if not a.inplace:
+        print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
+        result["out"] = str(out_book)
+        return True
+
+    ok_ip, err_ip = atomic_replace_inplace(
+        book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
+    if not ok_ip:
+        print(f"× {err_ip}")
+        print(f"適用先: {out_book.name}（原本への反映は中止・原本 {book.name} は無変更）")
+        result["out"] = str(out_book)
+        return False
+
+    if machine_verified:
+        print("\n✓ 反映しました（もとに戻す: ailine undo）")
+    else:
+        print("\n⚠ 反映しましたが機械保証はありません — 確認して、違えば ailine undo")
+    result["out"] = str(book)
+    return True
+
+
 def cmd_run(a: argparse.Namespace) -> int:
     """run コマンドの入口。★ W8b 項目6: 実処理(_cmd_run_body)の前後をグローバル run
        ロックで挟む（基盤の LibreOffice が単一インスタンス前提のため、ブック単位でなく
@@ -3232,6 +3291,14 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
 
 
 def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
+    # ★ W8b-2 項目2: 既定 = 原本直接適用（旧 --inplace 相当）。--copy で旧 .out 挙動を
+    #   温存する。--inplace は廃止した旧フラグだが、互換のため受理はして移行メッセージ
+    #   だけ出す（指定してもしなくても挙動は同じ＝既定が原本適用）。
+    if getattr(a, "inplace", False):
+        print("★ --inplace は廃止されました。既定で原本に直接適用します"
+              "（従来の .out 挙動が欲しい場合は --copy を使ってください）。")
+    a.inplace = not getattr(a, "copy", False)
+
     apply_timeout = a.timeout if a.timeout else None   # 0 で無効化（旧挙動 = 無制限）
 
     source_book = book
@@ -3242,17 +3309,15 @@ def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
         progress_end(t0)
         struct_dump = build_struct_dump(source_book, workdir)
 
-        # ★ W8b 項目1: --inplace が要求されている時だけ、原本にまだ触れていないこの
-        #   時点で往復忠実度を見る（喪失ゼロなら無言・体験は不変）。
+        # ★ W8b 項目1: 原本に実際に適用する時だけ、まだ触れていないこの時点で往復忠実度
+        #   を見る（喪失ゼロなら無言・体験は不変）。★ W8b-2 項目4: --copy 時は原本に
+        #   一切触れないためゲート自体を走らせない（無駄な zip/openpyxl 比較も省く）。
         if a.inplace:
             fidelity = check_round_trip_fidelity(book, source_book)
             a._fidelity = fidelity
             if fidelity["lost"]:
                 print(format_fidelity_warning(fidelity))
-                if getattr(a, "copy", False):
-                    print("→ --copy 指定のため .out へ切り替えて続行します（原本は無変更）")
-                    a.inplace = False
-                elif getattr(a, "accept_loss", False):
+                if getattr(a, "accept_loss", False):
                     print("→ --accept-loss 指定のため続行します（失われても ailine undo で元に戻せます）")
                 else:
                     print("この処理を続けるには、以下のいずれかを指定して再実行してください:")
@@ -3452,21 +3517,10 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         print(f"\n✓ 達成を機械検証済み（操作:{OP_LABELS.get(op, op)}）: {reason}")
         result["ok"] = True
 
-    if a.inplace:
-        # ★ W8b 項目4: バックアップ+原子的置換(os.replace)は atomic_replace_inplace に集約。
-        ok_ip, err_ip = atomic_replace_inplace(
-            book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
-        if not ok_ip:
-            print(f"× {err_ip}")
-            print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
-            result["out"] = str(out_book)
-        else:
-            print(f"\n適用先: {book.name}（--inplace で上書き）")
-            print(f"復元: ailine undo {book.name}")
-            result["out"] = str(book)
-    else:
-        print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
-        result["out"] = str(out_book)
+    # ★ W8b-2: DSL 経路はルールベース codegen（自由生成ではない）ので、postcondition が
+    #   warn(検証対象不足)でも trailing メッセージは常に ✓「反映しました」側を使う
+    #   （postcondition の warn/pass は上ですでに正直に出し分けている＝別レイヤ）。
+    _finish_apply(a, book, out_book, workdir, result, machine_verified=True)
 
     _finish_run(a, book, result, "none")
     return 0
@@ -3648,21 +3702,9 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
         result["changes"] = lines
         result["advisories"] = advisories
         failure_kind = "none"
-        if a.inplace:
-            # ★ W8b 項目4: バックアップ+原子的置換(os.replace)は atomic_replace_inplace に集約。
-            ok_ip, err_ip = atomic_replace_inplace(
-                book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
-            if not ok_ip:
-                print(f"× {err_ip}")
-                print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
-                result["out"] = str(out_book)
-            else:
-                print(f"\n適用先: {book.name}（--inplace で上書き）")
-                print(f"復元: ailine undo {book.name}")
-                result["out"] = str(book)
-        else:
-            print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
-            result["out"] = str(out_book)
+        # ★ W8b-2 項目1: 自由生成(FREEFORM/OUT_OF_VOCAB)は機械保証が無いので、既定(原本
+        #   直接適用)でも trailing メッセージは ⚠「機械保証はありません」側を使う。
+        _finish_apply(a, book, out_book, workdir, result, machine_verified=False)
         break
     else:
         print(f"\n× {a.repair+1} 回試みたが達成できなかった。")
@@ -4012,21 +4054,11 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
         return 1
 
     result["ok"] = True
-    if a.inplace:
-        # ★ W8b 項目4: バックアップ+原子的置換(os.replace)は atomic_replace_inplace に集約。
-        ok_ip, err_ip = atomic_replace_inplace(
-            book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
-        if not ok_ip:
-            print(f"\n× {err_ip}")
-            print(f"適用先: {out_book.name}（--inplace は中止・原本 {book.name} は無変更）")
-            result["out"] = str(out_book)
-        else:
-            print(f"\n適用先: {book.name}（--inplace で上書き）")
-            print(f"復元: ailine undo {book.name}")
-            result["out"] = str(book)
-    else:
-        print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
-        result["out"] = str(out_book)
+    # ★ W8b-2 項目1: 複合計画は総合判定(overall_verdict)に従う。全段機械検証済み(ok)
+    #   の時だけ ✓「反映しました」、語彙外/検証不足の段が混じる(warn)なら
+    #   ⚠「機械保証はありません」側（自由生成の段が混じっている以上、全体としても
+    #   機械保証済みとは名乗れない＝format_plan_report/overall_verdict と同じ誠実さ）。
+    _finish_apply(a, book, out_book, workdir, result, machine_verified=(verdict == "ok"))
 
     _finish_run(a, book, result, "none")
     return 0
@@ -4050,7 +4082,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--repair", type=int, default=2, help="修復の最大回数 (既定 2)")
     r.add_argument("--temperature", type=float, default=0.2)
     r.add_argument("--dry", action="store_true", help="生成して見せるだけ（適用しない）")
-    r.add_argument("--inplace", action="store_true", help="原本を上書き（既定はコピー .out に適用）")
+    r.add_argument("--inplace", action="store_true",
+                   help="（廃止・後方互換のため受理のみ）既定で原本に直接適用するため不要。"
+                        "旧 .out 挙動が欲しければ --copy")
     r.add_argument("--json", action="store_true", help="結果を JSON でも出す")
     r.add_argument("--timeout", type=float, default=DEFAULT_APPLY_TIMEOUT,
                    help=f"basrun apply のタイムアウト秒 (既定 {DEFAULT_APPLY_TIMEOUT:.0f}、"
@@ -4058,18 +4092,18 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--ask", action="store_true",
                    help="DSL 経路の確認行の後に y/n で対話する（既定は表示して続行）")
     r.add_argument("--keep-backups", dest="keep_backups", type=int, default=DEFAULT_KEEP_BACKUPS,
-                   help=f"--inplace のバックアップを book ごとに何世代残すか (既定 {DEFAULT_KEEP_BACKUPS}、"
+                   help=f"原本への反映前のバックアップを book ごとに何世代残すか (既定 {DEFAULT_KEEP_BACKUPS}、"
                         "負数で無制限)")
     r.add_argument("--values", action="store_true",
                    help="COMPUTE_COLUMN を式でなく値ベタ書きにする（既定は式・W3 Part3）")
     r.add_argument("--header-row", dest="header_row", type=int, default=None,
                    help="見出し行を明示指定（1起点。指定時は自動検出をスキップしてこの行を採用）")
     r.add_argument("--accept-loss", dest="accept_loss", action="store_true",
-                   help="往復忠実度ゲートが検出した喪失を承知の上で --inplace を続行する"
+                   help="往復忠実度ゲートが検出した喪失を承知の上で原本への反映を続行する"
                         "（ailine undo で戻せる）")
     r.add_argument("--copy", action="store_true",
-                   help="往復忠実度ゲート発動時、--inplace をあきらめて .out に結果を作る"
-                        "（原本は無変更）")
+                   help="原本には触らず <book>.out に結果を作る（既定の原本直接適用をしない・"
+                        "旧 --inplace 無指定と同じ挙動。往復忠実度ゲートも走らせない）")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")
@@ -4083,12 +4117,12 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--max", type=int, default=10, help="表示件数（既定 10、新しい順）")
     h.set_defaults(func=cmd_history)
 
-    rs = sub.add_parser("restore", help="--inplace のバックアップから復元する（ailine undo と同じ）")
+    rs = sub.add_parser("restore", help="原本への反映前のバックアップから復元する（ailine undo と同じ）")
     rs.add_argument("book", help="対象の文書 (.xlsx / .ods)")
     rs.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
     rs.set_defaults(func=cmd_restore)
 
-    u = sub.add_parser("undo", help="--inplace のバックアップから復元する（あと何回戻せるかを表示）")
+    u = sub.add_parser("undo", help="原本への反映前のバックアップから復元する（あと何回戻せるかを表示）")
     u.add_argument("book", help="対象の文書 (.xlsx / .ods)")
     u.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
     u.set_defaults(func=cmd_undo)

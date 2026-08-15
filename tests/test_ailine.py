@@ -15,6 +15,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ailine
 
+# ★ W8b-2（既定=原本直接適用への反転）: この回で `dry=False, inplace=False, ...` だった
+#   argparse.Namespace リテラルを機械的に `dry=False, copy=True, ...` へ置き換えた
+#   （旧既定＝コピーにしか書かない、を再現するのが copy=True になったため）。inplace は
+#   もう分岐に使われない（cmd_run 側で `a.inplace = not a.copy` に上書きされる）。
+#   ★ 実測: 置き換え前は real ~/.ailine/backups/ にテスト実行のたびバックアップが
+#   実書き込みされていた（BACKUP_DIR を monkeypatch していないテストが多数、かつ
+#   既定が原本適用になったことで無条件に make_backup が走るようになったため）。
+
 
 # --- コード抽出 / 署名 -----------------------------------------------------
 
@@ -1048,7 +1056,7 @@ def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, 
     ns = argparse.Namespace(
         book=str(book), task="テスト", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
 
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
@@ -1084,7 +1092,7 @@ def test_cmd_run_freeform_success_shows_honest_warning_not_checkmark(tmp_path, m
     ns = argparse.Namespace(
         book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -1131,7 +1139,7 @@ def test_cmd_run_freeform_rate_literal_scan_fires_when_task_silent_on_rate(tmp_p
     ns = argparse.Namespace(
         book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -1160,7 +1168,7 @@ def test_cmd_run_freeform_rate_literal_scan_silent_when_task_states_rate(tmp_pat
     ns = argparse.Namespace(
         book=str(book), task="消費税8%込みの合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -1474,7 +1482,7 @@ def test_cmd_run_exits_5_when_excel_lock_detected(tmp_path, monkeypatch, capsys)
     ns = argparse.Namespace(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 5
@@ -1583,10 +1591,12 @@ def test_format_fidelity_warning_lists_categories_and_counts():
 
 
 def _fidelity_gate_ns(book, **overrides):
+    # ★ W8b-2: 既定が原本直接適用になったため inplace=True は不要（指定しても挙動は
+    #   同じだが廃止フラグの移行メッセージが余計に出るので外す）。
     base = dict(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=True, json=False, timeout=180.0, ask=False,
+        dry=False, json=False, timeout=180.0, ask=False,
         accept_loss=False, copy=False)
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -1641,9 +1651,13 @@ def test_cmd_run_inplace_fidelity_gate_accept_loss_continues(tmp_path, monkeypat
     rc = ailine.cmd_run(_fidelity_gate_ns(book, accept_loss=True))
     captured = capsys.readouterr()
     assert "続行します" in captured.out
-    assert f"適用先: {book.name}" in captured.out   # 原本へ実際に適用された
+    # ★ W8b-2: 既定=原本直接適用の trailing メッセージ（FREEFORM 経路なので ⚠ 側）。
+    assert "⚠ 反映しましたが機械保証はありません" in captured.out
 
-def test_cmd_run_inplace_fidelity_gate_copy_flag_downgrades_to_out(tmp_path, monkeypatch, capsys):
+def test_cmd_run_copy_flag_skips_fidelity_gate_entirely(tmp_path, monkeypatch, capsys):
+    # ★ W8b-2 項目4: --copy 時は原本に一切触れないため、忠実度ゲート自体を走らせない
+    #   （喪失があっても申告すら出ない・W8b-1 は『発動後に --copy で降格』だったが、
+    #   既定反転後は最初から発動しないよう変わった）。
     book = _cf_dv_book(tmp_path, "book.xlsx", add_cf=True, add_dv=False)
     original_bytes = book.read_bytes()
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
@@ -1661,7 +1675,7 @@ def test_cmd_run_inplace_fidelity_gate_copy_flag_downgrades_to_out(tmp_path, mon
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
     rc = ailine.cmd_run(_fidelity_gate_ns(book, copy=True))
     captured = capsys.readouterr()
-    assert "--copy 指定のため .out へ切り替え" in captured.out
+    assert "失われる飾り" not in captured.out   # ゲート自体が走っていない
     assert book.read_bytes() == original_bytes   # 原本は無変更
     out_book = book.with_name(book.stem + ".out" + book.suffix)
     assert out_book.exists()
@@ -1921,7 +1935,7 @@ def test_cmd_run_cleans_up_workdir_after_clarify_exit(tmp_path, monkeypatch):
     ns = argparse.Namespace(
         book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     assert rc == 3
     assert not (book.parent / f".ailine_{book.stem}").exists()
@@ -2757,7 +2771,7 @@ def test_cmd_run_dsl_postcondition_warn_does_not_claim_verified(tmp_path, monkey
     ns = argparse.Namespace(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -2805,7 +2819,7 @@ def test_cmd_run_dsl_prints_truncation_notice_when_snapshot_truncated(tmp_path, 
     ns = argparse.Namespace(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -2825,7 +2839,7 @@ def test_cmd_run_clarify_prints_question_and_exits_3(tmp_path, monkeypatch, caps
     ns = argparse.Namespace(
         book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 3
@@ -2840,7 +2854,7 @@ def test_cmd_run_dsl_verification_failure_falls_back_to_clarify_exit_3(tmp_path,
     ns = argparse.Namespace(
         book=str(book), task="存在しない列で並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 3
@@ -2878,7 +2892,7 @@ def test_cmd_run_dsl_postcondition_failure_returns_1(tmp_path, monkeypatch, caps
     ns = argparse.Namespace(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 1
@@ -2978,7 +2992,7 @@ def test_cmd_run_plan_all_dsl_steps_pass_gives_full_verdict(tmp_path, monkeypatc
     ns = argparse.Namespace(
         book=str(p), task="金額で降順に並べ替えて見出しを太字に", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=True, timeout=180.0, ask=False)
+        dry=False, copy=True, json=True, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -3012,7 +3026,7 @@ def test_cmd_run_plan_mixes_dsl_success_and_freeform_warns(tmp_path, monkeypatch
     ns = argparse.Namespace(
         book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0   # ⚠ は失敗ではない
@@ -3034,7 +3048,7 @@ def test_cmd_run_plan_all_steps_fail_grounding_gives_overall_failure(tmp_path, m
     ns = argparse.Namespace(
         book=str(p), task="存在しない列で並べ替えて太字にして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 1
@@ -3095,7 +3109,7 @@ def test_cmd_run_plan_dependent_chaining_resolves_new_column_reference(tmp_path,
     ns = argparse.Namespace(
         book=str(p), task="売上から原価を引いた利益列を作って、利益で降順に並べ替えて",
         model="qwen2.5-coder:7b", refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
         # ★ W3 Part3: fake_apply は静的な値を直接書き込む(式は書かない)ので、この
         #   テストは --values（値ベタ書き）経路として実行する。式検証(二層)は
         #   check_compute_column の専用ユニットテストで別途カバーする。
@@ -3253,7 +3267,7 @@ def test_cmd_run_clarify_on_ambiguous_header_before_translation(tmp_path, monkey
     ns = argparse.Namespace(
         book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 3
@@ -3285,7 +3299,7 @@ def test_cmd_run_header_row_flag_bypasses_ambiguous_detection_no_clarify(tmp_pat
     ns = argparse.Namespace(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False, values=False,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False, values=False,
         header_row=3)
     ailine.cmd_run(ns)
     captured = capsys.readouterr()
@@ -3312,7 +3326,7 @@ def test_cmd_run_without_header_row_flag_still_clarifies_on_ambiguous(tmp_path, 
     ns = argparse.Namespace(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False, values=False,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False, values=False,
         header_row=None)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
@@ -4181,7 +4195,7 @@ def test_cmd_run_dsl_aggregate_flags_unrequested_new_sheet(tmp_path, monkeypatch
     ns = argparse.Namespace(
         book=str(book), task="部門ごとに金額を集計して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -4209,8 +4223,141 @@ def test_cmd_run_dsl_aggregate_silent_when_task_mentions_sheet_keyword(tmp_path,
     ns = argparse.Namespace(
         book=str(book), task="部門ごとに金額を集計シートにまとめて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, inplace=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
     assert "依頼にない新しいシート" not in captured.out
+
+
+# ===========================================================================
+# ★ W8b-2 B2: 事故バッテリのpytest化（回帰固定）
+# ===========================================================================
+
+def _chain_run_ns(book, task="何かして", **overrides):
+    """既定(原本直接適用)のまま run する Namespace。B2 バッテリ共通の土台。"""
+    base = dict(
+        book=str(book), task=task, model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def test_b2_chain_three_runs_then_undo_three_times_matches_each_generation_sha1(tmp_path, monkeypatch):
+    # ★ B2① 連鎖3段→undo3段: run→run→run で原本が進化し（連続タスクの自然成立の核心）、
+    #   undo を3回繰り返すと各世代の SHA1 に正確に1段ずつ戻ることを固定する。
+    import hashlib
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "normalize_book", lambda b, workdir, timeout=None: b)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+
+    step = {"n": 0}
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        step["n"] += 1
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=3, value=f"step{step['n']}")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    sha1s = [hashlib.sha1(book.read_bytes()).hexdigest()]   # 世代0（原本）
+    for _ in range(3):
+        rc = ailine.cmd_run(_chain_run_ns(book))
+        assert rc == 0
+        sha1s.append(hashlib.sha1(book.read_bytes()).hexdigest())
+
+    assert len(set(sha1s)) == 4   # 4世代とも中身が違う（毎回ちゃんと進化している）
+
+    for expected_sha1 in reversed(sha1s[:-1]):   # 世代3→2→1→0 の順に戻る
+        rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+        assert rc == 0
+        assert hashlib.sha1(book.read_bytes()).hexdigest() == expected_sha1
+
+def test_b2_replace_and_fallback_both_fail_leaves_book_untouched(tmp_path, monkeypatch, capsys):
+    # ★ B2② 置換直前で os.replace を例外にし、copy2 フォールバックも失敗させる
+    #   （原本無傷であることを固定する。バックアップ自体は成功しているので undo は可能）。
+    import shutil as _shutil
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "normalize_book", lambda b, workdir, timeout=None: b)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=3, value="new")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    monkeypatch.setattr(ailine.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
+    real_copy2 = _shutil.copy2
+    def fake_copy2(src, dst):
+        if str(dst) == str(book):
+            raise OSError("also locked")
+        return real_copy2(src, dst)
+    monkeypatch.setattr(ailine.shutil, "copy2", fake_copy2)
+
+    rc = ailine.cmd_run(_chain_run_ns(book))
+    captured = capsys.readouterr()
+    assert rc == 0   # 自由生成の適用自体は成功。反映(置換)だけが失敗している
+    assert "置換に失敗した" in captured.out
+    assert book.read_bytes() == original_bytes   # 原本は無傷
+    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    assert out_book.exists()   # .out はそのまま残る（レビュー可能）
+
+def test_b2_backup_failure_aborts_replacement_book_untouched(tmp_path, monkeypatch, capsys):
+    # ★ B2③ バックアップ自体が失敗したら置換を中止する（回帰固定・原本無傷）。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "normalize_book", lambda b, workdir, timeout=None: b)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=3, value="new")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    monkeypatch.setattr(ailine, "make_backup",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+
+    rc = ailine.cmd_run(_chain_run_ns(book))
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "バックアップに失敗" in captured.out
+    assert book.read_bytes() == original_bytes   # 原本は無傷
+    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    assert out_book.exists()
+
+def test_b2_undo_remaining_count_matches_after_pruning_beyond_ten(tmp_path, monkeypatch, capsys):
+    # ★ B2④ 10世代の剪定を超えてバックアップが積み上がった後も、ailine undo の
+    #   「あと N 回戻せます」が実際のバックアップ件数（剪定後）と整合すること。
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"v0")
+    for i in range(12):
+        book.write_bytes(f"v{i + 1}".encode())
+        ailine.make_backup(book, keep=10)
+    assert len(ailine.list_backups(book)) == 10   # 剪定済み
+
+    rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+    captured = capsys.readouterr()
+    assert rc == 0
+    remaining_after = len(ailine.list_backups(book))
+    assert f"あと {remaining_after} 回戻せます" in captured.out
