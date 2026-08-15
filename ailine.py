@@ -77,6 +77,14 @@ DEFAULT_KEEP_BACKUPS = 10   # M2c: book ごとにこの世代数を超えたら�
 RUN_LOCK_FILE = HISTORY_DIR / "run.lock"
 RUN_LOCK_STALE_SECONDS = 30 * 60   # 30分超のロックは stale とみなして奪取する
 
+# ★ W10a 項目2: 既定変更(W8b-2・原本直接反映)の一度きり告知。marker ファイルの有無だけで
+#   判定する（history 等には依存しない・単純に「見せたか」の1ビット）。
+NOTICE_V2_FILE = HISTORY_DIR / "notice_v2_shown"
+NOTICE_V2_TEXT = (
+    "★ このバージョンから、既定で原本に直接反映します（自動バックアップ+undo つき）。"
+    "従来のコピー方式は --copy。この告知は一度だけ表示されます"
+)
+
 # ★ A': 用語集（税率等の「現場の取り決め値」）。グローバルのみ・ブック別上書きは作らない
 #   （YAGNI・受信ファイル注入の予防。サイドカー自動読みは絶対にしない）。
 VOCAB_FILE = HISTORY_DIR / "vocab.json"
@@ -1529,7 +1537,8 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         #   新規列作成にフォールバックする（推測で断定しない CLARIFY の原則は、真に曖昧な
         #   ケース＝digit_candidates の複数一致にだけ残す）。
         if resolved.get("target"):
-            v, was_inferred, err = resolve_col_ref(resolved["target"], headers.get(first_sheet, []))
+            raw_target = resolved["target"]
+            v, was_inferred, err = resolve_col_ref(raw_target, headers.get(first_sheet, []))
             if err:
                 if "一意に決まりません" in err:
                     return False, resolved, inferred, err
@@ -1538,6 +1547,9 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 resolved["target"] = v
                 if was_inferred:
                     inferred.add("target")
+                    # ★ W10a 項目3: 数字指定→列名解決の元の表記を残す（解釈要約の表示用・
+                    #   例:「列5」→「在庫」列と解決した時、確認行の直後にその経緯を見せる）。
+                    resolved["_target_raw"] = raw_target
 
     elif op == "LOOKUP_FILL":
         if (err := check_sheet("target_sheet")):
@@ -3226,6 +3238,29 @@ def release_run_lock(path: Path | None = None) -> None:
         pass
 
 
+def maybe_show_notice_v2(path: Path | None = None) -> bool:
+    """★ W10a 項目2: 既定変更(原本直接反映)の一度きり告知。marker ファイルが無ければ
+       表示して作る（以後は無言）。戻り値は「今回表示したか」（テスト用）。
+       marker の読み書き失敗（権限等）で run 本体を落とさないよう、書き込み失敗は無視する
+       （その場合は次回また表示されうる＝安全側に倒す）。
+       ★ path 省略時は HISTORY_FILE.parent（＝実運用では NOTICE_V2_FILE と同じ
+       ~/.ailine/）から求める（固定の NOTICE_V2_FILE を直接使わない）。実測: この関数は
+       cmd_run のたび無条件に呼ぶため、HISTORY_FILE を monkeypatch 済みの大量のテストが
+       それに便乗して安全になる（このファイルは backups と違って『一度書いたら消えない』
+       ため、実ユーザーの ~/.ailine/notice_v2_shown をテストが汚すと『初回表示』が二度と
+       出せなくなる＝汚染の被害が他の一時ファイルより重い）。"""
+    p = path or (HISTORY_FILE.parent / "notice_v2_shown")
+    if p.exists():
+        return False
+    print(NOTICE_V2_TEXT)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(datetime.now(timezone.utc).isoformat(timespec="seconds"), encoding="utf-8")
+    except OSError:
+        pass
+    return True
+
+
 # ---------------------------------------------------------------------------
 # doctor（M1: セットアップ診断）
 # ---------------------------------------------------------------------------
@@ -3312,6 +3347,9 @@ def doctor_checks(model: str = DEFAULT_MODEL) -> list:
         ("LibreOffice", *_check_libreoffice()),
         ("basrun.py", *_check_basrun()),
         ("demo/", *_check_demo_dir()),
+        # ★ W10a 項目2: 動作可否のチェックではなく設定の告知（常に ok=True）。
+        #   既定が原本直接反映に変わったこと(W8b-2〜)を doctor でも確認できるようにする。
+        ("既定動作", True, "原本直接（v2〜）。--copy で従来のコピー方式"),
     ]
 
 
@@ -3574,6 +3612,8 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
        - 計画が2段以上(複合依頼) → 段ごとに honest な項目別実行(cmd_run_plan)（M2c）
        ★ 後方互換: translate_task が "plan" で包まない旧形式（bare {"op":...}）を返した場合
        （テストの monkeypatch を含む）も、その dict をそのまま単一段として扱う。"""
+    maybe_show_notice_v2()   # ★ W10a 項目2: 既定変更の一度きり告知（run の一番最初）
+
     book = Path(a.book).resolve()
     if not book.exists():
         sys.exit(f"文書が無い: {book}")
@@ -3668,42 +3708,90 @@ def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
     return cmd_run_plan(a, book, source_book, book_meta, plan)
 
 
-def _column_has_existing_values(book_path: Path, sheet_name: str, col_name: str,
-                                 header_row: int = 1) -> bool:
-    """★ M2c: target(既存列指定)列に、見出し行を除いてどれか値が入っているか。
-       上書き検知の明示用。読めない/列やシートが見つからない場合は False
-       （保守的に『無い』扱い＝誤って警告しない）。★ W3: header_row(1起点)で見出しの
-       実位置を受け取る（省略時は物理1行目・旧挙動と同一）。"""
+def _column_existing_value_count(book_path: Path, sheet_name: str, col_name: str,
+                                  header_row: int = 1) -> int:
+    """★ M2c / W10a: target(既存列指定)列に、見出し行を除いて値が入っているセルの件数。
+       上書き検知の明示（確認行の注意書き）と W10a の破壊の関所（確認メッセージの件数）が
+       共有する。読めない/列やシートが見つからない場合は 0（保守的に『無い』扱い＝誤って
+       止めない）。★ W3: header_row(1起点)で見出しの実位置を受け取る
+       （省略時は物理1行目・旧挙動と同一）。"""
     try:
         wb = openpyxl.load_workbook(book_path, read_only=True)
         if sheet_name not in wb.sheetnames:
             wb.close()
-            return False
+            return 0
         ws = wb[sheet_name]
         idx = _col_index_by_header(ws, col_name, header_row=header_row)
         if idx is None:
             wb.close()
-            return False
+            return 0
         last = _scan_last_row(ws, header_row=header_row)
-        found = any(ws.cell(row=r, column=idx).value not in (None, "")
-                    for r in range(header_row + 1, last + 1))
+        count = sum(1 for r in range(header_row + 1, last + 1)
+                    if ws.cell(row=r, column=idx).value not in (None, ""))
         wb.close()
-        return found
+        return count
     except Exception:
-        return False
+        return 0
+
+
+def _column_has_existing_values(book_path: Path, sheet_name: str, col_name: str,
+                                 header_row: int = 1) -> bool:
+    """★ M2c: target(既存列指定)列に、見出し行を除いてどれか値が入っているか
+       （_column_existing_value_count の bool 版。他コードとの互換のため残す）。"""
+    return _column_existing_value_count(book_path, sheet_name, col_name, header_row=header_row) > 0
 
 
 def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_path: Path) -> str | None:
     """★ M2c 項目2: COMPUTE_COLUMN の target(既存列指定)に既存値がある場合、
-       上書きになる旨の1行を返す（無ければ None・確認行に明示するため）。"""
+       上書きになる旨の1行を返す（無ければ None・確認行に明示するため）。
+       ★ W10a 項目1: この検出（と件数）を「破壊の関所」（原本適用時に確認を挟む・
+       cmd_run_dsl/cmd_run_plan 側）がそのまま流用する（検出ロジックを二重管理しない）。"""
     if op != "COMPUTE_COLUMN" or not resolved.get("target"):
         return None
     sheets = book_meta.get("sheets") or []
     if not sheets:
         return None
     header_row = book_meta.get("header_rows", {}).get(sheets[0], 1)
-    if _column_has_existing_values(book_path, sheets[0], resolved["target"], header_row=header_row):
-        return f"★ 対象列『{resolved['target']}』には既存値があります（上書きします）"
+    count = _column_existing_value_count(book_path, sheets[0], resolved["target"], header_row=header_row)
+    if count > 0:
+        return f"★ 対象列『{resolved['target']}』には既存の値が {count} 件あります（上書きします）"
+    return None
+
+
+def _interpretation_summary_line(resolved: dict, inferred: set) -> str | None:
+    """★ W10a 項目3: 実行前の解釈要約。target が数字表記から列名へ推定解決され、かつ
+       （呼び出し側が別途 _maybe_warn_target_overwrite で）既存データありと分かっている
+       場合だけ、その経緯を1文で見せる（「監査要望3」＝数字指定→列名解決の可視化）。
+       それ以外（target が最初から実在列名で指定された等）は None（何も語ることが無い）。"""
+    if "target" not in inferred or resolved.get("_target_raw") is None:
+        return None
+    return f"→『{resolved['_target_raw']}』は既存の『{resolved['target']}』列と解釈しました（既存データあり）"
+
+
+def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None,
+                                step_prefix: str = "") -> int | None:
+    """★ W10a 項目1: 破壊の関所。既定(原本へ直接反映)で、既存データへの上書きが起きる
+       操作（_maybe_warn_target_overwrite が検出）は、--ask 無指定でも確認を挟む
+       （監査実測: target が誤って既存列に解決され、確認なしで実データが上書きされた
+       事故の再発防止）。--copy/--dry 時は原本に触れない/何もしないため素通し。
+       --overwrite が既に立っていれば承知の上として素通し。--ask が既に立っている場合は
+       cmd_run_dsl 側の汎用確認で兼ねる（二重に聞かない）。
+       戻り値: 続行してよければ None、中断すべきなら呼び出し側がそのまま return すべき
+       exit code（対話で拒否=1・非対話で確認できない=7）。
+       step_prefix は複合計画の段番号表示用（例: "  2段目: "）。単発 DSL では空文字。"""
+    if not (warn_overwrite and getattr(a, "inplace", False) and not getattr(a, "dry", False)
+            and not getattr(a, "ask", False) and not getattr(a, "overwrite", False)):
+        return None
+    try:
+        ans = input(f"{step_prefix}上書きしますか？ [y/N]: ").strip().lower()
+    except EOFError:
+        print(f"{step_prefix}この処理を続けるには、以下のいずれかを指定して再実行してください:")
+        print(f"{step_prefix}  --overwrite  上書きを承知して続行する（バックアップから ailine undo で戻せる）")
+        print(f"{step_prefix}  --copy       原本には触らず .out に結果を作る（原本は無変更）")
+        return 7
+    if ans not in ("y", "yes"):
+        print(f"{step_prefix}× 中止した")
+        return 1
     return None
 
 
@@ -3730,9 +3818,16 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         print(f"（{PIVOT_CAVEAT}）")
     warn_overwrite = _maybe_warn_target_overwrite(op, resolved, book_meta, book)
     if warn_overwrite:
+        summary = _interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
+        if summary:
+            print(summary)
         print(warn_overwrite)
     for w in resolved.get("_warnings", []):   # ★ A': LLM由来の値と機械抽出の食い違い
         print(f"⚠ {w}")
+
+    gate_exit = _confirm_overwrite_or_gate(a, warn_overwrite)   # ★ W10a 項目1: 破壊の関所
+    if gate_exit is not None:
+        return gate_exit
 
     if a.ask:
         try:
@@ -4302,9 +4397,18 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             print(f"  {i}段目: （{PIVOT_CAVEAT}）")
         warn_overwrite = _maybe_warn_target_overwrite(op, resolved, current_meta, out_book)
         if warn_overwrite:
+            summary = _interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
+            if summary:
+                print(f"  {i}段目: {summary}")
             print(f"  {i}段目: {warn_overwrite}")
         for w in resolved.get("_warnings", []):   # ★ A': LLM由来の値と機械抽出の食い違い
             print(f"  {i}段目: ⚠ {w}")
+        # ★ W10a 項目1: 破壊の関所（複合計画の段ごと）。原本にはまだ何も反映されていない
+        #   （out_book はコピー・最終段まで揃ってから atomic_replace_inplace される）ので、
+        #   ここで中断すれば原本は無傷のまま run 全体を止められる。
+        gate_exit = _confirm_overwrite_or_gate(a, warn_overwrite, step_prefix=f"  {i}段目: ")
+        if gate_exit is not None:
+            return gate_exit
         if resolved.get("_sources"):
             plan_provenance.append({"step": i, **resolved["_sources"]})
         step_header_row = current_meta.get("header_rows", {}).get(first_sheet, 1) if first_sheet else 1
@@ -4417,6 +4521,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--copy", action="store_true",
                    help="原本には触らず <book>.out に結果を作る（既定の原本直接適用をしない・"
                         "旧 --inplace 無指定と同じ挙動。往復忠実度ゲートも走らせない）")
+    r.add_argument("--overwrite", action="store_true",
+                   help="破壊の関所（既存データを持つ列への上書き確認）を承知の上で"
+                        "続行する（ailine undo で戻せる）")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")

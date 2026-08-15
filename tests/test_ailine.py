@@ -501,13 +501,20 @@ def test_format_doctor_report_has_failure_and_fix_hint():
     assert all_ok is False
     assert "× b — 直せ" in text
 
-def test_doctor_checks_returns_seven_items():
+def test_doctor_checks_returns_eight_items():
     # ①python ②openpyxl ③ollama ④モデル ⑤LibreOffice ⑥basrun.py ⑦demo/
+    # ★ W10a 項目2: ⑧既定動作の告知（原本直接・v2〜）を追加。
     results = ailine.doctor_checks()
-    assert len(results) == 7
+    assert len(results) == 8
     for name, ok, detail in results:
         assert isinstance(name, str)
         assert isinstance(ok, bool)
+
+def test_doctor_checks_includes_default_behavior_notice():
+    results = ailine.doctor_checks()
+    names = {name: detail for name, ok, detail in results}
+    assert "既定動作" in names
+    assert "原本直接" in names["既定動作"]
 
 
 # --- ★ W8a 項目5: doctor の事務向け一行説明（7項目全部・翻訳表示） -----------------
@@ -626,6 +633,9 @@ def test_format_history_table_old_rows_without_dry_key_read_as_applied():
     assert "(下見)" not in text
 
 def test_cmd_run_dry_survives_history_write_failure(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     # ★ 履歴の書き込み失敗で run 本体を落とさない（try で包み WARN のみ）ことを
     #   --dry（ollama 生成だけで LibreOffice を要さない）経路で確認する。
     book = _book(tmp_path, [["a", 1]])
@@ -1033,6 +1043,9 @@ def test_short_error_summary_empty():
     assert ailine.short_error_summary(None) == "(詳細不明)"
 
 def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     # ★ M2a: 端末には最終行だけ、履歴 jsonl には全文（トレースバックをそのまま出さない）。
     # ★ W3: 見出し検出には「見出し行(複数の非空文字列)+データ行(型の混在)」が要るため、
     #   単一行 [["a", 1]] でなく見出し+データの2行にする（意図は runtime_error 経路の確認）。
@@ -1100,6 +1113,9 @@ def test_cmd_run_freeform_success_shows_honest_warning_not_checkmark(tmp_path, m
     assert "✓ 適用され" not in captured.out
 
 def test_cmd_run_freeform_banner_uses_ai_direct_wording_not_jargon(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     # ★ W8a 項目5: 「自由生成経路」→「AI が直接作成（機械保証なし）」（operator の語彙翻訳）。
     book = _book(tmp_path, [["a", 1]])
     monkeypatch.setattr(ailine, "translate_task",
@@ -1472,6 +1488,9 @@ def test_check_excel_lock_detects_exclusively_opened_file(tmp_path):
         ctypes.windll.kernel32.CloseHandle(handle)
 
 def test_cmd_run_exits_5_when_excel_lock_detected(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     book = _book(tmp_path, [["商品", "金額"], ["a", 1]])
     (tmp_path / f"~${book.name}").write_bytes(b"lock")
     called = {"n": 0}
@@ -1703,6 +1722,9 @@ def test_cmd_run_inplace_fidelity_gate_silent_when_no_loss(tmp_path, monkeypatch
     assert "失われる飾り" not in captured.out
 
 def test_cmd_run_inplace_fidelity_records_history_field(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     book = _cf_dv_book(tmp_path, "book.xlsx", add_cf=True, add_dv=False)
     monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
@@ -1724,6 +1746,9 @@ def test_cmd_run_inplace_fidelity_records_history_field(tmp_path, monkeypatch, c
     assert any(it["label"] == "条件付き書式" for it in recorded["fidelity"]["items"])
 
 def test_cmd_run_inplace_no_fidelity_field_when_gate_not_run(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     # --inplace すら要求していない run では、ゲートは走らず fidelity は None のまま。
     book = _book(tmp_path, [["a", 1], ["b", 2]])
     monkeypatch.setattr(ailine, "translate_task",
@@ -1873,6 +1898,9 @@ def test_acquire_run_lock_broken_file_is_stale(tmp_path):
     assert acquired is True
 
 def test_cmd_run_exits_6_when_run_lock_busy(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     book = _book(tmp_path, [["a", 1], ["b", 2]])
     lock_path = tmp_path / "run.lock"
     monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
@@ -1893,6 +1921,9 @@ def test_cmd_run_exits_6_when_run_lock_busy(tmp_path, monkeypatch, capsys):
     assert called["n"] == 0   # ロックで止まった＝本体は一切呼ばれていない
 
 def test_cmd_run_releases_lock_even_on_early_sys_exit(tmp_path, monkeypatch):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     # book が無い場合は sys.exit() する経路（SystemExit）。それでも lock は解放されること。
     lock_path = tmp_path / "run.lock"
     monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
@@ -1910,6 +1941,9 @@ def test_cmd_run_releases_lock_even_on_early_sys_exit(tmp_path, monkeypatch):
 # ===========================================================================
 
 def test_cmd_run_cleans_up_workdir_after_success(tmp_path, monkeypatch):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     book = _book(tmp_path, [["a", 1], ["b", 2]])
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
@@ -1923,6 +1957,9 @@ def test_cmd_run_cleans_up_workdir_after_success(tmp_path, monkeypatch):
     assert not (book.parent / f".ailine_{book.stem}").exists()
 
 def test_cmd_run_cleans_up_workdir_after_clarify_exit(tmp_path, monkeypatch):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     book = _book(tmp_path, [["a", 1], ["b", 2]])
     ambiguous = {"sheets": {"Sheet": {"rows": {
         1: {"nonempty": 2, "str": 2, "bold": 0},
@@ -2829,6 +2866,9 @@ def test_cmd_run_dsl_prints_truncation_notice_when_snapshot_truncated(tmp_path, 
 # --- run コマンド: 翻訳の分岐（CLARIFY exit 3 / DSL 経路の事後条件不合格） -------
 
 def test_cmd_run_clarify_prints_question_and_exits_3(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     book = _book(tmp_path, [["商品", "金額"]])
     # ★ W3: 正規化パス(StructDump)は翻訳より前に走るので、CLARIFY 系の単体テストも
     #   normalize_book を差し替えて LibreOffice を要さないようにする。
@@ -2846,6 +2886,9 @@ def test_cmd_run_clarify_prints_question_and_exits_3(tmp_path, monkeypatch, caps
     assert "どの列を並べ替えますか？" in captured.out
 
 def test_cmd_run_dsl_verification_failure_falls_back_to_clarify_exit_3(tmp_path, monkeypatch, capsys):
+    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
+    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     book = _book(tmp_path, [["商品", "金額"]])
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "translate_task",
@@ -4703,3 +4746,369 @@ def test_cmd_run_dsl_pivot_dry_shows_caveat(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert "集計表" in captured.out   # PIVOT_CAVEAT が確認行の直後にも出る
     assert "PivotSum" in captured.out
+
+
+# ===========================================================================
+# ★ W10a: 破壊の関所（既存データ上書きの自動確認・既定変更の告知・解釈要約）
+# ===========================================================================
+
+# --- 検出（件数つき） -----------------------------------------------------------
+
+def test_column_existing_value_count_counts_nonempty_cells(tmp_path):
+    p = _book(tmp_path, [["商品", "原価"], ["a", 300], ["b", 250], ["c", None]])
+    assert ailine._column_existing_value_count(p, "Sheet", "原価") == 2
+
+def test_column_existing_value_count_zero_when_all_empty(tmp_path):
+    p = _book(tmp_path, [["商品", "原価"], ["a", None], ["b", None]])
+    assert ailine._column_existing_value_count(p, "Sheet", "原価") == 0
+
+def test_column_existing_value_count_zero_when_column_missing(tmp_path):
+    p = _book(tmp_path, [["商品", "原価"], ["a", 300]])
+    assert ailine._column_existing_value_count(p, "Sheet", "存在しない") == 0
+
+def test_column_has_existing_values_is_bool_wrapper(tmp_path):
+    p = _book(tmp_path, [["商品", "原価"], ["a", 300]])
+    assert ailine._column_has_existing_values(p, "Sheet", "原価") is True
+    assert ailine._column_has_existing_values(p, "Sheet", "存在しない") is False
+
+def test_maybe_warn_target_overwrite_message_includes_count(tmp_path):
+    p = _book(tmp_path, [["商品", "金額", "原価"], ["a", 100, 300], ["b", 200, 250]])
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額", "原価"]}}
+    msg = ailine._maybe_warn_target_overwrite(
+        "COMPUTE_COLUMN", {"target": "原価"}, meta, p)
+    assert msg == "★ 対象列『原価』には既存の値が 2 件あります（上書きします）"
+
+def test_maybe_warn_target_overwrite_none_when_no_existing_values(tmp_path):
+    p = _book(tmp_path, [["商品", "新列"], ["a", None], ["b", None]])
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "新列"]}}
+    assert ailine._maybe_warn_target_overwrite("COMPUTE_COLUMN", {"target": "新列"}, meta, p) is None
+
+def test_maybe_warn_target_overwrite_none_for_non_compute_column_ops():
+    assert ailine._maybe_warn_target_overwrite("SORT", {"col": "金額"}, {"sheets": ["S"]}, Path(".")) is None
+
+
+# --- 解釈要約（実行前の可視化） --------------------------------------------------
+
+def test_interpretation_summary_line_shows_digit_to_name_resolution():
+    resolved = {"target": "原価", "_target_raw": "5"}
+    line = ailine._interpretation_summary_line(resolved, {"target"})
+    assert line == "→『5』は既存の『原価』列と解釈しました（既存データあり）"
+
+def test_interpretation_summary_line_none_when_target_not_inferred():
+    resolved = {"target": "原価"}
+    assert ailine._interpretation_summary_line(resolved, set()) is None
+
+def test_interpretation_summary_line_none_when_no_raw_value_recorded():
+    # target が推定はされたが _target_raw が無いケース（他の op 由来等）は何も語らない。
+    resolved = {"target": "原価"}
+    assert ailine._interpretation_summary_line(resolved, {"target"}) is None
+
+
+# --- 破壊の関所（ゲート判定） ----------------------------------------------------
+
+def _gate_ns(**overrides):
+    base = dict(inplace=True, dry=False, ask=False, overwrite=False)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+def test_confirm_overwrite_or_gate_none_when_no_warning():
+    assert ailine._confirm_overwrite_or_gate(_gate_ns(), None) is None
+
+def test_confirm_overwrite_or_gate_none_when_copy_mode():
+    # --copy は a.inplace=False になる（W8b-2 の反転ロジック）。
+    assert ailine._confirm_overwrite_or_gate(_gate_ns(inplace=False), "★ 警告") is None
+
+def test_confirm_overwrite_or_gate_none_when_dry():
+    assert ailine._confirm_overwrite_or_gate(_gate_ns(dry=True), "★ 警告") is None
+
+def test_confirm_overwrite_or_gate_none_when_ask_already_set():
+    # --ask 側の汎用確認に譲る（二重に聞かない）。
+    assert ailine._confirm_overwrite_or_gate(_gate_ns(ask=True), "★ 警告") is None
+
+def test_confirm_overwrite_or_gate_none_when_overwrite_flag_set():
+    assert ailine._confirm_overwrite_or_gate(_gate_ns(overwrite=True), "★ 警告") is None
+
+def test_confirm_overwrite_or_gate_interactive_yes_continues(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    assert ailine._confirm_overwrite_or_gate(_gate_ns(), "★ 警告") is None
+
+def test_confirm_overwrite_or_gate_interactive_no_returns_1(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    rc = ailine._confirm_overwrite_or_gate(_gate_ns(), "★ 警告")
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "中止した" in captured.out
+
+def test_confirm_overwrite_or_gate_noninteractive_returns_7_with_guidance(monkeypatch, capsys):
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    rc = ailine._confirm_overwrite_or_gate(_gate_ns(), "★ 警告")
+    captured = capsys.readouterr()
+    assert rc == 7
+    assert "--overwrite" in captured.out
+    assert "--copy" in captured.out
+
+def test_confirm_overwrite_or_gate_uses_step_prefix(monkeypatch, capsys):
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ailine._confirm_overwrite_or_gate(_gate_ns(), "★ 警告", step_prefix="  3段目: ")
+    captured = capsys.readouterr()
+    assert "  3段目: 上書きしますか" not in captured.out   # prompt はstdinへ・標準出力ではない
+    assert "  3段目: この処理を続けるには" in captured.out
+
+
+# --- 告知（一度きり） ------------------------------------------------------------
+
+def test_maybe_show_notice_v2_shows_once_and_creates_marker(tmp_path, capsys):
+    marker = tmp_path / "notice_v2_shown"
+    assert not marker.exists()
+    shown = ailine.maybe_show_notice_v2(marker)
+    captured = capsys.readouterr()
+    assert shown is True
+    assert "既定で原本に直接反映" in captured.out
+    assert marker.exists()
+
+def test_maybe_show_notice_v2_silent_on_second_call(tmp_path, capsys):
+    marker = tmp_path / "notice_v2_shown"
+    ailine.maybe_show_notice_v2(marker)
+    capsys.readouterr()   # 1回目の出力を捨てる
+    shown = ailine.maybe_show_notice_v2(marker)
+    captured = capsys.readouterr()
+    assert shown is False
+    assert captured.out == ""
+
+def test_maybe_show_notice_v2_never_mentions_dry_run_wording(tmp_path):
+    marker = tmp_path / "notice_v2_shown"
+    ailine.maybe_show_notice_v2(marker)
+    assert "dry-run" not in ailine.NOTICE_V2_TEXT.lower()
+
+
+# --- argparse ------------------------------------------------------------------
+
+def test_build_parser_has_overwrite_flag():
+    args = ailine.build_parser().parse_args(["run", "book.xlsx", "task", "--overwrite"])
+    assert args.overwrite is True
+
+def test_build_parser_overwrite_defaults_false():
+    args = ailine.build_parser().parse_args(["run", "book.xlsx", "task"])
+    assert args.overwrite is False
+
+
+# --- cmd_run_dsl 統合 ------------------------------------------------------------
+
+def _overwrite_scenario_ns(book, **overrides):
+    base = dict(
+        book=str(book), task="売上から原価を引いた値を5列目に入れて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False, overwrite=False,
+        values=False)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+def _overwrite_book(tmp_path, name="book.xlsx"):
+    # ★ 監査の実際の再現に合わせた列構成（商品/金額/在庫/売上/原価・demo/sample.xlsx 型）。
+    return _book(tmp_path, [
+        ["商品", "金額", "在庫", "売上", "原価"],
+        ["りんご", 1200, 8, 5000, 3000],
+        ["みかん", 800, 25, 4000, 3500],
+    ])
+
+def test_cmd_run_dsl_new_column_creation_skips_gate_entirely(tmp_path, monkeypatch, capsys):
+    # 新規列作成（target 無指定）は「破壊だけ関所」の対象外・従来どおり素通り。
+    book = _overwrite_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN", "args": {"operands": ["売上", "原価"], "operator": "-"}})
+    ns = _overwrite_scenario_ns(book)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "上書きしますか" not in captured.out
+    assert "既存の値が" not in captured.out
+
+def test_cmd_run_dsl_overwrite_gate_blocks_noninteractive_exit7(tmp_path, monkeypatch, capsys):
+    # ★ 監査の実測事故の再現: target が既存列(原価)に解決され、既存データがある。
+    book = _overwrite_book(tmp_path)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN",
+                         "args": {"operands": ["売上", "原価"], "operator": "-", "target": "5"}})
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = _overwrite_scenario_ns(book)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 7
+    assert "既存の値が 2 件あります" in captured.out
+    assert "--overwrite" in captured.out
+    assert book.read_bytes() == original_bytes   # 原本は無傷
+
+def test_cmd_run_dsl_overwrite_gate_shows_interpretation_summary(tmp_path, monkeypatch, capsys):
+    book = _overwrite_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN",
+                         "args": {"operands": ["売上", "原価"], "operator": "-", "target": "5"}})
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = _overwrite_scenario_ns(book)
+    ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert "→『5』は既存の『原価』列と解釈しました（既存データあり）" in captured.out
+
+def _fake_apply_overwrite_target(out_book, code, workdir, helper_files=(), timeout=None):
+    """COMPUTE_COLUMN(売上-原価→在庫列) の実際の計算結果を書き込む fake_apply
+    （target=在庫 は operand ではない既存列なので、事後条件が operand から素直に
+    再計算できる・--values 前提で use_formula=False の直値照合が通る）。"""
+    wb2 = openpyxl.load_workbook(out_book)
+    ws2 = wb2.active
+    ws2.cell(row=2, column=3, value=5000 - 3000)
+    ws2.cell(row=3, column=3, value=4000 - 3500)
+    wb2.save(out_book)
+    return True, None, "ok"
+
+def test_cmd_run_dsl_overwrite_gate_bypassed_with_overwrite_flag(tmp_path, monkeypatch, capsys):
+    book = _overwrite_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN",
+                         "args": {"operands": ["売上", "原価"], "operator": "-", "target": "在庫"}})
+    monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_overwrite_target)
+    ns = _overwrite_scenario_ns(book, overwrite=True, values=True)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert "上書きしますか" not in captured.out   # 関所自体をスキップ
+    assert rc == 0
+    assert "✓ 反映しました" in captured.out
+
+def test_cmd_run_dsl_overwrite_gate_bypassed_with_copy_flag(tmp_path, monkeypatch, capsys):
+    book = _overwrite_book(tmp_path)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN",
+                         "args": {"operands": ["売上", "原価"], "operator": "-", "target": "在庫"}})
+    monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_overwrite_target)
+    ns = _overwrite_scenario_ns(book, copy=True, values=True)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert "上書きしますか" not in captured.out   # --copy は原本に触れないため関所自体が発動しない
+    assert rc == 0
+    assert book.read_bytes() == original_bytes   # 原本は無変更
+
+def test_cmd_run_dsl_overwrite_gate_interactive_yes_applies(tmp_path, monkeypatch, capsys):
+    book = _overwrite_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN",
+                         "args": {"operands": ["売上", "原価"], "operator": "-", "target": "在庫"}})
+    monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_overwrite_target)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    ns = _overwrite_scenario_ns(book, values=True)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "✓ 反映しました" in captured.out
+
+def test_cmd_run_dsl_overwrite_gate_interactive_no_aborts(tmp_path, monkeypatch, capsys):
+    book = _overwrite_book(tmp_path)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN",
+                         "args": {"operands": ["売上", "原価"], "operator": "-", "target": "5"}})
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    ns = _overwrite_scenario_ns(book)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "× 中止した" in captured.out
+    assert book.read_bytes() == original_bytes
+
+def test_cmd_run_dsl_overwrite_gate_no_summary_line_when_target_explicit(tmp_path, monkeypatch, capsys):
+    # target が最初から実在列名で明示された場合（数字推定なし）は「→」の解釈要約は出ない
+    # （何も『解釈』していないので語ることが無い）。警告そのものは出る。
+    book = _overwrite_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN",
+                         "args": {"operands": ["売上", "金額"], "operator": "-", "target": "原価"}})
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = _overwrite_scenario_ns(book)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 7
+    assert "既存の値が" in captured.out
+    assert "と解釈しました" not in captured.out
+
+
+# --- cmd_run_plan 統合（複合計画の段ごとの関所） ---------------------------------
+
+def test_cmd_run_plan_overwrite_gate_blocks_noninteractive_book_untouched(tmp_path, monkeypatch, capsys):
+    book = _overwrite_book(tmp_path)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [
+                            {"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                            {"op": "COMPUTE_COLUMN",
+                             "args": {"operands": ["売上", "原価"], "operator": "-", "target": "5"}},
+                        ]})
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None: (True, None, "ok"))
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = _overwrite_scenario_ns(book, task="金額で並べ替えて売上から原価を引いた値を5列目に入れて")
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 7
+    assert "  2段目:" in captured.out
+    assert book.read_bytes() == original_bytes   # 1段目が実行済みでも原本(book)自体は無傷
+
+
+# --- 実行前告知の cmd_run 統合（一度きり） ----------------------------------------
+
+def test_cmd_run_shows_notice_v2_once_then_silent(tmp_path, monkeypatch, capsys):
+    book = _book(tmp_path, [["商品", "金額"], ["a", 1], ["b", 2]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, copy=False, json=False, timeout=180.0, ask=False)
+    ailine.cmd_run(ns)
+    first = capsys.readouterr().out
+    assert "既定で原本に直接反映" in first
+
+    ailine.cmd_run(ns)
+    second = capsys.readouterr().out
+    assert "既定で原本に直接反映" not in second
