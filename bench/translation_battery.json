@@ -126,6 +126,14 @@
         "slot_accuracy": 0.8,
         "note": "W9: 検証済みヘルパ4種(INSERT_ROWS/DRAW_BORDERS/AUTOFIT/PIVOT)の語彙昇格後の翻訳精度。合格線は v1 と同じ op90%/slot80%。PIVOT/AGGREGATE の分岐（『ピボット』明示の有無）検体を含む。"
       }
+    },
+    "v5": {
+      "frozen": "2026-08-15 (W10b 実行前凍結)",
+      "bar": {
+        "op_accuracy": 0.833,
+        "factor_machine_determined": 1.0,
+        "note": "W10b: COMPUTE_COLUMN の「1列 × 率」パターン(税込み/税抜き)を DSL 語彙に収載した後の翻訳精度。合格線は分類成功 5/6=83.3%以上。倍率(factor)は LLM に確定させない(A原則) - verify_dsl_args が machine 抽出(extract_rate_factor/lookup_vocab_factor)だけで全件確定できること(LLM確定0件)も併せて測る。"
+      }
     }
   },
   "items": [
@@ -969,6 +977,80 @@
         "op": "AGGREGATE",
         "group_col": "商品",
         "value_col": "売上"
+      }
+    }
+  ],
+  "items_v5": [
+    {
+      "id": 501,
+      "book": "sales",
+      "text": "税込み金額の列を追加して（消費税10%）",
+      "expect": {
+        "op": "COMPUTE_COLUMN",
+        "operands": [
+          "金額"
+        ],
+        "operator": "*"
+      }
+    },
+    {
+      "id": 502,
+      "book": "sales",
+      "text": "消費税10%を足した列を作って",
+      "expect": {
+        "op": "COMPUTE_COLUMN",
+        "operands": [
+          "金額"
+        ],
+        "operator": "*"
+      }
+    },
+    {
+      "id": 503,
+      "book": "sales",
+      "text": "金額に1.1を掛けた列を追加して",
+      "expect": {
+        "op": "COMPUTE_COLUMN",
+        "operands": [
+          "金額"
+        ],
+        "operator": "*"
+      }
+    },
+    {
+      "id": 504,
+      "book": "sales",
+      "text": "税込みの列を追加して（消費税10%）",
+      "expect": {
+        "op": "COMPUTE_COLUMN",
+        "operands": [
+          "金額"
+        ],
+        "operator": "*"
+      }
+    },
+    {
+      "id": 505,
+      "book": "sample",
+      "text": "原価に消費税10%を足した列を追加して",
+      "expect": {
+        "op": "COMPUTE_COLUMN",
+        "operands": [
+          "原価"
+        ],
+        "operator": "*"
+      }
+    },
+    {
+      "id": 506,
+      "book": "sample",
+      "text": "売上に1.1倍した列を作って",
+      "expect": {
+        "op": "COMPUTE_COLUMN",
+        "operands": [
+          "売上"
+        ],
+        "operator": "*"
       }
     }
   ]

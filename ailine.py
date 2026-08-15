@@ -208,6 +208,8 @@ def load_helpers(helpers_dir: Path) -> tuple:
         "arcane な操作（並べ替え等）は、自分で書かず次のヘルパを使うこと。\n"
         "★ 呼び方は必ず `Call 名前(引数)` の形（Call を付ける。括弧つきで Call 無しは誤動作する）。\n"
         "★ ヘルパの中身は絶対に書き写すな（SummaryTable 等が長くても）。必ず `Call 名前(...)` の1行だけで呼ぶ。\n"
+        "★ W10b: 依頼に無い操作のヘルパは絶対に呼ぶな（『何か効くかもしれない』で総当たりに"
+        "色々呼ぶのは禁止。依頼を達成するのに要る分だけを呼ぶ）。\n"
         "★ headerRow 引数は見出し行（0起点）。見出しが物理1行目ならほぼ常に 0。\n"
         "例: 列0〜4の表で金額が列1なら、金額で降順に並べ替え"
         " → `Call SortByColumn(oDoc, 0, 4, 1, False)`（第2引数 lastCol=表の最終列）\n"
@@ -779,6 +781,36 @@ def detect_ghost_data(before: dict, after: dict) -> str | None:
     return f"★ 疑わしい: 変更が元データの範囲外です（{span}）"
 
 
+# ★ W10b 項目4a(摩擦): 「★疑わしい: 変更が元データの範囲外」が、新規列の作成という
+#   *意図した*操作でも毎回出ていた実測所見への対応。DSL 経路(COMPUTE_COLUMN・target
+#   無指定=新規列作成)に限り、detect_ghost_data が指す範囲が丸ごとその新規列に収まって
+#   いれば中立表示に落とす（新規列は原本の使用範囲外に出るのが当然＝誤警報）。
+_GHOST_RANGE_RE = re.compile(r"^★ 疑わしい: 変更が元データの範囲外です（([A-Z]+)\d+(?::([A-Z]+)\d+)?）$")
+
+
+def _neutralize_new_column_ghost_warning(advisories: list, op: str, resolved: dict,
+                                          book_meta: dict) -> list:
+    """op が COMPUTE_COLUMN で target 無指定（＝新規列を作成する宣言済みの効果）の場合、
+       advisories 中の『変更が元データの範囲外』行のうち、範囲が丸ごとその新規列1本に
+       収まっているものだけを中立表示に置き換える。範囲が他列にも及ぶ場合（保守的）や
+       op が別のものの場合は一切変えない。"""
+    if op != "COMPUTE_COLUMN" or resolved.get("target"):
+        return advisories
+    first_sheet = book_meta["sheets"][0] if book_meta.get("sheets") else None
+    if not first_sheet:
+        return advisories
+    new_col_idx = len(book_meta["headers"].get(first_sheet, []))   # 0起点・新規列の位置
+    new_col_letter = get_column_letter(new_col_idx + 1)
+    out = []
+    for line in advisories:
+        m = _GHOST_RANGE_RE.match(line)
+        if m and m.group(1) == new_col_letter and (m.group(2) or m.group(1)) == new_col_letter:
+            out.append("（新規列の追加は意図どおりです）")
+            continue
+        out.append(line)
+    return out
+
+
 def detect_uniform_fill(before: dict, after: dict) -> str | None:
     """★ 一様埋め検出: 変更セルの全部で『変化前が空欄』かつ『変化後が全部同一値』
        （特に 0/空文字）の場合だけ疑わしい旨を返す（保守的）。
@@ -976,9 +1008,16 @@ def _changed_sheets(before: dict, after: dict) -> set:
     return changed
 
 
-def mention_overlap_advisory(mentions: dict, before: dict, after: dict) -> list:
+def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
+                              exclude_sheets: set | None = None) -> list:
     """言及があるのに変更範囲と全く重ならない場合だけ警告する（保守的）。
-       数字表記の列は 0 起点/1 起点の両解釈を許し、どちらかが触られていれば沈黙する。"""
+       数字表記の列は 0 起点/1 起点の両解釈を許し、どちらかが触られていれば沈黙する。
+       ★ W10b 項目4b(摩擦): exclude_sheets に載るシート（例: LOOKUP_FILL の参照専用
+       source_sheet）は、依頼文に言及があっても『変更されていません』を出さない
+       （読み取り専用が正しい操作で、変更が無いのが正常なため誤警報だった）。
+       ★ 安全器官の減衰なので保守的に: 抑制は呼び出し側が op から明示的に渡す時だけ・
+       既定(None)は従来どおり無抑制。"""
+    exclude_sheets = exclude_sheets or set()
     if not (mentions["cols"] or mentions.get("digit_cols") or mentions["rows"]
             or mentions["sheets"]):
         return []
@@ -1002,12 +1041,14 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict) -> list:
         if row not in changed_rows:
             lines.append(f"★ 依頼で言及された『行{row}』は存在しません/変更されていません")
     for sheet in sorted(mentions["sheets"]):
+        if sheet in exclude_sheets:
+            continue
         if sheet not in changed_sheets:
             lines.append(f"★ 依頼で言及された『{sheet}』は存在しません/変更されていません")
     return lines
 
 
-def build_advisories(task: str, before: dict, after: dict) -> list:
+def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set | None = None) -> list:
     """diff の後に表示する助言行を全部集める。
        ①幽霊データ ②一様埋め ③件数の突き合わせ ④依頼文言との重なり
        ⑤新規シートの中身（★ W6） ⑥依頼にないシート新設の申告（★ W6）。"""
@@ -1022,7 +1063,7 @@ def build_advisories(task: str, before: dict, after: dict) -> list:
     lines.extend(new_sheet_advisories(before, after))
     lines.extend(unrequested_new_sheet_advisory(task, before, after))
     mentions = extract_task_mentions(task, before["sheets"])
-    lines.extend(mention_overlap_advisory(mentions, before, after))
+    lines.extend(mention_overlap_advisory(mentions, before, after, exclude_sheets))
     return lines
 
 
@@ -1104,13 +1145,19 @@ def vocab_add(term: str, value, path: Path | None = None) -> tuple:
 
 _RATE_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]")
 _RATE_BAI_RE = re.compile(r"(\d+(?:\.\d+)?)\s*倍")
+# ★ W10b 項目3: 「1.1を掛けた/掛ける」「1.1で割った/割る」型（税込み/税抜きの言い換えで
+#   「倍」を伴わない場合の実測ギャップ・battery v5 #503 で発覚）。掛けるは n そのまま、
+#   割るは 1/n（税抜き＝税込み金額から逆算する倍率）。
+_RATE_KAKE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:を|に)?\s*掛け")
+_RATE_WARI_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:で|に)?\s*割っ")
 _RATE_KEYWORD_RE = re.compile(r"税|倍率")
 _RATE_BARE_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
 
 
 def extract_rate_factor(text: str) -> tuple:
     """依頼文から明示の倍率を抽出する。戻り値は (factor, 出典スニペット) か (None, None)。
-       ①「10%」「8 ％」型 → 1+n/100 ②「1.1倍」型 → n そのまま ③「税」「倍率」という語の
+       ①「10%」「8 ％」型 → 1+n/100 ②「1.1倍」型 → n そのまま ②'「1.1を掛けた」型 → n
+       そのまま ②''「1.1で割った」型 → 1/n（税抜き等の逆算） ③「税」「倍率」という語の
        前後8文字だけにある裸の小数（例:「税率0.1」）→ 1未満なら 1+n・1以上ならそのまま
        （無関係な数値の誤爆を避けるため、③だけは税/倍率の語の近傍に絞る）。
        複数の異なる値が見つかった場合は断定しない（None, None・CLARIFY に委ねる）。"""
@@ -1123,6 +1170,14 @@ def extract_rate_factor(text: str) -> tuple:
     for m in _RATE_BAI_RE.finditer(text):
         f = round(float(m.group(1)), 6)
         candidates.setdefault(f, m.group(0))
+    for m in _RATE_KAKE_RE.finditer(text):
+        f = round(float(m.group(1)), 6)
+        candidates.setdefault(f, m.group(0))
+    for m in _RATE_WARI_RE.finditer(text):
+        n = float(m.group(1))
+        if n > 0:
+            f = round(1 / n, 6)
+            candidates.setdefault(f, m.group(0))
     if not candidates:
         for km in _RATE_KEYWORD_RE.finditer(text):
             window = text[max(0, km.start() - 8): km.end() + 8]
@@ -1228,6 +1283,9 @@ OP_SCHEMA = {
 OPS_DOC = """SORT: 並べ替え。args: col(列名), order(asc|desc)
 COMPUTE_COLUMN: 既存列同士の計算。args: operands(列名2つ), operator(+,-,*,/), target(省略可・実在する列名。
   依頼が「〜に」のように既存列を名指ししたらその列名を入れる。無指定なら新しい列を作る)
+  ★ 税込み/税抜き等「1列 × 率」の場合は operands を既存列名1つだけの配列にする。
+  operator は * (税込み等、掛ける) か / (税抜き等、割る)。倍率(税率等)の数値はここに入れない
+  （数値化はここでは行わない・機械が別途確定する。APPEND_TOTAL の倍率と同じ扱い）
 LOOKUP_FILL: 別シートの対応表から値を転記。args: target_sheet, target_col, source_sheet, key_col
 AGGREGATE: グループ別に集計表を作る。args: group_col, value_col
 BOLD: 太字。args: target("row:行番号" か "col:列名")
@@ -1319,6 +1377,19 @@ TRANSLATION_FEWSHOT = [
     ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
      '依頼: 「金額の平均値を一番下に追加して」',
      '{"plan": [{"op": "OUT_OF_VOCAB", "about": "平均値の追加"}]}'),
+    # ★ W10b 項目3: 税込み/税抜き等「1列 × 率」パターンの語彙昇格（operator 第6回査定の
+    #   実測: この言い回しが4種すべて DSL 分類に失敗し自由生成へ退避していた）。
+    #   few-shot は最小限（W9 の実測: 足しすぎると別 op の誤断定回帰が出る）。
+    #   ★ A': 倍率の数値化は LLM に求めない（factor は machine-determined。verify_dsl_args の
+    #   extract_rate_factor/lookup_vocab_factor が依頼文/用語集から機械確定する）。
+    #   ★ battery v3 再走で実測した回帰: 「税込み○○を出して」型の言い回しで例を作ると、
+    #   APPEND_TOTAL の label 例（「税込み合計を一番下に出して」）と表現が似すぎて、
+    #   モデルが APPEND_TOTAL の label フィールドまで省略するようになった(#305 CLARIFY
+    #   すべきが確定に化けた)。「〜を追加して」型（新規列作成が明確な言い回し）の例だけ
+    #   残し、APPEND_TOTAL の言い回しと重ならないようにする。
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「金額に1.1を掛けた列を追加して」',
+     '{"plan": [{"op": "COMPUTE_COLUMN", "args": {"operands": ["金額"], "operator": "*"}}]}'),
 ]
 
 TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙を使った「計画」の JSON に翻訳する。
@@ -1515,19 +1586,71 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
 
     elif op == "COMPUTE_COLUMN":
         operands = resolved.get("operands")
-        if not (isinstance(operands, list) and len(operands) == 2):
+        # ★ W10b 項目3: 税込み/税抜き等「1列 × 率」パターン。operands が列名1つだけの
+        #   配列なら『既存列×倍率』とみなす（2列の四則演算とは別モード）。倍率(factor)は
+        #   APPEND_TOTAL と同じ A' 原則で LLM から受け取らず機械確定する
+        #   （extract_rate_factor/lookup_vocab_factor・regex のみ）。
+        single_factor_mode = isinstance(operands, list) and len(operands) == 1
+        if not single_factor_mode and not (isinstance(operands, list) and len(operands) == 2):
             return False, resolved, inferred, "演算対象が2つの列名になっていません"
-        new_operands = []
-        for o in operands:
-            v, was_inferred, err = resolve_col_ref(o, headers.get(first_sheet, []))
+
+        if single_factor_mode:
+            v, was_inferred, err = resolve_col_ref(operands[0], headers.get(first_sheet, []))
             if err:
                 return False, resolved, inferred, err
-            new_operands.append(v)
+            resolved["operands"] = [v]
             if was_inferred:
                 inferred.add("operands")
-        resolved["operands"] = new_operands
-        if resolved.get("operator") not in ("+", "-", "*", "/"):
-            return False, resolved, inferred, f"演算子『{resolved.get('operator')}』が不明です"
+            if resolved.get("operator") not in ("*", "/"):
+                return False, resolved, inferred, (
+                    f"演算子『{resolved.get('operator')}』は列1つの計算（税込み/税抜き等）"
+                    "では * か / のみ対応です")
+
+            llm_factor_raw = resolved.pop("factor", None)
+            text_factor, text_snippet = extract_rate_factor(task)
+            vocab_factor, vocab_term = (None, None)
+            if text_factor is None:
+                vocab_factor, vocab_term = lookup_vocab_factor(task, vocab or {})
+
+            sources: dict = {}
+            if text_factor is not None:
+                resolved["factor"] = text_factor
+                sources["factor"] = f"依頼文: {text_snippet}"
+            elif vocab_factor is not None:
+                resolved["factor"] = vocab_factor
+                sources["factor"] = f"用語集: {vocab_term}"
+            else:
+                return False, resolved, inferred, (
+                    "倍率（税率等）が分かりません。依頼文に率を書く（例:「消費税10%」）か、"
+                    "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
+                )
+            if resolved["factor"] <= 0:
+                return False, resolved, inferred, f"倍率『{resolved['factor']}』は正の数でなければなりません"
+            if sources:
+                resolved["_sources"] = sources
+            if llm_factor_raw not in (None, ""):
+                try:
+                    llm_factor = float(llm_factor_raw)
+                except (TypeError, ValueError):
+                    llm_factor = None
+                if llm_factor is not None and abs(llm_factor - resolved["factor"]) > 1e-9:
+                    mfactor = resolved["factor"]
+                    resolved["_warnings"] = [
+                        f"LLM が返した倍率({llm_factor:g})と機械抽出の倍率({mfactor:g})が"
+                        f"食い違うため機械抽出({mfactor:g})を採用しました"
+                    ]
+        else:
+            new_operands = []
+            for o in operands:
+                v, was_inferred, err = resolve_col_ref(o, headers.get(first_sheet, []))
+                if err:
+                    return False, resolved, inferred, err
+                new_operands.append(v)
+                if was_inferred:
+                    inferred.add("operands")
+            resolved["operands"] = new_operands
+            if resolved.get("operator") not in ("+", "-", "*", "/"):
+                return False, resolved, inferred, f"演算子『{resolved.get('operator')}』が不明です"
         # ★ M2c: target(任意) — 依頼が既存列を名指し（「小計に」等）した場合はその列に書く。
         #   無指定なら従来どおり新規列（codegen_dsl 側で分岐）。
         # ★ W3: target が実在しない場合、翻訳が「新しい列の名前」（例:「利益列を作って」の
@@ -1904,11 +2027,42 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         return _wrap_basic(body)
 
     if op == "COMPUTE_COLUMN":
-        op1, op2 = resolved_args["operands"]
-        i1 = headers[first_sheet].index(op1)
-        i2 = headers[first_sheet].index(op2)
+        operands = resolved_args["operands"]
         operator = resolved_args["operator"]
         target = resolved_args.get("target")
+
+        if len(operands) == 1:
+            # ★ W10b 項目3: 税込み/税抜き等「列 × 率」パターン（1列 + 機械確定した factor）。
+            #   codegen は既存の2列版と同じ書き方（式=セル参照、値ベタ書きの選択も同じ）。
+            op1 = operands[0]
+            i1 = headers[first_sheet].index(op1)
+            factor = float(resolved_args["factor"])
+            if target:
+                new_col = headers[first_sheet].index(target)
+                header_write = ""
+            else:
+                new_col = len(headers[first_sheet])
+                header_name = f"{op1}{operator}{factor:g}".replace('"', '""')
+                header_write = f"    oSheet.getCellByPosition({new_col}, {hr0}).setString(\"{header_name}\")\n"
+            if use_formula:
+                col1_letter = get_column_letter(i1 + 1)
+                write_line = (f'        oSheet.getCellByPosition({new_col}, i).setFormula('
+                              f'"=" & "{col1_letter}" & (i + 1) & "{operator}{factor:g}")\n')
+            else:
+                write_line = (f"        oSheet.getCellByPosition({new_col}, i).setValue("
+                              f"oSheet.getCellByPosition({i1}, i).getValue() {operator} {factor:g})\n")
+            body = ("    Dim oSheet As Object, lastRow As Long, i As Long\n"
+                    "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                    + _scan_last_row_basic(start_row=str(hr0 + 1))
+                    + header_write
+                    + f"    For i = {hr0 + 1} To lastRow\n"
+                    + write_line
+                    + "    Next i\n")
+            return _wrap_basic(body)
+
+        op1, op2 = operands
+        i1 = headers[first_sheet].index(op1)
+        i2 = headers[first_sheet].index(op2)
         # ★ M2c: target(実在列名) 指定時はその列に書く（新規列を作らない）。
         #   無指定なら従来どおり次の空き列に新規列を作る。
         if target:
@@ -2076,7 +2230,12 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
        ★ W3 Part3: use_formula=True のとき事後条件を二層化する — ①通常の openpyxl 読み
        で保存された式文字列が期待形か ②data_only 読みでキャッシュ値が演算結果と一致するか。
        両方合格して初めて pass にする（式だけ合っていて未計算/値だけ合っていて式が
-       無いケースの両方を見逃さない）。"""
+       無いケースの両方を見逃さない）。
+       ★ W10b 項目3: operands が1つだけ（税込み/税抜き等「列 × 率」パターン）の場合は
+       check_compute_column_single_factor に委譲する。"""
+    if len(args["operands"]) == 1:
+        return check_compute_column_single_factor(path, args, header_row=header_row,
+                                                    use_formula=use_formula)
     wb = openpyxl.load_workbook(path)
     ws = wb[wb.sheetnames[0]]
     op1, op2 = args["operands"]
@@ -2109,6 +2268,65 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
         want = _apply_operator(a, b, args["operator"])
         if use_formula:
             expect_formula = f"={col1_letter}{r}{args['operator']}{col2_letter}{r}"
+            if not isinstance(got, str) or got.replace(" ", "") != expect_formula:
+                wb.close(); wb_v.close()
+                return "fail", f"{r}行目: 式が期待形でない (期待 {expect_formula} 実際 {got!r})"
+            got_cached = ws_v.cell(row=r, column=inew).value
+            if not _is_number(got_cached) or abs(got_cached - want) > 1e-6:
+                wb.close(); wb_v.close()
+                return "fail", f"{r}行目: 式のキャッシュ値が不一致 (期待 {want} 実際 {got_cached!r})"
+        else:
+            if not _is_number(got) or abs(got - want) > 1e-6:
+                wb.close()
+                return "fail", f"{r}行目: 期待 {want} 実際 {got}"
+        checked += 1
+    wb.close()
+    if wb_v is not None:
+        wb_v.close()
+    note = f"（数値でない {excluded} 行は対象外）" if excluded else ""
+    if checked == 0:
+        return "fail", _ZERO_TARGET_REASON + note
+    if use_formula:
+        return "pass", f"{checked} 行を検証（式・キャッシュ値とも一致）{note}"
+    return "pass", f"{checked} 行を検証{note}"
+
+
+def check_compute_column_single_factor(path: Path, args: dict, header_row: int = 1,
+                                        use_formula: bool = False) -> tuple:
+    """★ W10b 項目3: COMPUTE_COLUMN の「1列 × 率」パターン（税込み/税抜き等）専用の事後条件。
+       check_compute_column（2列版）と同じ二層検証（式の期待形・data_only キャッシュ値）を
+       1列 + factor に合わせて行う。factor は verify_dsl_args が機械確定済みの値
+       （resolved["factor"]）をそのまま受け取る前提。"""
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    op1 = args["operands"][0]
+    operator = args["operator"]
+    factor = float(args.get("factor", 1) or 1)
+    i1 = _col_index_by_header(ws, op1, header_row=header_row)
+    target = args.get("target")
+    newname = target or f"{op1}{operator}{factor:g}"
+    inew = _col_index_by_header(ws, newname, header_row=header_row)
+    if i1 is None or inew is None:
+        wb.close()
+        return "fail", f"演算対象または対象列『{newname}』が見つからない"
+    last = _scan_last_row(ws, header_row=header_row)
+    wb_v = None
+    ws_v = None
+    if use_formula:
+        wb_v = openpyxl.load_workbook(path, data_only=True)
+        ws_v = wb_v[wb_v.sheetnames[0]]
+    col1_letter = get_column_letter(i1)
+    checked = 0
+    excluded = 0
+    for r in range(header_row + 1, last + 1):
+        a = ws.cell(row=r, column=i1).value
+        got = ws.cell(row=r, column=inew).value
+        if not _is_number(a):
+            excluded += 1   # 例: 合計行で演算対象セルが空欄
+            continue
+        want = _apply_operator(a, factor, operator)
+        if use_formula:
+            expect_formula = f"={col1_letter}{r}{operator}{factor:g}"
             if not isinstance(got, str) or got.replace(" ", "") != expect_formula:
                 wb.close(); wb_v.close()
                 return "fail", f"{r}行目: 式が期待形でない (期待 {expect_formula} 実際 {got!r})"
@@ -2171,7 +2389,15 @@ def check_lookup_fill(path: Path, args: dict, header_row: int = 1) -> tuple:
     if scanned == 0:
         return "fail", _ZERO_TARGET_REASON
     if checked == 0:
-        return "fail", "対応表に載っているキーが1件も転記されていない"
+        # ★ W10b 項目4a: 摩擦(operator 実測) — マスタ表の列順が値→キーだと1件も引けず
+        #   ここに落ちるが、旧メッセージは原因を示さなかった。VLookupFromTable ヘルパは
+        #   常に「参照表は列0=キー・列1=値」固定（列順非依存化は他列数のマスタで誤ヒット
+        #   するリスクが高くリスク高と判断・具体誘導での対応を選んだ＝W10b 報告参照）。
+        return "fail", (
+            f"対応表『{args['source_sheet']}』に載っているキーが1件も転記されていません。"
+            f"マスタ表はキー列→値列の順である必要があります。『{args['source_sheet']}』"
+            f"シートの A 列にキー（{args['key_col']} に対応する値）、B 列に値を置いてください"
+        )
     return "pass", f"{checked} 行を検証"
 
 
@@ -3886,7 +4112,13 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     notice = _truncation_notice(before, after, exhaustive_postcondition=True)
     if notice:
         print(notice)
-    advisories = build_advisories(a.task, before, after)
+    # ★ W10b 項目4b(摩擦): LOOKUP_FILL の参照専用シート(source_sheet)は書き換えない
+    #   （読み取り専用が正しい操作）ので「変更されていません」の対象から除外する。
+    exclude_sheets = {resolved["source_sheet"]} if op == "LOOKUP_FILL" else None
+    advisories = build_advisories(a.task, before, after, exclude_sheets=exclude_sheets)
+    # ★ W10b 項目4a(摩擦): COMPUTE_COLUMN の新規列作成は宣言どおりの効果なので、
+    #   その新規列1本に収まる『範囲外』警報は中立表示に落とす。
+    advisories = _neutralize_new_column_ghost_warning(advisories, op, resolved, book_meta)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -3938,6 +4170,13 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 _BASIC_COMMENT_LINE_RE = re.compile(r"^\s*(?:'|REM\b)", re.I)
 _RATE_LITERAL_RE = re.compile(r"(?<![\w.])(\d+\.\d+)(?![\w.])")
 
+# ★ W10b 項目2: 修復ループが行き詰まると『総当たりで色々試す』方向に暴走し、依頼と無関係な
+#   操作（ヘルパの全呼び出し等）を追加することがあった実測（operator 第6回査定・3回連続
+#   再現。詳細は _known_helper_names/detect_helper_sweep のコメント）。修復メッセージ自体に、
+#   依頼の範囲を超えるな、という制約を明示的に加える（no-op/実行時エラーの2種のみ・
+#   bad_signature/truncated は構造の修正だけなので対象外）。
+_REPAIR_SCOPE_GUARD = "★ 元の依頼に無い操作(無関係なヘルパ呼び出しを含む)を追加してはいけない。"
+
 
 def _looks_like_rate(value: float) -> bool:
     """0.05〜0.2（例: 消費税8%→0.08）または 1.05〜1.2（例: 税込計算の *1.1）の小数か。"""
@@ -3988,6 +4227,89 @@ def scan_rate_literals(code: str, task: str, vocab: dict | None = None) -> list:
     return out
 
 
+# ---------------------------------------------------------------------------
+# ★ W10b 項目1/2: 自由生成の関所とヘルパ総なめ検出
+#   operator 第6回ブラインド査定（実機）で確定した致命: 自由生成(FREEFORM/OUT_OF_VOCAB)は
+#   事後条件チェッカーが無い唯一の経路なのに、成功時は「⚠ 機械保証なし」のソフト警告だけで
+#   無条件に適用されていた。修復ループが行き詰まると、依頼と無関係な操作（ヘルパの全呼び出し）
+#   を書いて「何か効くかもしれない」を試す暴走（ヘルパ総なめ）が3回連続で再現した。
+#   検証できないものは人に確認を返す（忠実度ゲート/破壊の関所と同じ思想）。
+# ---------------------------------------------------------------------------
+
+class _FreeformGateAbort(Exception):
+    """★ W10b 項目1: run_freeform_plan_step の関所で人が拒否/非対話で確認できなかった時、
+       cmd_run_plan まで一気に抜けるための内部シグナル（_confirm_overwrite_or_gate が
+       cmd_run_plan の同じフレームで直接 exit code を return しているのと同じ扱いを、
+       別関数をまたいでも実現する）。exit_code は呼び出し元がそのまま return すべき値。"""
+    def __init__(self, exit_code: int):
+        super().__init__(exit_code)
+        self.exit_code = exit_code
+
+
+def _confirm_freeform_apply(a: argparse.Namespace, sweep_warning: str | None = None,
+                             step_prefix: str = "") -> int | None:
+    """★ W10b 項目1: 自由生成の関所。DSL 経路（②検証→③確認→④codegen→⑤適用→⑥事後条件）
+       と違い、自由生成は「変化したか」しか機械確認できず「正しいか」は検証できない唯一の
+       経路（事後条件チェッカーが無い）。生成コードを見せた直後・適用の直前に必ず人に確認を
+       返す。--allow-freeform が既に立っていれば承知の上として素通し。
+       sweep_warning があれば y/N の直前に強調表示する（★ 項目2: ヘルパ総なめの疑い）。
+       戻り値: 続行してよければ None、中断すべきなら呼び出し側がそのまま return すべき
+       exit code（対話で拒否=1・非対話で確認できない=8）。
+       step_prefix は複合計画の段番号表示用（例: "  2段目: "）。単発 FREEFORM では空文字。"""
+    if getattr(a, "allow_freeform", False):
+        return None
+    if sweep_warning:
+        print(f"{step_prefix}{sweep_warning}")
+    try:
+        ans = input(f"{step_prefix}このコードは機械検証できません。適用しますか？ [y/N]: ").strip().lower()
+    except EOFError:
+        print(f"{step_prefix}この処理を続けるには、以下のいずれかを指定して再実行してください:")
+        print(f"{step_prefix}  --allow-freeform  機械検証できないことを承知の上で適用する")
+        return 8
+    if ans not in ("y", "yes"):
+        print(f"{step_prefix}× 中止した")
+        return 1
+    return None
+
+
+_HELPER_SUB_DECL_RE = re.compile(r"^\s*Sub\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.M)
+_HELPER_CALL_RE = re.compile(r"\bCall\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+# ★ 根拠: bench 再現実験（W10b・demo/expense_w10b.xlsx 相当のダミー表で「氏名の列を全部
+#   『退職済み』に書き換えて」を実行）で、修復3回目のヘルパ総なめは異なるヘルパ7種
+#   （AutoFitColumns/AlignCenter/FormatThousands/VLookupFromTable/PivotSum/SummaryTable/
+#   StyleBold）を Call していた一方、正常な単一操作の自由生成は0〜1種しか呼ばない。
+#   間の4を閾値に採用（operator の所見「単一操作でCallが4個以上」とも一致）。
+_HELPER_SWEEP_THRESHOLD = 4
+
+
+def _known_helper_names(helper_files: list) -> set:
+    """helper_files（load_helpers が返す .bas ファイル一覧）から Sub 名を集める
+       （ヘルパ総なめ検出の対象を『実在するヘルパ』だけに絞るため。ユーザー定義の
+       Sub まで数えると通常の複数ヘルパ利用と区別できなくなる）。"""
+    names: set = set()
+    for f in helper_files:
+        try:
+            names |= set(_HELPER_SUB_DECL_RE.findall(f.read_text(encoding="utf-8")))
+        except OSError:
+            continue
+    return names
+
+
+def detect_helper_sweep(code: str, helper_names: set) -> str | None:
+    """★ W10b 項目2: 自由生成コードが異なるヘルパを閾値(_HELPER_SWEEP_THRESHOLD)以上
+       呼んでいたら、依頼と無関係な操作を全部 Call する『ヘルパ総なめ』の疑いを1行で
+       返す（無ければ None）。ブロックはしない（誤検知の可能性は残る）— 関所の y/N の
+       直前に強調表示し、人の判断を後押しする助言止まり。"""
+    if not helper_names:
+        return None
+    called = set(_HELPER_CALL_RE.findall(code)) & helper_names
+    if len(called) < _HELPER_SWEEP_THRESHOLD:
+        return None
+    names = "、".join(sorted(called))
+    return (f"🚨 疑わしい: {len(called)} 種類のヘルパを呼んでいます（{names}）"
+            "— 依頼と無関係な操作が混じっていないか確認してください")
+
+
 def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> int:
     """自由生成経路（従来の cmd_run 本体そのまま。M2a の助言つき）。
        ① 翻訳が CLARIFY にも DSL 語彙にも決まらなかった（FREEFORM・翻訳失敗）ときに使う。
@@ -3996,6 +4318,7 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
     refs_dir = Path(a.refs).resolve() if a.refs else DEFAULT_REFS
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     helper_catalog, helper_files = load_helpers(helpers_dir)
+    known_helper_names = _known_helper_names(helper_files)   # ★ W10b 項目2: 総なめ検出用
     system = CONTRACT + load_refs(refs_dir) + helper_catalog
     desc = describe_book(book)
     user = f"{desc}\n\nタスク:\n{a.task}\n\n`Sub Run(oDoc As Object)` を1つだけ書け。コードのみ。"
@@ -4055,6 +4378,13 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
             failure_kind = "none"
             break
 
+        # ★ W10b 項目1: 自由生成の関所。コードは既に表示済み（上の attempt 表示）・
+        #   適用の直前に必ず確認する（原本にはまだ何も触れていない）。
+        sweep_warning = detect_helper_sweep(code, known_helper_names)
+        gate_exit = _confirm_freeform_apply(a, sweep_warning)
+        if gate_exit is not None:
+            return gate_exit
+
         shutil.copy2(source_book, out_book)   # 原本は触らず、正規化済みコピーに適用
         t0 = progress_start("⏳ LibreOffice で適用中…")
         ok, err, rawout = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
@@ -4067,7 +4397,7 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
             failure_kind = "runtime_error"
             result["last_error_full"] = err
             msgs += [{"role": "assistant", "content": raw},
-                     {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。コードのみ。"}]
+                     {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。{_REPAIR_SCOPE_GUARD}コードのみ。"}]
             continue
 
         after = snapshot(out_book)
@@ -4078,7 +4408,8 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
             msgs += [{"role": "assistant", "content": raw},
                      {"role": "user", "content":
                       "実行は成功したが文書に一切変化が無かった（no-op）。"
-                      "設定した API が効いていない可能性がある。別の正しい方法で書き直して。コードのみ。"}]
+                      "設定した API が効いていない可能性がある。別の正しい方法で書き直して。"
+                      f"{_REPAIR_SCOPE_GUARD}コードのみ。"}]
             continue
 
         # ★ W8a 項目4: 単段の FREEFORM/OUT_OF_VOCAB は、成功しても『機械検証済み』の
@@ -4154,13 +4485,18 @@ def _apply_new_column_fallback(op: str, args: dict, headers: list, new_cols: lis
 
 def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path, workdir: Path,
                             refs_dir: Path, helpers_dir: Path, tag: str,
-                            apply_timeout: float | None) -> tuple:
+                            apply_timeout: float | None, step_prefix: str = "") -> tuple:
     """M2c: 複合計画の語彙外(OUT_OF_VOCAB/FREEFORM)段を FREEFORM 経路で実行する。
-       cmd_run_freeform と同じ生成→適用→署名/切断/no-op チェックのループを、
+       cmd_run_freeform と同じ生成→（★ W10b: 関所→）適用→署名/切断/no-op チェックのループを、
        『その段の依頼文だけ』かつ『out_book の現在の状態』を起点に行う版。
        ★ cmd_run_freeform 本体は変えない（既存の回帰リスクを避けるため意図的に複製する）。
+       ★ W10b 項目1: 関所で人が拒否/非対話で確認できなかった場合は _FreeformGateAbort を
+       投げて cmd_run_plan まで一気に抜ける（破壊の関所と同じ『計画全体を止める』扱い。
+       原本(book)はこの時点でまだ一切触れていない＝out_book はコピーなので安全）。
+       step_prefix は複合計画の段番号表示用（例: "  2段目: "）。
        戻り値: (ok, changes:list[str], advisories:list[str], failure_kind:str, detail:str|None)"""
     helper_catalog, helper_files = load_helpers(helpers_dir)
+    known_helper_names = _known_helper_names(helper_files)   # ★ W10b 項目2: 総なめ検出用
     system = CONTRACT + load_refs(refs_dir) + helper_catalog
     desc = describe_book(out_book)
     user = f"{desc}\n\nタスク:\n{task_text}\n\n`Sub Run(oDoc As Object)` を1つだけ書け。コードのみ。"
@@ -4191,6 +4527,17 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
                       "最初から完全なコードを1つだけ書いて。コードのみ。"}]
             continue
 
+        # ★ W10b 項目1: 自由生成の関所。単発 cmd_run_freeform と違い、この経路はこれまで
+        #   生成コードを一切表示していなかった（黙って確認を求めても判断できない）ので、
+        #   ここで初めて表示してから y/N を聞く。
+        print(f"{step_prefix}─ 生成した .bas（語彙外・AI が直接作成）───────────────")
+        print(code)
+        print(f"{step_prefix}──────────────────────────────────────────")
+        sweep_warning = detect_helper_sweep(code, known_helper_names)
+        gate_exit = _confirm_freeform_apply(a, sweep_warning, step_prefix=step_prefix)
+        if gate_exit is not None:
+            raise _FreeformGateAbort(gate_exit)
+
         shutil.copy2(stepsource, out_book)
         t0 = progress_start("⏳ LibreOffice で適用中…")
         ok, err, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
@@ -4198,7 +4545,7 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
         if not ok:
             failure_kind = "runtime_error"
             msgs += [{"role": "assistant", "content": raw},
-                     {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。コードのみ。"}]
+                     {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。{_REPAIR_SCOPE_GUARD}コードのみ。"}]
             continue
 
         after = snapshot(out_book)
@@ -4208,7 +4555,8 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
             msgs += [{"role": "assistant", "content": raw},
                      {"role": "user", "content":
                       "実行は成功したが文書に一切変化が無かった（no-op）。"
-                      "設定した API が効いていない可能性がある。別の正しい方法で書き直して。コードのみ。"}]
+                      "設定した API が効いていない可能性がある。別の正しい方法で書き直して。"
+                      f"{_REPAIR_SCOPE_GUARD}コードのみ。"}]
             continue
 
         advisories = build_advisories(task_text, before, after)
@@ -4354,8 +4702,14 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
         if op not in OP_SCHEMA:
             about = step.get("about") or "内容不明の依頼"
-            okf, changes, advisories, _fkind, detail = run_freeform_plan_step(
-                a, about, out_book, workdir, refs_dir, helpers_dir, f"plan{i}", apply_timeout)
+            # ★ W10b 項目1: 関所で拒否/非対話なら、破壊の関所と同じく計画全体をここで止める
+            #   （原本(book)はまだ無傷・out_book はコピーなので途中終了しても安全）。
+            try:
+                okf, changes, advisories, _fkind, detail = run_freeform_plan_step(
+                    a, about, out_book, workdir, refs_dir, helpers_dir, f"plan{i}", apply_timeout,
+                    step_prefix=f"  {i}段目: ")
+            except _FreeformGateAbort as e:
+                return e.exit_code
             if okf:
                 items.append((i, about, "warn", None))
                 for ln in changes:
@@ -4524,6 +4878,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--overwrite", action="store_true",
                    help="破壊の関所（既存データを持つ列への上書き確認）を承知の上で"
                         "続行する（ailine undo で戻せる）")
+    r.add_argument("--allow-freeform", dest="allow_freeform", action="store_true",
+                   help="自由生成の関所（AI が直接作成したコードは機械検証できないという確認）を"
+                        "承知の上で続行する（ailine undo で戻せる）")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")

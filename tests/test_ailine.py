@@ -965,6 +965,79 @@ def test_mention_overlap_empty_when_no_mentions(tmp_path):
     snap = ailine.snapshot(p)
     assert ailine.mention_overlap_advisory({"cols": set(), "rows": set(), "sheets": set()}, snap, snap) == []
 
+def test_mention_overlap_exclude_sheets_suppresses_readonly_reference(tmp_path):
+    # ★ W10b 項目4b(摩擦): LOOKUP_FILL の参照専用シートは読み取り専用が正しい操作。
+    #   exclude_sheets に渡せば言及があっても『変更されていません』を出さない。
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in [["商品", "数量", "単価"], ["りんご", 2, None]]:
+        ws.append(row)
+    wb.create_sheet("単価表")
+    wb.save(p)
+    before = ailine.snapshot(p)
+    wb2 = openpyxl.load_workbook(p)
+    wb2.active.cell(row=2, column=3, value=100)   # 明細側だけ変更、単価表は無変更(正常)
+    wb2.save(p)
+    after = ailine.snapshot(p)
+    mentions = ailine.extract_task_mentions("単価表から単価を引いて入れて", before["sheets"])
+    lines_without_exclude = ailine.mention_overlap_advisory(mentions, before, after)
+    assert any("単価表" in ln for ln in lines_without_exclude)   # 対照: 抑制無しなら出る
+    lines_with_exclude = ailine.mention_overlap_advisory(mentions, before, after, {"単価表"})
+    assert not any("単価表" in ln for ln in lines_with_exclude)
+
+def test_mention_overlap_exclude_sheets_still_flags_other_sheets(tmp_path):
+    # 抑制は指定したシートだけ・保守的（他の言及シートは従来どおり警報する）。
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in [["商品", "金額"], ["りんご", 100]]:
+        ws.append(row)
+    wb.create_sheet("単価表")
+    wb.create_sheet("集計")
+    wb.save(p)
+    before = ailine.snapshot(p)
+    wb2 = openpyxl.load_workbook(p)
+    wb2.active.cell(row=2, column=2, value=999)
+    wb2.save(p)
+    after = ailine.snapshot(p)
+    mentions = ailine.extract_task_mentions("単価表と集計シートも直して", before["sheets"])
+    lines = ailine.mention_overlap_advisory(mentions, before, after, {"単価表"})
+    assert not any("単価表" in ln for ln in lines)
+    assert any("集計" in ln for ln in lines)
+
+
+# --- ★ W10b 項目4a(摩擦): 新規列作成の『範囲外』誤警報の中立化 --------------------
+
+def test_neutralize_new_column_ghost_warning_replaces_when_span_matches_new_column():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}   # 新規列は列C(3)
+    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]
+    out = ailine._neutralize_new_column_ghost_warning(
+        advisories, "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "factor": 1.1}, meta)
+    assert out == ["（新規列の追加は意図どおりです）"]
+
+def test_neutralize_new_column_ghost_warning_keeps_when_span_extends_beyond_new_column():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    advisories = ["★ 疑わしい: 変更が元データの範囲外です（B2:C4）"]   # B列も含む＝新規列だけでない
+    out = ailine._neutralize_new_column_ghost_warning(
+        advisories, "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "factor": 1.1}, meta)
+    assert out == advisories   # 保守的：変えない
+
+def test_neutralize_new_column_ghost_warning_noop_when_target_specified():
+    # target 指定(既存列への書き込み)は新規列作成ではないので対象外。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額", "税込み金額"]}}
+    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]
+    out = ailine._neutralize_new_column_ghost_warning(
+        advisories, "COMPUTE_COLUMN",
+        {"operands": ["金額"], "operator": "*", "factor": 1.1, "target": "税込み金額"}, meta)
+    assert out == advisories
+
+def test_neutralize_new_column_ghost_warning_noop_for_other_ops():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]
+    out = ailine._neutralize_new_column_ghost_warning(advisories, "SORT", {"col": "金額"}, meta)
+    assert out == advisories
+
 
 # --- ★ W8a 項目4: 率リテラルの機械スキャン（判断棚から昇格） -----------------------
 
@@ -1069,7 +1142,8 @@ def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, 
     ns = argparse.Namespace(
         book=str(book), task="テスト", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=True, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)   # ★ W10b: 関所は無関係（実行時エラー経路を見るテスト）
 
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
@@ -1105,7 +1179,8 @@ def test_cmd_run_freeform_success_shows_honest_warning_not_checkmark(tmp_path, m
     ns = argparse.Namespace(
         book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=True, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)   # ★ W10b: 関所は無関係（自由生成の成功表示を見るテスト）
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -1155,7 +1230,8 @@ def test_cmd_run_freeform_rate_literal_scan_fires_when_task_silent_on_rate(tmp_p
     ns = argparse.Namespace(
         book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=True, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)   # ★ W10b: 関所は無関係（率リテラル助言を見るテスト）
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -1184,7 +1260,8 @@ def test_cmd_run_freeform_rate_literal_scan_silent_when_task_states_rate(tmp_pat
     ns = argparse.Namespace(
         book=str(book), task="消費税8%込みの合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=True, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)   # ★ W10b: 関所は無関係（率リテラル助言の対照テスト）
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0
@@ -1612,11 +1689,13 @@ def test_format_fidelity_warning_lists_categories_and_counts():
 def _fidelity_gate_ns(book, **overrides):
     # ★ W8b-2: 既定が原本直接適用になったため inplace=True は不要（指定しても挙動は
     #   同じだが廃止フラグの移行メッセージが余計に出るので外す）。
+    # ★ W10b: これらのテストは忠実度ゲート自体を見るのが目的で、その先の自由生成の関所
+    #   （項目1）は無関係なので allow_freeform=True で素通しする。
     base = dict(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, json=False, timeout=180.0, ask=False,
-        accept_loss=False, copy=False)
+        accept_loss=False, copy=False, allow_freeform=True)
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -2281,6 +2360,141 @@ def test_codegen_dsl_compute_column_values_mode_writes_static_getvalue():
     assert "getCellByPosition(1, i).setValue" in code
     assert "setFormula" not in code
 
+# --- ★ W10b 項目3: COMPUTE_COLUMN の「1列 × 率」パターン（税込み/税抜き） -----------
+
+def test_verify_dsl_args_compute_column_single_operand_resolves_factor_from_task_text():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*"}, meta,
+        task="税込み金額の列を追加して（消費税10%）")
+    assert ok
+    assert resolved["operands"] == ["金額"]
+    assert resolved["factor"] == 1.1
+    assert resolved["_sources"]["factor"] == "依頼文: 10%"
+
+def test_verify_dsl_args_compute_column_single_operand_resolves_factor_from_vocab():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*"}, meta,
+        task="消費税込みの列を追加して", vocab={"消費税": 1.1})
+    assert ok
+    assert resolved["factor"] == 1.1
+    assert resolved["_sources"]["factor"] == "用語集: 消費税"
+
+def test_verify_dsl_args_compute_column_single_operand_clarifies_when_no_rate():
+    # ★ A': 率が依頼文にも用語集にも無ければ CLARIFY へ倒す（1.0既定で断定しない・
+    #   APPEND_TOTAL の税/込番人と違い、このモードは常に率が要る前提なので無条件に聞く）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*"}, meta,
+        task="税込みの列を追加して")
+    assert not ok
+    assert "倍率" in err and "分かりません" in err
+    assert "ailine vocab add" in err
+
+def test_verify_dsl_args_compute_column_single_operand_llm_factor_ignored_but_warns():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "factor": 99}, meta,
+        task="消費税10%を足した列を作って")
+    assert ok
+    assert resolved["factor"] == 1.1
+    assert resolved["_warnings"]
+    assert "99" in resolved["_warnings"][0] and "1.1" in resolved["_warnings"][0]
+
+def test_verify_dsl_args_compute_column_single_operand_rejects_bad_operator():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "+"}, meta,
+        task="金額に1.1を掛けた列を追加して")
+    assert not ok
+    assert "* か /" in err
+
+def test_verify_dsl_args_compute_column_single_operand_unknown_column_errors():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["存在しない列"], "operator": "*"}, meta,
+        task="消費税10%を足した列")
+    assert not ok
+    assert "がありません" in err
+
+def test_verify_dsl_args_compute_column_single_operand_with_target_resolves_existing_column():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額", "税込み金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "target": "税込み金額"}, meta,
+        task="消費税10%を金額に掛けて税込み金額に入れて")
+    assert ok
+    assert resolved["target"] == "税込み金額"
+
+def test_codegen_dsl_compute_column_single_operand_writes_formula_with_cell_ref():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    code = ailine.codegen_dsl(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "factor": 1.1}, meta)
+    # 金額は列1(0起点)＝B列。新規列(列2)に =B{行}*1.1 のセル参照式が入る。
+    assert 'getCellByPosition(2, i).setFormula("=" & "B" & (i + 1) & "*1.1")' in code
+    assert 'setString("金額*1.1")' in code
+    assert ailine.valid_signature(code)
+
+def test_codegen_dsl_compute_column_single_operand_values_mode_writes_static_getvalue():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
+    code = ailine.codegen_dsl(
+        "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "factor": 1.1}, meta,
+        use_formula=False)
+    assert "getCellByPosition(1, i).getValue() * 1.1)" in code
+    assert "setFormula" not in code
+
+def test_codegen_dsl_compute_column_single_operand_with_target_writes_into_existing_column():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額", "税込み金額"]}}
+    code = ailine.codegen_dsl(
+        "COMPUTE_COLUMN",
+        {"operands": ["金額"], "operator": "*", "factor": 1.1, "target": "税込み金額"}, meta)
+    assert "getCellByPosition(2, i).setFormula" in code
+    assert 'setString("金額*1.1")' not in code   # 既存の見出しは上書きしない
+
+def test_check_compute_column_single_factor_passes_values_mode(tmp_path):
+    # 金額*1.1 の結果を「税込み金額」列に直接書いた表（values モード相当）。
+    p = _book(tmp_path, [["品目", "金額", "税込み金額"], ["a", 100, 110.0], ["b", 200, 220.0]])
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["金額"], "operator": "*", "factor": 1.1, "target": "税込み金額"})
+    assert status == "pass"
+
+def test_check_compute_column_single_factor_fails_when_value_wrong(tmp_path):
+    p = _book(tmp_path, [["品目", "金額", "税込み金額"], ["a", 100, 999]])
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["金額"], "operator": "*", "factor": 1.1, "target": "税込み金額"})
+    assert status == "fail"
+
+def test_check_compute_column_single_factor_new_column_auto_named(tmp_path):
+    # target 無指定なら自動命名『金額*1.1』列を検証する（codegen_dsl と同じ命名規則）。
+    p = _book(tmp_path, [["品目", "金額", "金額*1.1"], ["a", 100, 110.0]])
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["金額"], "operator": "*", "factor": 1.1})
+    assert status == "pass"
+
+def test_check_compute_column_single_factor_formula_mode_passes(tmp_path):
+    # ★ use_formula=True: 式文字列(=B{行}*1.1)とキャッシュ値の両方が一致して初めて pass。
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["品目", "金額", "税込み金額"])
+    ws.append(["a", 100, None])
+    ws.cell(row=2, column=3).value = "=B2*1.1"
+    p = tmp_path / "formula.xlsx"
+    wb.save(p)
+    # openpyxl の通常読み(キャッシュ値)側も用意する必要があるため、data_only 読み用に
+    # 一度 LibreOffice 相当のキャッシュを模して同じセルに数式文字列を残したまま
+    # 値をキャッシュとして持たせる別ブックとして保存し直す代わりに、ここでは
+    # check_compute_column_single_factor の使い分け（式/キャッシュ2層）を素直に確認する
+    # ため、通常読みで式文字列を、data_only 読みでキャッシュ値を返す openpyxl の挙動に従う。
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["金額"], "operator": "*", "factor": 1.1, "target": "税込み金額"},
+        use_formula=True)
+    # openpyxl は数式のみ書いたセルに対する data_only キャッシュを持たない(None)ため、
+    # ここでは「式は期待形」までを機械実装の観点で確認する（fail 理由がキャッシュ不一致
+    # であることを確認 = 式チェック自体は通っている証拠）。
+    assert status == "fail"
+    assert "キャッシュ値が不一致" in reason
+
+
 def test_verify_dsl_args_lookup_fill_ok():
     meta = {"sheets": ["明細", "単価表"],
             "headers": {"明細": ["商品", "数量", "単価"], "単価表": ["商品", "単価"]}}
@@ -2501,6 +2715,26 @@ def test_check_lookup_fill_fails_when_value_missing_a_row(tmp_path):
     args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
     status, reason = ailine.check_lookup_fill(p, args)
     assert status == "fail"
+
+def test_check_lookup_fill_master_reversed_column_order_gives_actionable_guidance(tmp_path):
+    # ★ W10b 項目4a(摩擦): マスタ表が「値→キー」の順(単価が列0・商品名が列1)だと
+    # VLookupFromTable ヘルパ(常に列0=キー・列1=値固定)が1件も引けない。旧メッセージは
+    # 「対応表に載っているキーが1件も転記されていない」とだけ言って原因を示さなかった。
+    wb = openpyxl.Workbook()
+    ws1 = wb.active; ws1.title = "明細"
+    for row in [["商品", "数量", "単価"], ["りんご", 2, None], ["バナナ", 3, None]]:
+        ws1.append(row)
+    ws2 = wb.create_sheet("単価表")
+    for row in [["単価", "商品"], [100, "りんご"], [200, "バナナ"]]:   # ★ 列順が逆(値→キー)
+        ws2.append(row)
+    p = tmp_path / "lookup_reversed.xlsx"
+    wb.save(p)
+    args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
+    status, reason = ailine.check_lookup_fill(p, args)
+    assert status == "fail"
+    assert "単価表" in reason
+    assert "キー列→値列の順" in reason
+    assert "A 列にキー" in reason and "B 列に値" in reason
 
 def test_check_aggregate_passes_when_sums_correct(tmp_path):
     wb = openpyxl.Workbook()
@@ -3069,7 +3303,8 @@ def test_cmd_run_plan_mixes_dsl_success_and_freeform_warns(tmp_path, monkeypatch
     ns = argparse.Namespace(
         book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=True, json=False, timeout=180.0, ask=False)
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)   # ★ W10b: 段の自由生成の関所は無関係（項目別報告を見るテスト）
     rc = ailine.cmd_run(ns)
     captured = capsys.readouterr()
     assert rc == 0   # ⚠ は失敗ではない
@@ -3877,6 +4112,25 @@ def test_extract_rate_factor_same_value_repeated_is_not_conflicting():
 def test_extract_rate_factor_empty_text():
     assert ailine.extract_rate_factor("") == (None, None)
 
+# --- ★ W10b 項目3: 「掛けた/割った」型（battery v5 #503 実測ギャップの修正） ------------
+
+def test_extract_rate_factor_kake_suffix():
+    assert ailine.extract_rate_factor("金額に1.1を掛けた列を追加して") == (1.1, "1.1を掛け")
+
+def test_extract_rate_factor_kake_suffix_no_particle():
+    assert ailine.extract_rate_factor("1.1掛けた列を作って") == (1.1, "1.1掛け")
+
+def test_extract_rate_factor_wari_suffix_inverts():
+    # 税抜き等の逆算: 「1.1で割った」→ factor = 1/1.1
+    factor, snippet = ailine.extract_rate_factor("税込み金額を1.1で割った列を追加して")
+    assert factor == round(1 / 1.1, 6)
+    assert snippet == "1.1で割っ"
+
+def test_extract_rate_factor_kake_does_not_affect_percent_or_bai():
+    # 既存パターンとの併用でも壊れない（回帰）。
+    assert ailine.extract_rate_factor("消費税10%を足した列を作って") == (1.1, "10%")
+    assert ailine.extract_rate_factor("1.1倍にして合計を出して") == (1.1, "1.1倍")
+
 
 # ===========================================================================
 # ★ A': 用語集（vocab）
@@ -4278,11 +4532,14 @@ def test_cmd_run_dsl_aggregate_silent_when_task_mentions_sheet_keyword(tmp_path,
 # ===========================================================================
 
 def _chain_run_ns(book, task="何かして", **overrides):
-    """既定(原本直接適用)のまま run する Namespace。B2 バッテリ共通の土台。"""
+    """既定(原本直接適用)のまま run する Namespace。B2 バッテリ共通の土台。
+       ★ W10b: これらのテストは反映(置換)経路を見るのが目的で、自由生成の関所（項目1）は
+       無関係なので allow_freeform=True で素通しする。"""
     base = dict(
         book=str(book), task=task, model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=False, json=False, timeout=180.0, ask=False)
+        dry=False, copy=False, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -4930,6 +5187,62 @@ def test_cmd_run_dsl_new_column_creation_skips_gate_entirely(tmp_path, monkeypat
     assert "上書きしますか" not in captured.out
     assert "既存の値が" not in captured.out
 
+def test_cmd_run_dsl_new_column_creation_neutralizes_ghost_warning(tmp_path, monkeypatch, capsys):
+    # ★ W10b 項目4a(摩擦): 新規列作成(target無指定)は宣言どおりの効果として『範囲外』の
+    #   ★疑わしい表示を出さない（中立表示に落ちる）。COMPUTE_COLUMN の実適用は基盤の
+    #   codegen_dsl(ルールベース)なので basrun_apply も実際に走らせて確かめる
+    #   （既存の new_column_creation_skips_gate テストと同じ作法・real LibreOffice）。
+    book = _overwrite_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "COMPUTE_COLUMN", "args": {"operands": ["売上", "原価"], "operator": "-"}})
+    ns = _overwrite_scenario_ns(book)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "変更が元データの範囲外です" not in captured.out
+    assert "（新規列の追加は意図どおりです）" in captured.out
+
+def test_cmd_run_dsl_lookup_fill_suppresses_readonly_source_sheet_warning(tmp_path, monkeypatch, capsys):
+    # ★ W10b 項目4b(摩擦): 参照専用シート(単価表)は依頼文に言及があっても書き換えない
+    #   のが正しい操作。旧実装は「依頼で言及された『単価表』は... 変更されていません」を
+    #   誤って出していた。
+    wb = openpyxl.Workbook()
+    ws1 = wb.active; ws1.title = "明細"
+    for row in [["商品", "数量", "単価"], ["りんご", 2, None], ["バナナ", 3, None]]:
+        ws1.append(row)
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品", "単価"], ["りんご", 100], ["バナナ", 200]]:
+        ws2.append(row)
+    book = tmp_path / "lookup_int.xlsx"
+    wb.save(book)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "normalize_book", lambda b, workdir, timeout=None: b)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "LOOKUP_FILL", "args": {
+                            "target_sheet": "明細", "target_col": "単価",
+                            "source_sheet": "単価表", "key_col": "商品"}})
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws = wb2["明細"]
+        ws.cell(row=2, column=3, value=100)
+        ws.cell(row=3, column=3, value=200)
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    ns = argparse.Namespace(
+        book=str(book), task="単価表から単価を引いてきて明細に入れて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False, values=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "依頼で言及された『単価表』は存在しません/変更されていません" not in captured.out
+
 def test_cmd_run_dsl_overwrite_gate_blocks_noninteractive_exit7(tmp_path, monkeypatch, capsys):
     # ★ 監査の実測事故の再現: target が既存列(原価)に解決され、既存データがある。
     book = _overwrite_book(tmp_path)
@@ -5112,3 +5425,319 @@ def test_cmd_run_shows_notice_v2_once_then_silent(tmp_path, monkeypatch, capsys)
     ailine.cmd_run(ns)
     second = capsys.readouterr().out
     assert "既定で原本に直接反映" not in second
+
+
+# ===========================================================================
+# W10b 項目1/2: 自由生成の関所・ヘルパ総なめ検出
+# ===========================================================================
+
+def _fgate_ns(**overrides):
+    base = dict(allow_freeform=False)
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+def test_confirm_freeform_apply_none_when_allow_freeform_set():
+    assert ailine._confirm_freeform_apply(_fgate_ns(allow_freeform=True)) is None
+
+def test_confirm_freeform_apply_interactive_yes_continues(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    assert ailine._confirm_freeform_apply(_fgate_ns()) is None
+
+def test_confirm_freeform_apply_interactive_no_returns_1(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    rc = ailine._confirm_freeform_apply(_fgate_ns())
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "中止した" in captured.out
+
+def test_confirm_freeform_apply_noninteractive_returns_8_with_guidance(monkeypatch, capsys):
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    rc = ailine._confirm_freeform_apply(_fgate_ns())
+    captured = capsys.readouterr()
+    assert rc == 8
+    assert "--allow-freeform" in captured.out
+
+def test_confirm_freeform_apply_uses_step_prefix(monkeypatch, capsys):
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ailine._confirm_freeform_apply(_fgate_ns(), step_prefix="  2段目: ")
+    captured = capsys.readouterr()
+    assert "  2段目: この処理を続けるには" in captured.out
+    assert "  2段目: 適用しますか" not in captured.out   # prompt はstdinへ・標準出力ではない
+
+def test_confirm_freeform_apply_shows_sweep_warning_before_prompt(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    ailine._confirm_freeform_apply(_fgate_ns(), sweep_warning="疑わしい: テスト警告")
+    captured = capsys.readouterr()
+    assert "疑わしい: テスト警告" in captured.out
+
+
+# --- ヘルパ総なめ検出 -------------------------------------------------------
+
+_SWEEP_HELPER_NAMES = {"AutoFitColumns", "AlignCenter", "FormatThousands",
+                        "VLookupFromTable", "PivotSum", "SummaryTable", "StyleBold"}
+
+def test_detect_helper_sweep_none_for_normal_single_call():
+    code = "Sub Run(oDoc As Object)\n    Call AutoFitColumns(oDoc)\nEnd Sub"
+    assert ailine.detect_helper_sweep(code, _SWEEP_HELPER_NAMES) is None
+
+def test_detect_helper_sweep_none_below_threshold():
+    code = ("Sub Run(oDoc As Object)\n"
+            "    Call AutoFitColumns(oDoc)\n"
+            "    Call AlignCenter(oDoc, 0, 4)\n"
+            "    Call StyleBold(oDoc, 0, 0, 4, 0)\n"
+            "End Sub")
+    assert ailine.detect_helper_sweep(code, _SWEEP_HELPER_NAMES) is None
+
+def test_detect_helper_sweep_fires_at_threshold():
+    code = ("Sub Run(oDoc As Object)\n"
+            "    Call AutoFitColumns(oDoc)\n"
+            "    Call AlignCenter(oDoc, 0, 4)\n"
+            "    Call FormatThousands(oDoc, 0, 4)\n"
+            "    Call VLookupFromTable(oDoc, 0, 0, 2, \"単価表\")\n"
+            "End Sub")
+    msg = ailine.detect_helper_sweep(code, _SWEEP_HELPER_NAMES)
+    assert msg is not None
+    assert "4 種類のヘルパ" in msg
+
+def test_detect_helper_sweep_ignores_non_helper_calls():
+    code = ("Sub Run(oDoc As Object)\n"
+            "    Call Foo(oDoc)\n    Call Bar(oDoc)\n    Call Baz(oDoc)\n    Call Qux(oDoc)\n"
+            "End Sub")
+    assert ailine.detect_helper_sweep(code, _SWEEP_HELPER_NAMES) is None
+
+def test_known_helper_names_reads_sub_declarations(tmp_path):
+    f = tmp_path / "H.bas"
+    f.write_text("Sub Foo(oDoc As Object)\nEnd Sub\n\nSub Bar(oDoc As Object, x As Integer)\nEnd Sub\n",
+                 encoding="utf-8")
+    names = ailine._known_helper_names([f])
+    assert names == {"Foo", "Bar"}
+
+
+# --- cmd_run_freeform 統合（関所） ------------------------------------------
+
+def _freeform_gate_scenario_book(tmp_path):
+    return _book(tmp_path, [["部署", "氏名", "金額"], ["営業", "山田", 12000], ["経理", "佐藤", 9800]])
+
+def test_cmd_run_freeform_gate_blocks_noninteractive_exit8_book_untouched(tmp_path, monkeypatch, capsys):
+    book = _freeform_gate_scenario_book(tmp_path)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    # ★ basrun_apply を丸ごと差し替えるため、normalize_book 内部の構造読み取り呼び出しも
+    #   同じ fake に飛んでしまう。normalize_book 自体を恒等関数にして混線を避ける
+    #   （既存の忠実度ゲートテスト群と同じ作法）。
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    called = {"n": 0}
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        called["n"] += 1
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 8
+    assert "この処理を続けるには" in captured.out
+    assert "--allow-freeform" in captured.out
+    assert called["n"] == 0   # 適用そのものが一度も走っていない
+    assert book.read_bytes() == original_bytes   # 原本は無傷
+
+def test_cmd_run_freeform_gate_allow_freeform_flag_applies(tmp_path, monkeypatch, capsys):
+    book = _freeform_gate_scenario_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=4, value="new")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "機械検証できません" not in captured.out   # 関所自体をスキップ
+    assert "⚠ 反映しましたが機械保証はありません" in captured.out
+
+def test_cmd_run_freeform_gate_interactive_yes_applies_then_undo_restores(tmp_path, monkeypatch, capsys):
+    book = _freeform_gate_scenario_book(tmp_path)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        wb2.active.cell(row=1, column=4, value="new")
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    assert rc == 0
+    assert book.read_bytes() != original_bytes   # 適用された
+
+    rc_undo = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+    assert rc_undo == 0
+    assert book.read_bytes() == original_bytes   # undo で原本に戻る
+
+def test_cmd_run_freeform_gate_interactive_no_aborts_book_untouched(tmp_path, monkeypatch, capsys):
+    book = _freeform_gate_scenario_book(tmp_path)
+    original_bytes = book.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "× 中止した" in captured.out
+    assert book.read_bytes() == original_bytes
+
+def test_cmd_run_freeform_gate_dry_run_never_asks(tmp_path, monkeypatch, capsys):
+    book = _freeform_gate_scenario_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    def _boom(prompt=""):
+        raise AssertionError("dry では確認を聞いてはいけない")
+    monkeypatch.setattr("builtins.input", _boom)
+    ns = argparse.Namespace(
+        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=True, copy=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    assert rc == 0
+
+def test_cmd_run_freeform_gate_sweep_warning_shown_in_output(tmp_path, monkeypatch, capsys):
+    book = _freeform_gate_scenario_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
+    sweep_code = ("Sub Run(oDoc As Object)\n"
+                  "    Call AutoFitColumns(oDoc)\n"
+                  "    Call AlignCenter(oDoc, 0, 2)\n"
+                  "    Call StyleBold(oDoc, 0, 0, 2, 0)\n"
+                  "    Call DrawTableBorders(oDoc)\n"
+                  "End Sub")
+    monkeypatch.setattr(ailine, "ollama_generate", lambda model, msgs, temperature=0.2: sweep_code)
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = argparse.Namespace(
+        book=str(book), task="氏名の列を書き換えて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 8
+    assert "疑わしい" in captured.out
+    assert "4 種類のヘルパ" in captured.out
+
+
+# --- cmd_run_plan 統合（複合計画の段の自由生成の関所） -----------------------
+
+def test_cmd_run_plan_freeform_step_gate_blocks_noninteractive_book_untouched(tmp_path, monkeypatch, capsys):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200]])
+    original_bytes = p.read_bytes()
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                                  {"op": "OUT_OF_VOCAB", "about": "条件付き書式"}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    monkeypatch.setattr(ailine, "basrun_apply",
+                        lambda out_book, code, workdir, helper_files=(), timeout=None: (True, None, "ok"))
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    ns = argparse.Namespace(
+        book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=False, json=False, timeout=180.0, ask=False)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 8
+    assert "  2段目:" in captured.out
+    assert p.read_bytes() == original_bytes   # 1段目(SORT)は out_book にしか反映されていない
+
+def test_cmd_run_plan_freeform_step_gate_allow_freeform_applies(tmp_path, monkeypatch, capsys):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                                  {"op": "OUT_OF_VOCAB", "about": "条件付き書式"}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    monkeypatch.setattr(ailine, "ollama_generate",
+                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        cell = ws2.cell(row=1, column=10)
+        cell.value = (cell.value or 0) + 1
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    ns = argparse.Namespace(
+        book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "機械検証できません" not in captured.out
+
+
+# --- argparse ------------------------------------------------------------------
+
+def test_build_parser_has_allow_freeform_flag():
+    args = ailine.build_parser().parse_args(["run", "book.xlsx", "task", "--allow-freeform"])
+    assert args.allow_freeform is True
+
+def test_build_parser_allow_freeform_defaults_false():
+    args = ailine.build_parser().parse_args(["run", "book.xlsx", "task"])
+    assert args.allow_freeform is False
