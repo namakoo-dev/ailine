@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "金額",
+    "label": "合計",
+    "factor": 0.0
+  },
+  "inferred": [],
+  "err": "倍率『0.0』は正の数でなければなりません"
+}

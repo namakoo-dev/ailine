@@ -1,0 +1,18 @@
+{
+  "rc": 0,
+  "path": "freeform",
+  "dry": false,
+  "key_type_signature": {
+    "advisories": "list[str]",
+    "attempts": "int",
+    "changes": "list[str]",
+    "command": "null",
+    "fidelity": "null",
+    "model": "str",
+    "ok": "bool",
+    "out": "str",
+    "path": "str",
+    "postcondition": "null",
+    "task": "str"
+  }
+}

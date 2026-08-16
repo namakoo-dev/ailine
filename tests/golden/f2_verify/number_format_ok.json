@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "金額",
+    "style": "thousands"
+  },
+  "inferred": [],
+  "err": null
+}

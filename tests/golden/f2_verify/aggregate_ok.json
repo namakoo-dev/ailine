@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "resolved": {
+    "group_col": "商品",
+    "value_col": "金額"
+  },
+  "inferred": [],
+  "err": null
+}

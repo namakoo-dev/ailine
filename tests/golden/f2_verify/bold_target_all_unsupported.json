@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "resolved": {
+    "target": "all"
+  },
+  "inferred": [],
+  "err": "対象『all』は 太字 では未対応です"
+}

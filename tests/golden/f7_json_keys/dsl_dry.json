@@ -1,0 +1,17 @@
+{
+  "rc": 0,
+  "path": "dsl",
+  "dry": true,
+  "key_type_signature": {
+    "attempts": "int",
+    "command": "str",
+    "dry": "bool",
+    "fidelity": "null",
+    "model": "str",
+    "ok": "bool",
+    "path": "str",
+    "postcondition": "null",
+    "provenance": "null",
+    "task": "str"
+  }
+}

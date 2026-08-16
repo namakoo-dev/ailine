@@ -1,0 +1,18 @@
+[exit code: 1]
+★ このバージョンから、既定で原本に直接反映します（自動バックアップ+undo つき）。従来のコピー方式は --copy。この告知は一度だけ表示されます
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=b.xlsx
+解釈: 操作:並べ替え 対象:金額 順:降順
+
+─ 生成した .bas（ルール変換・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Call SortByColumn(oDoc, 0, 1, 1, False)
+End Sub
+
+──────────────────────────────────────────
+
+（文書に変化は検出されなかった）
+
+× 適用されたが事後条件を満たさない: 列『金額』が指定順（desc）に並んでいない

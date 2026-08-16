@@ -1,0 +1,36 @@
+usage: ailine run [-h] [--model MODEL] [--refs REFS] [--helpers HELPERS]
+                  [--repair REPAIR] [--temperature TEMPERATURE] [--dry]
+                  [--inplace] [--json] [--timeout TIMEOUT] [--ask]
+                  [--keep-backups KEEP_BACKUPS] [--values]
+                  [--header-row HEADER_ROW] [--accept-loss] [--copy]
+                  [--overwrite] [--allow-freeform]
+                  book task
+
+positional arguments:
+  book                  対象の文書 (.xlsx / .ods)
+  task                  やりたいことを自然言語で
+
+options:
+  -h, --help            show this help message and exit
+  --model MODEL         ollama モデル (既定 qwen2.5-coder:7b)
+  --refs REFS           参照ライブラリのディレクトリ (既定 ./refs)
+  --helpers HELPERS     検証済みヘルパのディレクトリ (既定 ./helpers)
+  --repair REPAIR       修復の最大回数 (既定 2)
+  --temperature TEMPERATURE
+  --dry                 生成して見せるだけ（適用しない）
+  --inplace             （廃止・後方互換のため受理のみ）既定で原本に直接適用するため不要。旧 .out 挙動が欲しければ
+                        --copy
+  --json                結果を JSON でも出す
+  --timeout TIMEOUT     basrun apply のタイムアウト秒 (既定 180、0 で無効化=旧挙動の無制限)
+  --ask                 DSL 経路の確認行の後に y/n で対話する（既定は表示して続行）
+  --keep-backups KEEP_BACKUPS
+                        原本への反映前のバックアップを book ごとに何世代残すか (既定 10、負数で無制限)
+  --values              COMPUTE_COLUMN を式でなく値ベタ書きにする（既定は式・W3 Part3）
+  --header-row HEADER_ROW
+                        見出し行を明示指定（1起点。指定時は自動検出をスキップしてこの行を採用）
+  --accept-loss         往復忠実度ゲートが検出した喪失を承知の上で原本への反映を続行する（ailine undo で戻せる）
+  --copy                原本には触らず <book>.out に結果を作る（既定の原本直接適用をしない・旧 --inplace
+                        無指定と同じ挙動。往復忠実度ゲートも走らせない）
+  --overwrite           破壊の関所（既存データを持つ列への上書き確認）を承知の上で続行する（ailine undo で戻せる）
+  --allow-freeform      自由生成の関所（AI が直接作成したコードは機械検証できないという確認）を承知の上で続行する（ailine
+                        undo で戻せる）

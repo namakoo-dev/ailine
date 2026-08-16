@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "商品",
+    "value": "確認済み",
+    "_sources": {
+      "value": "依頼文: 「確認済み」"
+    }
+  },
+  "inferred": [],
+  "err": null
+}

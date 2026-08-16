@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "resolved": {
+    "operands": [
+      "金額"
+    ],
+    "operator": "*",
+    "factor": 1.1,
+    "_sources": {
+      "factor": "依頼文: 10%"
+    },
+    "_new_col_label": "税込金額",
+    "_warnings": [
+      "LLM が返した倍率(1.05)と機械抽出の倍率(1.1)が食い違うため機械抽出(1.1)を採用しました"
+    ]
+  },
+  "inferred": [],
+  "err": null
+}

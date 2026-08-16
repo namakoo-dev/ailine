@@ -1,0 +1,20 @@
+[exit code: 0]
+★ このバージョンから、既定で原本に直接反映します（自動バックアップ+undo つき）。従来のコピー方式は --copy。この告知は一度だけ表示されます
+■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=b.xlsx
+解釈: 操作:並べ替え 対象:金額 順:降順
+
+─ 生成した .bas（ルール変換・LLM不使用）───────────────
+Option VBASupport 1
+Option Explicit
+
+Sub Run(oDoc As Object)
+    Call SortByColumn(oDoc, 0, 1, 1, False)
+End Sub
+
+──────────────────────────────────────────
+
+（文書に変化は検出されなかった）
+
+⚠ 事後条件を機械検証できなかった（操作:並べ替え）: 検証対象が1行のみ（並べ替えの意味がありません）
+
+適用先: b.out.xlsx（原本 b.xlsx は無変更）

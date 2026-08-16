@@ -1,0 +1,140 @@
+{
+  "task": "列2を更新して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,3": [
+        "備考",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,3": [
+        "x",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,3": [
+        "備考",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a2",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,3": [
+        "x",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "列 A: データ 1 行のうち 1 行を変更（0 行は未変更）",
+    "★ 依頼で言及された『列2』は存在しません/変更されていません"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "金額",
+    "label": "合計",
+    "factor": 1.1,
+    "_sources": {
+      "factor": "用語集: 消費税"
+    }
+  },
+  "inferred": [],
+  "err": null
+}

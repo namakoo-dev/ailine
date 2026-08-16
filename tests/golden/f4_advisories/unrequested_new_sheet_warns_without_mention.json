@@ -1,0 +1,127 @@
+{
+  "task": "金額を更新して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet",
+      "新規"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "新規!1,1": [
+        "x",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "新規!1,2": [
+        1,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": [],
+      "新規": []
+    },
+    "colw": {
+      "Sheet": {},
+      "新規": {}
+    },
+    "rowh": {
+      "Sheet": {},
+      "新規": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "★ 依頼にない新しいシートが作成されました（新規）"
+  ]
+}

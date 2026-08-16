@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "resolved": {
+    "target": "col:金額",
+    "color": "虹色"
+  },
+  "inferred": [],
+  "err": "色『虹色』は未対応です。使える色: black, blue, gray, green, grey, lightblue, lightgray, lightgreen, lightgrey, lightred, lightyellow, orange, pink, purple, red, white, yellow"
+}

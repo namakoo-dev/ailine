@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "resolved": {
+    "target_sheet": "Sheet",
+    "target_col": "単価",
+    "source_sheet": "単価表",
+    "key_col": "不明列"
+  },
+  "inferred": [],
+  "err": "列『不明列』がありません。ある列: 商品, 数量, 単価, 金額"
+}

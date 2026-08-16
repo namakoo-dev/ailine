@@ -1,0 +1,176 @@
+{
+  "task": "0で初期化したシートを追加して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet",
+      "新規"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "新規!1,1": [
+        0,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "新規!1,2": [
+        0,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "新規!2,1": [
+        0,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "新規!2,2": [
+        0,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": [],
+      "新規": []
+    },
+    "colw": {
+      "Sheet": {},
+      "新規": {}
+    },
+    "rowh": {
+      "Sheet": {},
+      "新規": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "★ 疑わしい: 空欄への同一値の一括書き込みです（値 0 × 4 セル）",
+    "★ 疑わしい: 新規シート『新規』の空欄への同一値の一括書き込みです（値 0 × 4 セル）"
+  ]
+}

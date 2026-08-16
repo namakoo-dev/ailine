@@ -1,0 +1,9 @@
+usage: ailine vocab [-h] {add,list} ...
+
+positional arguments:
+  {add,list}
+    add       語を登録する（例: ailine vocab add 消費税 1.1）
+    list      登録済みの語を一覧表示する
+
+options:
+  -h, --help  show this help message and exit

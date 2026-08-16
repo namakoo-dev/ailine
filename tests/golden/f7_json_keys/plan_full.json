@@ -1,0 +1,21 @@
+{
+  "rc": 0,
+  "path": "plan",
+  "dry": false,
+  "key_type_signature": {
+    "advisories": "list[dict{steps:list[int],text:str}]",
+    "attempts": "int",
+    "changes": "list[str]",
+    "command": "null",
+    "fidelity": "null",
+    "items": "list[dict{detail:str,idx:int,label:str,status:str}]",
+    "model": "str",
+    "ok": "bool",
+    "out": "str",
+    "path": "str",
+    "plan": "list[dict{command:str,op:str,postcondition:str,status:str}]",
+    "postcondition": "null",
+    "provenance": "null",
+    "task": "str"
+  }
+}

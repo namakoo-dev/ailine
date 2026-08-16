@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "resolved": {
+    "value_col": "不明"
+  },
+  "inferred": [],
+  "err": "列『不明』がありません。ある列: 商品, 数量, 単価, 金額"
+}

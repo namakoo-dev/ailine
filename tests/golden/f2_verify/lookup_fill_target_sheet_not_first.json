@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "resolved": {
+    "target_sheet": "単価表",
+    "target_col": "単価",
+    "source_sheet": "単価表",
+    "key_col": "商品"
+  },
+  "inferred": [],
+  "err": "対象シートは1枚目（Sheet）のみ対応しています"
+}

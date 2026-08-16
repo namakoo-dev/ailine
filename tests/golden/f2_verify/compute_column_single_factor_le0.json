@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "resolved": {
+    "operands": [
+      "金額"
+    ],
+    "operator": "*",
+    "factor": 0.0
+  },
+  "inferred": [],
+  "err": "倍率『0.0』は正の数でなければなりません"
+}

@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "resolved": {
+    "target_sheet": "Sheet",
+    "target_col": "備考",
+    "source_sheet": "単価表",
+    "key_col": "商品"
+  },
+  "inferred": [],
+  "err": null
+}

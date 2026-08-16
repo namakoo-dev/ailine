@@ -1,0 +1,4 @@
+{
+  "status": "error",
+  "reason": "事後条件の検証に失敗: KeyError: 'col'"
+}

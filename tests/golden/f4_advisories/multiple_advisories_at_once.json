@@ -1,0 +1,157 @@
+{
+  "task": "金額を更新して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!30,10": [
+        "外側",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!31,10": [
+        "外側",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "★ 疑わしい: 変更が元データの範囲外です（J30:J31）",
+    "★ 疑わしい: 空欄への同一値の一括書き込みです（値 '外側' × 2 セル）",
+    "列 J: データ 0 行のうち 0 行を変更（0 行は未変更）"
+  ]
+}

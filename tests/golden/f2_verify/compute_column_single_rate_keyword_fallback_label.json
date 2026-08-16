@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "resolved": {
+    "operands": [
+      "金額"
+    ],
+    "operator": "/",
+    "factor": 1.1,
+    "_sources": {
+      "factor": "依頼文: 1.1"
+    },
+    "_new_col_label": "税抜金額"
+  },
+  "inferred": [],
+  "err": null
+}

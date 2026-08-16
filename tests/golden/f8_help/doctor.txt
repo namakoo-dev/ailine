@@ -1,0 +1,5 @@
+usage: ailine doctor [-h] [--model MODEL]
+
+options:
+  -h, --help     show this help message and exit
+  --model MODEL  確認するモデル (既定 qwen2.5-coder:7b)

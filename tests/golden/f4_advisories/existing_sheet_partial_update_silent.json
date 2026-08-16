@@ -1,0 +1,147 @@
+{
+  "task": "集計を更新して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "Sheet",
+      "集計"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        1,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!1,1": [
+        "A",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!1,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!2,1": [
+        "B",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!2,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": [],
+      "集計": []
+    },
+    "colw": {
+      "Sheet": {},
+      "集計": {}
+    },
+    "rowh": {
+      "Sheet": {},
+      "集計": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet",
+      "集計"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        1,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!1,1": [
+        "A",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!1,2": [
+        999,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!2,1": [
+        "B",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!2,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": [],
+      "集計": []
+    },
+    "colw": {
+      "Sheet": {},
+      "集計": {}
+    },
+    "rowh": {
+      "Sheet": {},
+      "集計": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "列 B: データ 1 行のうち 0 行を変更（1 行は未変更）＋見出し行"
+  ]
+}

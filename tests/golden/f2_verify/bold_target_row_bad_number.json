@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "resolved": {
+    "target": "row:abc"
+  },
+  "inferred": [],
+  "err": "行番号『abc』が不正です"
+}

@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "resolved": {
+    "operands": [
+      "数量",
+      "単価"
+    ],
+    "operator": "%"
+  },
+  "inferred": [],
+  "err": "演算子『%』が不明です"
+}

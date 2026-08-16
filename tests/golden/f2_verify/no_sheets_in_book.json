@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "金額",
+    "order": "asc"
+  },
+  "inferred": [],
+  "err": "ブックにシートが無い"
+}

@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "resolved": {
+    "operands": [
+      "金額"
+    ],
+    "operator": "/",
+    "target": "金額",
+    "factor": 0.909091,
+    "_sources": {
+      "factor": "依頼文: 1.1で割っ"
+    }
+  },
+  "inferred": [],
+  "err": null
+}

@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "resolved": {
+    "operands": [
+      "金額"
+    ],
+    "operator": "*",
+    "factor": 1.1,
+    "_sources": {
+      "factor": "用語集: 消費税"
+    },
+    "_new_col_label": "税込金額"
+  },
+  "inferred": [],
+  "err": null
+}

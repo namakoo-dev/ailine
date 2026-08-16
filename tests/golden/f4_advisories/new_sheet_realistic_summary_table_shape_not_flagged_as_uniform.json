@@ -1,0 +1,191 @@
+{
+  "task": "部門ごとに集計して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "部門",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "A",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "B",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet",
+      "集計"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "部門",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "A",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "B",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!1,1": [
+        "部門",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!1,2": [
+        "合計",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!2,1": [
+        "A",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!2,2": [
+        0,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!3,1": [
+        "B",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!3,2": [
+        0,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": [],
+      "集計": []
+    },
+    "colw": {
+      "Sheet": {},
+      "集計": {}
+    },
+    "rowh": {
+      "Sheet": {},
+      "集計": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "★ 依頼にない新しいシートが作成されました（集計）"
+  ]
+}

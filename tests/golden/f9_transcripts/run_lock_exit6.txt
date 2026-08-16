@@ -1,0 +1,2 @@
+[exit code: 6]
+× 別の ailine が実行中です（pid=999999・<TS>）

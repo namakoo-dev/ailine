@@ -1,0 +1,8 @@
+usage: ailine vocab add [-h] term value
+
+positional arguments:
+  term        語（例: 消費税）
+  value       値（倍率。例: 1.1）
+
+options:
+  -h, --help  show this help message and exit

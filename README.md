@@ -6,7 +6,7 @@
 書いたコードは平文で残り、`git diff` で読める。外部にデータは送らない。
 
 > **状態: 骨格（PoC）。** 中核のパイプライン（生成 → 適用 → 検証 → 修復）は動き、
-> 純ロジックのユニットテスト 594 件は緑（CI で毎 push 確認）。参照ライブラリの拡充と、
+> 純ロジックのユニットテストは CI で毎 push 緑を確認（件数は手で書かない — python -m pytest tests -q が正）。参照ライブラリの拡充と、
 > 実機 LibreOffice を通した自動の通し試験は `@pytest.mark.local` 配下に1件着手済み
 > （太字の `.bas` 層が本当に効いているかの通し試験。詳細は下の「CI」）。
 > 実運用の前に下の「限界」を必ず読むこと。
@@ -247,7 +247,7 @@ python ailine.py vocab list
   （README ⇔ ailine.py のヘルパカタログ ⇔ helpers/*.bas 実体の三者突合と、太字ヘルパが
   CharWeight/CharWeightAsian を両方セットしているかの静的検査。★どちらもファイル読み取り
   だけで完結し ollama/LibreOffice を要さない）。実測（`socket.socket.connect` を
-  差し替えて本物の接続を全部拒否した状態で再実行）で **594 本全部**が ollama への接続・
+  差し替えて本物の接続を全部拒否した状態で再実行）で **全件**が ollama への接続・
   LibreOffice・basrun の実プロセス起動を一切要さないと確認済み
   （`urllib.request.urlopen` / `subprocess.Popen` / `ailine.basrun_apply` の境界を
   `monkeypatch` で全テストが差し替えている）。
@@ -259,7 +259,7 @@ python ailine.py vocab list
   しない。実際に xlsx へ効いているか（日本語の太字が本当に反映されるか）はこの
   local 試験でしか測れない（実測: CharWeightAsian の1行を消すと openpyxl 読み戻しの
   `Font.bold` が `False` になることを確認済み）。
-- **全部（595 本）を人が回す**: `python -m pytest tests -q`
+- **全部を人が回す**: `python -m pytest tests -q`
 - **CI と同じ範囲だけ人が回す**: `python -m pytest tests -q -m "not local"`
 - **ローカル依存だけ回す**（現状1本）: `pytest -m local`
 

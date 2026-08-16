@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "resolved": {
+    "operands": [
+      "数量",
+      "単価"
+    ],
+    "operator": "*"
+  },
+  "inferred": [],
+  "err": null
+}

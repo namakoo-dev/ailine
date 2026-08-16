@@ -1,0 +1,20 @@
+{
+  "aggregate": "解釈: 操作:集計 分類列:商品 集計列:金額",
+  "append_total_with_source": "解釈: 操作:合計追加 対象列:金額 ラベル:合計 率:1.1（依頼文: 10%）",
+  "append_total_without_source": "解釈: 操作:合計追加 対象列:金額 ラベル:合計 率:1.0",
+  "autofit_no_fields": "解釈: 操作:列幅自動調整",
+  "bold_col_inferred": "解釈: 操作:太字 対象:col:商品(推定)",
+  "center_align_all": "解釈: 操作:中央揃え 対象:all",
+  "chart": "解釈: 操作:グラフ 値列:金額",
+  "compute_column_with_target_inferred": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:* 対象列:金額(推定)",
+  "compute_column_without_target_omits_field": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:*",
+  "draw_borders_no_fields": "解釈: 操作:けい線",
+  "fill_color_row": "解釈: 操作:背景色 対象:row:1 色:red",
+  "insert_rows_count_inferred": "解釈: 操作:行挿入 挿入位置:3 行数:1(推定)",
+  "lookup_fill_key_col_inferred": "解釈: 操作:転記 対象シート:Sheet 対象列:単価 参照シート:単価表 キー列:商品(推定)",
+  "merge": "解釈: 操作:セル結合 範囲:A1:B1",
+  "number_format": "解釈: 操作:数値書式 対象列:金額 書式:thousands",
+  "pivot": "解釈: 操作:ピボット 分類列:商品 集計列:金額",
+  "set_column_value_with_source": "解釈: 操作:一括書換 対象列:商品 値:確認済み（依頼文: 「確認済み」）",
+  "sort": "解釈: 操作:並べ替え 対象:金額 順:降順"
+}

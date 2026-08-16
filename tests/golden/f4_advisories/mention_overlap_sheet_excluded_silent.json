@@ -1,0 +1,117 @@
+{
+  "task": "参照シートも更新して",
+  "exclude_sheets": [
+    "参照シート"
+  ],
+  "before": {
+    "sheets": [
+      "Sheet",
+      "参照シート"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        1,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "参照シート!1,1": [
+        "x",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "参照シート!1,2": [
+        1,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": [],
+      "参照シート": []
+    },
+    "colw": {
+      "Sheet": {},
+      "参照シート": {}
+    },
+    "rowh": {
+      "Sheet": {},
+      "参照シート": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet",
+      "参照シート"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        2,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "参照シート!1,1": [
+        "x",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "参照シート!1,2": [
+        1,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": [],
+      "参照シート": []
+    },
+    "colw": {
+      "Sheet": {},
+      "参照シート": {}
+    },
+    "rowh": {
+      "Sheet": {},
+      "参照シート": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "列 B: データ 0 行のうち 0 行を変更（0 行は未変更）＋見出し行"
+  ]
+}

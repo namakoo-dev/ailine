@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "resolved": {
+    "operands": [
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "operator": "*"
+  },
+  "inferred": [],
+  "err": "演算対象が2つの列名になっていません"
+}

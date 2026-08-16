@@ -1,0 +1,4 @@
+usage: ailine vocab list [-h]
+
+options:
+  -h, --help  show this help message and exit

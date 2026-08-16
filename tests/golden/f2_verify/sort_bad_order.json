@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "金額",
+    "order": "ascending"
+  },
+  "inferred": [],
+  "err": "順序『ascending』は asc/desc のどちらでもありません"
+}

@@ -1,0 +1,5 @@
+usage: ailine history [-h] [--max MAX]
+
+options:
+  -h, --help  show this help message and exit
+  --max MAX   表示件数（既定 10、新しい順）
