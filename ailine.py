@@ -66,6 +66,10 @@ except ImportError:
 #   実行時に自動で sys.path[0] に入れる ailine.py の所在ディレクトリからそのまま拾える
 #   （別の作業ディレクトリから `python C:\...\ailine.py run ...` と叩いても同じ）。
 from ailine_core.book_view import BookView
+from ailine_core.claim import (   # ★ C5: Claim 型と『✓ 機械検証済み』の一元レンダラ
+    Claim, format_plan_report, overall_verdict, render_single_op_claim,
+    _VERIFY_SCOPE_NOTE, _VERIFY_SCOPE_NOTE_PLAN,
+)
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
@@ -4624,8 +4628,13 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         print(f"\n⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
         result["ok"] = True
     else:
-        print(f"\n✓ 達成を機械検証済み（操作:{OP_LABELS.get(op, op)}）: {reason}")
-        print(_VERIFY_SCOPE_NOTE)   # ★ 致命1(W10e) 要求1: 「計画どおり」≠「依頼どおり」を明示
+        # ★ C5: scope は上で表示済みの「解釈: ...」行から「解釈: 」を除いた宣言テキスト
+        #   （＝計画が宣言した対象そのもの。format_plan_report 側の label と同じ取り方）。
+        claim = Claim(verified=True, basis="declaration",
+                       scope=line[len("解釈: "):], evidence=reason,
+                       observation_complete=True)
+        for out_line in render_single_op_claim(claim, OP_LABELS.get(op, op)):
+            print(out_line)
         result["ok"] = True
 
     # ★ W8b-2: DSL 経路はルールベース codegen（自由生成ではない）ので、postcondition が
@@ -4929,19 +4938,11 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
 #   パイプライン、語彙外(OUT_OF_VOCAB/FREEFORM)の段は FREEFORM 経路（その段の依頼文だけ）。
 #   ★ 黙落ゼロ: 計画に載った段は必ず項目別報告の1行になる。
 #   ★ 総合判定は最弱の段に従う。「機械検証済み」の語は実際に機械検証が通った段にだけ付ける。
+#   ★ C5: _ITEM_STATUS_MARK / _VERIFY_SCOPE_NOTE(_PLAN) / format_plan_report /
+#   overall_verdict は ailine_core/claim.py に移した（『✓ 機械検証済み』相当の文字列は
+#   レンダラ1箇所からしか出さない・冒頭の import で ailine.format_plan_report 等は
+#   従来どおり使える）。
 # ---------------------------------------------------------------------------
-
-_ITEM_STATUS_MARK = {"ok": "✓", "warn": "⚠", "fail": "×"}
-
-# ★ 致命1(W10e): 「機械検証済み」が保証する範囲を正直に言う一文。バナー自体の語は
-#   既存テストが厳密一致で見ている（format_plan_report/overall_verdict）ため変えず、
-#   この注記を別行として1回だけ添える方針にした（『計画どおり』と『依頼どおり』の
-#   同一視をやめる・出しすぎない＝行数を増やさない）。
-_VERIFY_SCOPE_NOTE = ("★「機械検証済み」は、上の「解釈:」行どおりに実行されたことの検証です。"
-                       "その解釈が依頼の意図と合っているかまでは含みません — 「解釈:」行を確認してください。")
-_VERIFY_SCOPE_NOTE_PLAN = ("★「機械検証済み」は各段の「◯段目: 解釈:」行どおりに実行されたことの検証です。"
-                            "各段の解釈が依頼の意図と合っているかまでは含みません"
-                            " — 各段の「解釈:」行を確認してください。")
 
 # col系 slot を持つ op → その slot 名（依存つき連鎖の新規列フォールバック対象）。
 _COLUMN_ARG_KEYS = {
@@ -5109,45 +5110,9 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
     return False, [], [], failure_kind, detail
 
 
-def format_plan_report(items: list) -> list:
-    """複合計画の項目別報告を行のリストにする。items: [(idx, label, status, detail), ...]
-       status は 'ok'/'warn'/'fail'。★ FREEFORM 段の成功は『機械検証済み』とは絶対に言わない
-       （✓ 適用され文書が変化した級に留める＝warn 表示の固定文言で担保）。
-       ★ 止血1: 'warn' は2種類の由来を持つ — 語彙外(FREEFORM)段は detail=None の
-       固定文言、DSL 段の事後条件が「検証対象が少なすぎる」場合は detail に理由が
-       入るのでそちらを見せる（どちらも『機械検証済み』とは言わない点は共通）。"""
-    lines = []
-    for idx, label, status, detail in items:
-        mark = _ITEM_STATUS_MARK[status]
-        if status == "ok":
-            suffix = f"（{detail}）" if detail else ""
-            lines.append(f"{idx}. {label} → {mark} 機械検証済み{suffix}")
-        elif status == "warn":
-            if detail:
-                lines.append(f"{idx}. {label} → {mark} 機械検証できませんでした: {detail}")
-            else:
-                # ★ W8a 項目5: 「自由生成」→「AI が直接作成（機械保証なし）」（operator の語彙翻訳）。
-                lines.append(f"{idx}. {label} → {mark} 語彙外のため AI が直接作成（機械保証なし）で実行（確認してください）")
-        else:
-            lines.append(f"{idx}. {label} → {mark} 未対応: {detail}")
-    return lines
-
-
-def overall_verdict(items: list) -> tuple:
-    """(判定文, 総合status)。★ 総合判定は最弱の段に従う:
-       全段 ok → 「✓ すべて機械検証済み」/ fail 無しで warn を含む → 「⚠ 一部は確認が必要です」/
-       fail を含む → 失敗。『達成を機械検証済み』の語は機械検証が実際に通った段にだけ付ける
-       （ここでは全段が ok の時だけそう言う）。"""
-    statuses = {it[2] for it in items}
-    if "fail" in statuses:
-        return "× 一部の操作が未対応/失敗のため、達成できませんでした", "fail"
-    if "warn" in statuses:
-        # ★ 止血1: warn の由来は2種類（語彙外の自由生成／DSL段の検証対象不足）ある
-        #   ため、どちらにも当てはまる言い方にする。
-        # ★ W8a 項目5: 表示文言のみ「自由生成」→「AI が直接作成」（operator の語彙翻訳）。
-        return ("⚠ 一部は確認が必要です（語彙外で AI が直接作成した段、または検証対象不足の段があり、"
-                "機械検証はしていません）", "warn")
-    return "✓ すべて機械検証済み", "ok"
+# ★ C5: format_plan_report / overall_verdict は ailine_core/claim.py に移した
+#   （Claim を経由してしか『✓ 機械検証済み』相当の文字列を出さないレンダラ側に統合・
+#   冒頭の import で ailine.format_plan_report / ailine.overall_verdict は従来どおり使える）。
 
 
 # ★ W10d【本命】: 複合計画は段が増えるほど同じ助言（例: 幽霊データ検出）が段の数だけ
