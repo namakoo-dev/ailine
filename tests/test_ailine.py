@@ -1009,63 +1009,113 @@ def test_mention_overlap_exclude_sheets_still_flags_other_sheets(tmp_path):
     assert any("集計" in ln for ln in lines)
 
 
-# --- ★ W10b 項目4a(摩擦): 新規列作成の『範囲外』誤警報の中立化 --------------------
+# --- ★ W10b 項目4a(摩擦) → ★ C9: 新規列作成の『範囲外』誤警報の中立化 --------------
+# ★ C9: 旧 _neutralize_new_column_ghost_warning は advisories リストを後から書き換える
+#   単体関数だったが、detect_ghost_data 自身が new_col_letter を受け取り発生源で判定する形に
+#   構造を置き換えた（判定条件・出力文言は不変・ゴールデン差分ゼロで確認）。低レベルの
+#   detect_ghost_data(new_col_letter=) と、op からの橋渡しを含む _structural_advisories を
+#   それぞれ直接叩いて同じシナリオを検証する。
 
-def test_neutralize_new_column_ghost_warning_replaces_when_span_matches_new_column():
-    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}   # 新規列は列C(3)
-    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]
-    out = ailine._neutralize_new_column_ghost_warning(
-        advisories, "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "factor": 1.1}, meta)
-    assert out == ["（新規列の追加は意図どおりです）"]
+def test_detect_ghost_data_neutral_when_span_confined_to_new_col_letter(tmp_path):
+    p = _book(tmp_path, [["品目", "金額"], ["a", 100]])   # 使用範囲は A1:B2、新規列は C
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    for r in (2, 3, 4):
+        wb.active.cell(row=r, column=3, value=110)   # C列（範囲外・新規列）だけに書く
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.detect_ghost_data(before, after, new_col_letter="C")
+    assert msg == "（新規列の追加は意図どおりです）"
 
-def test_neutralize_new_column_ghost_warning_keeps_when_span_extends_beyond_new_column():
+def test_detect_ghost_data_keeps_warning_when_span_extends_beyond_new_col_letter(tmp_path):
+    p = _book(tmp_path, [["品目", "金額"], ["a", 100]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    for r in (3, 4):
+        wb.active.cell(row=r, column=2, value=9)   # B列（範囲外だが新規列ではない）も含む
+        wb.active.cell(row=r, column=3, value=9)   # C列（新規列）
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.detect_ghost_data(before, after, new_col_letter="C")
+    assert msg is not None and msg.startswith("★ 疑わしい")   # 保守的：他列にも及ぶので変えない
+
+def test_structural_advisories_neutralizes_ghost_warning_for_declared_new_column(tmp_path):
+    p = _book(tmp_path, [["品目", "金額"], ["a", 100]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    for r in (2, 3, 4):
+        wb.active.cell(row=r, column=3, value=110)
+    wb.save(p)
+    after = ailine.snapshot(p)
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
-    advisories = ["★ 疑わしい: 変更が元データの範囲外です（B2:C4）"]   # B列も含む＝新規列だけでない
-    out = ailine._neutralize_new_column_ghost_warning(
-        advisories, "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*", "factor": 1.1}, meta)
-    assert out == advisories   # 保守的：変えない
+    resolved = {"operands": ["金額"], "operator": "*", "factor": 1.1}
+    lines = ailine._structural_advisories(before, after, op="COMPUTE_COLUMN", resolved=resolved, meta=meta)
+    assert "（新規列の追加は意図どおりです）" in lines
+    assert not any(ln.startswith("★ 疑わしい: 変更が元データの範囲外です") for ln in lines)
 
-def test_neutralize_new_column_ghost_warning_noop_when_target_specified():
-    # target 指定(既存列への書き込み)は新規列作成ではないので対象外。
+def test_structural_advisories_keeps_ghost_warning_when_target_specified(tmp_path):
+    # target 指定(既存列への書き込み)は新規列作成ではないので中立化しない。
+    # ★ 行2は既存データ(110)のままにする ── 変更を混ぜると detect_ghost_data 自体が
+    # 「1つでも範囲内の変更がある」で無条件に None を返してしまい判定材料が無くなるため。
+    p = _book(tmp_path, [["品目", "金額", "税込み金額"], ["a", 100, 110]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    for r in (3, 4):
+        wb.active.cell(row=r, column=3, value=999)   # 既存の『税込み金額』列の範囲外行に書く
+    wb.save(p)
+    after = ailine.snapshot(p)
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額", "税込み金額"]}}
-    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]
-    out = ailine._neutralize_new_column_ghost_warning(
-        advisories, "COMPUTE_COLUMN",
-        {"operands": ["金額"], "operator": "*", "factor": 1.1, "target": "税込み金額"}, meta)
-    assert out == advisories
+    resolved = {"operands": ["金額"], "operator": "*", "factor": 1.1, "target": "税込み金額"}
+    lines = ailine._structural_advisories(before, after, op="COMPUTE_COLUMN", resolved=resolved, meta=meta)
+    assert any(ln.startswith("★ 疑わしい: 変更が元データの範囲外です") for ln in lines)
 
-def test_neutralize_new_column_ghost_warning_noop_for_other_ops():
+def test_structural_advisories_keeps_ghost_warning_for_other_ops(tmp_path):
+    p = _book(tmp_path, [["品目", "金額"], ["a", 100]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    for r in (2, 3, 4):
+        wb.active.cell(row=r, column=3, value=110)
+    wb.save(p)
+    after = ailine.snapshot(p)
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
-    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]
-    out = ailine._neutralize_new_column_ghost_warning(advisories, "SORT", {"col": "金額"}, meta)
-    assert out == advisories
+    lines = ailine._structural_advisories(before, after, op="SORT", resolved={"col": "金額"}, meta=meta)
+    assert any(ln.startswith("★ 疑わしい: 変更が元データの範囲外です") for ln in lines)
 
 
 # ★ W10d 項目2: COMPUTE_COLUMN 専用だった中立化を OP_WRITE_TARGET の宣言駆動へ一般化。
 #   LOOKUP_FILL が新規列を作る場合も同じ誤警報（査定で名指しされたオオカミ少年）が出ていた。
 
-def test_neutralize_new_column_ghost_warning_replaces_for_lookup_fill_new_column():
-    # 旧実装は COMPUTE_COLUMN 専用の if だったため、これは常に None のまま漏れていた。
+def test_structural_advisories_neutralizes_ghost_warning_for_lookup_fill_new_column(tmp_path):
+    # 旧実装は COMPUTE_COLUMN 専用の if だったため、これは常に漏れていた。
+    p = _book(tmp_path, [["商品コード", "数量"], ["x1", 3]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    for r in (2, 3, 4):
+        wb.active.cell(row=r, column=3, value=500)   # C列（範囲外・新規の『単価』列）
+    wb.save(p)
+    after = ailine.snapshot(p)
     meta = {"sheets": ["明細", "単価表"],
             "headers": {"明細": ["商品コード", "数量"], "単価表": ["商品コード", "単価"]}}
-    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]   # 新規列は列C(3)
-    out = ailine._neutralize_new_column_ghost_warning(
-        advisories, "LOOKUP_FILL",
-        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"},
-        meta)
-    assert out == ["（新規列の追加は意図どおりです）"]
+    resolved = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"}
+    lines = ailine._structural_advisories(before, after, op="LOOKUP_FILL", resolved=resolved, meta=meta)
+    assert "（新規列の追加は意図どおりです）" in lines
 
-def test_neutralize_new_column_ghost_warning_keeps_for_lookup_fill_existing_column():
+def test_structural_advisories_keeps_ghost_warning_for_lookup_fill_existing_column(tmp_path):
     # target_col が対象シートに既に実在する（上書き系）場合は新規列作成ではないので対象外
     # （抑制しすぎない側＝安全器官の減衰は保守的に、が守られていることの確認）。
+    # ★ 行2は既存データ(100)のままにする（理由は上のテストのコメント参照）。
+    p = _book(tmp_path, [["商品コード", "数量", "単価"], ["x1", 3, 100]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    for r in (3, 4):
+        wb.active.cell(row=r, column=3, value=500)
+    wb.save(p)
+    after = ailine.snapshot(p)
     meta = {"sheets": ["明細", "単価表"],
             "headers": {"明細": ["商品コード", "数量", "単価"], "単価表": ["商品コード", "単価"]}}
-    advisories = ["★ 疑わしい: 変更が元データの範囲外です（C2:C4）"]
-    out = ailine._neutralize_new_column_ghost_warning(
-        advisories, "LOOKUP_FILL",
-        {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"},
-        meta)
-    assert out == advisories
+    resolved = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"}
+    lines = ailine._structural_advisories(before, after, op="LOOKUP_FILL", resolved=resolved, meta=meta)
+    assert any(ln.startswith("★ 疑わしい: 変更が元データの範囲外です") for ln in lines)
 
 def test_declared_new_column_letter_driven_by_op_write_target():
     # ★ W10d 番人: 新規列作成の判定が OP_WRITE_TARGET の宣言だけで決まり、op ごとの
@@ -5078,33 +5128,33 @@ def test_unrequested_new_sheet_advisory_empty_when_no_new_sheet():
 
 
 # ===========================================================================
-# ★ W10c 中: AGGREGATE/PIVOT の新規シート作成は宣言どおりの効果（中立表示に落とす）
+# ★ W10c 中 → ★ C9: AGGREGATE/PIVOT の新規シート作成は宣言どおりの効果（中立表示に落とす）
+#   ★ C9: 旧 _neutralize_declared_new_sheet_warning は advisories を後から書き換える単体
+#   関数だったが、unrequested_new_sheet_advisory 自身が op を受け取り発生源で判定する形に
+#   構造を置き換えた（判定条件・出力文言は不変・ゴールデン差分ゼロで確認）。
 # ===========================================================================
 
 @pytest.mark.parametrize("op", ["AGGREGATE", "PIVOT"])
-def test_neutralize_declared_new_sheet_warning_replaces_for_declared_ops(op):
+def test_unrequested_new_sheet_advisory_neutral_for_declared_ops(op):
     before = {"sheets": ["Sheet"]}
     after = {"sheets": ["Sheet", "集計"]}
-    advisories = ailine.unrequested_new_sheet_advisory("部門ごとに金額を集計して", before, after)
-    out = ailine._neutralize_declared_new_sheet_warning(advisories, op, before, after)
+    out = ailine.unrequested_new_sheet_advisory("部門ごとに金額を集計して", before, after, op=op)
     assert out == ["（新規シート『集計』の作成は意図どおりです）"]
 
-def test_neutralize_declared_new_sheet_warning_noop_for_other_ops():
+def test_unrequested_new_sheet_advisory_warns_for_other_ops():
     before = {"sheets": ["Sheet"]}
     after = {"sheets": ["Sheet", "集計"]}
-    advisories = ["★ 依頼にない新しいシートが作成されました（集計）"]
-    out = ailine._neutralize_declared_new_sheet_warning(advisories, "COMPUTE_COLUMN", before, after)
-    assert out == advisories   # 対象外の op は一切変えない
+    out = ailine.unrequested_new_sheet_advisory("部門ごとに金額を集計して", before, after, op="COMPUTE_COLUMN")
+    assert out == ["★ 依頼にない新しいシートが作成されました（集計）"]   # 対象外の op は一切変えない
 
-def test_neutralize_declared_new_sheet_warning_conservative_when_multiple_new_sheets():
+def test_unrequested_new_sheet_advisory_conservative_when_multiple_new_sheets():
     # 保守的（安全器官の減衰は迷ったら出す側）: 新規シートが2枚以上できたら宣言どおりの
     # 単一効果と断定できないので、警告はそのまま残す。
     before = {"sheets": ["Sheet"]}
     after = {"sheets": ["Sheet", "集計", "もう一枚"]}
-    advisories = ["★ 依頼にない新しいシートが作成されました（集計）",
-                  "★ 依頼にない新しいシートが作成されました（もう一枚）"]
-    out = ailine._neutralize_declared_new_sheet_warning(advisories, "AGGREGATE", before, after)
-    assert out == advisories
+    out = ailine.unrequested_new_sheet_advisory("部門ごとに金額を集計して", before, after, op="AGGREGATE")
+    assert out == ["★ 依頼にない新しいシートが作成されました（集計）",
+                    "★ 依頼にない新しいシートが作成されました（もう一枚）"]
 
 def test_cmd_run_dsl_aggregate_neutralizes_unrequested_new_sheet_warning(tmp_path, monkeypatch, capsys):
     # ★ W10c 中（査定で名指し）: この検体は「シート/ピボット/別に」のどれも言わない依頼
@@ -5666,11 +5716,6 @@ def test_column_existing_value_count_zero_when_all_empty(tmp_path):
 def test_column_existing_value_count_zero_when_column_missing(tmp_path):
     p = _book(tmp_path, [["商品", "原価"], ["a", 300]])
     assert ailine._column_existing_value_count(p, "Sheet", "存在しない") == 0
-
-def test_column_has_existing_values_is_bool_wrapper(tmp_path):
-    p = _book(tmp_path, [["商品", "原価"], ["a", 300]])
-    assert ailine._column_has_existing_values(p, "Sheet", "原価") is True
-    assert ailine._column_has_existing_values(p, "Sheet", "存在しない") is False
 
 def test_maybe_warn_target_overwrite_message_includes_count(tmp_path):
     p = _book(tmp_path, [["商品", "金額", "原価"], ["a", 100, 300], ["b", 200, 250]])
@@ -6737,21 +6782,23 @@ def test_existing_sheet_replaced_advisory_silent_when_no_before_data():
                              sheets=("Sheet", "集計"))
     assert ailine.existing_sheet_replaced_advisory(before, after) == []
 
-def test_neutralize_declared_sheet_replace_warning_for_aggregate():
+# ★ C9: 旧 _neutralize_declared_sheet_replace_warning は advisories を後から書き換える単体
+#   関数だったが、existing_sheet_replaced_advisory 自身が op を受け取り発生源で判定する形に
+#   構造を置き換えた（判定条件・出力文言は不変・ゴールデン差分ゼロで確認）。
+
+def test_existing_sheet_replaced_advisory_neutral_for_aggregate():
     before = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("旧")}, sheets=("Sheet", "集計"))
     after = _sheet_snapshot({"集計!1,1": _v("日付"), "集計!2,1": _v("新")}, sheets=("Sheet", "集計"))
-    lines = ailine.existing_sheet_replaced_advisory(before, after)
-    assert len(lines) == 1
-    out = ailine._neutralize_declared_sheet_replace_warning(lines, "AGGREGATE", before, after)
+    out = ailine.existing_sheet_replaced_advisory(before, after, op="AGGREGATE")
     assert out == ["（既存シート『集計』の更新は意図どおりです）"]
 
-def test_neutralize_declared_sheet_replace_warning_leaves_other_ops_alone():
+def test_existing_sheet_replaced_advisory_warns_for_other_ops():
     before = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("旧")}, sheets=("Sheet", "集計"))
     after = _sheet_snapshot({"集計!1,1": _v("日付"), "集計!2,1": _v("新")}, sheets=("Sheet", "集計"))
     lines = ailine.existing_sheet_replaced_advisory(before, after)
     # AGGREGATE/PIVOT 以外（例: 自由生成には op という概念が無いので FREEFORM 相当）は
     # 何も変えない（このテストでは仮に SORT を渡して確認）。
-    out = ailine._neutralize_declared_sheet_replace_warning(lines, "SORT", before, after)
+    out = ailine.existing_sheet_replaced_advisory(before, after, op="SORT")
     assert out == lines
 
 

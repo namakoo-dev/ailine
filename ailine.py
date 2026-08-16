@@ -778,7 +778,7 @@ def _used_range(before: dict, sheet: str) -> tuple | None:
     return (min(rows), max(rows), min(cols), max(cols))
 
 
-def detect_ghost_data(before: dict, after: dict) -> str | None:
+def detect_ghost_data(before: dict, after: dict, *, new_col_letter: str | None = None) -> str | None:
     """★ 幽霊データ検出: 変更セルが全部、原本の使用範囲（データが存在した矩形）の
        外に集中している場合だけ疑わしい旨を返す。1セルでも範囲内なら何も言わない
        （保守的。使用範囲が不明なシートが混ざる場合も判定を保留する）。
@@ -788,7 +788,11 @@ def detect_ghost_data(before: dict, after: dict) -> str | None:
        関数全体が判定を保留する』実装だったため、AGGREGATE/CHART/PivotSum のように新規シート
        を作る操作が絡むたび、他シートの本当のゴーストデータ検出まで丸ごと素通りしていた
        （監査実測。旧シート範囲が不明＝原本に無い＝新規シート、の場合に限って除外することで
-       既存シートに対する検出力は変えずに直す）。"""
+       既存シートに対する検出力は変えずに直す）。
+       ★ C9: new_col_letter（呼び出し側が op の宣言（OP_WRITE_TARGET）から求めた、今回
+       新規に作る列の文字）が与えられ、かつ検出範囲が丸ごとその1列に収まる場合は、
+       警告でなく中立表示を返す（旧 _neutralize_new_column_ghost_warning が『出してから
+       打ち消す』後処理でやっていたのと同じ判定を、発生源で先取りする）。"""
     changed = _value_changed_cells(before, after)
     if not changed:
         return None
@@ -807,8 +811,16 @@ def detect_ghost_data(before: dict, after: dict) -> str | None:
         return None   # 変更が全部、新規シートのセルだけだった
     rows = [r for r, _ in outside]
     cols = [c for _, c in outside]
-    top_left = _cell_ref(min(rows), min(cols))
-    bot_right = _cell_ref(max(rows), max(cols))
+    min_c, max_c = min(cols), max(cols)
+    if new_col_letter is not None:
+        try:
+            new_col_idx = column_index_from_string(new_col_letter)
+        except ValueError:
+            new_col_idx = None
+        if new_col_idx is not None and min_c == max_c == new_col_idx:
+            return "（新規列の追加は意図どおりです）"
+    top_left = _cell_ref(min(rows), min_c)
+    bot_right = _cell_ref(max(rows), max_c)
     span = top_left if len(outside) == 1 else f"{top_left}:{bot_right}"
     return f"★ 疑わしい: 変更が元データの範囲外です（{span}）"
 
@@ -823,7 +835,11 @@ def detect_ghost_data(before: dict, after: dict) -> str | None:
 #   そのまま読み、その列が対象シートの既存見出しに無ければ『新規列を作る効果』とみなす
 #   （COMPUTE_COLUMN の target 無指定＝キーが空、LOOKUP_FILL の target_col 有指定だが
 #   対象シートにまだ無い列名＝どちらも実行時にその名前で新しい列を作るという同じ意味）。
-_GHOST_RANGE_RE = re.compile(r"^★ 疑わしい: 変更が元データの範囲外です（([A-Z]+)\d+(?::([A-Z]+)\d+)?）$")
+# ★ C9: 以前は detect_ghost_data がまず警告を出し、_neutralize_new_column_ghost_warning が
+#   advisories の該当行を後から中立表示に置き換えていた（『出してから打ち消す』）。W10c/W10d で
+#   宣言（OP_WRITE_TARGET）が入力として取れるようになったので、detect_ghost_data 自身が
+#   new_col_letter を受け取り、発生源で中立表示を返す形にした（_neutralize_new_column_ghost_warning
+#   は削除。判定条件・出力文言は一切変えていない＝ゴールデン差分ゼロで確認済み）。
 
 
 def _declared_new_column_letter(op: str, resolved: dict, book_meta: dict) -> str | None:
@@ -849,25 +865,6 @@ def _declared_new_column_letter(op: str, resolved: dict, book_meta: dict) -> str
         return None   # 既存列への書き込み（上書き側の話・新規列ではない）
     new_col_idx = len(headers)   # 0起点・新規列は既存見出しの直後
     return get_column_letter(new_col_idx + 1)
-
-
-def _neutralize_new_column_ghost_warning(advisories: list, op: str, resolved: dict,
-                                          book_meta: dict) -> list:
-    """op が今回、宣言済みの効果として新規列1本を作る場合、advisories 中の
-       『変更が元データの範囲外』行のうち、範囲が丸ごとその新規列1本に収まっている
-       ものだけを中立表示に置き換える。範囲が他列にも及ぶ場合（保守的）や
-       op に新規列作成の宣言が無い場合は一切変えない。"""
-    new_col_letter = _declared_new_column_letter(op, resolved, book_meta)
-    if not new_col_letter:
-        return advisories
-    out = []
-    for line in advisories:
-        m = _GHOST_RANGE_RE.match(line)
-        if m and m.group(1) == new_col_letter and (m.group(2) or m.group(1)) == new_col_letter:
-            out.append("（新規列の追加は意図どおりです）")
-            continue
-        out.append(line)
-    return out
 
 
 def detect_uniform_fill(before: dict, after: dict) -> str | None:
@@ -1037,15 +1034,22 @@ def new_sheet_advisories(before: dict, after: dict) -> list:
 _NEW_SHEET_MENTION_RE = re.compile(r"シート|ピボット|別に")
 
 
-def unrequested_new_sheet_advisory(task: str, before: dict, after: dict) -> list:
+def unrequested_new_sheet_advisory(task: str, before: dict, after: dict, *,
+                                    op: str | None = None) -> list:
     """★ W6 項目3（機械側）: 依頼文にシート新設の明示的な言及（『シート』『ピボット』
        『別に』のいずれか）が無いのに新規シートが作られたら申告する。
        ★ 保守的: 言及があれば（AGGREGATE/CHART/PivotSum 等が意図どおり新設したと見なし）沈黙。
        プロンプト側の抑制（CONTRACT の追記）はあくまで誘導であって保証にならないため、
-       この機械申告が最終防衛線（feedback_intent_vs_guarantee: 指示は意図、保証は機械）。"""
+       この機械申告が最終防衛線（feedback_intent_vs_guarantee: 指示は意図、保証は機械）。
+       ★ C9: op が OP_DECLARED_SHEET_EFFECT（新規シート作成が宣言済みの効果）で、かつ
+       今回ちょうど1枚だけ新規シートができた場合は、その1枚については警告でなく中立表示を
+       返す（旧 _neutralize_declared_new_sheet_warning の後処理を発生源へ先取り。
+       2枚以上できた場合は宣言どおりと断定できないので従来どおり全部警告する＝保守的）。"""
     new_sheets = _new_sheets(before, after)
     if not new_sheets or _NEW_SHEET_MENTION_RE.search(task):
         return []
+    if op in OP_DECLARED_SHEET_EFFECT and len(new_sheets) == 1:
+        return [f"（新規シート『{new_sheets[0]}』の作成は意図どおりです）"]
     return [f"★ 依頼にない新しいシートが作成されました（{s}）" for s in new_sheets]
 
 
@@ -1057,39 +1061,21 @@ def unrequested_new_sheet_advisory(task: str, before: dict, after: dict) -> list
 OP_DECLARED_SHEET_EFFECT = {"AGGREGATE", "PIVOT"}
 
 
-def _neutralize_declared_new_sheet_warning(advisories: list, op: str, before: dict, after: dict) -> list:
-    """op が OP_DECLARED_SHEET_EFFECT（新規シート作成が宣言済みの効果）で、かつ実際に
-       ちょうど1枚だけ新規シートができた場合に限り、その1枚についての
-       『依頼にない新しいシートが作成されました』を中立表示に落とす。
-       ★ 保守的（安全器官の減衰は迷ったら出す側）: 新規シートが2枚以上できた場合や
-       op が対象外の場合は一切変えない（宣言どおりの効果と断定できないケースは残す）。"""
-    if op not in OP_DECLARED_SHEET_EFFECT:
-        return advisories
-    new_sheets = _new_sheets(before, after)
-    if len(new_sheets) != 1:
-        return advisories
-    sheet = new_sheets[0]
-    target_line = f"★ 依頼にない新しいシートが作成されました（{sheet}）"
-    out = []
-    for line in advisories:
-        if line == target_line:
-            out.append(f"（新規シート『{sheet}』の作成は意図どおりです）")
-            continue
-        out.append(line)
-    return out
-
-
 # ★ 致命2(W10e): 「既存シートの中身が置き換わった」検出。自由生成が依頼と無関係な
 #   内容で既存シートを丸ごと上書きした実測事故（「集計」シートが日付別の無関係な内容に
 #   すり替わった）への対抗。detect_ghost_data/detect_uniform_fill と同じ保守的な方針
 #   （両条件とも『原本にあった非空セルが全部』変わった時だけ発火＝一部だけの更新・
 #   再計算は対象外＝誤検知回避優先）。
-def existing_sheet_replaced_advisory(before: dict, after: dict) -> list:
+def existing_sheet_replaced_advisory(before: dict, after: dict, *, op: str | None = None) -> list:
     """before・after の両方に実在するシート（新規作成ではない）のうち、原本の使用範囲に
        あった非空セルが【全部】別の値に変わっている場合だけ「中身が置き換わった」を返す。
        一部のセルだけが変わった（値の再計算・部分更新等）場合は対象外（保守的）。
        ★ 空欄への一様書き込み等は detect_uniform_fill が別途担当するので、ここでは
-       『置き換え後も何かしら値が残っている』ケースだけを見る（全消去は別の懸念）。"""
+       『置き換え後も何かしら値が残っている』ケースだけを見る（全消去は別の懸念）。
+       ★ C9: op が OP_DECLARED_SHEET_EFFECT で、かつそのシートが OP_DECLARED_SHEET_NAME の
+       宣言どおりの出力先（例: AGGREGATE→『集計』）なら、警告でなく中立表示を返す
+       （旧 _neutralize_declared_sheet_replace_warning の後処理を発生源へ先取り）。"""
+    declared_sheet = OP_DECLARED_SHEET_NAME.get(op) if op in OP_DECLARED_SHEET_EFFECT else None
     lines = []
     for sheet in before["sheets"]:
         if sheet not in after["sheets"]:
@@ -1118,6 +1104,9 @@ def existing_sheet_replaced_advisory(before: dict, after: dict) -> list:
                     changed += 1
         if total == 0 or changed != total or not after_has_content:
             continue   # 一部だけの変更、または全消去（置き換えではない）→ 発火しない
+        if sheet == declared_sheet:
+            lines.append(f"（既存シート『{sheet}』の更新は意図どおりです）")
+            continue
         lines.append(f"★ 疑わしい: 既存シート『{sheet}』の中身が置き換わりました"
                       f"（元データ {total} セル分が別の内容に変わっています）")
     return lines
@@ -1129,25 +1118,6 @@ def existing_sheet_replaced_advisory(before: dict, after: dict) -> list:
 #   確立した「op の宣言済み効果と一致する変化は中立」に乗せて中立化する
 #   （helpers/*.bas は出力シート名を固定で決め打つため、ここも固定表で対応づける）。
 OP_DECLARED_SHEET_NAME = {"AGGREGATE": "集計", "PIVOT": "ピボット"}
-
-
-def _neutralize_declared_sheet_replace_warning(advisories: list, op: str, before: dict, after: dict) -> list:
-    """op が OP_DECLARED_SHEET_EFFECT で、かつそのシートの『中身が置き換わりました』が
-       出ている場合に限り、中立表示に落とす（他シートの置き換え検出には触れない）。"""
-    if op not in OP_DECLARED_SHEET_EFFECT:
-        return advisories
-    sheet = OP_DECLARED_SHEET_NAME.get(op)
-    if not sheet:
-        return advisories
-    target_line = (f"★ 疑わしい: 既存シート『{sheet}』の中身が置き換わりました"
-                    f"（元データ ")
-    out = []
-    for line in advisories:
-        if line.startswith(target_line):
-            out.append(f"（既存シート『{sheet}』の更新は意図どおりです）")
-            continue
-        out.append(line)
-    return out
 
 
 def _changed_sheets(before: dict, after: dict) -> set:
@@ -1208,7 +1178,8 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
     return lines
 
 
-def _structural_advisories(before: dict, after: dict) -> list:
+def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
+                            resolved: dict | None = None, meta: dict | None = None) -> list:
     """助言のうち『この差分そのものが疑わしいか』を判定する部分だけ
        （①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身・★ W6）。
        依頼文言との重なり(④ mention_overlap_advisory)は含めない。
@@ -1217,27 +1188,36 @@ def _structural_advisories(before: dict, after: dict) -> list:
        充足を問う質問なので、段ごとの局所的な before/after では判定できない
        （他段が担当する言及まで『この段で変更されていない』と誤検知する）。
        単発 op(build_advisories 経由)ではこれまでどおり④も同じ before/after で
-       評価する（そちらは1段しかないため局所=全体で一致し、挙動は不変）。"""
+       評価する（そちらは1段しかないため局所=全体で一致し、挙動は不変）。
+       ★ C9: op/resolved/meta（呼び出し側が今回の段の宣言済み効果を渡す・省略時は None）は
+       detect_ghost_data の new_col_letter 判定と existing_sheet_replaced_advisory の
+       宣言シート判定にそのまま渡す（旧 _neutralize_* 三兄弟の後処理を発生源へ先取り）。"""
     lines = []
-    for fn in (detect_ghost_data, detect_uniform_fill):
-        msg = fn(before, after)
+    new_col_letter = _declared_new_column_letter(op, resolved, meta) if (op and resolved is not None and meta is not None) else None
+    for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter}), (detect_uniform_fill, {})):
+        msg = fn(before, after, **kwargs)
         if msg:
             lines.append(msg)
     recon = count_reconciliation(before, after)
     if recon:
         lines.append(recon)
     lines.extend(new_sheet_advisories(before, after))
-    lines.extend(existing_sheet_replaced_advisory(before, after))   # ★ 致命2(W10e)
+    lines.extend(existing_sheet_replaced_advisory(before, after, op=op))   # ★ 致命2(W10e)
     return lines
 
 
-def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set | None = None) -> list:
+def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set | None = None, *,
+                      op: str | None = None, resolved: dict | None = None,
+                      meta: dict | None = None) -> list:
     """diff の後に表示する助言行を全部集める。
        ①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身（★ W6・
        _structural_advisories が担当） ⑥依頼にないシート新設の申告（★ W6）
-       ④依頼文言との重なり。"""
-    lines = list(_structural_advisories(before, after))
-    lines.extend(unrequested_new_sheet_advisory(task, before, after))
+       ④依頼文言との重なり。
+       ★ C9: op/resolved/meta は _structural_advisories/unrequested_new_sheet_advisory へ
+       そのまま横流しする（宣言済み効果の中立化を発生源で先取りするための追加引数・
+       省略時は従来どおり無条件で全部発火する）。"""
+    lines = list(_structural_advisories(before, after, op=op, resolved=resolved, meta=meta))
+    lines.extend(unrequested_new_sheet_advisory(task, before, after, op=op))
     mentions = extract_task_mentions(task, before["sheets"])
     lines.extend(mention_overlap_advisory(mentions, before, after, exclude_sheets))
     return lines
@@ -4423,13 +4403,6 @@ def _column_existing_value_count(book_path: Path, sheet_name: str, col_name: str
         return 0
 
 
-def _column_has_existing_values(book_path: Path, sheet_name: str, col_name: str,
-                                 header_row: int = 1) -> bool:
-    """★ M2c: target(既存列指定)列に、見出し行を除いてどれか値が入っているか
-       （_column_existing_value_count の bool 版。他コードとの互換のため残す）。"""
-    return _column_existing_value_count(book_path, sheet_name, col_name, header_row=header_row) > 0
-
-
 def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_path: Path) -> str | None:
     """★ M2c 項目2 / W10c 致命1: OP_WRITE_TARGET が宣言する書き込み先列に既存値がある場合、
        上書きになる旨の1行を返す（無ければ None・確認行に明示するため）。
@@ -4508,10 +4481,7 @@ def _make_dsl_step_deps() -> DslStepDeps:
         run_postcondition=run_postcondition, progress_start=progress_start, progress_end=progress_end,
         pivot_caveat=PIVOT_CAVEAT, verify_dsl_args=verify_dsl_args,
         apply_new_column_fallback=_apply_new_column_fallback, build_advisories=build_advisories,
-        structural_advisories=_structural_advisories, unrequested_new_sheet_advisory=unrequested_new_sheet_advisory,
-        neutralize_new_column_ghost_warning=_neutralize_new_column_ghost_warning,
-        neutralize_declared_new_sheet_warning=_neutralize_declared_new_sheet_warning,
-        neutralize_declared_sheet_replace_warning=_neutralize_declared_sheet_replace_warning)
+        structural_advisories=_structural_advisories, unrequested_new_sheet_advisory=unrequested_new_sheet_advisory)
 
 
 def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta: dict,

@@ -61,9 +61,6 @@ class DslStepDeps:
     build_advisories: Callable
     structural_advisories: Callable
     unrequested_new_sheet_advisory: Callable
-    neutralize_new_column_ghost_warning: Callable
-    neutralize_declared_new_sheet_warning: Callable
-    neutralize_declared_sheet_replace_warning: Callable
 
 
 @dataclass
@@ -106,16 +103,19 @@ def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, 
     """⑤適用後の助言。mode="flat"（単発）は build_advisories(exclude_sheets 込み) を丸ごと、
        mode="structural"（複合計画の段）は _structural_advisories + unrequested_new_sheet_advisory
        だけ（依頼文言との重なり④は計画全体に対して1回だけ評価するため、段ごとのここには
-       含めない ── 呼び出し側(cmd_run_plan)のコメント参照）。3つの中立化(neutralize)は
-       両モード共通。"""
+       含めない ── 呼び出し側(cmd_run_plan)のコメント参照）。
+       ★ C9: op/resolved/meta（今回の段の宣言済み効果）を build_advisories/
+       structural_advisories/unrequested_new_sheet_advisory へそのまま渡す ── 宣言済み効果と
+       一致する行の中立化は、以前はここで3つの neutralize_* を後処理として適用していたが、
+       各生成関数自身が発生源で判定するようになったため、この後処理は不要になった
+       （ailine.py の detect_ghost_data/unrequested_new_sheet_advisory/
+       existing_sheet_replaced_advisory 参照）。"""
     if mode == "flat":
-        advisories = deps.build_advisories(task, before, after, exclude_sheets=exclude_sheets)
+        advisories = deps.build_advisories(task, before, after, exclude_sheets=exclude_sheets,
+                                            op=op, resolved=resolved, meta=meta)
     else:
-        advisories = list(deps.structural_advisories(before, after))
-        advisories.extend(deps.unrequested_new_sheet_advisory(task, before, after))
-    advisories = deps.neutralize_new_column_ghost_warning(advisories, op, resolved, meta)
-    advisories = deps.neutralize_declared_new_sheet_warning(advisories, op, before, after)
-    advisories = deps.neutralize_declared_sheet_replace_warning(advisories, op, before, after)
+        advisories = list(deps.structural_advisories(before, after, op=op, resolved=resolved, meta=meta))
+        advisories.extend(deps.unrequested_new_sheet_advisory(task, before, after, op=op))
     return advisories
 
 
