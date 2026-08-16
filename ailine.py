@@ -76,6 +76,7 @@ from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 
 from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手書きしていた表示の純関数化
     render_code_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
+    render_ops_table,
 )
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
@@ -4123,6 +4124,14 @@ def cmd_doctor(a: argparse.Namespace) -> int:
     return 0 if all_ok else 1
 
 
+def cmd_ops(a: argparse.Namespace) -> int:
+    """★ `ailine ops`: 頼める操作の一覧。盲検査定 2 本が独立に MISSING の筆頭へ置いた
+       「こう頼めばこれができる」の対応表。中身は登録簿から生成する（手書きしない）。"""
+    for line in render_ops_table(OP_META, OP_SCHEMA, _CONFIRM_FIELDS):
+        print(line)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # 実行履歴（M1: 最小版・将来の需要センサー）
 # ---------------------------------------------------------------------------
@@ -4459,6 +4468,11 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         if op == "CLARIFY":
             question = step.get("question") or "確認が必要です"
             print(f"？ {question}")
+            # ★ 行き止まりに出口を置く（盲検査定 A の実測: 語彙外の依頼を 4 回言い直して
+            #   4 回とも質問返しになり「普通の購入検討者ならここで評価を終える」）。
+            #   聞き返しは「言い方が悪い」場合と「そもそも対応していない」場合を
+            #   区別できない ── 区別する手段を毎回そえる。
+            print("  （頼める操作の一覧: ailine ops）")
             return 3
         if op in OP_SCHEMA:
             return cmd_run_dsl(a, book, source_book, book_meta, op, step.get("args", {}))
@@ -5564,6 +5578,9 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("doctor", help="セットアップを診断する")
     d.add_argument("--model", default=DEFAULT_MODEL, help=f"確認するモデル (既定 {DEFAULT_MODEL})")
     d.set_defaults(func=cmd_doctor)
+
+    o = sub.add_parser("ops", help="頼める操作の一覧を表示する（何ができるか）")
+    o.set_defaults(func=cmd_ops)
 
     h = sub.add_parser("history", help="実行履歴を表示する")
     h.add_argument("--max", type=int, default=10, help="表示件数（既定 10、新しい順）")

@@ -94,3 +94,44 @@ def render_vocab_listing(vocab: dict, vocab_file: Path) -> list:
     lines = [f"用語集（{vocab_file}・{len(vocab)}件）:"]
     lines.extend(f"  {term} = {vocab[term]:g}" for term in sorted(vocab))
     return lines
+
+
+# --- 対応操作の一覧（★ 査定 2 本が独立に「無い」と指摘した唯一のもの） ------------------
+
+def render_ops_table(op_meta: dict, op_schema: dict, confirm_fields: dict) -> list:
+    """「こう頼めばこれができる」の一覧を**登録簿から生成**する。
+
+    ★ なぜ生成か（2026-08-16 の盲検査定 2 本より）: 二人とも「対応操作の一覧が無い」を
+    MISSING の筆頭に挙げた。README 368 行の中で**何を頼めるのかが分からない**ため、
+    語彙外の依頼で質問ループに入り「普通の購入検討者ならここで評価を終える」と書かれた。
+    ★ 手書きの表は必ずずれる（この repo は索引のずれを何度も踏んでいる）。
+    op_meta / op_schema / confirm_fields から作れば、**操作を足した日に表も増える**。
+
+    引数で登録簿を受け取るのは ailine_core → ailine の逆流を避けるため（移植可能性の番人）。
+    """
+    order, seen = [], set()
+    for meta in op_meta.values():          # 宣言順をそのまま使う（並べ替えない＝出力が安定）
+        if meta["category"] not in seen:
+            seen.add(meta["category"])
+            order.append(meta["category"])
+    lines = ["ailine に頼めること（この表は登録簿から自動生成しています）", ""]
+    for category in order:
+        lines.append(f"■ {category}")
+        for op, meta in op_meta.items():
+            if meta["category"] != category:
+                continue
+            says = "／".join(meta["synonyms"])
+            need = _needed_info(op, op_schema, confirm_fields)
+            lines.append(f"  {meta['label']}    こう書く: {says}")
+            if need:
+                lines.append(f"      必要な情報: {need}")
+        lines.append("")
+    lines.append("※ ここに無いことは今はできません（「重複行の削除」「ウィンドウ枠の固定」など）。")
+    lines.append("※ 一覧に無い依頼は聞き返します。言い換えても通らないときは未対応です。")
+    return lines
+
+
+def _needed_info(op: str, op_schema: dict, confirm_fields: dict) -> str:
+    """必須 slot を日本語ラベルに直す。ラベルは確認行の登録簿から引く（新しい語を作らない）。"""
+    labels = {slot: label for label, slot, _fmt in confirm_fields.get(op, ())}
+    return "・".join(labels.get(slot, slot) for slot in op_schema.get(op, ()))
