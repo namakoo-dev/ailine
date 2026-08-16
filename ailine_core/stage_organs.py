@@ -178,12 +178,14 @@ STAGE_ENTRY_FUNCTIONS = {
     "dsl_plan_step": ("_run_dsl_plan_step",),
     "freeform_single": ("cmd_run_freeform",),
     "freeform_plan_step": ("run_freeform_plan_step",),
-    # ★ _cmd_run_dispatch の CLARIFY 分岐（plan が1段だけで CLARIFY の場合）は
-    #   print+return の3行だけで、器官の呼び出しは一切無い。かつ同じ関数内の他の分岐
-    #   （cmd_run_dsl/cmd_run_freeform/cmd_run_plan の呼び出し）は別関数への委譲であって
-    #   _cmd_run_dispatch 自身の AST には inline されていないため、関数単位の走査でも
-    #   分岐混線が起きない（clarify_plan_step と違い、安全に検証できる）。
-    "clarify_single": ("_cmd_run_dispatch",),
+    # ★ 単発の CLARIFY 分岐（plan が1段だけで CLARIFY の場合）は print+return の3行だけで、
+    #   器官の呼び出しは一切無い。かつ同じ関数内の他の分岐（cmd_run_dsl/cmd_run_freeform/
+    #   cmd_run_plan の呼び出し）は別関数への委譲であって AST には inline されていないため、
+    #   関数単位の走査でも分岐混線が起きない（clarify_plan_step と違い、安全に検証できる）。
+    #   ★★ 挙動変更#3 で更新: この分岐は _cmd_run_dispatch から _translate_and_dispatch へ
+    #   移った（シート名の衝突の3択②で「翻訳からやり直す」ために、対象シート決定より後を
+    #   別関数へ切り出したため）。代表関数を実体のある側へ追随させる ── 表は現実を写す。
+    "clarify_single": ("_translate_and_dispatch",),
     # ★★ C7 で unverifiable を卒業（旧: 空タプル）。cmd_run_plan の CLARIFY 分岐（3行）
     #   と DSL 段の実体(_run_dsl_plan_step)が別関数に分かれたことで、cmd_run_plan 自身の
     #   AST を安全に代表関数として使えるようになった（上のコメント参照）。

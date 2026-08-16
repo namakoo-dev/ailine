@@ -9,7 +9,7 @@
 | code | 意味 | 発生箇所（関数） | 裏取りテスト |
 |---|---|---|---|
 | 0 | 成功（DSL/plan/freeform いずれかの達成。「機械保証なし」の警告つき成功や、doctor/history/vocab の正常終了も含む） | `cmd_run_dsl` / `cmd_run_freeform` / `cmd_run_plan` / `cmd_doctor` / `cmd_history` / `cmd_vocab` / `cmd_stop` 他 | `test_exit_0_success` |
-| 1 | 汎用の失敗（事後条件 fail・y/N 確認で拒否・doctor の任意チェック失敗・restore/undo の対象無し 等） | `_confirm_overwrite_or_gate`（対話 no）/ `_confirm_freeform_apply`（対話 no）/ `cmd_run_dsl` 等（事後条件未達成） | `test_exit_1_generic_failure` |
+| 1 | 汎用の失敗（事後条件 fail・y/N 確認で拒否・doctor の任意チェック失敗・restore/undo の対象無し 等） | `_confirm_overwrite_or_gate`（対話 no）/ `_confirm_freeform_apply`（対話 no）/ `cmd_run_dsl` 等（事後条件未達成）/ ★挙動変更#3 `_sheet_conflict_gate`（3択の③「やめる」）・`_preview_and_run_on_alternative_sheet`（②のプレビュー後に N） | `test_exit_1_generic_failure` / `tests/test_sheet_conflict.py::test_choice_3_stops_without_doing_anything` |
 | **2** | **★ 欠番。ailine.py 自身はこのコードを一度も使わない。** | （下の「なぜ2が欠番か」参照） | `test_exit_2_is_argparse_reserved_not_ailine_own` |
 | 3 | CLARIFY（見出し行推定の自信不足、または翻訳が確認質問を返した） | `_cmd_run_body`（見出し行推定）/ `cmd_run_dsl` / `cmd_run_freeform` / `cmd_run_plan`（翻訳結果が CLARIFY） | `test_exit_3_clarify` |
 | 4 | 往復忠実度ゲート（LibreOffice 往復で失われる飾りを検出・`--accept-loss`/`--copy` 未指定） | `_cmd_run_body` | `test_exit_4_fidelity_gate` |

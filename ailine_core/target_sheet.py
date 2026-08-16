@@ -11,59 +11,182 @@ sheet_key=None フォールバック・postcondition チェッカーは、みな
 wrap_basic_for_sheet() は「対象シートが1枚目のときの既定ラップ」を呼び出し側から
 コールバックで受け取る（ailine.py 側の _wrap_basic をそのまま渡す）ことで、
 ailine_core → ailine への逆流を避けている。
+
+★★ 挙動変更#3（対象シートの取り違え）: 挙動変更#2 の副作用を実測で見つけた ──
+`sheets=['売上データ','金額']` のブックへ「金額を降順に並べ替えて」と頼むと、**列を
+指したつもりの語**が2枚目『金額』シートの名前と完全一致して、対象シートが2枚目になる
+（`sheets=['明細','合計']` + 「合計行を追加して」も同型）。告知は出るので沈黙ではないが、
+対象シートにも同名列があれば**間違ったシートを並べ替えて「成功」してしまう** ── エラーで
+止まるより後で気づきにくい。そこで:
+  - 依頼文で**そのシート名の直後が「シート」「タブ」**（または「N枚目」の序数表現）＝
+    明示マーカー付きの言及は、無条件に採用する（衝突チェックを免除）。
+  - **裸の言及**は、その語が**どこかのシートの列見出しにも存在する**なら曖昧と判断し、
+    既定(1枚目)へ後退する。後退した事実は SheetNameConflict として呼び出し側へ返し、
+    呼び出し側が（対話できる場面でだけ）3択で聞く。
+★ A' 原則はここでも同じ: 実在シート名・実在列名との**機械照合のみ**で、LLM は使わない。
+★ 正直に記録しておく限界: 列見出しは `build_book_meta(source_book)` を引数なしで呼んだ
+結果（＝全シート1行目）を使う。タイトル行があって見出しが5行目にあるブックでは衝突を
+見逃す（＝挙動変更#2 と同じ挙動になるだけで、退行はしない）。見出し行の確定は対象シートが
+決まった後にしかできないため、順番として避けられない（README の「既知の限界」参照）。
 """
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Callable
 
 _SHEET_ORDINAL_RE = re.compile(r"(\d+)\s*枚目")
+# シート名の直後に来ると「シートを指している」と読める語。閉じ括弧・引用符は挟まってよい
+# （「『金額』シート」のような書き方を拾う）。
+_SHEET_MARKER_SUFFIX = r"[』」”’\"'）\)]*\s*(?:シート|タブ)"
 
 
-def resolve_target_sheet(task: str, sheets: list, cli_sheet: str | None = None) -> tuple:
+@dataclass(frozen=True)
+class SheetNameConflict:
+    """裸の言及が列見出しとも一致したため、既定(1枚目)へ後退したことの記録。
+
+    word:        依頼文中の曖昧な語（＝シート名でもあり、どこかの列名でもある）
+    alternative: その語が指しうるもう一方の解釈＝同名のシート（word と同じ文字列だが、
+                 「語」と「シート」は別の役割なので別フィールドとして持つ）
+    chosen:      実際に採用した既定シート（＝1枚目）
+    """
+    word: str
+    alternative: str
+    chosen: str
+
+
+def _mentioned_with_marker(task: str, name: str) -> bool:
+    """依頼文で name が「〜シート」「〜タブ」の形で言及されているか（明示マーカー）。"""
+    return re.search(re.escape(name) + _SHEET_MARKER_SUFFIX, task) is not None
+
+
+def _is_also_a_column_name(name: str, headers: dict | None) -> bool:
+    """name が（どのシートであれ）実在の列見出しと完全一致するか。"""
+    for cols in (headers or {}).values():
+        for col in cols or []:
+            if str(col).strip() == name:
+                return True
+    return False
+
+
+def resolve_target_sheet(task: str, sheets: list, cli_sheet: str | None = None,
+                          headers: dict | None = None) -> tuple:
     """★ 挙動変更#2: 対象シートの決定はここ1箇所だけで行う（呼び出し側 [_cmd_run_dispatch]
        が戻り値を a._target_sheet に積み、以降は全部それを読む）。
-       戻り値: (対象シート名 or None, source∈{"cli","task","default"}, error_or_None)。
-       優先順位: ①--sheet 明示指定（実在しなければエラー） ②依頼文中の実在シート名の
-       完全一致（複数一致・部分文字列一致し合う場合は長い方だけ残す。それでも複数なら
-       曖昧と判断し、CLARIFY で止めずに③既定へフォールバックする — LOOKUP_FILL のように
-       依頼文に転記先/参照元の2シート名が正当に両方登場するケースを誤ってブロックしない
-       ため。ユーザーが1シートだけを明示したい場合は --sheet を使う）
+       戻り値: (対象シート名 or None, source∈{"cli","task","default"}, error_or_None,
+                conflict∈{SheetNameConflict, None})。
+       優先順位: ①--sheet 明示指定（実在しなければエラー・衝突チェックとは無関係に常に最優先）
+       ②依頼文中の実在シート名の完全一致（複数一致・部分文字列一致し合う場合は長い方だけ
+       残す。それでも複数なら曖昧と判断し、CLARIFY で止めずに④既定へフォールバックする —
+       LOOKUP_FILL のように依頼文に転記先/参照元の2シート名が正当に両方登場するケースを
+       誤ってブロックしないため。ユーザーが1シートだけを明示したい場合は --sheet を使う）
        ③「N枚目」の序数表現 ④既定=1枚目（旧挙動と同一）。
+       ★★ 挙動変更#3: ②で1つに絞れた言及が**裸**（「シート」「タブ」が後ろに無い）で、
+       かつその語が headers のどこかの列見出しとも一致する場合は、②を採らずに④へ後退し、
+       4つ目の戻り値 SheetNameConflict で「後退した」ことを呼び出し側へ伝える
+       （headers が渡されない/列が取れない場合は挙動変更#2 のまま＝退行させない）。
        ★ A' 原則: 値は LLM に確定させない。実在するシート名/序数との機械的な照合のみ
        （LOOKUP_FILL が既に source_sheet を名前で受けている仕組みと同じ考え方）。"""
     if not sheets:
-        return None, "default", "ブックにシートが無い"
+        return None, "default", "ブックにシートが無い", None
     if cli_sheet:
         if cli_sheet not in sheets:
-            return None, "cli", f"シート『{cli_sheet}』がありません。あるシート: {', '.join(sheets)}"
-        return cli_sheet, "cli", None
+            return None, "cli", f"シート『{cli_sheet}』がありません。あるシート: {', '.join(sheets)}", None
+        return cli_sheet, "cli", None, None
     task = task or ""
     named = [s for s in sheets if s and s in task]
     named = [s for s in named if not any(s != t and s in t for t in named)]   # 部分文字列は長い方だけ残す
     if len(named) == 1:
-        return named[0], "task", None
+        name = named[0]
+        # ★ 挙動変更#3: 明示マーカー付きの言及は無条件に採用（衝突チェックを免除）。
+        if _mentioned_with_marker(task, name) or not _is_also_a_column_name(name, headers):
+            return name, "task", None, None
+        conflict = SheetNameConflict(word=name, alternative=name, chosen=sheets[0])
+        return sheets[0], "default", None, conflict
     m = _SHEET_ORDINAL_RE.search(task)
     if m:
         idx = int(m.group(1)) - 1
         if 0 <= idx < len(sheets):
-            return sheets[idx], "task", None
-    return sheets[0], "default", None
+            return sheets[idx], "task", None, None
+    return sheets[0], "default", None, None
 
 
 def describe_target_sheet(sheets: list, target_sheet: str | None, source: str) -> str | None:
     """★ 挙動変更#2 最低限: 適用前に対象シートを明示する（査定所見:「これがあれば事故は
        防げた」）。1枚しか無いブックは曖昧さが無いため沈黙する（既存の単一シート帳票の
-       出力を一切変えない＝ゴールデン/933テストへの影響ゼロ）。"""
+       出力を一切変えない＝ゴールデンへの影響ゼロ）。
+       ★★ 挙動変更#3: 3種とも「操作するシート:」で始める ── 旧文言は前置き
+       （「このブックは4シートですが、」）から入っていて、**一番大事な情報が文の後ろ**に
+       あった。衝突で既定へ後退した場合も文言は既定と同じ（後退したこと自体は、この行では
+       なく3択で伝える）。"""
     if not target_sheet or len(sheets) <= 1:
         return None
     idx = sheets.index(target_sheet) + 1 if target_sheet in sheets else None
-    ordinal = f"{idx}枚目の" if idx else ""
+    ordinal = f"{idx}枚目" if idx else ""
     if source == "cli":
-        return f"操作対象シート: {ordinal}『{target_sheet}』（--sheet 指定）"
+        return f"操作するシート: {ordinal}『{target_sheet}』（--sheet 指定）"
     if source == "task":
-        return f"このブックは{len(sheets)}シートですが、操作対象は{ordinal}『{target_sheet}』です（依頼文の言及から判断）"
-    return f"このブックは{len(sheets)}シートですが、操作対象は{ordinal}『{target_sheet}』です"
+        return f"操作するシート: {ordinal}『{target_sheet}』（依頼文から判断・このブックは{len(sheets)}シート）"
+    return f"操作するシート: {ordinal}『{target_sheet}』（このブックは{len(sheets)}シート）"
+
+
+def format_sheet_field(sheets: list, target_sheet: str | None) -> str | None:
+    """★ 挙動変更#3: 「解釈:」行の先頭に載せるシート欄
+       （例: `シート:『売上データ』(1枚目)`）。
+
+    ★ なぜ: 転記(LOOKUP_FILL)だけが確認行に「対象シート:」を持ち、他の操作は持って
+      いなかった。シートを選べるようになった以上、**確かめる行にシートが無いのは片手落ち**。
+    ★ 1枚だけのブックでは None（沈黙）── 単一シート帳票の出力はバイト単位で不変。"""
+    if not sheets or len(sheets) <= 1 or not target_sheet or target_sheet not in sheets:
+        return None
+    return f"シート:『{target_sheet}』({sheets.index(target_sheet) + 1}枚目)"
+
+
+# ★ op → (辞書形, タ形)。3択の文（「…を並べ替える」「…を並べ替えた場合を」）は日本語の
+#   活用が要るため、表示ラベル（OP_LABELS の「並べ替え」等）からは機械的に作れない。
+#   ここに無い op は `ラベル+する / ラベル+した`（転記する/集計する のように自然に読める形）。
+#   ★ 置き場所: ailine.py の OP_LABELS の隣ではなくここ。この表を使うのは3択の文だけで、
+#     ailine.py 側は op と表示ラベルを渡すだけにする（新しいロジック本体は ailine_core/ に）。
+_OP_VERBS = {
+    "SORT": ("並べ替える", "並べ替えた"),
+    "COMPUTE_COLUMN": ("計算列を作る", "計算列を作った"),
+    "BOLD": ("太字にする", "太字にした"),
+    "FILL_COLOR": ("背景色を付ける", "背景色を付けた"),
+    "NUMBER_FORMAT": ("数値書式を設定する", "数値書式を設定した"),
+    "CHART": ("グラフにする", "グラフにした"),
+    "CENTER_ALIGN": ("中央揃えにする", "中央揃えにした"),
+    "APPEND_TOTAL": ("合計行を追加する", "合計行を追加した"),
+    "INSERT_ROWS": ("行を挿入する", "行を挿入した"),
+    "DRAW_BORDERS": ("けい線を引く", "けい線を引いた"),
+    "PIVOT": ("ピボットにする", "ピボットにした"),
+    "SET_COLUMN_VALUE": ("一括で書き換える", "一括で書き換えた"),
+    "AUTOFIT": ("列幅を自動調整する", "列幅を自動調整した"),
+}
+
+
+def op_verbs(op: str, op_label: str) -> tuple:
+    """(辞書形, タ形)。未登録の op はラベルに する/した を付ける（上の表のコメント参照）。"""
+    return _OP_VERBS.get(op) or (f"{op_label}する", f"{op_label}した")
+
+
+def sheet_conflict_choice_lines(conflict: SheetNameConflict, op: str, op_label: str) -> tuple:
+    """3択の前置き行と選択肢を組む（純関数・印字はしない）。
+
+    戻り値: (前置きの行リスト, [(key, 文), ...])。
+    ★ なぜ翻訳の**後**で聞くのか（設計判断・変えないこと）: 翻訳前は操作が決まっておらず
+      「『売上データ』に対して実行します」という中身のない選択肢しか出せない。それでは
+      「よく分からないけど1を押す」になる。**操作が確定してから、具体的な日本語で選ばせる。**
+      原本にはまだ触れていないので安全。"""
+    dict_form, ta_form = op_verbs(op, op_label)
+    lines = ["", f"依頼文の「{conflict.word}」は2通りに読めます"
+                 f"（『{conflict.alternative}』という名前のシートもあるため）:"]
+    choices = [
+        ("1", f"『{conflict.chosen}』シートの「{conflict.word}」列を{dict_form}"
+              f" ← 上の解釈のとおり実行する"),
+        ("2", f"『{conflict.alternative}』シートを{ta_form}場合を見てみる"),
+        ("3", "やめる"),
+    ]
+    return lines, choices
 
 
 def wrap_basic_for_sheet(body: str, wrap_default: Callable[[str], str],

@@ -78,8 +78,12 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
 )
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
-from ailine_core.target_sheet import (   # ★ 挙動変更#2: 対象シートの決定を一箇所に閉じ込める
+from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
+    format_sheet_field, sheet_conflict_choice_lines,
+)
+from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
+    Choice, ask_choice, ask_yes_no, is_interactive,
 )
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
@@ -2220,17 +2224,24 @@ _CONFIRM_FIELDS = {
 PIVOT_CAVEAT = "書式なしの素の表になります。書式つきは『集計表』"
 
 
-def format_confirmation_line(op: str, resolved_args: dict, inferred: set) -> str:
+def format_confirmation_line(op: str, resolved_args: dict, inferred: set,
+                              sheets: list | None = None, target_sheet: str | None = None) -> str:
     """命令言語形式の確認行を1行で組む（例: 解釈: 操作:並べ替え 対象:金額 順:降順）。
        推定で埋めた（数字表記から解決した等）引数には (推定) を付ける。
        ★ M2c: キー自体が resolved_args に無い任意項目（COMPUTE_COLUMN の target 等）は
        そのフィールドを丸ごと省略する（必須項目は常に存在するので既存の表示は変わらない）。
        ★ A': resolved_args["_sources"] に該当キーの出典があれば（例: 倍率:1.1）
-       末尾に「（用語集: 消費税）」のように出典を添える（verify_dsl_args の APPEND_TOTAL が積む）。"""
+       末尾に「（用語集: 消費税）」のように出典を添える（verify_dsl_args の APPEND_TOTAL が積む）。
+       ★★ 挙動変更#3: sheets/target_sheet を渡すと、複数シートのブックでは先頭に
+       `シート:『売上データ』(1枚目)` を載せる（本体は
+       ailine_core.target_sheet.format_sheet_field・1枚のブックでは None で従来どおり）。
+       その場合 LOOKUP_FILL の「対象シート:」欄は同じ値の二重表示になるので省く
+       （転記の「参照シート:」はもう一方のシートなので残す）。"""
     sources = resolved_args.get("_sources") or {}
-    parts = [f"操作:{OP_LABELS.get(op, op)}"]
+    sheet_field = format_sheet_field(sheets or [], target_sheet)
+    parts = ([sheet_field] if sheet_field else []) + [f"操作:{OP_LABELS.get(op, op)}"]
     for label, key, transform in _CONFIRM_FIELDS.get(op, ()):
-        if key not in resolved_args:
+        if key not in resolved_args or (sheet_field and key == "target_sheet"):
             continue
         val = resolved_args.get(key)
         shown = transform(val) if transform else val
@@ -4377,21 +4388,40 @@ def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
                         print(ln)
                     return 4
 
-    sheets = build_book_meta(source_book).get("sheets", [])
+    # ★ 挙動変更#3: 衝突検出のため headers も使う。build_book_meta は元から1回呼んでいて
+    #   sheets しか読んでいなかった ── 同じ戻り値の headers を渡すだけ（ブックは開き直さない）。
+    probe_meta = build_book_meta(source_book)
+    sheets = probe_meta.get("sheets", [])
 
     # ★ 挙動変更#2: 対象シートの決定はここ1箇所（resolve_target_sheet）。それより後の
     #   全処理（見出し行検出・翻訳→検証→codegen→事後条件）は a._target_sheet を読むだけで
     #   個別に「1枚目」を仮定しない。--header-row/翻訳より前＝原本の実処理が始まる前に
     #   決め、実処理の前に必ず宣言する（査定所見:「これがあれば事故は防げた」）。
-    target_sheet, sheet_source, sheet_err = resolve_target_sheet(a.task, sheets, getattr(a, "sheet", None))
+    target_sheet, sheet_source, sheet_err, sheet_conflict = resolve_target_sheet(
+        a.task, sheets, getattr(a, "sheet", None), headers=probe_meta.get("headers"))
     if sheet_err:
         print(f"？ {sheet_err}")
         return 3
     a._target_sheet = target_sheet
+    a._sheet_conflict = sheet_conflict      # ★ 挙動変更#3: 3択の関門(_sheet_conflict_gate)が読む
+    a._rerun_ctx = (book, source_book, struct_dump, sheets)
     announce = describe_target_sheet(sheets, target_sheet, sheet_source)
     if announce:
         print(announce)
+    return _translate_and_dispatch(a, book, source_book, struct_dump, sheets)
 
+
+def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path,
+                             struct_dump: dict, sheets: list) -> int:
+    """対象シートが決まった後の残り（見出し行 → 翻訳 → 計画の振り分け）。
+       ★ 挙動変更#3 のために _cmd_run_dispatch から切り出した: シート名の衝突の3択で
+       「もう一方のシートを見てみる」が選ばれたとき、a._target_sheet を差し替えて
+       **翻訳からやり直す**ため（見出し行の検出も翻訳結果も対象シートに依存するので、
+       翻訳を使い回すのでは「やり直し」にならない）。
+       ★ a._reuse_translation が積まれている場合だけ翻訳を省く ── 3択の②で
+       プレビュー用に一度翻訳したものを、y の後の本番実行で使い回すため（同じ対象シート・
+       同じ依頼文に対して ollama を2回叩かない）。"""
+    target_sheet = getattr(a, "_target_sheet", None)
     forced_header_row = getattr(a, "header_row", None)
     if forced_header_row:
         # ★ W8a 項目3: --header-row 指定時は検出(StructDump ヒューリスティクス)を丸ごと
@@ -4408,9 +4438,13 @@ def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
         return 3
 
     book_meta = build_book_meta(source_book, header_rows=header_rows)
-    t0 = progress_start(f"⏳ 翻訳中 ({a.model})…")
-    translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
-    progress_end(t0)
+    translation = getattr(a, "_reuse_translation", None)
+    a._reuse_translation = None
+    if translation is None:
+        t0 = progress_start(f"⏳ 翻訳中 ({a.model})…")
+        translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
+        progress_end(t0)
+    a._last_translation = translation
 
     plan = translation.get("plan") if isinstance(translation, dict) else None
     if not isinstance(plan, list) or not plan:
@@ -4528,6 +4562,61 @@ def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None
     return None
 
 
+def _stdin_isatty() -> bool:
+    """標準入力が端末か（対話してよいか）。★ ここを関数にしてあるのはテストから
+       差し替えるため（stdin そのものを触らずに TTY/非 TTY を作り分ける）。"""
+    try:
+        return bool(sys.stdin) and sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def _sheet_conflict_gate(a: argparse.Namespace, op: str) -> int | None:
+    """★ 挙動変更#3: シート名の衝突で既定(1枚目)へ後退した時だけ、「解釈:」行の直後に
+       3択を出す薄い配線（選択肢の文言は ailine_core.target_sheet、対話の仕組みは
+       ailine_core.ask_choice が本体）。
+       戻り値: そのまま続行してよければ None、呼び出し側がそのまま return すべき
+       exit code なら int（②の実行結果もここに含まれる）。
+       ★ 聞くのは衝突で後退した時だけ・TTY の時だけ（--json/パイプ/CI/--dry では
+       絶対に入力を待たない ── 止めると動いていたスクリプトが黙って壊れる）。"""
+    conflict = getattr(a, "_sheet_conflict", None)
+    if not conflict:
+        return None
+    a._sheet_conflict = None   # 二重に聞かない（②のやり直しでも再発火させない）
+    lines, choices = sheet_conflict_choice_lines(conflict, op, OP_LABELS.get(op, op))
+    result = ask_choice(lines, [Choice(key=k, text=t) for k, t in choices],
+                        interactive=is_interactive(stdin_isatty=_stdin_isatty(),
+                                                   json_mode=getattr(a, "json", False),
+                                                   dry=getattr(a, "dry", False)))
+    if result.key in (None, "1"):
+        return None            # 聞かなかった/①＝上の解釈のとおり（既定＝今までの挙動）
+    if result.key == "3":
+        print(render_aborted())
+        return 1               # 既存の中止系（対話で拒否）と同じ exit code
+    return _preview_and_run_on_alternative_sheet(a, conflict)
+
+
+def _preview_and_run_on_alternative_sheet(a: argparse.Namespace, conflict) -> int:
+    """★ 挙動変更#3 の②: もう一方のシートを対象に**翻訳からやり直し**、その解釈行と
+       --dry 相当のプレビューを見せた上で y/N を聞く。y ならそちらで実行、N ならやめる
+       （原本は無変更）。この時点で原本にはまだ一切触れていない。"""
+    book, source_book, struct_dump, sheets = a._rerun_ctx
+    a._target_sheet = conflict.alternative
+    original_dry, a.dry, a._preview_only = getattr(a, "dry", False), True, True
+    rc = _translate_and_dispatch(a, book, source_book, struct_dump, sheets)
+    a.dry, a._preview_only = original_dry, False
+    if rc != 0:
+        return rc
+    if not ask_yes_no("この内容で実行しますか？ [y/N]: ",
+                      interactive=is_interactive(stdin_isatty=_stdin_isatty(),
+                                                 json_mode=getattr(a, "json", False),
+                                                 dry=original_dry)):
+        print(render_aborted())
+        return 1
+    a._reuse_translation = getattr(a, "_last_translation", None)   # 同じ翻訳を使い回す
+    return _translate_and_dispatch(a, book, source_book, struct_dump, sheets)
+
+
 def _make_dsl_step_deps() -> DslStepDeps:
     """★ C7: 呼び出しのたびに毎回新しく組み立てる依存の束（monkeypatch を効かせるため・dsl_step.py 参照）。"""
     return DslStepDeps(
@@ -4539,7 +4628,8 @@ def _make_dsl_step_deps() -> DslStepDeps:
         run_postcondition=run_postcondition, progress_start=progress_start, progress_end=progress_end,
         pivot_caveat=PIVOT_CAVEAT, verify_dsl_args=verify_dsl_args,
         apply_new_column_fallback=_apply_new_column_fallback, build_advisories=build_advisories,
-        structural_advisories=_structural_advisories, unrequested_new_sheet_advisory=unrequested_new_sheet_advisory)
+        structural_advisories=_structural_advisories, unrequested_new_sheet_advisory=unrequested_new_sheet_advisory,
+        sheet_conflict_gate=_sheet_conflict_gate)   # ★ 挙動変更#3
 
 
 def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta: dict,
@@ -4600,7 +4690,10 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
               "provenance": resolved.get("_sources")}
 
     if a.dry:
-        print("（--dry: 適用しない。レビュー後に --dry を外して実行）")
+        # ★ 挙動変更#3: シート衝突②の内部プレビュー（_preview_and_run_on_alternative_sheet）
+        #   では「--dry を外して実行」の案内は誤り（この直後に y/N を聞くため）。
+        if not getattr(a, "_preview_only", False):
+            print("（--dry: 適用しない。レビュー後に --dry を外して実行）")
         result["ok"] = True
         result["dry"] = True
         _finish_run(a, book, result, "none")
@@ -5258,7 +5351,10 @@ def _preview_dsl_plan(a: argparse.Namespace, plan: list, book_meta: dict, vocab:
                 op, step.get("args", {}), book_meta, task=a.task, vocab=vocab,
                 target_sheet=getattr(a, "_target_sheet", None))
             if ok_v:
-                label = format_confirmation_line(op, resolved, inferred)[len("解釈: "):]
+                # ★ 挙動変更#3: プレビューの宣言テキストにも対象シートを載せる（実行時の
+                #   「解釈:」行と同じ形にする・1枚のブックでは従来どおり付かない）。
+                label = format_confirmation_line(op, resolved, inferred, sheets=book_meta.get("sheets"),
+                                                 target_sheet=resolved.get("_target_sheet"))[len("解釈: "):]
                 preview_items.append((i, label, "ok", "未実行・プレビューのみ"))
                 plan_json.append({"op": op, "command": label, "status": "ok", "postcondition": None})
             else:

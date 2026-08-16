@@ -2689,45 +2689,45 @@ def test_verify_dsl_args_lookup_fill_allows_non_first_sheet_target():
 # --- ★ 挙動変更#2: 対象シートの固定を解く（resolve_target_sheet / describe_target_sheet） ----
 
 def test_resolve_target_sheet_cli_flag_wins():
-    sheet, source, err = ailine.resolve_target_sheet("なにか", ["請求書", "工事台帳"], "工事台帳")
-    assert (sheet, source, err) == ("工事台帳", "cli", None)
+    sheet, source, err, conflict = ailine.resolve_target_sheet("なにか", ["請求書", "工事台帳"], "工事台帳")
+    assert (sheet, source, err, conflict) == ("工事台帳", "cli", None, None)
 
 def test_resolve_target_sheet_cli_flag_unknown_sheet_errors():
-    sheet, source, err = ailine.resolve_target_sheet("なにか", ["請求書", "工事台帳"], "存在しないシート")
-    assert sheet is None and source == "cli"
+    sheet, source, err, conflict = ailine.resolve_target_sheet("なにか", ["請求書", "工事台帳"], "存在しないシート")
+    assert sheet is None and source == "cli" and conflict is None
     assert "存在しないシート" in err and "請求書" in err and "工事台帳" in err
 
 def test_resolve_target_sheet_named_in_task_wins_over_default():
-    sheet, source, err = ailine.resolve_target_sheet(
+    sheet, source, err, conflict = ailine.resolve_target_sheet(
         "工事台帳シートで取引先ごとの売上を集計して", ["請求書", "工事台帳", "取引先マスタ"])
-    assert (sheet, source, err) == ("工事台帳", "task", None)
+    assert (sheet, source, err, conflict) == ("工事台帳", "task", None, None)
 
 def test_resolve_target_sheet_ordinal_phrase():
-    sheet, source, err = ailine.resolve_target_sheet(
+    sheet, source, err, conflict = ailine.resolve_target_sheet(
         "2枚目のシートで金額を降順に並べ替えて", ["請求書", "工事台帳"])
-    assert (sheet, source, err) == ("工事台帳", "task", None)
+    assert (sheet, source, err, conflict) == ("工事台帳", "task", None, None)
 
 def test_resolve_target_sheet_ambiguous_mention_falls_back_to_default_not_clarify():
     # ★ LOOKUP_FILL のように転記先/参照元の2シート名が正当に両方登場するケースを
     #   誤ってブロックしない（resolve_target_sheet 自身の docstring 参照）。
-    sheet, source, err = ailine.resolve_target_sheet(
+    sheet, source, err, conflict = ailine.resolve_target_sheet(
         "工事台帳の値を単価表から転記して", ["工事台帳", "単価表"])
-    assert err is None
+    assert err is None and conflict is None
     assert (sheet, source) == ("工事台帳", "default")   # 1枚目へフォールバック（曖昧を理由に止めない）
 
 def test_resolve_target_sheet_substring_names_pick_longer_match():
     # 「請求書」は「請求書控え」の部分文字列 → 長い方(実際に言及された固有名)だけ残す。
-    sheet, source, err = ailine.resolve_target_sheet(
+    sheet, source, err, conflict = ailine.resolve_target_sheet(
         "請求書控えシートで並べ替えて", ["請求書", "請求書控え"])
-    assert (sheet, source, err) == ("請求書控え", "task", None)
+    assert (sheet, source, err, conflict) == ("請求書控え", "task", None, None)
 
 def test_resolve_target_sheet_no_mention_defaults_to_first():
-    sheet, source, err = ailine.resolve_target_sheet("金額で降順に並べ替えて", ["請求書", "工事台帳"])
-    assert (sheet, source, err) == ("請求書", "default", None)
+    sheet, source, err, conflict = ailine.resolve_target_sheet("金額で降順に並べ替えて", ["請求書", "工事台帳"])
+    assert (sheet, source, err, conflict) == ("請求書", "default", None, None)
 
 def test_resolve_target_sheet_no_sheets_errors():
-    sheet, source, err = ailine.resolve_target_sheet("なにか", [])
-    assert sheet is None
+    sheet, source, err, conflict = ailine.resolve_target_sheet("なにか", [])
+    assert sheet is None and conflict is None
     assert "シートが無い" in err
 
 def test_describe_target_sheet_single_sheet_book_is_silent():
@@ -2735,15 +2735,15 @@ def test_describe_target_sheet_single_sheet_book_is_silent():
 
 def test_describe_target_sheet_default_matches_brief_wording():
     line = ailine.describe_target_sheet(["a", "b", "c", "請求明細"], "請求明細", "default")
-    assert line == "このブックは4シートですが、操作対象は4枚目の『請求明細』です"
+    assert line == "操作するシート: 4枚目『請求明細』（このブックは4シート）"
 
 def test_describe_target_sheet_task_source_names_the_reason():
-    line = ailine.describe_target_sheet(["請求書", "工事台帳"], "工事台帳", "task")
-    assert line == "このブックは2シートですが、操作対象は2枚目の『工事台帳』です（依頼文の言及から判断）"
+    line = ailine.describe_target_sheet(["請求書", "工事台帳", "取引先マスタ"], "工事台帳", "task")
+    assert line == "操作するシート: 2枚目『工事台帳』（依頼文から判断・このブックは3シート）"
 
 def test_describe_target_sheet_cli_source_names_the_reason():
     line = ailine.describe_target_sheet(["請求書", "工事台帳"], "工事台帳", "cli")
-    assert line == "操作対象シート: 2枚目の『工事台帳』（--sheet 指定）"
+    assert line == "操作するシート: 2枚目『工事台帳』（--sheet 指定）"
 
 
 # ★ DoD1: 査定の再現の回帰テスト（verify_dsl_args レベル）。
@@ -4390,7 +4390,7 @@ def test_cmd_run_named_second_sheet_no_longer_shows_misleading_first_sheet_error
     assert "ある列: 取引先名, 工事名, 金額" in captured.out
     assert "ある列: 宛先, 金額" not in captured.out
     # ★ 挙動変更#2 最低限: 適用前の対象シート明示（査定所見「これがあれば事故は防げた」）。
-    assert "操作対象は2枚目の『工事台帳』です" in captured.out
+    assert "操作するシート: 2枚目『工事台帳』" in captured.out
 
 def test_cmd_run_named_second_sheet_applies_operation_there_not_first_sheet(
         tmp_path, monkeypatch, capsys):
@@ -4433,7 +4433,7 @@ def test_cmd_run_single_sheet_book_no_announcement_no_regression(tmp_path, monke
     argv = run_argv(book=str(book), task="数量で降順に並べ替えて", dry=False, copy=True, header_row=None)
     ailine.main(argv)   # ★ fake_apply は実際にソートしないため postcondition の pass/fail は見ない
     captured = capsys.readouterr()
-    assert "操作対象は" not in captured.out   # 単一シートは沈黙（既存出力を変えない）
+    assert "操作するシート:" not in captured.out   # 単一シートは沈黙（既存出力を変えない）
     assert "moveByName" not in captured_code.get("code", "")
 
 def test_cmd_run_plan_composite_step_targets_named_non_first_sheet(tmp_path, monkeypatch, capsys):
@@ -4457,7 +4457,7 @@ def test_cmd_run_plan_composite_step_targets_named_non_first_sheet(tmp_path, mon
         dry=False, copy=True, header_row=None)
     ailine.main(argv)
     captured = capsys.readouterr()
-    assert "操作対象は2枚目の『工事台帳』です" in captured.out
+    assert "操作するシート: 2枚目『工事台帳』" in captured.out
     assert len(captured_codes) == 2
     for code in captured_codes:
         assert 'oDoc.Sheets.moveByName("工事台帳", 0)' in code

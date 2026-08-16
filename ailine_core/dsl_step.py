@@ -61,6 +61,13 @@ class DslStepDeps:
     build_advisories: Callable
     structural_advisories: Callable
     unrequested_new_sheet_advisory: Callable
+    # ★ 挙動変更#3: シート名の衝突で既定(1枚目)へ後退した時に「解釈:」行の直後で3択を
+    #   聞く関門（ailine.py の _sheet_conflict_gate）。None なら聞かない（既定）。
+    #   ★ ここに置く理由: 3択は**解釈行のすぐ後**でなければならない（操作が確定してから
+    #   具体的な日本語で選ばせるという設計判断・ailine_core/target_sheet.py 参照）。
+    #   print_dsl_confirmation の**後**に呼ぶと、破壊の関所（上書きしますか？）の方が
+    #   先に聞いてしまい、どのシートを触るか未確定のまま上書き可否を尋ねることになる。
+    sheet_conflict_gate: Callable | None = None
 
 
 @dataclass
@@ -144,9 +151,21 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
        複合計画は (current_meta, out_book)（直前までの段を反映済みの作業コピー）を渡す
        ── 上書き検知の対象が「今の実体」であることは共通で、その実体をどちらから見るかが
        経路によって違う（既存の非対称・今回はそのまま踏襲する）。"""
-    line = deps.format_confirmation_line(op, resolved, inferred)
+    # ★ 挙動変更#3: 複数シートのブックでは「解釈:」行の先頭に対象シートを載せる
+    #   （1枚だけのブックは meta["sheets"] が1件なので従来どおり沈黙＝出力は不変）。
+    line = deps.format_confirmation_line(op, resolved, inferred, sheets=meta.get("sheets"),
+                                          target_sheet=resolved.get("_target_sheet"))
     label = line[len("解釈: "):]
     print(f"{step_prefix}{line}")
+    # ★ 挙動変更#3: 衝突で既定へ後退していたら、ここ（解釈行の直後・まだ原本に触れる前）で
+    #   3択を聞く。単発(step_prefix=="")だけを対象にする ── 複合計画の途中の段で対象シート
+    #   を選び直すと、直前までの段を適用済みの作業コピーの上で計画をやり直すことになり、
+    #   「原本にはまだ触れていないので安全」という前提が崩れるため（ASSUMED・報告参照）。
+    if not step_prefix and deps.sheet_conflict_gate is not None:
+        gate = deps.sheet_conflict_gate(a, op)
+        if gate is not None:
+            return DslConfirmResult(line=line, label=label, warn_overwrite=None,
+                                     mismatch_warning=None, gate_exit=gate)
     if op == "PIVOT":   # ★ W9 項目4
         print(f"{step_prefix}（{deps.pivot_caveat}）")
     mismatch_warning = deps.maybe_warn_header_col_mismatch(op, resolved, new_cols or [], task)

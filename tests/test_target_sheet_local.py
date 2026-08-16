@@ -84,7 +84,7 @@ def test_e2e_multi_sheet_book_writes_to_named_second_sheet_via_real_basrun(
         rc = ailine.main(argv)
         captured = capsys.readouterr()
         assert rc == 0, captured.out
-        assert "操作対象は2枚目の『工事台帳』です" in captured.out
+        assert "操作するシート: 2枚目『工事台帳』" in captured.out
 
         out_book = book.with_name(book.stem + ".out" + book.suffix)
         wb2 = openpyxl.load_workbook(out_book)
@@ -134,7 +134,7 @@ def test_e2e_single_sheet_book_still_works_unchanged_no_regression(tmp_path, mon
         rc = ailine.main(argv)
         captured = capsys.readouterr()
         assert rc == 0, captured.out
-        assert "操作対象は" not in captured.out   # 単一シートは沈黙（既存挙動を変えない）
+        assert "操作するシート:" not in captured.out   # 単一シートは沈黙（既存挙動を変えない）
 
         out_book = book.with_name(book.stem + ".out" + book.suffix)
         wb2 = openpyxl.load_workbook(out_book)
