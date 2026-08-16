@@ -144,6 +144,91 @@ STAGE_ORGANS = {
 }
 
 
+# --- ★ C6b: 宣言を現実（ailine.py の実装）と突き合わせる番人 ---------------------------
+# C6 の missing_cells() は表の**内的整合**（全マス目が埋まっているか）だけを見る。
+# ここから下は、その先の欠陥（W10f の再演: 表が True のまま裏の呼び出しだけ消えても
+# missing_cells は気づけない）を防ぐための、**表 × ailine.py の実 AST の突合せ**。
+#
+# ★ 段↔関数の対応（STAGE_ENTRY_FUNCTIONS）は「その段の実行経路を代表する ailine.py の
+#   トップレベル関数」を宣言する。値は関数名のタプル（AST 走査はこの関数の本体
+#   *だけ* を見る＝他関数の呼び出し先までは追わない・呼び出しヘルパ経由の間接呼び出しは
+#   構造的に見えない）。
+#   ★★ 空タプル `()` は「この段種は関数単位では他の段種の分岐と分離できない」という
+#   明示的な unverifiable 宣言（missing ではない ―― キーは必ず埋める。C6 の None と同じ
+#   思想: 「追えない」も「忘れた」と区別して機械で読めるようにする）。
+#   該当は clarify_plan_step 一つ: cmd_run_plan() は dsl_plan_step と clarify_plan_step の
+#   両方の分岐を同じ関数本体の中に inline で持っており（CLARIFY 分岐は3行で return、
+#   DSL 分岐は同じ for ループの続きに書かれている）、関数単位の AST 走査では両分岐を
+#   区別できない。もし clarify_plan_step にも cmd_run_plan を当てると、dsl_plan_step が
+#   実際に呼んでいる verify_dsl_args 等が「clarify_plan_step でも呼ばれている」との
+#   誤検知になる（clarify_plan_step の宣言は全マス None なので、これは逆向きチェックの
+#   誤報になる）。誤報する番人は無視を育てるので、ここは追わずに unverifiable へ逃がす。
+STAGE_ENTRY_FUNCTIONS = {
+    "dsl_single": ("cmd_run_dsl",),
+    "dsl_plan_step": ("cmd_run_plan",),
+    "freeform_single": ("cmd_run_freeform",),
+    "freeform_plan_step": ("run_freeform_plan_step",),
+    # ★ _cmd_run_dispatch の CLARIFY 分岐（plan が1段だけで CLARIFY の場合）は
+    #   print+return の3行だけで、器官の呼び出しは一切無い。かつ同じ関数内の他の分岐
+    #   （cmd_run_dsl/cmd_run_freeform/cmd_run_plan の呼び出し）は別関数への委譲であって
+    #   _cmd_run_dispatch 自身の AST には inline されていないため、関数単位の走査でも
+    #   分岐混線が起きない（clarify_plan_step と違い、安全に検証できる）。
+    "clarify_single": ("_cmd_run_dispatch",),
+    "clarify_plan_step": (),   # ★ unverifiable（理由は上のコメント）
+}
+
+# ★ 器官 → 「その器官が満たされたとみなす ailine.py 側の呼び出し先関数名」の候補集合。
+#   1器官が複数関数のどれかで満たされる場合がある（destructive_gate は2つ、
+#   helper_sweep_detect も2つ、advisories は段種によって build_advisories と
+#   _structural_advisories のどちらか一方 ―― どちらの候補が実際に呼ばれていても
+#   「いずれかが呼ばれていれば満たす」で判定する）。
+ORGAN_FUNCTION_CANDIDATES = {
+    "grounding": ("verify_dsl_args",),
+    "destructive_gate": ("_maybe_warn_target_overwrite", "_confirm_overwrite_or_gate"),
+    "rate_scan": ("scan_rate_literals",),
+    "helper_sweep_detect": ("detect_helper_sweep", "_confirm_freeform_apply"),
+    "advisories": ("build_advisories", "_structural_advisories"),
+    "truncation_notice": ("_truncation_notice",),
+}
+
+
+def reality_mismatches(found_names_by_stage: dict,
+                        table: dict = STAGE_ORGANS,
+                        entry_functions: dict = STAGE_ENTRY_FUNCTIONS,
+                        organ_candidates: dict = ORGAN_FUNCTION_CANDIDATES,
+                        organs=ORGANS) -> list:
+    """★ 番人の本体（C6b）: 宣言表 (table) と「実際に呼ばれている器官の集合」
+       (found_names_by_stage: {段種: その段の関数本体で見つかった呼び出し先関数名の集合}) を
+       突き合わせ、食い違うマス目を列挙する。純ロジック（ailine.py を読む/AST を作るのは
+       呼び出し側の責務 ―― C4/C5 に倣い、ここは ailine.py に一切依存しない）。
+
+       食い違いは両方向:
+       - declared_true_not_found: True と宣言したのに、その段の関数本体に器官の呼び出しが
+         見当たらない（＝誰かが呼び出しを消した、または宣言だけ先に True にした）。
+       - declared_none_but_found: None（無いという宣言）なのに、実際にはその段の関数本体で
+         器官の呼び出しが見つかった（＝宣言と現実がずれている。無いと言ったのに在る）。
+
+       entry_functions の値が空タプルの段種（unverifiable）はここでは判定しない
+       （found_names_by_stage に何を渡しても無視される＝呼び出し側が空集合を渡しても
+       誤検知しない）。
+       戻り値: [(stage, organ, kind), ...]（kind は上の2種、無ければ空リスト）。"""
+    mismatches = []
+    for stage, funcs in entry_functions.items():
+        if not funcs:   # unverifiable
+            continue
+        found = found_names_by_stage.get(stage, set())
+        row = table.get(stage, {})
+        for organ in organs:
+            declared = row.get(organ)
+            candidates = set(organ_candidates.get(organ, ()))
+            is_found = bool(found & candidates)
+            if declared is True and not is_found:
+                mismatches.append((stage, organ, "declared_true_not_found"))
+            elif declared is not True and is_found:
+                mismatches.append((stage, organ, "declared_none_but_found"))
+    return mismatches
+
+
 def missing_cells(table: dict = STAGE_ORGANS, stages=STAGES, organs=ORGANS) -> list:
     """(段種, 器官) のうち、table にキーとして明示的な値が無いものを列挙する。
 
