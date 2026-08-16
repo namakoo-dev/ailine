@@ -6895,6 +6895,156 @@ def test_set_column_value_end_to_end_via_cmd_run_dsl(tmp_path, monkeypatch, caps
     assert "上書き" in captured.out or "--overwrite" in captured.out
 
 
+# --- ★ 宣言つき挙動変更#1: 型破壊の安全網 ---------------------------------------
+#   ブラインド査定の実測: 数値の『原価』列を SET_COLUMN_VALUE で文字列『0円』に一括書換
+#   すると、それを参照する数式(利益=売上-原価)が #VALUE! に壊れるのに、事後条件
+#   チェッカー(check_set_column_value・対象列が指定文字列になったかだけを見る)は
+#   「✓ 達成を機械検証済み」を出す。ailine_core/formula_health.py の (a) エラー値増加の
+#   網 (b) 型変化の助言 が、CLI 全体（cmd_run_dsl）を通した時に実際に発火することを見る
+#   （fake_apply が basrun/LibreOffice の代わりに書き込み+エラー値キャッシュ注入を行う。
+#   本物の basrun/LibreOffice 通しは tests/test_formula_health_local.py が担う）。
+
+def _inject_error_cache_ailine_test(path, sheet_filename: str, addr_to_err: dict) -> None:
+    """テスト専用: tests/test_formula_health.py の _inject_error_cache と同型（数式セルへ
+       t="e" のエラー値キャッシュを直接注入する）。fake_apply の内部から呼ぶための複製
+       （test_ailine.py はモジュール横断のテスト専用 import はしない既存の作法に合わせる）。"""
+    import re
+    import zipfile
+    tmp = path.with_suffix(".tmp.xlsx")
+    with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == sheet_filename:
+                text = data.decode("utf-8")
+                for addr, err in addr_to_err.items():
+                    pattern = re.compile(rf'<c r="{addr}"([^>]*)>(.*?<f>.*?</f>)(?:<v\s*/>|<v>.*?</v>)?</c>')
+
+                    def _sub(m, err=err):
+                        attrs = re.sub(r'\s*t="[^"]*"', '', m.group(1))
+                        return f'<c r="{addr}"{attrs} t="e">{m.group(2)}<v>{err}</v></c>'
+
+                    text, n = pattern.subn(_sub, text, count=1)
+                    assert n == 1, f"_inject_error_cache_ailine_test: {addr} に注入できなかった"
+                data = text.encode("utf-8")
+            zout.writestr(item, data)
+    tmp.replace(path)
+
+def _genka_book(tmp_path) -> Path:
+    """査定と同じ形の検体: 品目/売上/原価/利益(=売上-原価) の7行。"""
+    p = tmp_path / "genka.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["品目", "売上", "原価", "利益"])
+    rows = [("りんご", 1000, 300), ("みかん", 800, 200), ("ぶどう", 1500, 600)]
+    for i, (name, sales, cost) in enumerate(rows, start=2):
+        ws.cell(row=i, column=1, value=name)
+        ws.cell(row=i, column=2, value=sales)
+        ws.cell(row=i, column=3, value=cost)
+        ws.cell(row=i, column=4, value=f"=B{i}-C{i}")
+    wb.save(p)
+    return p
+
+def test_set_column_value_nonnumeric_write_triggers_both_advisories(tmp_path, monkeypatch, capsys):
+    """★ DoD1: 査定の再現そのものを回帰テストにする。数値列に文字列『0円』を書く →
+       依存する数式が壊れる（#VALUE!）→ (a)(b) 両方の助言が出る。★ 事後条件チェッカー
+       自体は今回変えていないので「✓ 達成を機械検証済み」は今回も出る（claim の主張範囲は
+       変えない設計判断・報告参照）── その上で波及被害の警告が別チャンネルで出ることを見る。"""
+    book = _genka_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SET_COLUMN_VALUE", "args": {"col": "原価"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        for r in (2, 3, 4):
+            ws2.cell(row=r, column=3, value="0円")
+        wb2.save(out_book)
+        _inject_error_cache_ailine_test(out_book, "xl/worksheets/sheet1.xml",
+                                         {"D2": "#VALUE!", "D3": "#VALUE!", "D4": "#VALUE!"})
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    argv = run_argv(
+        book=str(book), task="原価の列を全部『0円』にして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False, overwrite=True)
+    rc = ailine.main(argv)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "✓ 達成を機械検証済み" in captured.out   # ★ claim の文言そのものは変えていない
+    assert "★ 疑わしい: 適用後にエラー値のセルが増えました" in captured.out
+    assert "Sheet!D2=#VALUE!" in captured.out
+    assert "（確認）列『原価』は元は数値でしたが" in captured.out
+
+def test_set_column_value_numeric_looking_write_no_advisory(tmp_path, monkeypatch, capsys):
+    """★ DoD4/5②: 過剰検出でないことの実証。同じ列に数値そのものの文字列『500』を書く
+       正常系（数式は壊れない）では、(a)(b) どちらの警告も出ない。"""
+    book = _genka_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SET_COLUMN_VALUE", "args": {"col": "原価"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        for r in (2, 3, 4):
+            ws2.cell(row=r, column=3, value="500")
+            ws2.cell(row=r, column=4, value=500)   # 数式は数値そのものへ正常に再計算された想定
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    argv = run_argv(
+        book=str(book), task="原価の列を全部『500』にして", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False, overwrite=True)
+    rc = ailine.main(argv)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "★ 疑わしい: 適用後にエラー値のセルが増えました" not in captured.out
+    assert "（確認）列『原価』は元は数値でしたが" not in captured.out
+
+def test_compute_column_new_column_normal_op_no_advisory(tmp_path, monkeypatch, capsys):
+    """★ DoD4: 正常な操作の代表例②「計算列作成」で警告が出ないこと（新規列は元の型という
+       概念が無いので (b) は対象外・数式も壊れていないので (a) も無言）。"""
+    book = _genka_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "COMPUTE_COLUMN",
+                                   "args": {"operands": ["売上", "原価"], "operator": "-"}}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        ws2.cell(row=1, column=5, value="売上-原価")
+        for r in (2, 3, 4):
+            sales = ws2.cell(row=r, column=2).value
+            cost = ws2.cell(row=r, column=3).value
+            ws2.cell(row=r, column=5, value=sales - cost)
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    argv = run_argv(
+        book=str(book), task="売上から原価を引いた列を作って", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False, values=True)
+    rc = ailine.main(argv)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "★ 疑わしい: 適用後にエラー値のセルが増えました" not in captured.out
+    assert "（確認）列『" not in captured.out
+
+
 # --- 致命3 項目①: 全列テキストの表で見出し行検出が CLARIFY に落ちる不具合の修正 -----
 
 def test_detect_header_row_all_text_table_picks_first_row():

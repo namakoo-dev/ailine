@@ -77,7 +77,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_code_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
 )
-
+from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
 DEFAULT_HELPERS = HERE / "helpers"
@@ -1190,8 +1190,8 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
        単発 op(build_advisories 経由)ではこれまでどおり④も同じ before/after で
        評価する（そちらは1段しかないため局所=全体で一致し、挙動は不変）。
        ★ C9: op/resolved/meta（呼び出し側が今回の段の宣言済み効果を渡す・省略時は None）は
-       detect_ghost_data の new_col_letter 判定と existing_sheet_replaced_advisory の
-       宣言シート判定にそのまま渡す（旧 _neutralize_* 三兄弟の後処理を発生源へ先取り）。"""
+       detect_ghost_data の new_col_letter 判定と existing_sheet_replaced_advisory の宣言シート判定・
+       detect_write_target_type_change（★宣言つき挙動変更#1(b)）にそのまま渡す（旧 _neutralize_* 三兄弟の後処理を発生源へ先取り）。"""
     lines = []
     new_col_letter = _declared_new_column_letter(op, resolved, meta) if (op and resolved is not None and meta is not None) else None
     for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter}), (detect_uniform_fill, {})):
@@ -1202,7 +1202,7 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
     if recon:
         lines.append(recon)
     lines.extend(new_sheet_advisories(before, after))
-    lines.extend(existing_sheet_replaced_advisory(before, after, op=op))   # ★ 致命2(W10e)
+    lines.extend(existing_sheet_replaced_advisory(before, after, op=op) + [m for m in [detect_write_target_type_change(before, after, op=op, resolved=resolved, meta=meta, op_write_target=OP_WRITE_TARGET, is_number=_is_number)] if m])   # ★ 致命2(W10e) + 挙動変更#1(b)
     return lines
 
 
@@ -4564,7 +4564,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     # ★ W10b 項目4b(摩擦): LOOKUP_FILL の参照専用シート(source_sheet)は「変更なし」対象から除外。
     exclude_sheets = {resolved["source_sheet"]} if op == "LOOKUP_FILL" else None
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
-        "flat", op, resolved, book_meta, a.task, before, after, exclude_sheets=exclude_sheets, deps=deps)
+        "flat", op, resolved, book_meta, a.task, before, after, exclude_sheets=exclude_sheets, deps=deps) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -4868,8 +4868,8 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
         if notice:
             print(notice)
         advisories = build_advisories(a.task, before, after)
-        # ★ W8a 項目4: 率らしい数値リテラルの機械スキャン（判断棚から昇格）。
-        advisories = advisories + scan_rate_literals(code, a.task, vocab)
+        # ★ W8a 項目4: 率らしい数値リテラルの機械スキャン。★ 挙動変更#1(a): エラー値増加の網。
+        advisories = advisories + scan_rate_literals(code, a.task, vocab) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)
         for adv in advisories:
             print(adv)
         result["ok"] = True
@@ -5048,7 +5048,7 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
         advisories = build_advisories(task_text, before, after)
         # ★ W10f 項目2: 単発 cmd_run_freeform と同じ率リテラルの機械スキャン。この段の
         #   依頼文(task_text)だけを出典として見る（他段の依頼文言に混ざらないよう局所判定）。
-        advisories = advisories + scan_rate_literals(code, task_text, vocab)
+        advisories = advisories + scan_rate_literals(code, task_text, vocab) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
         # ★ 止血3: 呼び出し元(cmd_run_plan)は lines をそのまま「  {ln}」で表示するだけ
         #   なので、切り詰め注記はここで lines に混ぜて渡す。
         notice = _truncation_notice(before, after, exhaustive_postcondition=False)
@@ -5153,7 +5153,7 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     step_after = apply_result.after
     mention_exclude_sheet = resolved["source_sheet"] if op == "LOOKUP_FILL" and resolved.get("source_sheet") else None
     step_advisories.extend(compose_dsl_step_advisories(
-        "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps))
+        "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref))   # ★ 挙動変更#1(a)
 
     status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
     # ★ 止血1/2: "error"→fail 扱い。"warn"(検証対象不足)は成功は名乗るが機械検証済みとは言わない。
