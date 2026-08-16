@@ -12,7 +12,6 @@
 AILINE_REGEN_GOLDEN=1 で再生成し、diff に「advisories の形を統一した」等の理由を
 commit メッセージに書くこと。
 """
-import argparse
 import json
 import re
 import sys
@@ -26,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ailine  # noqa: E402
 
 from golden._harness import GOLDEN_ROOT, assert_golden_json  # noqa: E402
+from _run_argv import run_argv  # noqa: E402  — C2: cmd_run 直呼び用 Namespace → main(argv) 変換
 
 F7_DIR = GOLDEN_ROOT / "f7_json_keys"
 
@@ -62,13 +62,13 @@ def _book(tmp_path, rows, name="b.xlsx"):
     return p
 
 
-def _base_ns(book, dry, **overrides):
+def _base_argv(book, dry, **overrides):
     base = dict(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=dry, copy=True, json=True, timeout=180.0, ask=False)
     base.update(overrides)
-    return argparse.Namespace(**base)
+    return run_argv(**base)
 
 
 def _extract_json_line(stdout: str) -> dict:
@@ -124,8 +124,8 @@ def _run_and_capture(tmp_path, monkeypatch, capsys, translate_result, dry, *,
             ailine, "basrun_apply",
             _fake_basrun_apply_touches_cell if freeform else _fake_basrun_apply_noop)
 
-    ns = _base_ns(book, dry, allow_freeform=(freeform and not dry))
-    rc = ailine.cmd_run(ns)
+    argv = _base_argv(book, dry, allow_freeform=(freeform and not dry))
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     result = _extract_json_line(captured.out)
     return rc, result

@@ -15,6 +15,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ailine
 
+from _run_argv import run_argv  # noqa: E402  — C2: cmd_run 直呼び用 Namespace → main(argv) 変換
+
 # ★ W8b-2（既定=原本直接適用への反転）: この回で `dry=False, inplace=False, ...` だった
 #   argparse.Namespace リテラルを機械的に `dry=False, copy=True, ...` へ置き換えた
 #   （旧既定＝コピーにしか書かない、を再現するのが copy=True になったため）。inplace は
@@ -649,12 +651,12 @@ def test_cmd_run_dry_survives_history_write_failure(tmp_path, monkeypatch, capsy
         raise OSError("書き込み失敗（テスト用）")
     monkeypatch.setattr(ailine, "append_history", boom)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="テスト", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
 
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0   # ★ 履歴書き込みが例外を投げても run 自体は成功のまま
     assert "WARN" in captured.err
@@ -1183,13 +1185,13 @@ def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, 
     recorded = {}
     monkeypatch.setattr(ailine, "append_history", lambda entry, path=None: recorded.update(entry))
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="テスト", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
         allow_freeform=True)   # ★ W10b: 関所は無関係（実行時エラー経路を見るテスト）
 
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 1
     assert "Traceback (most recent call last):" not in captured.out
@@ -1220,12 +1222,12 @@ def test_cmd_run_freeform_success_shows_honest_warning_not_checkmark(tmp_path, m
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
         allow_freeform=True)   # ★ W10b: 関所は無関係（自由生成の成功表示を見るテスト）
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "⚠ AI が直接作成した処理です（機械保証なし）— 確認してください" in captured.out
@@ -1241,11 +1243,11 @@ def test_cmd_run_freeform_banner_uses_ai_direct_wording_not_jargon(tmp_path, mon
                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
     monkeypatch.setattr(ailine, "ollama_generate",
                         lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
-    ailine.cmd_run(ns)
+    ailine.main(argv)
     captured = capsys.readouterr()
     assert "自由生成経路" not in captured.out
     assert "AI が直接作成" in captured.out
@@ -1271,12 +1273,12 @@ def test_cmd_run_freeform_rate_literal_scan_fires_when_task_silent_on_rate(tmp_p
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
         allow_freeform=True)   # ★ W10b: 関所は無関係（率リテラル助言を見るテスト）
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "★ 率らしい数値 (1.08) が依頼に無いのに使われています — 検算してください" in captured.out
@@ -1301,12 +1303,12 @@ def test_cmd_run_freeform_rate_literal_scan_silent_when_task_states_rate(tmp_pat
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="消費税8%込みの合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
         allow_freeform=True)   # ★ W10b: 関所は無関係（率リテラル助言の対照テスト）
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "率らしい数値" not in captured.out
@@ -1318,11 +1320,11 @@ def test_cmd_run_dsl_dry_banner_says_rule_conversion_not_deterministic(tmp_path,
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "決定論" not in captured.out
@@ -1359,9 +1361,9 @@ def test_backup_path_for_uses_stem_ts_suffix(tmp_path, monkeypatch):
     #   （同名ファイルが別フォルダにあっても取り違えない・undo 混線の根治）。
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     book = Path("demo/sample.xlsx")
-    ns = ailine._backup_namespace(book)
+    argv = ailine._backup_namespace(book)
     p = ailine.backup_path_for(book, ts="20260814T120000Z")
-    assert p == tmp_path / "backups" / ns / "sample.20260814T120000Z.xlsx"
+    assert p == tmp_path / "backups" / argv / "sample.20260814T120000Z.xlsx"
 
 def test_make_backup_copies_content(tmp_path, monkeypatch):
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
@@ -1619,11 +1621,11 @@ def test_cmd_run_exits_5_when_excel_lock_detected(tmp_path, monkeypatch, capsys)
         called["n"] += 1
         return {"op": "FREEFORM", "args": {}}
     monkeypatch.setattr(ailine, "translate_task", boom)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 5
     assert "Excel で開かれています" in captured.out
@@ -1730,7 +1732,7 @@ def test_format_fidelity_warning_lists_categories_and_counts():
     assert msg == "⚠ このファイルには、処理すると失われる飾りがあります（条件付き書式 3 件）"
 
 
-def _fidelity_gate_ns(book, **overrides):
+def _fidelity_gate_argv(book, **overrides):
     # ★ W8b-2: 既定が原本直接適用になったため inplace=True は不要（指定しても挙動は
     #   同じだが廃止フラグの移行メッセージが余計に出るので外す）。
     # ★ W10b: これらのテストは忠実度ゲート自体を見るのが目的で、その先の自由生成の関所
@@ -1741,7 +1743,7 @@ def _fidelity_gate_ns(book, **overrides):
         dry=False, json=False, timeout=180.0, ask=False,
         accept_loss=False, copy=False, allow_freeform=True)
     base.update(overrides)
-    return argparse.Namespace(**base)
+    return run_argv(**base)
 
 def _patch_lossy_normalize(monkeypatch):
     """normalize_book を『CF が消える正規化』に差し替える（実際の LO を使わない）。
@@ -1766,7 +1768,7 @@ def test_cmd_run_inplace_fidelity_gate_blocks_without_flag(tmp_path, monkeypatch
         called["n"] += 1
         return {"op": "FREEFORM", "args": {}}
     monkeypatch.setattr(ailine, "translate_task", boom)
-    rc = ailine.cmd_run(_fidelity_gate_ns(book))
+    rc = ailine.main(_fidelity_gate_argv(book))
     captured = capsys.readouterr()
     assert rc == 4
     assert "失われる飾りがあります" in captured.out
@@ -1790,7 +1792,7 @@ def test_cmd_run_inplace_fidelity_gate_accept_loss_continues(tmp_path, monkeypat
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    rc = ailine.cmd_run(_fidelity_gate_ns(book, accept_loss=True))
+    rc = ailine.main(_fidelity_gate_argv(book, accept_loss=True))
     captured = capsys.readouterr()
     assert "続行します" in captured.out
     # ★ W8b-2: 既定=原本直接適用の trailing メッセージ（FREEFORM 経路なので ⚠ 側）。
@@ -1815,7 +1817,7 @@ def test_cmd_run_copy_flag_skips_fidelity_gate_entirely(tmp_path, monkeypatch, c
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    rc = ailine.cmd_run(_fidelity_gate_ns(book, copy=True))
+    rc = ailine.main(_fidelity_gate_argv(book, copy=True))
     captured = capsys.readouterr()
     assert "失われる飾り" not in captured.out   # ゲート自体が走っていない
     assert book.read_bytes() == original_bytes   # 原本は無変更
@@ -1839,8 +1841,8 @@ def test_cmd_run_inplace_fidelity_gate_silent_when_no_loss(tmp_path, monkeypatch
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    ns = _fidelity_gate_ns(book, dry=False)
-    ailine.cmd_run(ns)
+    argv = _fidelity_gate_argv(book, dry=False)
+    ailine.main(argv)
     captured = capsys.readouterr()
     assert "失われる飾り" not in captured.out
 
@@ -1864,7 +1866,7 @@ def test_cmd_run_inplace_fidelity_records_history_field(tmp_path, monkeypatch, c
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
     recorded = {}
     monkeypatch.setattr(ailine, "append_history", lambda entry, path=None: recorded.update(entry))
-    ailine.cmd_run(_fidelity_gate_ns(book, accept_loss=True))
+    ailine.main(_fidelity_gate_argv(book, accept_loss=True))
     assert recorded["fidelity"]["lost"] is True
     assert any(it["label"] == "条件付き書式" for it in recorded["fidelity"]["items"])
 
@@ -1880,8 +1882,8 @@ def test_cmd_run_inplace_no_fidelity_field_when_gate_not_run(tmp_path, monkeypat
                         lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
     recorded = {}
     monkeypatch.setattr(ailine, "append_history", lambda entry, path=None: recorded.update(entry))
-    ns = _fidelity_gate_ns(book, inplace=False, dry=True)
-    ailine.cmd_run(ns)
+    argv = _fidelity_gate_argv(book, inplace=False, dry=True)
+    ailine.main(argv)
     assert recorded["fidelity"] is None
 
 
@@ -2033,11 +2035,11 @@ def test_cmd_run_exits_6_when_run_lock_busy(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ailine, "_pid_alive", lambda pid: pid == other_pid)
     called = {"n": 0}
     monkeypatch.setattr(ailine, "check_excel_lock", lambda b: called.__setitem__("n", called["n"] + 1) or None)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 6
     assert "別の ailine が実行中です" in captured.out
@@ -2050,12 +2052,12 @@ def test_cmd_run_releases_lock_even_on_early_sys_exit(tmp_path, monkeypatch):
     # book が無い場合は sys.exit() する経路（SystemExit）。それでも lock は解放されること。
     lock_path = tmp_path / "run.lock"
     monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(tmp_path / "nope.xlsx"), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
     with pytest.raises(SystemExit):
-        ailine.cmd_run(ns)
+        ailine.main(argv)
     assert not lock_path.exists()
 
 
@@ -2072,11 +2074,11 @@ def test_cmd_run_cleans_up_workdir_after_success(tmp_path, monkeypatch):
                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
     monkeypatch.setattr(ailine, "ollama_generate",
                         lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
-    ailine.cmd_run(ns)
+    ailine.main(argv)
     assert not (book.parent / f".ailine_{book.stem}").exists()
 
 def test_cmd_run_cleans_up_workdir_after_clarify_exit(tmp_path, monkeypatch):
@@ -2092,11 +2094,11 @@ def test_cmd_run_cleans_up_workdir_after_clarify_exit(tmp_path, monkeypatch):
     }}}}
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "build_struct_dump", lambda book, workdir: ambiguous)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     assert rc == 3
     assert not (book.parent / f".ailine_{book.stem}").exists()
 
@@ -3405,11 +3407,11 @@ def test_cmd_run_dsl_postcondition_warn_does_not_claim_verified(tmp_path, monkey
     monkeypatch.setattr(ailine, "basrun_apply",
                         lambda out_book, code, workdir, helper_files=(), timeout=None:
                         (True, None, "ok"))
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "⚠" in captured.out
@@ -3453,11 +3455,11 @@ def test_cmd_run_dsl_prints_truncation_notice_when_snapshot_truncated(tmp_path, 
     monkeypatch.setattr(ailine, "basrun_apply",
                         lambda out_book, code, workdir, helper_files=(), timeout=None:
                         (True, None, "ok"))
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "表示は先頭 2 行の変化のみ。検証・適用は全行に対して実施" in captured.out
@@ -3476,11 +3478,11 @@ def test_cmd_run_clarify_prints_question_and_exits_3(tmp_path, monkeypatch, caps
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "CLARIFY", "question": "どの列を並べ替えますか？", "args": {}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 3
     assert "どの列を並べ替えますか？" in captured.out
@@ -3494,11 +3496,11 @@ def test_cmd_run_dsl_verification_failure_falls_back_to_clarify_exit_3(tmp_path,
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "SORT", "args": {"col": "存在しない列", "order": "desc"}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="存在しない列で並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 3
     assert "がありません" in captured.out
@@ -3509,11 +3511,11 @@ def test_cmd_run_dsl_dry_shows_confirmation_and_code_without_applying(tmp_path, 
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=True, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "解釈: 操作:並べ替え 対象:金額 順:降順" in captured.out
@@ -3532,11 +3534,11 @@ def test_cmd_run_dsl_postcondition_failure_returns_1(tmp_path, monkeypatch, caps
                         lambda out_book, code, workdir, helper_files=(), timeout=None:
                         (True, None, "ok"))
     # basrun_apply は成功したことにするが、実際には out_book の中身は昇順のまま(=事後条件不合格)。
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 1
     assert "事後条件を満たさない" in captured.out
@@ -3632,11 +3634,11 @@ def test_cmd_run_plan_all_dsl_steps_pass_gives_full_verdict(tmp_path, monkeypatc
     monkeypatch.setattr(ailine, "basrun_apply",
                         lambda out_book, code, workdir, helper_files=(), timeout=None:
                         (True, None, "ok"))
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="金額で降順に並べ替えて見出しを太字に", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=True, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "1. " in captured.out and "✓ 機械検証済み" in captured.out
@@ -3666,12 +3668,12 @@ def test_cmd_run_plan_mixes_dsl_success_and_freeform_warns(tmp_path, monkeypatch
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
         allow_freeform=True)   # ★ W10b: 段の自由生成の関所は無関係（項目別報告を見るテスト）
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0   # ⚠ は失敗ではない
     assert "✓ 機械検証済み" in captured.out
@@ -3710,12 +3712,12 @@ def test_cmd_run_plan_freeform_step_rate_literal_scan_fires(tmp_path, monkeypatc
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="金額で降順に並べ替えて税込み合計も出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
         allow_freeform=True)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "★ 率らしい数値 (1.08) が依頼に無いのに使われています — 検算してください" in captured.out
@@ -3728,11 +3730,11 @@ def test_cmd_run_plan_all_steps_fail_grounding_gives_overall_failure(tmp_path, m
                         {"plan": [{"op": "SORT", "args": {"col": "存在しない列1", "order": "desc"}},
                                   {"op": "BOLD", "args": {"target": "col:存在しない列2"}}]})
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="存在しない列で並べ替えて太字にして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 1
     assert captured.out.count("× 未対応") == 2
@@ -3745,11 +3747,11 @@ def test_cmd_run_plan_dry_previews_without_applying(tmp_path, monkeypatch, capsy
                         lambda model, task, book_meta, temperature=0.1:
                         {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
                                   {"op": "OUT_OF_VOCAB", "about": "条件付き書式"}]})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=True, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "1. " in captured.out
@@ -3789,7 +3791,7 @@ def test_cmd_run_plan_dependent_chaining_resolves_new_column_reference(tmp_path,
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="売上から原価を引いた利益列を作って、利益で降順に並べ替えて",
         model="qwen2.5-coder:7b", refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
@@ -3797,7 +3799,7 @@ def test_cmd_run_plan_dependent_chaining_resolves_new_column_reference(tmp_path,
         #   テストは --values（値ベタ書き）経路として実行する。式検証(二層)は
         #   check_compute_column の専用ユニットテストで別途カバーする。
         values=True)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "列『利益』がありません" not in captured.out
@@ -3870,11 +3872,11 @@ def test_cmd_run_plan_dsl_steps_show_advisories_and_dedup_repeats(tmp_path, monk
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="金額から原価を引いた利益列を作って、見出しを太字にして全体を中央揃えにして",
         model="qwen2.5-coder:7b", refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=True, timeout=180.0, ask=False, values=True)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     # 人が読む表示部分だけを対象にする（末尾の --json 1行は別途 JSON として検証する）。
     display_out = "\n".join(captured.out.strip().splitlines()[:-1])
@@ -4040,11 +4042,11 @@ def test_cmd_run_clarify_on_ambiguous_header_before_translation(tmp_path, monkey
         called["n"] += 1
         return {"plan": [{"op": "FREEFORM", "args": {}}]}
     monkeypatch.setattr(ailine, "translate_task", boom)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 3
     # ★ W8a 項目3: CLARIFY 文言更新（--header-row の使い方まで添える）に追従。
@@ -4072,12 +4074,12 @@ def test_cmd_run_header_row_flag_bypasses_ambiguous_detection_no_clarify(tmp_pat
     monkeypatch.setattr(ailine, "basrun_apply",
                         lambda out_book, code, workdir, helper_files=(), timeout=None:
                         (True, None, "ok"))
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False, values=False,
         header_row=3)
-    ailine.cmd_run(ns)
+    ailine.main(argv)
     captured = capsys.readouterr()
     assert "？" not in captured.out    # CLARIFY に落ちていない
     assert "対象:金額" in captured.out   # 3行目を見出しとして『金額』列を解決できている
@@ -4099,12 +4101,12 @@ def test_cmd_run_without_header_row_flag_still_clarifies_on_ambiguous(tmp_path, 
         called["n"] += 1
         return {"op": "SORT", "args": {"col": "金額", "order": "desc"}}
     monkeypatch.setattr(ailine, "translate_task", boom)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False, values=False,
         header_row=None)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 3
     assert "--header-row" in captured.out
@@ -4123,11 +4125,11 @@ def test_cmd_run_dry_skips_structdump_and_uses_physical_row1(tmp_path, monkeypat
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     assert rc == 0
     assert called["n"] == 0
 
@@ -4887,11 +4889,11 @@ def test_cmd_run_dsl_append_total_shows_factor_source_from_task_text(tmp_path, m
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "APPEND_TOTAL", "args": {"col": "小計", "label": "税込み合計"}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="税込み合計を一番下に出して（消費税10%）", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     # ★ W8a 項目5: 表示ラベル「倍率」→「率」。
@@ -4904,11 +4906,11 @@ def test_cmd_run_dsl_append_total_clarify_hint_has_copy_paste_command(tmp_path, 
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "APPEND_TOTAL", "args": {"col": "小計", "label": "税込み合計"}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 3
     assert "ailine vocab add" in captured.out
@@ -4922,11 +4924,11 @@ def test_cmd_run_dsl_append_total_uses_registered_vocab(tmp_path, monkeypatch, c
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "APPEND_TOTAL", "args": {"col": "小計", "label": "税込み合計"}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="消費税込みの合計を出して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     # ★ W8a 項目5: 表示ラベル「倍率」→「率」。
@@ -4940,11 +4942,11 @@ def test_cmd_run_dsl_append_total_warns_on_llm_factor_mismatch(tmp_path, monkeyp
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "APPEND_TOTAL",
                          "args": {"col": "小計", "label": "税込み合計", "factor": 1.08}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="税込み合計を一番下に出して（消費税10%）", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False, values=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "⚠" in captured.out
@@ -5130,11 +5132,11 @@ def test_cmd_run_dsl_aggregate_neutralizes_unrequested_new_sheet_warning(tmp_pat
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="部門ごとに金額を集計して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "★ 依頼にない新しいシートが作成されました" not in captured.out
@@ -5159,11 +5161,11 @@ def test_cmd_run_dsl_aggregate_silent_when_task_mentions_sheet_keyword(tmp_path,
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="部門ごとに金額を集計シートにまとめて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "依頼にない新しいシート" not in captured.out
@@ -5173,7 +5175,7 @@ def test_cmd_run_dsl_aggregate_silent_when_task_mentions_sheet_keyword(tmp_path,
 # ★ W8b-2 B2: 事故バッテリのpytest化（回帰固定）
 # ===========================================================================
 
-def _chain_run_ns(book, task="何かして", **overrides):
+def _chain_run_argv(book, task="何かして", **overrides):
     """既定(原本直接適用)のまま run する Namespace。B2 バッテリ共通の土台。
        ★ W10b: これらのテストは反映(置換)経路を見るのが目的で、自由生成の関所（項目1）は
        無関係なので allow_freeform=True で素通しする。"""
@@ -5183,7 +5185,7 @@ def _chain_run_ns(book, task="何かして", **overrides):
         dry=False, copy=False, json=False, timeout=180.0, ask=False,
         allow_freeform=True)
     base.update(overrides)
-    return argparse.Namespace(**base)
+    return run_argv(**base)
 
 
 def test_b2_chain_three_runs_then_undo_three_times_matches_each_generation_sha1(tmp_path, monkeypatch):
@@ -5210,7 +5212,7 @@ def test_b2_chain_three_runs_then_undo_three_times_matches_each_generation_sha1(
 
     sha1s = [hashlib.sha1(book.read_bytes()).hexdigest()]   # 世代0（原本）
     for _ in range(3):
-        rc = ailine.cmd_run(_chain_run_ns(book))
+        rc = ailine.main(_chain_run_argv(book))
         assert rc == 0
         sha1s.append(hashlib.sha1(book.read_bytes()).hexdigest())
 
@@ -5250,7 +5252,7 @@ def test_b2_replace_and_fallback_both_fail_leaves_book_untouched(tmp_path, monke
         return real_copy2(src, dst)
     monkeypatch.setattr(ailine.shutil, "copy2", fake_copy2)
 
-    rc = ailine.cmd_run(_chain_run_ns(book))
+    rc = ailine.main(_chain_run_argv(book))
     captured = capsys.readouterr()
     assert rc == 0   # 自由生成の適用自体は成功。反映(置換)だけが失敗している
     assert "置換に失敗した" in captured.out
@@ -5279,7 +5281,7 @@ def test_b2_backup_failure_aborts_replacement_book_untouched(tmp_path, monkeypat
     monkeypatch.setattr(ailine, "make_backup",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
 
-    rc = ailine.cmd_run(_chain_run_ns(book))
+    rc = ailine.main(_chain_run_argv(book))
     captured = capsys.readouterr()
     assert rc == 0
     assert "バックアップに失敗" in captured.out
@@ -5620,11 +5622,11 @@ def test_cmd_run_dsl_insert_rows_dry_shows_confirm_line(tmp_path, monkeypatch, c
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "INSERT_ROWS", "args": {"at": 2, "count": 1}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="2行目の前に1行挿入して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, copy=False, json=False, timeout=180.0, ask=False, values=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "挿入位置:2" in captured.out
@@ -5636,11 +5638,11 @@ def test_cmd_run_dsl_pivot_dry_shows_caveat(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "PIVOT", "args": {"group_col": "部門", "value_col": "金額"}})
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="部門ごとにピボットテーブルで集計して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, copy=False, json=False, timeout=180.0, ask=False, values=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "集計表" in captured.out   # PIVOT_CAVEAT が確認行の直後にも出る
@@ -5825,14 +5827,14 @@ def test_build_parser_overwrite_defaults_false():
 
 # --- cmd_run_dsl 統合 ------------------------------------------------------------
 
-def _overwrite_scenario_ns(book, **overrides):
+def _overwrite_scenario_argv(book, **overrides):
     base = dict(
         book=str(book), task="売上から原価を引いた値を5列目に入れて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=False, json=False, timeout=180.0, ask=False, overwrite=False,
         values=False)
     base.update(overrides)
-    return argparse.Namespace(**base)
+    return run_argv(**base)
 
 def _overwrite_book(tmp_path, name="book.xlsx"):
     # ★ 監査の実際の再現に合わせた列構成（商品/金額/在庫/売上/原価・demo/sample.xlsx 型）。
@@ -5868,8 +5870,8 @@ def test_cmd_run_dsl_new_column_creation_skips_gate_entirely(tmp_path, monkeypat
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "COMPUTE_COLUMN", "args": {"operands": ["売上", "原価"], "operator": "-"}})
     monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_new_column)
-    ns = _overwrite_scenario_ns(book, values=True)
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book, values=True)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "上書きしますか" not in captured.out
@@ -5885,8 +5887,8 @@ def test_cmd_run_dsl_new_column_creation_neutralizes_ghost_warning(tmp_path, mon
                         lambda model, task, book_meta, temperature=0.1:
                         {"op": "COMPUTE_COLUMN", "args": {"operands": ["売上", "原価"], "operator": "-"}})
     monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_new_column)
-    ns = _overwrite_scenario_ns(book, values=True)
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book, values=True)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "変更が元データの範囲外です" not in captured.out
@@ -5921,11 +5923,11 @@ def test_cmd_run_dsl_lookup_fill_suppresses_readonly_source_sheet_warning(tmp_pa
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="単価表から単価を引いてきて明細に入れて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False, values=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "依頼で言及された『単価表』は存在しません/変更されていません" not in captured.out
@@ -5943,8 +5945,8 @@ def test_cmd_run_dsl_overwrite_gate_blocks_noninteractive_exit7(tmp_path, monkey
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = _overwrite_scenario_ns(book)
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 7
     assert "既存の値が 2 件あります" in captured.out
@@ -5962,8 +5964,8 @@ def test_cmd_run_dsl_overwrite_gate_shows_interpretation_summary(tmp_path, monke
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = _overwrite_scenario_ns(book)
-    ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book)
+    ailine.main(argv)
     captured = capsys.readouterr()
     assert "→『5』は既存の『原価』列と解釈しました（既存データあり）" in captured.out
 
@@ -5987,8 +5989,8 @@ def test_cmd_run_dsl_overwrite_gate_bypassed_with_overwrite_flag(tmp_path, monke
                         {"op": "COMPUTE_COLUMN",
                          "args": {"operands": ["売上", "原価"], "operator": "-", "target": "在庫"}})
     monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_overwrite_target)
-    ns = _overwrite_scenario_ns(book, overwrite=True, values=True)
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book, overwrite=True, values=True)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert "上書きしますか" not in captured.out   # 関所自体をスキップ
     assert rc == 0
@@ -6004,8 +6006,8 @@ def test_cmd_run_dsl_overwrite_gate_bypassed_with_copy_flag(tmp_path, monkeypatc
                         {"op": "COMPUTE_COLUMN",
                          "args": {"operands": ["売上", "原価"], "operator": "-", "target": "在庫"}})
     monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_overwrite_target)
-    ns = _overwrite_scenario_ns(book, copy=True, values=True)
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book, copy=True, values=True)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert "上書きしますか" not in captured.out   # --copy は原本に触れないため関所自体が発動しない
     assert rc == 0
@@ -6021,8 +6023,8 @@ def test_cmd_run_dsl_overwrite_gate_interactive_yes_applies(tmp_path, monkeypatc
                          "args": {"operands": ["売上", "原価"], "operator": "-", "target": "在庫"}})
     monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_overwrite_target)
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-    ns = _overwrite_scenario_ns(book, values=True)
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book, values=True)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "✓ 反映しました" in captured.out
@@ -6037,8 +6039,8 @@ def test_cmd_run_dsl_overwrite_gate_interactive_no_aborts(tmp_path, monkeypatch,
                         {"op": "COMPUTE_COLUMN",
                          "args": {"operands": ["売上", "原価"], "operator": "-", "target": "5"}})
     monkeypatch.setattr("builtins.input", lambda prompt="": "n")
-    ns = _overwrite_scenario_ns(book)
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 1
     assert "× 中止した" in captured.out
@@ -6057,8 +6059,8 @@ def test_cmd_run_dsl_overwrite_gate_no_summary_line_when_target_explicit(tmp_pat
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = _overwrite_scenario_ns(book)
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 7
     assert "既存の値が" in captured.out
@@ -6081,14 +6083,14 @@ def _lookup_gate_book(tmp_path, target_values=(999, 999)):
     wb.save(book)
     return book
 
-def _lookup_gate_ns(book, **overrides):
+def _lookup_gate_argv(book, **overrides):
     base = dict(
         book=str(book), task="単価表から単価を引いてきて明細に入れて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=False, json=False, timeout=180.0, ask=False, overwrite=False,
         values=False)
     base.update(overrides)
-    return argparse.Namespace(**base)
+    return run_argv(**base)
 
 def test_cmd_run_dsl_lookup_fill_overwrite_gate_blocks_noninteractive_exit7(tmp_path, monkeypatch, capsys):
     # ★ W10c 致命1: LOOKUP_FILL は旧実装で破壊の関所が構造的に発火しなかった
@@ -6106,8 +6108,8 @@ def test_cmd_run_dsl_lookup_fill_overwrite_gate_blocks_noninteractive_exit7(tmp_
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = _lookup_gate_ns(book)
-    rc = ailine.cmd_run(ns)
+    argv = _lookup_gate_argv(book)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 7
     assert "既存の値が 2 件あります" in captured.out
@@ -6131,8 +6133,8 @@ def test_cmd_run_dsl_lookup_fill_overwrite_gate_bypassed_with_overwrite_flag(tmp
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    ns = _lookup_gate_ns(book, overwrite=True)
-    rc = ailine.cmd_run(ns)
+    argv = _lookup_gate_argv(book, overwrite=True)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert "上書きしますか" not in captured.out   # 関所自体をスキップ
     assert rc == 0
@@ -6165,8 +6167,8 @@ def test_cmd_run_dsl_lookup_fill_missing_column_does_not_corrupt_unrelated_colum
     def _boom(prompt=""):
         raise AssertionError("verify_dsl_args が CLARIFY で止まるはずで input まで来ない")
     monkeypatch.setattr("builtins.input", _boom)
-    ns = _lookup_gate_ns(book, task="単価表を見て単価を入れて")
-    rc = ailine.cmd_run(ns)
+    argv = _lookup_gate_argv(book, task="単価表を見て単価を入れて")
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 3   # CLARIFY 相当（取り違えの疑いありの質問で止まる）
     assert "取り違えている" in captured.out
@@ -6192,8 +6194,8 @@ def test_cmd_run_plan_overwrite_gate_blocks_noninteractive_book_untouched(tmp_pa
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = _overwrite_scenario_ns(book, task="金額で並べ替えて売上から原価を引いた値を5列目に入れて")
-    rc = ailine.cmd_run(ns)
+    argv = _overwrite_scenario_argv(book, task="金額で並べ替えて売上から原価を引いた値を5列目に入れて")
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 7
     assert "  2段目:" in captured.out
@@ -6209,15 +6211,15 @@ def test_cmd_run_shows_notice_v2_once_then_silent(tmp_path, monkeypatch, capsys)
                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
     monkeypatch.setattr(ailine, "ollama_generate",
                         lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, copy=False, json=False, timeout=180.0, ask=False)
-    ailine.cmd_run(ns)
+    ailine.main(argv)
     first = capsys.readouterr().out
     assert "既定で原本に直接反映" in first
 
-    ailine.cmd_run(ns)
+    ailine.main(argv)
     second = capsys.readouterr().out
     assert "既定で原本に直接反映" not in second
 
@@ -6338,11 +6340,11 @@ def test_cmd_run_freeform_gate_blocks_noninteractive_exit8_book_untouched(tmp_pa
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 8
     assert "この処理を続けるには" in captured.out
@@ -6365,12 +6367,12 @@ def test_cmd_run_freeform_gate_allow_freeform_flag_applies(tmp_path, monkeypatch
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=False, json=False, timeout=180.0, ask=False,
         allow_freeform=True)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "機械検証できません" not in captured.out   # 関所自体をスキップ
@@ -6393,11 +6395,11 @@ def test_cmd_run_freeform_gate_interactive_yes_applies_then_undo_restores(tmp_pa
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     assert rc == 0
     assert book.read_bytes() != original_bytes   # 適用された
 
@@ -6415,11 +6417,11 @@ def test_cmd_run_freeform_gate_interactive_no_aborts_book_untouched(tmp_path, mo
     monkeypatch.setattr(ailine, "ollama_generate",
                         lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
     monkeypatch.setattr("builtins.input", lambda prompt="": "n")
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 1
     assert "× 中止した" in captured.out
@@ -6435,11 +6437,11 @@ def test_cmd_run_freeform_gate_dry_run_never_asks(tmp_path, monkeypatch, capsys)
     def _boom(prompt=""):
         raise AssertionError("dry では確認を聞いてはいけない")
     monkeypatch.setattr("builtins.input", _boom)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, copy=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     assert rc == 0
 
 def test_cmd_run_freeform_gate_sweep_warning_shown_in_output(tmp_path, monkeypatch, capsys):
@@ -6457,11 +6459,11 @@ def test_cmd_run_freeform_gate_sweep_warning_shown_in_output(tmp_path, monkeypat
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="氏名の列を書き換えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 8
     assert "疑わしい" in captured.out
@@ -6487,11 +6489,11 @@ def test_cmd_run_plan_freeform_step_gate_blocks_noninteractive_book_untouched(tm
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 8
     assert "  2段目:" in captured.out
@@ -6516,12 +6518,12 @@ def test_cmd_run_plan_freeform_step_gate_allow_freeform_applies(tmp_path, monkey
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="金額で降順に並べ替えて条件付き書式もつけて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
         allow_freeform=True)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "機械検証できません" not in captured.out
@@ -6595,11 +6597,11 @@ def test_cmd_run_plan_prints_interpretation_line_per_step_before_applying(tmp_pa
     monkeypatch.setattr(ailine, "basrun_apply",
                         lambda out_book, code, workdir, helper_files=(), timeout=None:
                         (True, None, "ok"))
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="金額で降順に並べ替えて見出しを太字に", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert "  1段目: 解釈: 操作:並べ替え" in captured.out
@@ -6647,7 +6649,7 @@ def test_cmd_run_plan_reproduces_bold_target_leak_and_shows_mismatch_warning(tmp
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="数量と単価をかけた金額列を作って、見出しを太字にして",
         model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
@@ -6655,7 +6657,7 @@ def test_cmd_run_plan_reproduces_bold_target_leak_and_shows_mismatch_warning(tmp
         values=True)   # ★ --values（式でなく値ベタ書き）: フェイクが実データで postcondition
                         #   を実際に pass させ、current_meta の再読込(次段の new_cols 検出)を
                         #   正しく発火させる（fail 時は current_meta が更新されない既存仕様のため）。
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0   # 1段目(COMPUTE_COLUMN)は実データで pass し、2段目の new_cols 検出も動く
     # 2段目の対象『数量*単価』は直前段(COMPUTE_COLUMN)が新規作成した実在列であり、
@@ -6682,11 +6684,11 @@ def test_cmd_run_dsl_success_prints_scope_note(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ailine, "basrun_apply",
                         lambda out_book, code, workdir, helper_files=(), timeout=None:
                         (True, None, "ok"))
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="見出し行を太字にして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
     assert ailine._VERIFY_SCOPE_NOTE in captured.out
@@ -6835,11 +6837,11 @@ def test_set_column_value_end_to_end_via_cmd_run_dsl(tmp_path, monkeypatch, caps
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(p), task="備考列を全部『確認済み』にして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     captured = capsys.readouterr()
     # 既存値(旧×2件)がある列への上書き＝破壊の関所が発火し、非対話では exit 7 で案内する
     assert rc == 7

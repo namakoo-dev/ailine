@@ -22,7 +22,6 @@
    `pytest tests/test_compute_column_chain_local.py`）。
    ★ tests/test_bold_local.py と同じ後始末方針（taskkill 名前一括はしない・
    ailine._stop_office() に委譲）。"""
-import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +32,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 import ailine
+
+from _run_argv import run_argv  # noqa: E402  — C2: cmd_run 直呼び用 Namespace → main(argv) 変換
 
 
 def _soffice_process_count() -> int:
@@ -80,12 +81,12 @@ def test_compound_plan_compute_column_operand_from_prior_step_passes_without_val
                 ]
             })
 
-        ns = argparse.Namespace(
+        argv = run_argv(
             book=str(book), task=task_text, model="qwen2.5-coder:7b",
             refs=None, helpers=None, repair=0, temperature=0.2,
             dry=False, copy=True, json=False, timeout=180.0, ask=False,
             allow_freeform=True)
-        rc = ailine.cmd_run(ns)
+        rc = ailine.main(argv)
         captured = capsys.readouterr()
 
         assert rc == 0, captured.out

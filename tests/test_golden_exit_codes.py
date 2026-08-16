@@ -19,6 +19,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ailine  # noqa: E402
 
+from _run_argv import run_argv  # noqa: E402  — C2: cmd_run 直呼び用 Namespace → main(argv) 変換
+
 
 def _book(tmp_path, rows, name="b.xlsx"):
     p = tmp_path / name
@@ -62,14 +64,14 @@ def _patch_lossy_normalize(monkeypatch):
     monkeypatch.setattr(ailine, "normalize_book", fake_normalize)
 
 
-def _fidelity_gate_ns(book, **overrides):
+def _fidelity_gate_argv(book, **overrides):
     base = dict(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, json=False, timeout=180.0, ask=False,
         accept_loss=False, copy=False, allow_freeform=True)
     base.update(overrides)
-    return argparse.Namespace(**base)
+    return run_argv(**base)
 
 
 def _gate_ns(**overrides):
@@ -91,11 +93,11 @@ def test_exit_0_success(tmp_path, monkeypatch):
                          lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
     monkeypatch.setattr(ailine, "ollama_generate",
                          lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     assert rc == 0
 
 
@@ -136,11 +138,11 @@ def test_exit_3_clarify(tmp_path, monkeypatch):
     }}}}
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "build_struct_dump", lambda book, workdir: ambiguous)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="いい感じにして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     assert rc == 3
 
 
@@ -150,7 +152,7 @@ def test_exit_4_fidelity_gate(tmp_path, monkeypatch, capsys):
     _patch_lossy_normalize(monkeypatch)
     monkeypatch.setattr(ailine, "translate_task",
                          lambda *a, **k: {"op": "FREEFORM", "args": {}})
-    rc = ailine.cmd_run(_fidelity_gate_ns(book))
+    rc = ailine.main(_fidelity_gate_argv(book))
     captured = capsys.readouterr()
     assert rc == 4
     assert "--accept-loss" in captured.out
@@ -161,11 +163,11 @@ def test_exit_5_excel_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     book = _book(tmp_path, [["商品", "金額"], ["a", 1]])
     (tmp_path / f"~${book.name}").write_bytes(b"lock")
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     assert rc == 5
 
 
@@ -178,11 +180,11 @@ def test_exit_6_run_lock_busy(tmp_path, monkeypatch):
     lock_path.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
                                      .isoformat(timespec="seconds")}), encoding="utf-8")
     monkeypatch.setattr(ailine, "_pid_alive", lambda pid: pid == other_pid)
-    ns = argparse.Namespace(
+    argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.cmd_run(ns)
+    rc = ailine.main(argv)
     assert rc == 6
 
 
