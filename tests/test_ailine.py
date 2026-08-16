@@ -2896,6 +2896,11 @@ def test_check_lookup_fill_master_reversed_column_order_gives_actionable_guidanc
     # ★ W10b 項目4a(摩擦): マスタ表が「値→キー」の順(単価が列0・商品名が列1)だと
     # VLookupFromTable ヘルパ(常に列0=キー・列1=値固定)が1件も引けない。旧メッセージは
     # 「対応表に載っているキーが1件も転記されていない」とだけ言って原因を示さなかった。
+    # ★ W10f 項目5: この genuine な列順違いのケースでも従来どおり fail することを
+    # 固定する（誤診断の是正で断定をやめた結果、本当の列順違いまで見逃す方向に倒れて
+    # いないことの実証＝濡れ衣の逆）。ただし文言は『マスタ表の列順が違う』と断定せず
+    # 『可能性があります』と並べる形に変わった（区別できない以上、断定は飛躍）ため、
+    # 期待文言をそちらに更新する。actionable な直し方（A 列にキー・B 列に値）は残す。
     wb = openpyxl.Workbook()
     ws1 = wb.active; ws1.title = "明細"
     for row in [["商品", "数量", "単価"], ["りんご", 2, None], ["バナナ", 3, None]]:
@@ -2909,8 +2914,74 @@ def test_check_lookup_fill_master_reversed_column_order_gives_actionable_guidanc
     status, reason = ailine.check_lookup_fill(p, args)
     assert status == "fail"
     assert "単価表" in reason
+    assert "可能性があります" in reason   # ★ 断定でなく可能性として並べる
     assert "キー列→値列の順" in reason
     assert "A 列にキー" in reason and "B 列に値" in reason
+
+
+# --- ★ W10f 項目5: LOOKUP_FILL のキー列を operand にすると誤診断する（Namakoo 実測の
+#   再現をそのまま回帰テストにする）。VLookupFromTable ヘルパは getString()(LibreOffice が
+#   評価した文字列)でキーを照合するため、前段の式(=A2 等)で埋まったキー列でも転記自体は
+#   正しく動く。旧実装は openpyxl の raw 読み(式文字列そのもの)でキーを拾っていたため
+#   対応表と1件も一致せず、正しく転記された明細に対して『マスタ表の列順が違う』という
+#   濡れ衣を着せていた。use_formula=True を配線し data_only 側から読むよう直す。 ---
+
+def test_check_lookup_fill_formula_mode_key_col_from_prior_formula_passes_when_cache_present(tmp_path):
+    # ★ Namakoo が貼った純関数レベルの再現。明細シートのキー列(商品)が前段の式
+    # (=A2 等)で埋まっている状態でも、転記は正しく完了していれば pass すること。
+    p = tmp_path / "lookup_formula_key.xlsx"
+    wb = openpyxl.Workbook(); ws1 = wb.active; ws1.title = "明細"
+    ws1.append(["元商品", "商品", "数量", "単価"])
+    ws1.append(["りんご", None, 2, 100]); ws1["B2"] = "=A2"
+    ws1.append(["バナナ", None, 3, 200]); ws1["B3"] = "=A3"
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品", "単価"], ["りんご", 100], ["バナナ", 200]]:
+        ws2.append(row)
+    wb.save(p)
+    _inject_formula_string_cache(p, "xl/worksheets/sheet1.xml", {"B2": "りんご", "B3": "バナナ"})
+    args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
+    status, reason = ailine.check_lookup_fill(p, args, use_formula=True)
+    assert status == "pass"
+    assert "2 行を検証" in reason
+
+def test_check_lookup_fill_formula_mode_key_col_no_cache_fails_with_distinct_reason(tmp_path):
+    # 式はあるがキャッシュ値が無い(LibreOffice を通していない)場合は、直った後も
+    # 検証できず fail のままだが、理由が『マスタ表の列順が違う』という誤診断ではなく
+    # 『キャッシュ値が無く検証できない』という正確な診断に変わる（0cf9218 空虚な検証
+    # 合格の禁止 — 『対象が無い』と『対象はあるが読めない』を混同しない）。
+    p = tmp_path / "lookup_formula_key_nocache.xlsx"
+    wb = openpyxl.Workbook(); ws1 = wb.active; ws1.title = "明細"
+    ws1.append(["元商品", "商品", "数量", "単価"])
+    ws1.append(["りんご", None, 2, 100]); ws1["B2"] = "=A2"
+    ws1.append(["バナナ", None, 3, 200]); ws1["B3"] = "=A3"
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品", "単価"], ["りんご", 100], ["バナナ", 200]]:
+        ws2.append(row)
+    wb.save(p)
+    args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
+    status, reason = ailine.check_lookup_fill(p, args, use_formula=True)
+    assert status == "fail"
+    assert "キャッシュ値が無く検証できない行が 2 件" in reason
+    assert "列順が違う" not in reason
+    assert "可能性があります" not in reason   # 読めなかっただけで判定不能とは別の主張
+
+def test_check_lookup_fill_formula_mode_plain_key_values_still_pass(tmp_path):
+    # 対照: キー列が素の値(式でない)なら use_formula=True でも従来どおり pass する。
+    p = tmp_path / "lookup_formula_mode_plain_key.xlsx"
+    wb = openpyxl.Workbook(); ws1 = wb.active; ws1.title = "明細"
+    ws1.append(["商品", "数量", "単価"])
+    ws1.append(["りんご", 2, 100])
+    ws1.append(["バナナ", 3, 200])
+    ws1.append(["みかん", 1, 150])
+    ws2 = wb.create_sheet("単価表")
+    for row in [["商品", "単価"], ["りんご", 100], ["バナナ", 200], ["みかん", 150]]:
+        ws2.append(row)
+    wb.save(p)
+    args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
+    status, reason = ailine.check_lookup_fill(p, args, use_formula=True)
+    assert status == "pass"
+    assert reason == "3 行を検証"
+
 
 def test_check_aggregate_passes_when_sums_correct(tmp_path):
     wb = openpyxl.Workbook()
@@ -4133,6 +4204,36 @@ def _inject_formula_cache(path, sheet_filename: str, addr_to_value: dict) -> Non
                     assert n == 1, (
                         f"_inject_formula_cache: {addr} に注入できなかった（xlsx の直列化の形が "
                         f"想定外の可能性）。sheet={sheet_filename}")
+                data = text.encode("utf-8")
+            zout.writestr(item, data)
+    tmp.replace(path)
+
+
+def _inject_formula_string_cache(path, sheet_filename: str, addr_to_str: dict) -> None:
+    """テスト専用: 文字列を返す数式セル(=A2 等)へ t="str" 付きキャッシュ値を注入する。
+       ★ W10f 項目5: _inject_formula_cache は数値専用（t 属性を書かない＝既定の数値型の
+       まま）。LOOKUP_FILL のキー列は文字列キーを想定するため、<c> の t 属性も
+       t="str"（OOXML の「式の文字列キャッシュ」型）へ書き換える別ヘルパを用意する。"""
+    import re
+    import zipfile
+    tmp = path.with_suffix(".tmp.xlsx")
+    with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == sheet_filename:
+                text = data.decode("utf-8")
+                for addr, value in addr_to_str.items():
+                    pattern = re.compile(
+                        rf'<c r="{addr}"([^>]*)>(.*?<f>.*?</f>)(?:<v\s*/>|<v>.*?</v>)?</c>')
+
+                    def _sub(m, value=value):
+                        attrs = re.sub(r'\s*t="[^"]*"', '', m.group(1))
+                        return f'<c r="{addr}"{attrs} t="str">{m.group(2)}<v>{value}</v></c>'
+
+                    text, n = pattern.subn(_sub, text, count=1)
+                    assert n == 1, (
+                        f"_inject_formula_string_cache: {addr} に注入できなかった（xlsx の"
+                        f"直列化の形が想定外の可能性）。sheet={sheet_filename}")
                 data = text.encode("utf-8")
             zout.writestr(item, data)
     tmp.replace(path)

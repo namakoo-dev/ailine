@@ -2792,10 +2792,26 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
     return "pass", f"{checked} 行を検証{note}"
 
 
-def check_lookup_fill(path: Path, args: dict, header_row: int = 1) -> tuple:
+def check_lookup_fill(path: Path, args: dict, header_row: int = 1,
+                       use_formula: bool = False) -> tuple:
     """★ W3: header_row は対象シート(target_sheet=1枚目)の見出し行。参照表(source_sheet)は
        常に「列0=キー・列1=値」の物理1行目見出し前提（VLookupFromTable ヘルパの仕様どおり・
-       検出対象外）。"""
+       検出対象外）。
+       ★ W10f 項目5: use_formula のとき対象シートのキー列を data_only(計算後の値)側から
+       読む。VLookupFromTable ヘルパ自体は getString()（LibreOffice が式を評価した文字列）
+       でキーを照合するため、前段の式(=A2 等)で埋まったキー列でも転記そのものは正しく
+       動く。旧実装は openpyxl の raw 読み（式文字列そのもの）でキーを拾っていたため
+       対応表と1件も一致せず、正しく転記されたブックに対して『マスタ表の列順が違う』と
+       いう誤診断（濡れ衣）を出していた（Namakoo の純関数レベルの実測をそのまま回帰
+       テストにする）。LOOKUP_FILL は check_compute_column と同型の行独立の検証（他行の
+       結果に影響しない）なので、キーが読めなかった行は checked から除外する部分採点に
+       する（0cf9218 空虚な検証合格の禁止の趣旨 — 読めた行だけを『検証済み』と名乗る）。
+       ★ 誤診断の是正: 『対応表のキーが1件も転記されていない』という観測から即座に
+       『マスタ表の列順が違う』と断定するのは飛躍だった。まずキーが読めなかった行を
+       別集計し（『対象が無い』と『対象はあるが読めない』を混同しない）、キーが全部
+       読めたのに1件も一致しない場合でも、本当に列順が違うのか単にキー値そのものが
+       対応表と食い違うのかはこのデータだけでは区別できないため、断定をやめて
+       『可能性』として並べる。"""
     wb = openpyxl.load_workbook(path)
     if args["target_sheet"] not in wb.sheetnames or args["source_sheet"] not in wb.sheetnames:
         wb.close()
@@ -2812,35 +2828,57 @@ def check_lookup_fill(path: Path, args: dict, header_row: int = 1) -> tuple:
     while sws.cell(row=r, column=1).value not in (None, ""):
         lookup[sws.cell(row=r, column=1).value] = sws.cell(row=r, column=2).value
         r += 1
+    wb_v = None
+    tws_v = None
+    if use_formula:
+        wb_v = openpyxl.load_workbook(path, data_only=True)
+        tws_v = wb_v[args["target_sheet"]]
     scanned = 0   # ★ 止血1: 対象シートに行が1件も無い(0件)場合と、行はあるが1件も
                   #   対応表に載っていない場合を別のメッセージで区別する。
     checked = 0
+    uncached = 0
     r = header_row + 1
     while tws.cell(row=r, column=key_idx).value not in (None, ""):
         scanned += 1
-        key = tws.cell(row=r, column=key_idx).value
+        key_raw = tws.cell(row=r, column=key_idx).value
+        key = tws_v.cell(row=r, column=key_idx).value if use_formula else key_raw
+        if use_formula and key is None and isinstance(key_raw, str) and key_raw.startswith("="):
+            uncached += 1   # ★ W10f: キー列に式はあるがキャッシュ値が無い（『対象が無い』とは別）
+            r += 1
+            continue
         if key in lookup:
             got = tws.cell(row=r, column=tgt_idx).value
             want = lookup[key]
             if got != want:
                 wb.close()
+                if wb_v is not None:
+                    wb_v.close()
                 return "fail", f"{r}行目: キー『{key}』の転記値が不一致 (期待 {want!r} 実際 {got!r})"
             checked += 1
         r += 1
     wb.close()
+    if wb_v is not None:
+        wb_v.close()
     if scanned == 0:
         return "fail", _ZERO_TARGET_REASON
+    if uncached == scanned:
+        return "fail", (f"対象シートのキー列に式はあるがキャッシュ値が無く検証できない行が "
+                         f"{uncached} 件あり、転記結果を検証できません"
+                         f"（LibreOffice を通していない可能性）")
+    note = f"（キー列に式はあるがキャッシュ値が無く検証できない {uncached} 行は対象外）" if uncached else ""
     if checked == 0:
-        # ★ W10b 項目4a: 摩擦(operator 実測) — マスタ表の列順が値→キーだと1件も引けず
-        #   ここに落ちるが、旧メッセージは原因を示さなかった。VLookupFromTable ヘルパは
-        #   常に「参照表は列0=キー・列1=値」固定（列順非依存化は他列数のマスタで誤ヒット
-        #   するリスクが高くリスク高と判断・具体誘導での対応を選んだ＝W10b 報告参照）。
+        # ★ W10b 項目4a → W10f 項目5: ここまで来た行はキーが読めている（『読めなかった』
+        #   場合とは別集計済み）。ただし『本当に列順が違う』のか『キー値そのものが対応表と
+        #   一致しない』のかはこのデータだけでは区別できないため、断定せず可能性として
+        #   並べる（マスタ表が実際にキー列→値列の順で書かれた具体的な直し方は残す）。
         return "fail", (
             f"対応表『{args['source_sheet']}』に載っているキーが1件も転記されていません。"
-            f"マスタ表はキー列→値列の順である必要があります。『{args['source_sheet']}』"
-            f"シートの A 列にキー（{args['key_col']} に対応する値）、B 列に値を置いてください"
+            f"マスタ表の列順が違う可能性があります。または『{args['target_sheet']}』シートの"
+            f"『{args['key_col']}』列の値が対応表のキーと一致していない可能性があります。"
+            f"マスタ表がキー列→値列の順であれば、『{args['source_sheet']}』シートの A 列に"
+            f"キー（{args['key_col']} に対応する値）、B 列に値を置いてください{note}"
         )
-    return "pass", f"{checked} 行を検証"
+    return "pass", f"{checked} 行を検証{note}"
 
 
 def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bool = False) -> tuple:
@@ -3326,6 +3364,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
        operand を式ビューから読む同型バグが SORT/AGGREGATE にもあったため、その2つにも
        渡すよう広げた（同じ理由で check_compute_column_single_factor は
        check_compute_column からの委譲で既に受け取っている）。
+       ★ W10f 項目5: LOOKUP_FILL のキー列にも同型バグ(対象シートのキー列を式ビューから
+       読む)があったため渡すよう広げた。
        ★ W9: source_book（適用前のコピー・無ければ None）は INSERT_ROWS/AUTOFIT だけが使う
        （before/after の突き合わせが要る2op・他は無視される安全なキーワード引数）。
        ★ 止血2: チェッカー内で予期しない例外が起きても生の Python トレースバックを
@@ -3339,7 +3379,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
             return "fail", f"未対応の op: {op}"
         if op == "COMPUTE_COLUMN":
             return fn(out_book, resolved_args, header_row, use_formula)
-        if op in ("SORT", "AGGREGATE"):
+        if op in ("SORT", "AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
