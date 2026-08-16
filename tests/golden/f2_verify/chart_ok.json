@@ -1,7 +1,8 @@
 {
   "ok": true,
   "resolved": {
-    "value_col": "金額"
+    "value_col": "金額",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": null

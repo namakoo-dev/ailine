@@ -1,7 +1,8 @@
 {
   "ok": false,
   "resolved": {
-    "at": "0"
+    "at": "0",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "行番号『0』が不正です（1以上の整数）"

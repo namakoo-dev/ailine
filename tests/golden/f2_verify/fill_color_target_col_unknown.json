@@ -2,7 +2,8 @@
   "ok": false,
   "resolved": {
     "target": "col:存在しない",
-    "color": "red"
+    "color": "red",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "列『存在しない』がありません。ある列: 商品, 数量, 単価, 金額"

@@ -1,7 +1,8 @@
 {
   "ok": false,
   "resolved": {
-    "target": "xyz"
+    "target": "xyz",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "対象『xyz』の形式が不明です（row:N / col:列名 / all）"

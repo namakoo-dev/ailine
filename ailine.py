@@ -78,6 +78,9 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
 )
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
+from ailine_core.target_sheet import (   # ★ 挙動変更#2: 対象シートの決定を一箇所に閉じ込める
+    resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
+)
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
 DEFAULT_HELPERS = HERE / "helpers"
@@ -528,24 +531,28 @@ CLARIFY_HEADER_ROW_QUESTION = ("見出しが何行目か分かりません。"
                                 "`--header-row 3` のように指定して再実行してください")
 
 
-def resolve_header_rows(struct_dump: dict, sheets: list) -> tuple:
+def resolve_header_rows(struct_dump: dict, sheets: list, target_sheet: str | None = None) -> tuple:
     """全シートの見出し行(1起点)を決める。(header_rows: {シート名: 行}, clarify_question|None)。
-       ★ 1枚目シートだけ StructDump のヒューリスティクスで推定する（DSL 操作は1枚目シートに
-       限定されているため）。他シート（LOOKUP_FILL の参照表等）は物理1行目を既定にする。
+       ★ 挙動変更#2: 対象シート（target_sheet・省略時は1枚目＝旧挙動と同一）だけ StructDump の
+       ヒューリスティクスで推定する（DSL 操作の書き込み対象はこのシート1枚だけのため）。
+       他シート（LOOKUP_FILL の参照表等）は物理1行目を既定にする。
+       ★ build_struct_dump は元々全シート分の rows(書式的特徴) を計算済み（_structdump_macro が
+       `For i = 0 To n - 1` で全シートを走査する）。対象シートが1枚目でなくても StructDump 自体の
+       やり直しは不要 — ここで見る辞書のキーを sheets[0] から target_sheet に差し替えるだけでよい。
        StructDump が無い（テストでの normalize_book 差し替え等）場合は全シート1行目のまま
-       （旧挙動と同一・CLARIFY は出さない）。自信が持てない場合だけ1枚目シートについて
+       （旧挙動と同一・CLARIFY は出さない）。自信が持てない場合だけ対象シートについて
        CLARIFY 質問を返す（推測で進まない）。"""
     header_rows = {s: 1 for s in sheets}
     if not sheets:
         return header_rows, None
     sd_sheets = (struct_dump or {}).get("sheets", {})
-    first = sheets[0]
-    info = sd_sheets.get(first)
+    target = target_sheet if target_sheet in sheets else sheets[0]
+    info = sd_sheets.get(target)
     if info is None:
         return header_rows, None
     row, confident = detect_header_row(info)
     if confident:
-        header_rows[first] = row
+        header_rows[target] = row
         return header_rows, None
     return header_rows, CLARIFY_HEADER_ROW_QUESTION
 
@@ -855,8 +862,10 @@ def _declared_new_column_letter(op: str, resolved: dict, book_meta: dict) -> str
     if sheet_key:
         sheet = resolved.get(sheet_key)
     else:
+        # ★ 挙動変更#2: sheets[0] 決め打ちをやめ、verify_dsl_args が一箇所で決めた
+        # resolved["_target_sheet"] を読む（旧値と後方互換のフォールバック付き）。
         sheets = book_meta.get("sheets") or []
-        sheet = sheets[0] if sheets else None
+        sheet = resolved.get("_target_sheet") or (sheets[0] if sheets else None)
     if not sheet:
         return None
     headers = book_meta.get("headers", {}).get(sheet, [])
@@ -1800,20 +1809,28 @@ def resolve_col_ref(raw, headers: list) -> tuple:
     return None, False, f"列『{s}』がありません。ある列: {known}"
 
 
-def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab: dict | None = None) -> tuple:
+def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab: dict | None = None,
+                     target_sheet: str | None = None) -> tuple:
     """② 検証。(ok, resolved_args, inferred_keys, error_message)。
        args のシート/列名が実在するかを機械照合し、実在名に解決する。実在しなければ
        CLARIFY 相当のエラーメッセージを返す（呼び出し側が確認質問として表示する）。
        ★ A': task/vocab は APPEND_TOTAL の倍率(factor)確定専用（他の op は使わない・
        既定値のままで後方互換）。倍率の出典は resolved["_sources"]["factor"] に、
        LLM 由来の値との食い違いは resolved["_warnings"] に積む（戻り値のタプル形は
-       変えない＝呼び出し側の unpack を壊さない）。"""
+       変えない＝呼び出し側の unpack を壊さない）。
+       ★ 挙動変更#2: target_sheet（省略時は1枚目＝旧挙動と同一）が「対象シート」の
+       決定そのもの（resolve_target_sheet が一箇所で決めた値・呼び出し側が渡す）。
+       resolved["_target_sheet"] に必ず積む — codegen_dsl・_maybe_warn_target_overwrite・
+       _declared_new_column_letter・postcondition の各チェッカーは、みなここを読むだけで
+       個別に sheets[0] を仮定しない（LOOKUP_FILL だけは自分自身の target_sheet slot が
+       別途あるので、それを resolved["_target_sheet"] にも複製する）。"""
     sheets = book_meta["sheets"]
     headers = book_meta["headers"]
     if not sheets:
         return False, dict(args), set(), "ブックにシートが無い"
-    first_sheet = sheets[0]
+    first_sheet = target_sheet if target_sheet in sheets else sheets[0]
     resolved = dict(args)
+    resolved["_target_sheet"] = first_sheet
     inferred: set = set()
 
     def resolve_in(key: str, sheet_name: str):
@@ -1959,8 +1976,14 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return False, resolved, inferred, err
         if (err := check_sheet("source_sheet")):
             return False, resolved, inferred, err
-        if resolved["target_sheet"] != first_sheet:
-            return False, resolved, inferred, f"対象シートは1枚目（{first_sheet}）のみ対応しています"
+        # ★ 挙動変更#2: 旧実装はここで「対象シートは1枚目のみ対応しています」と拒否していた
+        #   （散在した『1枚目固定』の一つ・査定の致命そのもの）。LOOKUP_FILL は元々
+        #   target_sheet を自分の必須 slot として名前で受け取り check_sheet で実在確認まで
+        #   済ませているので、この制限を外すだけで対応できる。resolved["_target_sheet"] は
+        #   LOOKUP_FILL 自身の target_sheet を正とする（他 op 用の一般解決 first_sheet より
+        #   こちらを優先 — 依頼文に転記先/参照元の2シート名が両方出て一般解決が曖昧に
+        #   フォールバックしていても、LOOKUP_FILL のここでの解決は影響を受けない）。
+        resolved["_target_sheet"] = resolved["target_sheet"]
         # ★ W10c 致命2: target_col は COMPUTE_COLUMN の target と違い OP_SCHEMA 上は必須
         #   slot なので、LLM は「存在しないなら空にする」を選べない。実測（監査再現）:
         #   対象シートに『単価』列がまだ無いのに転記を頼むと、LLM がそれと無関係な
@@ -2225,6 +2248,14 @@ def _wrap_basic(body: str) -> str:
     return "Option VBASupport 1\nOption Explicit\n\nSub Run(oDoc As Object)\n" + body + "End Sub\n"
 
 
+def _wrap_basic_for_sheet(body: str, book_meta: dict, target_sheet: str | None) -> str:
+    """★ 挙動変更#2: 薄い配線。本体（対象シートの一時的な並べ替えロジック）は
+       ailine_core.target_sheet.wrap_basic_for_sheet に置く（移植可能性の番人 —
+       tests/ailine_py_line_budget.txt 参照）。_wrap_basic を「対象シートが1枚目のときの
+       既定ラップ」としてコールバックで渡す（ailine_core → ailine の逆流を避けるため）。"""
+    return wrap_basic_for_sheet(body, _wrap_basic, book_meta.get("sheets") or [], target_sheet)
+
+
 def _scan_last_row_basic(var: str = "oSheet", key_col: str = "0",
                           start_row: str = "1", min_ok: str | None = None) -> str:
     """走査ループの定型（refs の作法どおり：A列を上から走査して最終データ行を探す）。
@@ -2245,22 +2276,32 @@ def _scan_last_row_basic(var: str = "oSheet", key_col: str = "0",
 
 def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool = True) -> str:
     """④ 決定論 codegen。既存ヘルパへの Call を最優先し、無い操作だけテンプレ Basic を書く。
-       ★ W3: book_meta["header_rows"] があれば1枚目シートの見出し行(1起点)をそこから読み、
+       ★ W3: book_meta["header_rows"] があれば対象シートの見出し行(1起点)をそこから読み
+       （★ 挙動変更#2 より前は対象シート＝常に1枚目だった。下記参照）、
        0起点(hr0)に変換して全 op に一貫して渡す（『三層全部が同じ見出し推定を使う』の codegen 側）。
        header_rows が無い/キーが無い book_meta（_SAMPLE_META 等の旧テスト値）は既定1行目
        （hr0=0）＝旧挙動と完全に同一の Basic を生成する。
        use_formula: COMPUTE_COLUMN の既定を式（=B2*C2 等）にする（★ W3 Part3）。False で
-       従来の値ベタ書きに戻す（--values）。"""
+       従来の値ベタ書きに戻す（--values）。
+       ★ 挙動変更#2: 対象シートは resolved_args["_target_sheet"]（verify_dsl_args が一箇所で
+       決めた値）を読む。無ければ従来どおり1枚目（後方互換 — codegen_dsl を直接呼ぶ既存の
+       単体テスト・golden はこのキーを持たない args を渡しており、その挙動は変えない）。
+       wrap() は _wrap_basic の対象シート対応版（_wrap_basic_for_sheet）に book_meta/
+       first_sheet を閉じ込めたショートハンド — 対象シートの決定を codegen 側でも
+       一箇所（_wrap_basic_for_sheet）に寄せるための配線。"""
     headers = book_meta["headers"]
-    first_sheet = book_meta["sheets"][0]
+    first_sheet = resolved_args.get("_target_sheet") or book_meta["sheets"][0]
     header_row = book_meta.get("header_rows", {}).get(first_sheet, 1)
     hr0 = header_row - 1   # Basic 0起点の見出し行
+
+    def wrap(body: str) -> str:
+        return _wrap_basic_for_sheet(body, book_meta, first_sheet)
 
     if op == "SORT":
         col_idx = headers[first_sheet].index(resolved_args["col"])
         asc = "True" if resolved_args["order"] == "asc" else "False"
         last_col = len(headers[first_sheet]) - 1
-        return _wrap_basic(f"    Call SortByColumn(oDoc, {hr0}, {last_col}, {col_idx}, {asc})\n")
+        return wrap(f"    Call SortByColumn(oDoc, {hr0}, {last_col}, {col_idx}, {asc})\n")
 
     if op == "LOOKUP_FILL":
         theaders = headers[resolved_args["target_sheet"]]
@@ -2278,17 +2319,17 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
             header_name = str(target_col_name).replace('"', '""')
             header_write = (f'    oDoc.Sheets.getByIndex(0).getCellByPosition({tgt_idx}, {hr0})'
                              f'.setString("{header_name}")\n')
-        return _wrap_basic(header_write +
+        return wrap(header_write +
                             f'    Call VLookupFromTable(oDoc, {hr0}, {key_idx}, {tgt_idx}, "{src}")\n')
 
     if op == "AGGREGATE":
         g_idx = headers[first_sheet].index(resolved_args["group_col"])
         v_idx = headers[first_sheet].index(resolved_args["value_col"])
-        return _wrap_basic(f"    Call SummaryTable(oDoc, {hr0}, {g_idx}, {v_idx})\n")
+        return wrap(f"    Call SummaryTable(oDoc, {hr0}, {g_idx}, {v_idx})\n")
 
     if op == "NUMBER_FORMAT":
         col_idx = headers[first_sheet].index(resolved_args["col"])
-        return _wrap_basic(f"    Call FormatThousands(oDoc, {hr0}, {col_idx})\n")
+        return wrap(f"    Call FormatThousands(oDoc, {hr0}, {col_idx})\n")
 
     if op == "MERGE":
         c1s, r1s, c2s, r2s = re.match(
@@ -2296,11 +2337,11 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         col1 = column_index_from_string(c1s.upper()) - 1
         col2 = column_index_from_string(c2s.upper()) - 1
         row1, row2 = int(r1s) - 1, int(r2s) - 1
-        return _wrap_basic(f"    Call MergeCells(oDoc, {col1}, {row1}, {col2}, {row2})\n")
+        return wrap(f"    Call MergeCells(oDoc, {col1}, {row1}, {col2}, {row2})\n")
 
     if op == "CHART":
         v_idx = headers[first_sheet].index(resolved_args["value_col"])
-        return _wrap_basic(f"    Call InsertBarChart(oDoc, {hr0}, {v_idx})\n")
+        return wrap(f"    Call InsertBarChart(oDoc, {hr0}, {v_idx})\n")
 
     if op == "APPEND_TOTAL":
         # ★ W6: ヘルパは無し（罫線・カンマ等の見栄えまでは踏み込まない・素の SUM 式だけ）。
@@ -2330,12 +2371,12 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         body += (f'    oSheet.getCellByPosition({col_idx}, totalRow).setFormula('
                  f'"=SUM(" & "{col_letter}" & {start_excel_row} & ":INDEX(" & "{col_letter}" & '
                  f'":" & "{col_letter}" & ";ROW()-1))" & "{factor_tail}")\n')
-        return _wrap_basic(body)
+        return wrap(body)
 
     if op == "CENTER_ALIGN":
         if resolved_args["target"] == "all":
             last_col = len(headers[first_sheet]) - 1
-            return _wrap_basic(f"    Call AlignCenter(oDoc, {hr0}, {last_col})\n")
+            return wrap(f"    Call AlignCenter(oDoc, {hr0}, {last_col})\n")
         # col:NAME はヘルパ無し → refs の作法（走査して範囲を求め HoriJustify）でテンプレを書く。
         col_idx = headers[first_sheet].index(resolved_args["target"][4:])
         body = ("    Dim oSheet As Object, oRange As Object, lastRow As Long\n"
@@ -2343,7 +2384,7 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                 + _scan_last_row_basic(start_row=str(hr0 + 1), min_ok=str(hr0))
                 + f"    oRange = oSheet.getCellRangeByPosition({col_idx}, {hr0}, {col_idx}, lastRow)\n"
                 "    oRange.HoriJustify = com.sun.star.table.CellHoriJustify.CENTER\n")
-        return _wrap_basic(body)
+        return wrap(body)
 
     if op == "BOLD":
         target = resolved_args["target"]
@@ -2359,7 +2400,7 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                     "    oSheet = oDoc.Sheets.getByIndex(0)\n"
                     + _scan_last_row_basic(start_row=str(hr0 + 1), min_ok=str(hr0))
                     + f"    Call StyleBold(oDoc, {col_idx}, {hr0}, {col_idx}, lastRow)\n")
-        return _wrap_basic(body)
+        return wrap(body)
 
     if op == "FILL_COLOR":
         target = resolved_args["target"]
@@ -2382,7 +2423,7 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                     + f"    For r = {hr0} To lastRow\n"
                     f"        oSheet.getCellByPosition({col_idx}, r).CellBackColor = &H{hexcolor}&\n"
                     "    Next r\n")
-        return _wrap_basic(body)
+        return wrap(body)
 
     if op == "COMPUTE_COLUMN":
         operands = resolved_args["operands"]
@@ -2419,7 +2460,7 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                     + f"    For i = {hr0 + 1} To lastRow\n"
                     + write_line
                     + "    Next i\n")
-            return _wrap_basic(body)
+            return wrap(body)
 
         op1, op2 = operands
         i1 = headers[first_sheet].index(op1)
@@ -2453,7 +2494,7 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                 + f"    For i = {hr0 + 1} To lastRow\n"
                 + write_line
                 + "    Next i\n")
-        return _wrap_basic(body)
+        return wrap(body)
 
     # --- ★ W9: 検証済みヘルパ4種の語彙昇格。いずれも helpers/*.bas のヘルパは headerRow
     #   引数を取らない（物理1行目を前提に自前走査する既存実装・ここでは変更しない）ため、
@@ -2461,18 +2502,18 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
     if op == "INSERT_ROWS":
         at0 = int(resolved_args["at"]) - 1   # 1起点(Excel行番号) → 0起点(Basic)
         count = int(resolved_args.get("count", 1) or 1)
-        return _wrap_basic(f"    Call InsertRows(oDoc, {at0}, {count})\n")
+        return wrap(f"    Call InsertRows(oDoc, {at0}, {count})\n")
 
     if op == "DRAW_BORDERS":
-        return _wrap_basic("    Call DrawTableBorders(oDoc)\n")
+        return wrap("    Call DrawTableBorders(oDoc)\n")
 
     if op == "AUTOFIT":
-        return _wrap_basic("    Call AutoFitColumns(oDoc)\n")
+        return wrap("    Call AutoFitColumns(oDoc)\n")
 
     if op == "PIVOT":
         g_idx = headers[first_sheet].index(resolved_args["group_col"])
         v_idx = headers[first_sheet].index(resolved_args["value_col"])
-        return _wrap_basic(f"    Call PivotSum(oDoc, {g_idx}, {v_idx})\n")
+        return wrap(f"    Call PivotSum(oDoc, {g_idx}, {v_idx})\n")
 
     if op == "SET_COLUMN_VALUE":
         # ★ 致命3(W10e): ヘルパ無し・既存列のデータ行全部に同じ文字列を setString する
@@ -2485,7 +2526,7 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                 + f"    For r = {hr0 + 1} To lastRow\n"
                 f"        oSheet.getCellByPosition({col_idx}, r).setString(\"{value}\")\n"
                 "    Next r\n")
-        return _wrap_basic(body)
+        return wrap(body)
 
     raise ValueError(f"未対応の op: {op}")
 
@@ -2580,14 +2621,14 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
        （除いた行が実際は順序を崩していても見逃す＝COMPUTE_COLUMN の行独立検証とは違い
        部分採点できない）。0cf9218 空虚な検証合格の禁止の趣旨のまま fail で打ち切る。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         idx = _col_index_by_header(ws, args["col"], header_row=header_row)
         if idx is None:
             return "fail", f"列『{args['col']}』が見つからない"
         last = _scan_last_row(ws, header_row=header_row)
         raw_vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
         if use_formula:
-            eff_vals = [bv.cell_value(r, idx) for r in range(header_row + 1, last + 1)]
+            eff_vals = [bv.cell_value(r, idx, sheet=args.get("_target_sheet")) for r in range(header_row + 1, last + 1)]
         else:
             eff_vals = raw_vals
     vals = []
@@ -2641,7 +2682,7 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
         return check_compute_column_single_factor(path, args, header_row=header_row,
                                                     use_formula=use_formula)
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         op1, op2 = args["operands"]
         i1 = _col_index_by_header(ws, op1, header_row=header_row)
         i2 = _col_index_by_header(ws, op2, header_row=header_row)
@@ -2661,8 +2702,8 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
             a_raw = ws.cell(row=r, column=i1).value
             b_raw = ws.cell(row=r, column=i2).value
             got = ws.cell(row=r, column=inew).value
-            a = bv.cell_value(r, i1) if use_formula else a_raw
-            b = bv.cell_value(r, i2) if use_formula else b_raw
+            a = bv.cell_value(r, i1, sheet=args.get("_target_sheet")) if use_formula else a_raw
+            b = bv.cell_value(r, i2, sheet=args.get("_target_sheet")) if use_formula else b_raw
             if not _is_number(a) or not _is_number(b):
                 # ★ W10f: operand 自体が式(前段の計算列)で、かつキャッシュ値が無い行は
                 #   『数値でない対象外』と別カウントする（下の note で区別して表示）。
@@ -2679,7 +2720,7 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
                 expect_formula = f"={col1_letter}{r}{args['operator']}{col2_letter}{r}"
                 if not isinstance(got, str) or got.replace(" ", "") != expect_formula:
                     return "fail", f"{r}行目: 式が期待形でない (期待 {expect_formula} 実際 {got!r})"
-                got_cached = bv.cell_value(r, inew)
+                got_cached = bv.cell_value(r, inew, sheet=args.get("_target_sheet"))
                 if not _is_number(got_cached) or abs(got_cached - want) > 1e-6:
                     return "fail", f"{r}行目: 式のキャッシュ値が不一致 (期待 {want} 実際 {got_cached!r})"
             else:
@@ -2710,7 +2751,7 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
        場合の同じバグをここでも直す）。キャッシュ値が無い(式はあるが未計算)行は
        『数値でない対象外』と別カウントする（0cf9218 空虚な検証合格の禁止の趣旨）。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         op1 = args["operands"][0]
         operator = args["operator"]
         factor = float(args.get("factor", 1) or 1)
@@ -2729,7 +2770,7 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
         for r in range(header_row + 1, last + 1):
             a_raw = ws.cell(row=r, column=i1).value
             got = ws.cell(row=r, column=inew).value
-            a = bv.cell_value(r, i1) if use_formula else a_raw
+            a = bv.cell_value(r, i1, sheet=args.get("_target_sheet")) if use_formula else a_raw
             if not _is_number(a):
                 if use_formula and isinstance(a_raw, str) and a_raw.startswith("="):
                     uncached += 1   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
@@ -2741,7 +2782,7 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
                 expect_formula = f"={col1_letter}{r}{operator}{factor:g}"
                 if not isinstance(got, str) or got.replace(" ", "") != expect_formula:
                     return "fail", f"{r}行目: 式が期待形でない (期待 {expect_formula} 実際 {got!r})"
-                got_cached = bv.cell_value(r, inew)
+                got_cached = bv.cell_value(r, inew, sheet=args.get("_target_sheet"))
                 if not _is_number(got_cached) or abs(got_cached - want) > 1e-6:
                     return "fail", f"{r}行目: 式のキャッシュ値が不一致 (期待 {want} 実際 {got_cached!r})"
             else:
@@ -2763,9 +2804,9 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
 
 def check_lookup_fill(path: Path, args: dict, header_row: int = 1,
                        use_formula: bool = False) -> tuple:
-    """★ W3: header_row は対象シート(target_sheet=1枚目)の見出し行。参照表(source_sheet)は
-       常に「列0=キー・列1=値」の物理1行目見出し前提（VLookupFromTable ヘルパの仕様どおり・
-       検出対象外）。
+    """★ W3: header_row は対象シート(target_sheet。★ 挙動変更#2 より前は常に1枚目だった)の
+       見出し行。参照表(source_sheet)は常に「列0=キー・列1=値」の物理1行目見出し前提
+       （VLookupFromTable ヘルパの仕様どおり・検出対象外）。
        ★ W10f 項目5: use_formula のとき対象シートのキー列を data_only(計算後の値)側から
        読む。VLookupFromTable ヘルパ自体は getString()（LibreOffice が式を評価した文字列）
        でキーを照合するため、前段の式(=A2 等)で埋まったキー列でも転記そのものは正しく
@@ -2839,8 +2880,9 @@ def check_lookup_fill(path: Path, args: dict, header_row: int = 1,
 
 
 def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bool = False) -> tuple:
-    """★ W3: header_row は集計元(1枚目)の見出し行。出力の「集計」シートは SummaryTable
-       ヘルパが毎回新規作成し常に物理1行目が見出し（検出対象外・そのまま）。
+    """★ W3: header_row は集計元(対象シート。★ 挙動変更#2 より前は常に1枚目だった)の
+       見出し行。出力の「集計」シートは SummaryTable ヘルパが毎回新規作成し常に物理1行目が
+       見出し（検出対象外・そのまま）。
        ★ W10f 項目1: use_formula のとき分類列/集計列を data_only(計算後の値)側から読む
        （check_compute_column と同型のバグ。前段が式で作った計算列を group_col/value_col
        にした場合、raw 側は式文字列のままで value_col が『数値でない→0扱い』に落ち、
@@ -2852,7 +2894,7 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
     with BookView(path) as bv:
         if "集計" not in bv.sheetnames:
             return "fail", "『集計』シートが無い"
-        src = bv.sheet()
+        src = bv.sheet(args.get("_target_sheet"))
         gi = _col_index_by_header(src, args["group_col"], header_row=header_row)
         vi = _col_index_by_header(src, args["value_col"], header_row=header_row)
         if gi is None or vi is None:
@@ -2864,8 +2906,8 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
             k_raw = src.cell(row=r, column=gi).value
             v_raw = src.cell(row=r, column=vi).value
             if use_formula:
-                k = bv.cell_value(r, gi)
-                v = bv.cell_value(r, vi)
+                k = bv.cell_value(r, gi, sheet=args.get("_target_sheet"))
+                v = bv.cell_value(r, vi, sheet=args.get("_target_sheet"))
             else:
                 k, v = k_raw, v_raw
             k_uncached = use_formula and k is None and isinstance(k_raw, str) and k_raw.startswith("=")
@@ -2905,7 +2947,7 @@ def check_bold(path: Path, args: dict, header_row: int = 1) -> tuple:
     """★ W3: "col:" 対象は見出し(header_row)を含めて検証する（codegen の
        StyleBold(oDoc, col, hr0, col, lastRow) が見出しも含めて太字にするため）。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         kind, val = args["target"].split(":", 1)
         if kind == "row":
             last_col = _scan_last_col(ws, header_row=header_row)
@@ -2931,7 +2973,7 @@ def check_fill_color(path: Path, args: dict, header_row: int = 1) -> tuple:
     """★ W3: "col:" 対象は見出し(header_row)を含めて検証する（codegen が見出しも
        含めて塗るため）。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         want_hex = COLOR_MAP[args["color"]].upper()
         kind, val = args["target"].split(":", 1)
         if kind == "row":
@@ -2962,7 +3004,7 @@ def check_fill_color(path: Path, args: dict, header_row: int = 1) -> tuple:
 
 def check_number_format(path: Path, args: dict, header_row: int = 1) -> tuple:
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         idx = _col_index_by_header(ws, args["col"], header_row=header_row)
         if idx is None:
             return "fail", f"列『{args['col']}』が見つからない"
@@ -2978,7 +3020,7 @@ def check_number_format(path: Path, args: dict, header_row: int = 1) -> tuple:
 
 def check_merge(path: Path, args: dict, header_row: int = 1) -> tuple:
     with BookView(path) as bv:
-        ranges = {str(r) for r in bv.sheet().merged_cells.ranges}
+        ranges = {str(r) for r in bv.sheet(args.get("_target_sheet")).merged_cells.ranges}
     if args["range"] not in ranges:
         return "fail", f"範囲『{args['range']}』が結合されていない"
     return "pass", f"{args['range']} の結合を確認"
@@ -2995,7 +3037,7 @@ def check_center_align(path: Path, args: dict, header_row: int = 1) -> tuple:
     """★ W3: "all"/"col:" とも見出し(header_row)を含めて検証する（codegen の
        AlignCenter/inline テンプレが見出しも含めて中央揃えにするため）。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         target = args["target"]
         if target == "all":
             last_row = _scan_last_row(ws, header_row=header_row)
@@ -3047,7 +3089,7 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
        "=SUM(" という固有の目印を対象列自身の中だけで探すので、他列の中身にも
        COMPUTE_COLUMN の式の形にも影響されない。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         idx = _col_index_by_header(ws, args["col"], header_row=header_row)
         if idx is None:
             return "fail", f"列『{args['col']}』が見つからない"
@@ -3077,9 +3119,9 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
         if not label_ok:
             return "fail", f"{total_row}行目: ラベルが期待『{want_label}』と不一致 (実際 {got_label!r})"
 
-        raw_vals = [bv.cell_value(rr, idx) for rr in range(header_row + 1, last + 1)]
+        raw_vals = [bv.cell_value(rr, idx, sheet=args.get("_target_sheet")) for rr in range(header_row + 1, last + 1)]
         nums = [v for v in raw_vals if _is_number(v)]
-        got_cached = bv.cell_value(total_row, idx)
+        got_cached = bv.cell_value(total_row, idx, sheet=args.get("_target_sheet"))
     if not nums:
         return "fail", _ZERO_TARGET_REASON
     factor = float(args.get("factor", 1) or 1)
@@ -3106,7 +3148,7 @@ def check_insert_rows(path: Path, args: dict, header_row: int = 1,
 
     if source_book is None or not Path(source_book).exists():
         with BookView(path) as bv:
-            ws = bv.sheet()
+            ws = bv.sheet(args.get("_target_sheet"))
             last_col = max(_scan_last_col(ws, header_row=header_row), 1)
             row_cells = [ws.cell(row=at, column=c).value for c in range(1, last_col + 1)]
         if all(v in (None, "") for v in row_cells):
@@ -3114,13 +3156,13 @@ def check_insert_rows(path: Path, args: dict, header_row: int = 1,
         return "fail", f"{at}行目が空欄でない（挿入されていない可能性）"
 
     with BookView(source_book) as bv_before, BookView(path) as bv_after:
-        ws_before = bv_before.sheet()
+        ws_before = bv_before.sheet(args.get("_target_sheet"))
         last_before = _scan_last_row(ws_before, header_row=header_row)
         last_col = _scan_last_col(ws_before, header_row=header_row)
         if last_col < 1 or last_before < header_row + 1:
             return "fail", _ZERO_TARGET_REASON
 
-        ws_after = bv_after.sheet()
+        ws_after = bv_after.sheet(args.get("_target_sheet"))
 
         # ★ 挿入は AFTER 側に意図的な空行（挿入行そのもの）を作るため、連続データを前提にする
         #   _scan_last_row を AFTER 側の「最終行」検出には使わない（挿入行で即座に打ち切られて
@@ -3154,7 +3196,7 @@ def check_draw_borders(path: Path, args: dict, header_row: int = 1) -> tuple:
        （DrawTableBorders ヘルパは格子罫線を範囲全体に一括で付けるため、1セルでも
        欠けていれば ヘルパが動いていないか範囲がずれている）。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         last_row = _scan_last_row(ws, header_row=header_row)
         last_col = _scan_last_col(ws, header_row=header_row)
         if last_col < 1 or last_row < header_row:
@@ -3181,7 +3223,7 @@ def check_autofit(path: Path, args: dict, header_row: int = 1,
        変化した列数を数える（1列でも変化していれば pass）。source_book が無ければ、
        AFTER 側で幅が明示的に設定されている列があることだけを見る warn 判定に落とす。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         last_col = _scan_last_col(ws, header_row=header_row)
         if last_col < 1:
             return "fail", _ZERO_TARGET_REASON
@@ -3193,7 +3235,7 @@ def check_autofit(path: Path, args: dict, header_row: int = 1,
 
     if source_book is not None and Path(source_book).exists():
         with BookView(source_book) as bv_b:
-            ws_b = bv_b.sheet()
+            ws_b = bv_b.sheet(args.get("_target_sheet"))
             before_widths = {}
             for c in range(1, last_col + 1):
                 letter = get_column_letter(c)
@@ -3236,7 +3278,7 @@ def check_set_column_value(path: Path, args: dict, header_row: int = 1) -> tuple
        定数値(args["value"])と一致するかを見る（型を問わず文字列表現で比較 — codegen は
        setString で書くため、読み戻しも文字列として揃える）。"""
     with BookView(path) as bv:
-        ws = bv.sheet()
+        ws = bv.sheet(args.get("_target_sheet"))
         idx = _col_index_by_header(ws, args["col"], header_row=header_row)
         if idx is None:
             return "fail", f"列『{args['col']}』が見つからない"
@@ -4336,17 +4378,31 @@ def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
                     return 4
 
     sheets = build_book_meta(source_book).get("sheets", [])
+
+    # ★ 挙動変更#2: 対象シートの決定はここ1箇所（resolve_target_sheet）。それより後の
+    #   全処理（見出し行検出・翻訳→検証→codegen→事後条件）は a._target_sheet を読むだけで
+    #   個別に「1枚目」を仮定しない。--header-row/翻訳より前＝原本の実処理が始まる前に
+    #   決め、実処理の前に必ず宣言する（査定所見:「これがあれば事故は防げた」）。
+    target_sheet, sheet_source, sheet_err = resolve_target_sheet(a.task, sheets, getattr(a, "sheet", None))
+    if sheet_err:
+        print(f"？ {sheet_err}")
+        return 3
+    a._target_sheet = target_sheet
+    announce = describe_target_sheet(sheets, target_sheet, sheet_source)
+    if announce:
+        print(announce)
+
     forced_header_row = getattr(a, "header_row", None)
     if forced_header_row:
         # ★ W8a 項目3: --header-row 指定時は検出(StructDump ヒューリスティクス)を丸ごと
-        #   スキップし、その行を1枚目シートの見出しとして採用する（他シートは既定1行目のまま
+        #   スキップし、その行を対象シートの見出しとして採用する（他シートは既定1行目のまま
         #   ＝ resolve_header_rows の既定と同じ扱い）。CLARIFY には絶対に落ちない。
         header_rows = {s: 1 for s in sheets}
-        if sheets:
-            header_rows[sheets[0]] = forced_header_row
+        if target_sheet:
+            header_rows[target_sheet] = forced_header_row
         clarify_q = None
     else:
-        header_rows, clarify_q = resolve_header_rows(struct_dump, sheets)
+        header_rows, clarify_q = resolve_header_rows(struct_dump, sheets, target_sheet=target_sheet)
     if clarify_q:
         print(f"？ {clarify_q}")
         return 3
@@ -4421,8 +4477,10 @@ def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_
     if sheet_key:
         sheet_name = resolved.get(sheet_key)
     else:
+        # ★ 挙動変更#2: sheets[0] 決め打ちをやめ、verify_dsl_args が一箇所で決めた
+        # resolved["_target_sheet"] を読む（旧値と後方互換のフォールバック付き）。
         sheets = book_meta.get("sheets") or []
-        sheet_name = sheets[0] if sheets else None
+        sheet_name = resolved.get("_target_sheet") or (sheets[0] if sheets else None)
     if not sheet_name:
         return None
     header_row = book_meta.get("header_rows", {}).get(sheet_name, 1)
@@ -4492,13 +4550,21 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
        「単発 = 1 段の計画」）。--ask・.bas/変更点の印字・_truncation_notice は単発固有のまま。"""
     vocab = load_vocab()
     deps = _make_dsl_step_deps()
-    ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, deps=deps)
+    # ★ 挙動変更#2: 対象シートは _cmd_run_dispatch が resolve_target_sheet で一箇所だけ
+    #   決めた a._target_sheet を読む（後方互換フォールバックは1枚目・旧挙動と同一）。
+    first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
+    ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, first_sheet=first_sheet, deps=deps)
     if not ground.ok:
         print(f"？ {ground.err}")
         return 3
     resolved, inferred = ground.resolved, ground.inferred
 
-    first_sheet = book_meta["sheets"][0] if book_meta.get("sheets") else None
+    # ★ 挙動変更#2: header_row は「本当の」対象シート(resolved["_target_sheet"])で引き直す。
+    #   LOOKUP_FILL は自分の target_sheet slot が最終的な正で、依頼文が参照シート(source_sheet)
+    #   の名前も含む場合に一般解決(a._target_sheet・op を知る前の機械的な文字列一致)が
+    #   参照シート側へ寄る可能性があるため、op が分かった後のここで必ず読み直す
+    #   （他の op は resolved["_target_sheet"] == first_sheet のまま・実質無変化）。
+    first_sheet = resolved.get("_target_sheet") or first_sheet
     header_row = book_meta.get("header_rows", {}).get(first_sheet, 1)
     use_formula = not getattr(a, "values", False)
 
@@ -5128,7 +5194,11 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     step_advisories = [confirm.mismatch_warning] if confirm.mismatch_warning else []
     provenance_entry = {"step": i, **resolved["_sources"]} if resolved.get("_sources") else None
 
-    step_header_row = current_meta.get("header_rows", {}).get(first_sheet, 1) if first_sheet else 1
+    # ★ 挙動変更#2: cmd_run_dsl と同じ理由（コメント参照）で、この段の「本当の」対象シート
+    #   (resolved["_target_sheet"]) を優先する（LOOKUP_FILL 段が計画全体の対象シートと
+    #   異なる参照シートを持つ場合の header_row 取り違えを避ける）。
+    step_target_sheet = resolved.get("_target_sheet") or first_sheet
+    step_header_row = current_meta.get("header_rows", {}).get(step_target_sheet, 1) if step_target_sheet else 1
     code = codegen_dsl(op, resolved, current_meta, use_formula=use_formula)
     (workdir / f"plan_step{i}.bas").write_text(code, encoding="utf-8")
 
@@ -5183,8 +5253,10 @@ def _preview_dsl_plan(a: argparse.Namespace, plan: list, book_meta: dict, vocab:
             preview_items.append((i, about, "warn", None))
             plan_json.append({"op": op, "command": about, "status": "warn", "postcondition": None})
         else:
+            # ★ 挙動変更#2: --dry プレビューも a._target_sheet を読む（実行と同じ解決）。
             ok_v, resolved, inferred, err = verify_dsl_args(
-                op, step.get("args", {}), book_meta, task=a.task, vocab=vocab)
+                op, step.get("args", {}), book_meta, task=a.task, vocab=vocab,
+                target_sheet=getattr(a, "_target_sheet", None))
             if ok_v:
                 label = format_confirmation_line(op, resolved, inferred)[len("解釈: "):]
                 preview_items.append((i, label, "ok", "未実行・プレビューのみ"))
@@ -5231,7 +5303,9 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     shutil.copy2(source_book, out_book)
 
     original_headers = {k: list(v) for k, v in book_meta["headers"].items()}
-    first_sheet = book_meta["sheets"][0] if book_meta.get("sheets") else None
+    # ★ 挙動変更#2: 対象シートは _cmd_run_dispatch が resolve_target_sheet で一箇所だけ
+    #   決めた a._target_sheet を読む（後方互換フォールバックは1枚目・旧挙動と同一）。
+    first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
     before_all = snapshot(out_book)
     before_charts = before_all["charts"]
 
@@ -5371,6 +5445,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="COMPUTE_COLUMN を式でなく値ベタ書きにする（既定は式・W3 Part3）")
     r.add_argument("--header-row", dest="header_row", type=int, default=None,
                    help="見出し行を明示指定（1起点。指定時は自動検出をスキップしてこの行を採用）")
+    r.add_argument("--sheet", default=None,
+                   help="対象シートをシート名で明示指定（省略時は依頼文中のシート名の言及 → "
+                        "1枚目。★ 挙動変更#2: 従来は常に1枚目固定だった）")
     r.add_argument("--accept-loss", dest="accept_loss", action="store_true",
                    help="往復忠実度ゲートが検出した喪失を承知の上で原本への反映を続行する"
                         "（ailine undo で戻せる）")

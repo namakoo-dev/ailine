@@ -2,6 +2,7 @@
   "ok": true,
   "resolved": {
     "col": "金額",
+    "_target_sheet": "Sheet",
     "label": "合計",
     "factor": 1.1,
     "_sources": {

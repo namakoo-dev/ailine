@@ -15,7 +15,7 @@ _DEFAULTS = dict(
     model="qwen2.5-coder:7b", refs=None, helpers=None, repair=2, temperature=0.2,
     dry=False, json=False, timeout=180.0, ask=False, copy=False, values=False,
     header_row=None, accept_loss=False, overwrite=False, allow_freeform=False,
-    keep_backups=None,
+    keep_backups=None, sheet=None,   # ★ 挙動変更#2: --sheet（build_parser() に追加）
 )
 
 
@@ -56,6 +56,8 @@ def run_argv(book, task, **overrides):
         argv.append("--values")
     if cfg["header_row"] is not None:
         argv += ["--header-row", str(cfg["header_row"])]
+    if cfg["sheet"] is not None:
+        argv += ["--sheet", str(cfg["sheet"])]
     if cfg["accept_loss"]:
         argv.append("--accept-loss")
     if cfg["copy"]:

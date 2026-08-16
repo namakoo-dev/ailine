@@ -3,6 +3,7 @@
   "resolved": {
     "col": "金額",
     "label": "税込合計",
+    "_target_sheet": "Sheet",
     "factor": 1.0
   },
   "inferred": [],

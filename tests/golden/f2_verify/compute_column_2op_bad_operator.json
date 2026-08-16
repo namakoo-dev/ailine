@@ -5,7 +5,8 @@
       "数量",
       "単価"
     ],
-    "operator": "%"
+    "operator": "%",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "演算子『%』が不明です"

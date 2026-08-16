@@ -1,7 +1,8 @@
 {
   "ok": false,
   "resolved": {
-    "range": "A1-C3"
+    "range": "A1-C3",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "範囲『A1-C3』の形式が不正です（例: A1:C1）"

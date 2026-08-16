@@ -4,7 +4,8 @@
     "target_sheet": "Sheet",
     "target_col": "単価",
     "source_sheet": "存在しないシート",
-    "key_col": "商品"
+    "key_col": "商品",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "シート『存在しないシート』がありません。あるシート: Sheet, 単価表"

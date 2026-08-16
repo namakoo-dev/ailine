@@ -2,6 +2,7 @@
   "ok": true,
   "resolved": {
     "col": "商品",
+    "_target_sheet": "Sheet",
     "value": "確認済み",
     "_sources": {
       "value": "依頼文: 「確認済み」"

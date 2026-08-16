@@ -1,6 +1,8 @@
 {
   "ok": false,
-  "resolved": {},
+  "resolved": {
+    "_target_sheet": "Sheet"
+  },
   "inferred": [],
   "err": "未対応の操作: FOOBAR"
 }

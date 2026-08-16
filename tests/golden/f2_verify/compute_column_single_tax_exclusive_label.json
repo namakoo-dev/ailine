@@ -5,6 +5,7 @@
       "金額"
     ],
     "operator": "/",
+    "_target_sheet": "Sheet",
     "factor": 0.909091,
     "_sources": {
       "factor": "依頼文: 1.1で割っ"

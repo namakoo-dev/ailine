@@ -2,8 +2,8 @@ usage: ailine run [-h] [--model MODEL] [--refs REFS] [--helpers HELPERS]
                   [--repair REPAIR] [--temperature TEMPERATURE] [--dry]
                   [--inplace] [--json] [--timeout TIMEOUT] [--ask]
                   [--keep-backups KEEP_BACKUPS] [--values]
-                  [--header-row HEADER_ROW] [--accept-loss] [--copy]
-                  [--overwrite] [--allow-freeform]
+                  [--header-row HEADER_ROW] [--sheet SHEET] [--accept-loss]
+                  [--copy] [--overwrite] [--allow-freeform]
                   book task
 
 positional arguments:
@@ -28,6 +28,8 @@ options:
   --values              COMPUTE_COLUMN を式でなく値ベタ書きにする（既定は式・W3 Part3）
   --header-row HEADER_ROW
                         見出し行を明示指定（1起点。指定時は自動検出をスキップしてこの行を採用）
+  --sheet SHEET         対象シートをシート名で明示指定（省略時は依頼文中のシート名の言及 → 1枚目。★ 挙動変更#2:
+                        従来は常に1枚目固定だった）
   --accept-loss         往復忠実度ゲートが検出した喪失を承知の上で原本への反映を続行する（ailine undo で戻せる）
   --copy                原本には触らず <book>.out に結果を作る（既定の原本直接適用をしない・旧 --inplace
                         無指定と同じ挙動。往復忠実度ゲートも走らせない）

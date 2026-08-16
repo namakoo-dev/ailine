@@ -4,7 +4,8 @@
     "operands": [
       "金額"
     ],
-    "operator": "*"
+    "operator": "*",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "倍率（税率等）が分かりません。依頼文に率を書く（例:「消費税10%」）か、用語集に登録してください（例: ailine vocab add 消費税 1.1）"

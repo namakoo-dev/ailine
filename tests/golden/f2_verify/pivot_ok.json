@@ -2,7 +2,8 @@
   "ok": true,
   "resolved": {
     "group_col": "商品",
-    "value_col": "金額"
+    "value_col": "金額",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": null

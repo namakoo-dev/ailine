@@ -6,7 +6,8 @@
       "単価"
     ],
     "operator": "*",
-    "target": "1"
+    "target": "1",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "列『1』は複数の解釈が可能で一意に決まりません: ['数量', '商品']"

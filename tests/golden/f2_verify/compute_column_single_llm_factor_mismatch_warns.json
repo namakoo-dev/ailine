@@ -5,6 +5,7 @@
       "金額"
     ],
     "operator": "*",
+    "_target_sheet": "Sheet",
     "factor": 1.1,
     "_sources": {
       "factor": "依頼文: 10%"

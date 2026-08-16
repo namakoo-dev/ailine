@@ -6,7 +6,8 @@
       "単価",
       "金額"
     ],
-    "operator": "*"
+    "operator": "*",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "演算対象が2つの列名になっていません"

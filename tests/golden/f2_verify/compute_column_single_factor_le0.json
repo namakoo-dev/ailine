@@ -5,6 +5,7 @@
       "金額"
     ],
     "operator": "*",
+    "_target_sheet": "Sheet",
     "factor": 0.0
   },
   "inferred": [],

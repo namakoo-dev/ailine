@@ -4,7 +4,8 @@
     "target_sheet": "Sheet",
     "target_col": "単価",
     "source_sheet": "単価表",
-    "key_col": "商品"
+    "key_col": "商品",
+    "_target_sheet": "Sheet"
   },
   "inferred": [
     "target_col"

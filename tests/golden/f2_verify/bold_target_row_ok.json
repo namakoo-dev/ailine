@@ -1,7 +1,8 @@
 {
   "ok": true,
   "resolved": {
-    "target": "row:2"
+    "target": "row:2",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": null

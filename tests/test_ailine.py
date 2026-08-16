@@ -2365,7 +2365,8 @@ def test_resolve_col_ref_unknown_lists_known_columns():
 def test_verify_dsl_args_sort_ok():
     ok, resolved, inferred, err = ailine.verify_dsl_args("SORT", {"col": "金額", "order": "desc"}, _SAMPLE_META)
     assert ok is True
-    assert resolved == {"col": "金額", "order": "desc"}
+    # ★ 挙動変更#2: resolved は対象シートの決定(_target_sheet)を常に積む（省略時は1枚目）。
+    assert resolved == {"col": "金額", "order": "desc", "_target_sheet": "Sheet"}
     assert inferred == set()
     assert err is None
 
@@ -2669,15 +2670,199 @@ def test_verify_dsl_args_lookup_fill_ok():
     assert ok is True
     assert resolved["target_col"] == "単価"
 
-def test_verify_dsl_args_lookup_fill_rejects_non_first_sheet_target():
+# ★ 挙動変更#2: 旧 test_verify_dsl_args_lookup_fill_rejects_non_first_sheet_target は
+#   「対象シートは1枚目のみ対応」という散在した1枚目固定の一つを検証していた（査定の
+#   致命そのもの）。その制限を撤廃したので、逆に「2枚目でも通る」ことを検証する。
+def test_verify_dsl_args_lookup_fill_allows_non_first_sheet_target():
     meta = {"sheets": ["明細", "単価表"],
             "headers": {"明細": ["商品", "数量", "単価"], "単価表": ["商品", "単価"]}}
     ok, resolved, inferred, err = ailine.verify_dsl_args(
         "LOOKUP_FILL",
         {"target_sheet": "単価表", "target_col": "単価", "source_sheet": "明細", "key_col": "商品"},
-        meta)
+        meta, task="単価表の単価を明細から転記して")
+    assert ok is True
+    assert err is None
+    assert resolved["target_sheet"] == "単価表"
+    assert resolved["_target_sheet"] == "単価表"   # ★ codegen/postcondition が読む一元化キー
+
+
+# --- ★ 挙動変更#2: 対象シートの固定を解く（resolve_target_sheet / describe_target_sheet） ----
+
+def test_resolve_target_sheet_cli_flag_wins():
+    sheet, source, err = ailine.resolve_target_sheet("なにか", ["請求書", "工事台帳"], "工事台帳")
+    assert (sheet, source, err) == ("工事台帳", "cli", None)
+
+def test_resolve_target_sheet_cli_flag_unknown_sheet_errors():
+    sheet, source, err = ailine.resolve_target_sheet("なにか", ["請求書", "工事台帳"], "存在しないシート")
+    assert sheet is None and source == "cli"
+    assert "存在しないシート" in err and "請求書" in err and "工事台帳" in err
+
+def test_resolve_target_sheet_named_in_task_wins_over_default():
+    sheet, source, err = ailine.resolve_target_sheet(
+        "工事台帳シートで取引先ごとの売上を集計して", ["請求書", "工事台帳", "取引先マスタ"])
+    assert (sheet, source, err) == ("工事台帳", "task", None)
+
+def test_resolve_target_sheet_ordinal_phrase():
+    sheet, source, err = ailine.resolve_target_sheet(
+        "2枚目のシートで金額を降順に並べ替えて", ["請求書", "工事台帳"])
+    assert (sheet, source, err) == ("工事台帳", "task", None)
+
+def test_resolve_target_sheet_ambiguous_mention_falls_back_to_default_not_clarify():
+    # ★ LOOKUP_FILL のように転記先/参照元の2シート名が正当に両方登場するケースを
+    #   誤ってブロックしない（resolve_target_sheet 自身の docstring 参照）。
+    sheet, source, err = ailine.resolve_target_sheet(
+        "工事台帳の値を単価表から転記して", ["工事台帳", "単価表"])
+    assert err is None
+    assert (sheet, source) == ("工事台帳", "default")   # 1枚目へフォールバック（曖昧を理由に止めない）
+
+def test_resolve_target_sheet_substring_names_pick_longer_match():
+    # 「請求書」は「請求書控え」の部分文字列 → 長い方(実際に言及された固有名)だけ残す。
+    sheet, source, err = ailine.resolve_target_sheet(
+        "請求書控えシートで並べ替えて", ["請求書", "請求書控え"])
+    assert (sheet, source, err) == ("請求書控え", "task", None)
+
+def test_resolve_target_sheet_no_mention_defaults_to_first():
+    sheet, source, err = ailine.resolve_target_sheet("金額で降順に並べ替えて", ["請求書", "工事台帳"])
+    assert (sheet, source, err) == ("請求書", "default", None)
+
+def test_resolve_target_sheet_no_sheets_errors():
+    sheet, source, err = ailine.resolve_target_sheet("なにか", [])
+    assert sheet is None
+    assert "シートが無い" in err
+
+def test_describe_target_sheet_single_sheet_book_is_silent():
+    assert ailine.describe_target_sheet(["Sheet"], "Sheet", "default") is None
+
+def test_describe_target_sheet_default_matches_brief_wording():
+    line = ailine.describe_target_sheet(["a", "b", "c", "請求明細"], "請求明細", "default")
+    assert line == "このブックは4シートですが、操作対象は4枚目の『請求明細』です"
+
+def test_describe_target_sheet_task_source_names_the_reason():
+    line = ailine.describe_target_sheet(["請求書", "工事台帳"], "工事台帳", "task")
+    assert line == "このブックは2シートですが、操作対象は2枚目の『工事台帳』です（依頼文の言及から判断）"
+
+def test_describe_target_sheet_cli_source_names_the_reason():
+    line = ailine.describe_target_sheet(["請求書", "工事台帳"], "工事台帳", "cli")
+    assert line == "操作対象シート: 2枚目の『工事台帳』（--sheet 指定）"
+
+
+# ★ DoD1: 査定の再現の回帰テスト（verify_dsl_args レベル）。
+#   旧実装は first_sheet が常に sheets[0] だったため、対象シートを名指ししても
+#   「ある列: ...」に *1枚目* の列名が出る誤誘導だった（査定の致命そのもの）。
+def test_verify_dsl_args_error_lists_named_target_sheet_columns_not_first_sheet():
+    meta = {"sheets": ["請求書", "工事台帳"],
+            "headers": {"請求書": ["宛先", "金額"], "工事台帳": ["取引先名", "工事名", "金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "SORT", {"col": "宛先", "order": "desc"}, meta,
+        task="工事台帳シートで宛先を降順に並べ替えて",
+        target_sheet="工事台帳")   # ★ _cmd_run_dispatch が resolve_target_sheet で決めた値
     assert ok is False
-    assert "1枚目" in err
+    # ★ 直った点そのもの: 対象(工事台帳)の列名だけが出る。1枚目(請求書)の「宛先」「金額」を
+    #   誤って「ある列」に混ぜない（宛先は工事台帳に無い列なのでエラー自体は正しい）。
+    assert err == "列『宛先』がありません。ある列: 取引先名, 工事名, 金額"
+    assert "請求書" not in err
+
+
+def test_resolve_header_rows_uses_target_sheet_not_always_first():
+    # ★ 挙動変更#2: 対象シートが2枚目でも、build_struct_dump が元々全シート分持っている
+    #   rows(書式的特徴) から検出できる（StructDump のやり直しは不要）。
+    struct_dump = {"sheets": {
+        "請求書": {"rows": {1: {"nonempty": 2, "str": 2, "bold": 0},
+                            2: {"nonempty": 2, "str": 1, "bold": 0}}},
+        "工事台帳": {"rows": {1: {"nonempty": 0, "str": 0, "bold": 0},
+                              2: {"nonempty": 0, "str": 0, "bold": 0},
+                              3: {"nonempty": 3, "str": 3, "bold": 0},
+                              4: {"nonempty": 3, "str": 1, "bold": 0}}},
+    }}
+    header_rows, clarify = ailine.resolve_header_rows(
+        struct_dump, ["請求書", "工事台帳"], target_sheet="工事台帳")
+    assert clarify is None
+    assert header_rows["工事台帳"] == 3   # 対象シートは検出結果
+    assert header_rows["請求書"] == 1     # 対象外は既定のまま（旧挙動と同一）
+
+def test_resolve_header_rows_target_sheet_none_defaults_to_first_sheet_unchanged():
+    struct_dump = {"sheets": {"Sheet": {"rows": {
+        1: {"nonempty": 2, "str": 2, "bold": 0}, 2: {"nonempty": 2, "str": 1, "bold": 0}}}}}
+    header_rows, clarify = ailine.resolve_header_rows(struct_dump, ["Sheet"])   # target_sheet 省略
+    assert header_rows == {"Sheet": 1}
+    assert clarify is None
+
+
+# ★ 挙動変更#2: codegen_dsl が対象シートを一時的に先頭へ動かして戻す（_wrap_basic_for_sheet）。
+def test_codegen_dsl_first_sheet_target_unchanged_output():
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "数量", "単価", "金額", "原価"]}}
+    code = ailine.codegen_dsl("SORT", {"col": "金額", "order": "desc"}, meta)
+    assert "moveByName" not in code   # ★ 挙動不変（既存ゴールデンと同型）
+    assert code == (
+        "Option VBASupport 1\nOption Explicit\n\nSub Run(oDoc As Object)\n"
+        "    Call SortByColumn(oDoc, 0, 4, 3, False)\nEnd Sub\n")
+
+def test_codegen_dsl_non_first_sheet_target_wraps_with_move_by_name_and_restores_index():
+    meta = {"sheets": ["請求書", "工事台帳", "取引先マスタ"],
+            "headers": {"請求書": ["宛先", "金額"],
+                        "工事台帳": ["取引先名", "工事名", "金額"],
+                        "取引先マスタ": ["取引先名", "住所"]}}
+    resolved = {"group_col": "取引先名", "value_col": "金額", "_target_sheet": "工事台帳"}
+    code = ailine.codegen_dsl("AGGREGATE", resolved, meta)
+    assert 'oDoc.Sheets.moveByName("工事台帳", 0)' in code
+    assert 'oDoc.Sheets.moveByName("工事台帳", 1)' in code   # 元の位置(index 1)へ必ず戻す
+    assert "Sub __AilineTargetBody(oDoc As Object)" in code   # Exit Sub をまたいでも必ず戻る形
+    assert "Call SummaryTable(oDoc, 0, 0, 2)" in code
+
+def test_codegen_dsl_missing_target_sheet_key_falls_back_to_first_sheet_unchanged():
+    # ★ 後方互換: resolved_args に _target_sheet が無い既存呼び出し（多数の既存単体テスト/
+    #   ゴールデン）は codegen_dsl 内部で book_meta["sheets"][0] にフォールバックする。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    code = ailine.codegen_dsl("NUMBER_FORMAT", {"col": "金額", "style": "thousands"}, meta)
+    assert "moveByName" not in code
+
+
+# ★ postcondition チェッカーが resolved_args["_target_sheet"] を読むこと（1つの代表例で確認・
+#   他13チェッカーは機械的に同じ書き換え — CHANGED ファイル一覧参照）。
+def test_check_sort_reads_target_sheet_from_args_not_first_sheet(tmp_path):
+    book = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "請求書"
+    ws1.append(["宛先", "金額"])
+    ws1.append(["b", 2])
+    ws1.append(["a", 1])   # ★ 1枚目はわざと未整列のまま（対象シートでないので無視されるはず）
+    ws2 = wb.create_sheet("工事台帳")
+    ws2.append(["取引先名", "金額"])
+    ws2.append(["田中", 300])
+    ws2.append(["山田", 100])
+    wb.save(book)
+    status, reason = ailine.check_sort(
+        book, {"col": "金額", "order": "desc", "_target_sheet": "工事台帳"})
+    assert status == "pass", reason
+
+
+# ★ OP_WRITE_TARGET の sheet_key=None フォールバックが resolved["_target_sheet"] を読む
+#   （_maybe_warn_target_overwrite / _declared_new_column_letter の2箇所）。
+def test_maybe_warn_target_overwrite_uses_target_sheet_not_first_sheet(tmp_path):
+    book = tmp_path / "book.xlsx"
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "請求書"
+    ws1.append(["数量", "単価"])   # ★ 1枚目に同名の"金額"列は無い＝1枚目基準だと誤検知しない側
+    ws2 = wb.create_sheet("工事台帳")
+    ws2.append(["取引先名", "金額"])
+    ws2.append(["田中", 300])
+    wb.save(book)
+    meta = {"sheets": ["請求書", "工事台帳"],
+            "headers": {"請求書": ["数量", "単価"], "工事台帳": ["取引先名", "金額"]},
+            "header_rows": {"請求書": 1, "工事台帳": 1}}
+    warn = ailine._maybe_warn_target_overwrite(
+        "SET_COLUMN_VALUE", {"col": "金額", "_target_sheet": "工事台帳"}, meta, book)
+    assert warn is not None and "1 件" in warn   # 工事台帳の「金額」列に既存値1件を検知
+
+def test_declared_new_column_letter_uses_target_sheet_not_first_sheet():
+    meta = {"sheets": ["請求書", "工事台帳"],
+            "headers": {"請求書": ["宛先", "金額"], "工事台帳": ["取引先名", "工事名"]}}
+    # COMPUTE_COLUMN の target 無指定＝新規列。対象シート(工事台帳)は2列なので新規列は3列目=C。
+    letter = ailine._declared_new_column_letter(
+        "COMPUTE_COLUMN", {"_target_sheet": "工事台帳"}, meta)
+    assert letter == "C"
 
 # ★ W10c 致命2: target_col が対象シートに実在しない場合の扱い。
 #   実測の再現: 対象シートに『単価』列が無い状態で「単価表を見て単価を入れて」を依頼すると、
@@ -4161,6 +4346,122 @@ def test_cmd_run_without_header_row_flag_still_clarifies_on_ambiguous(tmp_path, 
     assert rc == 3
     assert "--header-row" in captured.out
     assert called["n"] == 0
+
+
+# --- ★ DoD1: 査定の再現をそのまま回帰テストにする（main(argv) 経由・CLI 全体） ---------------
+#   独立監査の再現手順そのもの:「複数シートのブックで2枚目シートを名指し」
+#   → 旧実装は誤って1枚目を対象にし、「ある列: ...」が1枚目の列名を出す誤誘導だった。
+#   ollama は monkeypatch で避ける（DSL 経路は率/列名を LLM に確定させない A' 原則どおり・
+#   verify_dsl_args 自体は決定論なので、翻訳結果だけ固定すれば ollama 無しで完全再現できる）。
+
+def _multi_sheet_book(tmp_path):
+    p = tmp_path / "multi.xlsx"
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "請求書"
+    ws1.append(["宛先", "金額"])
+    ws1.append(["山田商店", 50000])
+    ws2 = wb.create_sheet("工事台帳")
+    ws2.append(["取引先名", "工事名", "金額"])
+    ws2.append(["山田商店", "A邸新築", 300000])
+    ws2.append(["田中建設", "B邸改修", 150000])
+    wb.create_sheet("取引先マスタ")
+    wb.save(p)
+    return p
+
+def test_cmd_run_named_second_sheet_no_longer_shows_misleading_first_sheet_error(
+        tmp_path, monkeypatch, capsys):
+    """DoD1 の回帰テスト本体。「工事台帳シートで宛先を降順に並べ替えて」— 『宛先』は
+       1枚目(請求書)の列で、対象(工事台帳)には無い。旧実装はここで
+       「ある列: 宛先, 金額」（1枚目の列！）を出す誤誘導だった。直った後は対象シート
+       (工事台帳)の実列名だけが出る。"""
+    book = _multi_sheet_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "宛先", "order": "desc"}})
+    argv = run_argv(
+        book=str(book), task="工事台帳シートで宛先を降順に並べ替えて",
+        dry=False, copy=True, header_row=None)
+    rc = ailine.main(argv)
+    captured = capsys.readouterr()
+    assert rc == 3
+    # ★ 直った点そのもの: 誤誘導が無い（1枚目の列名「宛先」「金額」の組が「ある列」に出ない）。
+    assert "ある列: 取引先名, 工事名, 金額" in captured.out
+    assert "ある列: 宛先, 金額" not in captured.out
+    # ★ 挙動変更#2 最低限: 適用前の対象シート明示（査定所見「これがあれば事故は防げた」）。
+    assert "操作対象は2枚目の『工事台帳』です" in captured.out
+
+def test_cmd_run_named_second_sheet_applies_operation_there_not_first_sheet(
+        tmp_path, monkeypatch, capsys):
+    """同じ複数シートのブックで、今度は実在する列（工事台帳の『金額』）を指定し、
+       実際にその段が2枚目シートを対象に適用できることを確認する（basrun_apply は
+       decode 済みコードの内容だけ検査するダミーに差し替え・real LO は使わない
+       ＝ not local。real LO 版は tests/test_target_sheet_local.py 参照）。"""
+    book = _multi_sheet_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
+    captured_code = {}
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        captured_code["code"] = code
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    argv = run_argv(
+        book=str(book), task="工事台帳シートで金額を降順に並べ替えて",
+        dry=False, copy=True, header_row=None)
+    ailine.main(argv)
+    code = captured_code.get("code", "")
+    # ★ 対象シートが1枚目でないので、_wrap_basic_for_sheet が moveByName で包む。
+    assert 'oDoc.Sheets.moveByName("工事台帳", 0)' in code
+    assert 'oDoc.Sheets.moveByName("工事台帳", 1)' in code
+
+def test_cmd_run_single_sheet_book_no_announcement_no_regression(tmp_path, monkeypatch, capsys):
+    """DoD5②: 単一シートのブックは従来どおり（対象シート明示の行が出ない・moveByName も
+       生成されない＝既存ゴールデンと同型の出力）。"""
+    book = _book(tmp_path, [["商品", "数量", "単価"], ["りんご", 3, 100], ["みかん", 5, 50]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "数量", "order": "desc"}})
+    captured_code = {}
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        captured_code["code"] = code
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    argv = run_argv(book=str(book), task="数量で降順に並べ替えて", dry=False, copy=True, header_row=None)
+    ailine.main(argv)   # ★ fake_apply は実際にソートしないため postcondition の pass/fail は見ない
+    captured = capsys.readouterr()
+    assert "操作対象は" not in captured.out   # 単一シートは沈黙（既存出力を変えない）
+    assert "moveByName" not in captured_code.get("code", "")
+
+def test_cmd_run_plan_composite_step_targets_named_non_first_sheet(tmp_path, monkeypatch, capsys):
+    """複合計画(cmd_run_plan/_run_dsl_plan_step)でも対象シートの解決が効くこと
+       （単発(cmd_run_dsl)だけでなく _run_dsl_plan_step 側の first_sheet 配線も見る）。"""
+    book = _multi_sheet_book(tmp_path)
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [
+                            {"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                            {"op": "BOLD", "args": {"target": "col:金額"}},
+                        ]})
+    captured_codes = []
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        captured_codes.append(code)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    argv = run_argv(
+        book=str(book), task="工事台帳シートで金額を降順に並べ替えて太字にして",
+        dry=False, copy=True, header_row=None)
+    ailine.main(argv)
+    captured = capsys.readouterr()
+    assert "操作対象は2枚目の『工事台帳』です" in captured.out
+    assert len(captured_codes) == 2
+    for code in captured_codes:
+        assert 'oDoc.Sheets.moveByName("工事台帳", 0)' in code
+        assert 'oDoc.Sheets.moveByName("工事台帳", 1)' in code
 
 def test_cmd_run_dry_skips_structdump_and_uses_physical_row1(tmp_path, monkeypatch, capsys):
     # ★ --dry は LibreOffice に触れない（既存の設計不変条件）。normalize_book が

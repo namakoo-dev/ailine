@@ -1,7 +1,8 @@
 {
   "ok": true,
   "resolved": {
-    "range": "A1:C3"
+    "range": "A1:C3",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": null

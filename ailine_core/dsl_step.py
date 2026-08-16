@@ -76,22 +76,25 @@ class DslGroundResult:
 def resolve_dsl_step_args(op: str, raw_args: dict, task: str, meta: dict, vocab: dict, *,
                            original_headers: dict | None = None, first_sheet: str | None = None,
                            deps: DslStepDeps) -> DslGroundResult:
-    """②検証（grounding）。単発(cmd_run_dsl)は original_headers/first_sheet=None のまま
-       呼ぶ（new_cols は常に空になり、_apply_new_column_fallback は無条件でスキップされる
-       ── 新規列の概念自体が単発には無いため、この呼び方で単発の従来挙動と完全一致する）。
+    """②検証（grounding）。単発(cmd_run_dsl)は original_headers=None のまま呼ぶ（new_cols は
+       常に空になり、_apply_new_column_fallback は無条件でスキップされる ── 新規列の概念自体
+       が単発には無いため、この呼び方で単発の従来挙動と完全一致する）。★ 挙動変更#2:
+       first_sheet は今は単発でも渡す（resolve_target_sheet が一箇所で決めた対象シート）。
+       original_headers=None のガードにより new_cols への影響は無い（下記参照）。
        複合計画は直前までの段の original_headers/current_meta/first_sheet を渡し、
        『直前段が作った新規列』への依存つき連鎖フォールバックを1回だけ試みる。"""
     new_cols: list = []
     if first_sheet and original_headers is not None:
         new_cols = [c for c in meta["headers"].get(first_sheet, [])
                     if c not in original_headers.get(first_sheet, [])]
-    ok, resolved, inferred, err = deps.verify_dsl_args(op, raw_args, meta, task=task, vocab=vocab)
+    ok, resolved, inferred, err = deps.verify_dsl_args(op, raw_args, meta, task=task, vocab=vocab,
+                                                         target_sheet=first_sheet)
     if not ok and new_cols and first_sheet:
         patched = deps.apply_new_column_fallback(
             op, raw_args, meta["headers"].get(first_sheet, []), new_cols)
         if patched != raw_args:
             ok2, resolved2, inferred2, err2 = deps.verify_dsl_args(
-                op, patched, meta, task=task, vocab=vocab)
+                op, patched, meta, task=task, vocab=vocab, target_sheet=first_sheet)
             if ok2:
                 ok, resolved, inferred, err = ok2, resolved2, inferred2, err2
     return DslGroundResult(ok=ok, resolved=resolved, inferred=inferred, err=err, new_cols=new_cols)

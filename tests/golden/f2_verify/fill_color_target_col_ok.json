@@ -2,7 +2,8 @@
   "ok": true,
   "resolved": {
     "target": "col:金額",
-    "color": "red"
+    "color": "red",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": null

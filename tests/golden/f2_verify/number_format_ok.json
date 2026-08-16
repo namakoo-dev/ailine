@@ -2,7 +2,8 @@
   "ok": true,
   "resolved": {
     "col": "金額",
-    "style": "thousands"
+    "style": "thousands",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": null

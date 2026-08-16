@@ -112,8 +112,15 @@ _add("lookup_fill_unknown_target_sheet", "LOOKUP_FILL",
 _add("lookup_fill_unknown_source_sheet", "LOOKUP_FILL",
      {"target_sheet": "Sheet", "target_col": "単価", "source_sheet": "存在しないシート",
       "key_col": "商品"})
-_add("lookup_fill_target_sheet_not_first", "LOOKUP_FILL",
+_add("lookup_fill_target_sheet_not_first_now_ok", "LOOKUP_FILL",   # ★ 挙動変更#2: 旧「対象シートは
+     # 1枚目のみ対応」拒否を撤廃（散在した1枚目固定の一箇所）。target_sheet が2枚目でも
+     # target_col が実在(単価)かつ値列(source_headers[1])と一致すれば従来どおり通る。
      {"target_sheet": "単価表", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"})
+_add("lookup_fill_target_sheet_second_source_first", "LOOKUP_FILL",   # ★ 挙動変更#2: target_sheet
+     # が2枚目(単価表)・source_sheet が1枚目(Sheet)という、旧実装なら拒否されていた非対称な
+     # 組み合わせが通ることを示す（依頼文に列名の言及あり＝根拠つき）。
+     {"target_sheet": "単価表", "target_col": "単価", "source_sheet": "Sheet", "key_col": "商品"},
+     task="単価表の単価を更新して")
 _add("lookup_fill_unknown_key_col", "LOOKUP_FILL",
      {"target_sheet": "Sheet", "target_col": "単価", "source_sheet": "単価表", "key_col": "不明列"},
      task="単価転記して")

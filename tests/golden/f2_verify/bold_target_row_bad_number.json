@@ -1,7 +1,8 @@
 {
   "ok": false,
   "resolved": {
-    "target": "row:abc"
+    "target": "row:abc",
+    "_target_sheet": "Sheet"
   },
   "inferred": [],
   "err": "行番号『abc』が不正です"
