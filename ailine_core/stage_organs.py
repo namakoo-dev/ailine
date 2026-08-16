@@ -156,16 +156,26 @@ STAGE_ORGANS = {
 #   ★★ 空タプル `()` は「この段種は関数単位では他の段種の分岐と分離できない」という
 #   明示的な unverifiable 宣言（missing ではない ―― キーは必ず埋める。C6 の None と同じ
 #   思想: 「追えない」も「忘れた」と区別して機械で読めるようにする）。
-#   該当は clarify_plan_step 一つ: cmd_run_plan() は dsl_plan_step と clarify_plan_step の
-#   両方の分岐を同じ関数本体の中に inline で持っており（CLARIFY 分岐は3行で return、
-#   DSL 分岐は同じ for ループの続きに書かれている）、関数単位の AST 走査では両分岐を
-#   区別できない。もし clarify_plan_step にも cmd_run_plan を当てると、dsl_plan_step が
-#   実際に呼んでいる verify_dsl_args 等が「clarify_plan_step でも呼ばれている」との
-#   誤検知になる（clarify_plan_step の宣言は全マス None なので、これは逆向きチェックの
-#   誤報になる）。誤報する番人は無視を育てるので、ここは追わずに unverifiable へ逃がす。
+#
+# ★★★ C7（三経路の統合）で更新: dsl_single(cmd_run_dsl) と dsl_plan_step の DSL 段は
+#   ailine_core.dsl_step の共有エンジン（print_dsl_confirmation/apply_dsl_step）を通る
+#   ようになった。dsl_plan_step の実体（依存つき連鎖の新規列フォールバック含む）は
+#   cmd_run_plan の for ループから独立した関数 _run_dsl_plan_step に切り出したため、
+#   dsl_plan_step の代表関数を cmd_run_plan から _run_dsl_plan_step へ更新する。
+#   ★ 副産物（DoD7）: この切り出しにより cmd_run_plan 自身の関数本体はもう DSL 段の
+#   器官（verify_dsl_args/_maybe_warn_target_overwrite/_structural_advisories 等）を
+#   直接呼ばなくなった。--dry プレビュー本体も同じ理由で _preview_dsl_plan へ切り出した
+#   （cmd_run_plan がそこでも verify_dsl_args/format_confirmation_line を直接呼んでいた
+#   ── これも解消しないと clarify_plan_step の誤検知の種になる）。結果、cmd_run_plan
+#   自身の本体は CLARIFY 分岐(inline 3行) + run_freeform_plan_step/_run_dsl_plan_step/
+#   _preview_dsl_plan への委譲 + ループ外の集計（mention_overlap_advisory 等・どの
+#   ORGAN_FUNCTION_CANDIDATES にも含まれない）だけになり、以前のように dsl_plan_step の
+#   呼び出しを誤って拾う心配が無くなった ―― clarify_plan_step を unverifiable から
+#   卒業させ、cmd_run_plan を代表関数にできる（旧コメントが警告していた誤検知の種は
+#   dsl_plan_step 分岐が別関数へ分かれたことで消えた）。
 STAGE_ENTRY_FUNCTIONS = {
     "dsl_single": ("cmd_run_dsl",),
-    "dsl_plan_step": ("cmd_run_plan",),
+    "dsl_plan_step": ("_run_dsl_plan_step",),
     "freeform_single": ("cmd_run_freeform",),
     "freeform_plan_step": ("run_freeform_plan_step",),
     # ★ _cmd_run_dispatch の CLARIFY 分岐（plan が1段だけで CLARIFY の場合）は
@@ -174,20 +184,35 @@ STAGE_ENTRY_FUNCTIONS = {
     #   _cmd_run_dispatch 自身の AST には inline されていないため、関数単位の走査でも
     #   分岐混線が起きない（clarify_plan_step と違い、安全に検証できる）。
     "clarify_single": ("_cmd_run_dispatch",),
-    "clarify_plan_step": (),   # ★ unverifiable（理由は上のコメント）
+    # ★★ C7 で unverifiable を卒業（旧: 空タプル）。cmd_run_plan の CLARIFY 分岐（3行）
+    #   と DSL 段の実体(_run_dsl_plan_step)が別関数に分かれたことで、cmd_run_plan 自身の
+    #   AST を安全に代表関数として使えるようになった（上のコメント参照）。
+    "clarify_plan_step": ("cmd_run_plan",),
 }
 
 # ★ 器官 → 「その器官が満たされたとみなす ailine.py 側の呼び出し先関数名」の候補集合。
-#   1器官が複数関数のどれかで満たされる場合がある（destructive_gate は2つ、
-#   helper_sweep_detect も2つ、advisories は段種によって build_advisories と
-#   _structural_advisories のどちらか一方 ―― どちらの候補が実際に呼ばれていても
-#   「いずれかが呼ばれていれば満たす」で判定する）。
+#   1器官が複数関数のどれかで満たされる場合がある ―― どの候補が実際に呼ばれていても
+#   「いずれかが呼ばれていれば満たす」で判定する。
+#   ★ C7: grounding/destructive_gate/advisories に ailine_core.dsl_step の共有関数
+#   （resolve_dsl_step_args/print_dsl_confirmation/compose_dsl_step_advisories）を追加。
+#   cmd_run_dsl と _run_dsl_plan_step はどちらも同じ関数群を経由してこれらの器官を満たす。
+#   dsl_single と dsl_plan_step はこの3器官をどちらも True と宣言しているため、同じ候補名を
+#   共有しても True/None の判定はぶれない（両側とも「見つかれば True 相当」で一致する）。
+#   ★★ truncation_notice には共有関数(apply_dsl_step)を候補に**加えていない**（意図的）:
+#   apply_dsl_step は単発/複合計画の両方から呼ばれるが、_truncation_notice を実際に
+#   呼ぶかどうかは呼び出し側(ailine.py)に残した（ailine_core/dsl_step.py の
+#   apply_dsl_step docstring 参照）。もしここに apply_dsl_step を候補として加えると、
+#   dsl_single(True)と dsl_plan_step(None)が同じ関数名で見分けられなくなり
+#   test_dsl_plan_step_truncation_notice_gap_stays_green が誤って赤くなる
+#   （AST の名前ベース走査は「関数の中身」までは追えないという、この番人の設計そのものの
+#   限界 ―― モジュール先頭のコメント参照）。
 ORGAN_FUNCTION_CANDIDATES = {
-    "grounding": ("verify_dsl_args",),
-    "destructive_gate": ("_maybe_warn_target_overwrite", "_confirm_overwrite_or_gate"),
+    "grounding": ("verify_dsl_args", "resolve_dsl_step_args"),
+    "destructive_gate": ("_maybe_warn_target_overwrite", "_confirm_overwrite_or_gate",
+                          "print_dsl_confirmation"),
     "rate_scan": ("scan_rate_literals",),
     "helper_sweep_detect": ("detect_helper_sweep", "_confirm_freeform_apply"),
-    "advisories": ("build_advisories", "_structural_advisories"),
+    "advisories": ("build_advisories", "_structural_advisories", "compose_dsl_step_advisories"),
     "truncation_notice": ("_truncation_notice",),
 }
 

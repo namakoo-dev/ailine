@@ -14,9 +14,14 @@ ailine.py を読んで AST から「呼ばれている関数名の集合」を�
 
 ★ ailine.py は読むだけ（ast.parse のみ・import しない）。BASRUN 等の実行時依存を
 一切引かない（DoD6: BASRUN を存在しないパスに向けても緑）。
-★ ailine.py には1行も触れない（このテストの新規追加のみ。stage_organs.py への追加は
-STAGE_ENTRY_FUNCTIONS/ORGAN_FUNCTION_CANDIDATES/reality_mismacthes の3点＝ブリーフが
-明示的に許可した「段↔関数の対応表」）。
+★ C6b の時点では ailine.py には1行も触れていなかった（このテストの新規追加のみ。
+stage_organs.py への追加は STAGE_ENTRY_FUNCTIONS/ORGAN_FUNCTION_CANDIDATES/
+reality_mismacthes の3点＝ブリーフが明示的に許可した「段↔関数の対応表」）。
+★★ C7（三経路の統合）でこの前提は変わった: ailine.py 自体を書き換える回だったため、
+STAGE_ENTRY_FUNCTIONS/ORGAN_FUNCTION_CANDIDATES の宣言をその変更に合わせて更新している
+（dsl_plan_step の代表関数を cmd_run_plan → _run_dsl_plan_step へ、clarify_plan_step を
+unverifiable から卒業、destructive_gate の候補に print_dsl_confirmation を追加）。
+このファイル自身（AST を読むだけの番人のロジック）は変えていない。
 """
 import ast
 from pathlib import Path
@@ -109,14 +114,19 @@ def test_organ_function_candidates_declares_every_organ():
 
 
 def test_unverifiable_stages_are_exactly_the_declared_one():
-    """★ DoD4: 追えなかった（unverifiable に逃がした）段種の一覧を固定する。
-       clarify_plan_step だけが対象（理由は stage_organs.STAGE_ENTRY_FUNCTIONS の
-       コメント参照: cmd_run_plan が dsl_plan_step と同じ関数本体を共有しており、
-       関数単位の AST 走査では2つの分岐を区別できないため）。
+    """★ DoD4/C7 DoD7: 追えなかった（unverifiable に逃がした）段種の一覧を固定する。
+       ★★ C7 で空集合に更新: clarify_plan_step が卒業した。C7（三経路の統合）で
+       cmd_run_plan の DSL 段の実体を _run_dsl_plan_step という別関数に切り出し、
+       --dry プレビュー本体も _preview_dsl_plan に切り出したことで、cmd_run_plan
+       自身の関数本体はもう CLARIFY 分岐(inline 3行)＋委譲呼び出し＋ループ外集計
+       （どの ORGAN_FUNCTION_CANDIDATES にも該当しない）だけになった ── dsl_plan_step の
+       器官呼び出しを誤って拾う心配が無くなったので、cmd_run_plan を clarify_plan_step の
+       代表関数として安全に使えるようになった（stage_organs.STAGE_ENTRY_FUNCTIONS の
+       コメント参照）。
        ★ ここが増えたら（新しい段種が追えなくなったら）このテストが教えてくれる
        （unverifiable が静かに広がっていくのを防ぐ）。"""
     unverifiable = {stage for stage, funcs in STAGE_ENTRY_FUNCTIONS.items() if not funcs}
-    assert unverifiable == {"clarify_plan_step"}
+    assert unverifiable == set()
 
 
 # --- ★ 番人の本体: 実際の ailine.py に対して両方向を検査する ---------------------------
@@ -157,14 +167,15 @@ def test_dsl_plan_step_truncation_notice_gap_stays_green():
 def test_guard_fires_when_a_true_declared_call_is_erased_in_memory():
     """(a) 「True と宣言した器官の呼び出しを ailine.py からメモリ上で消す」の実演。
        実際に見つかった found_names_by_stage のコピーから、本当に True で本当に見つかって
-       いる1マス（dsl_single × grounding = verify_dsl_args）の候補名を取り除き、
-       『誰かが verify_dsl_args の呼び出しを消した』状態を再現する。"""
+       いる1マス（dsl_single × grounding = resolve_dsl_step_args。★ C7: cmd_run_dsl は
+       ailine_core.dsl_step の共有 grounding 関数を経由するようになった）の候補名を
+       取り除き、『誰かがその呼び出しを消した』状態を再現する。"""
     found = _found_names_by_stage()
     assert STAGE_ORGANS["dsl_single"]["grounding"] is True
-    assert "verify_dsl_args" in found["dsl_single"], "前提が崩れている（現状 True なのに見つからない）"
+    assert "resolve_dsl_step_args" in found["dsl_single"], "前提が崩れている（現状 True なのに見つからない）"
 
     poisoned = {stage: set(names) for stage, names in found.items()}
-    poisoned["dsl_single"].discard("verify_dsl_args")   # ← 呼び出しをメモリ上で消す
+    poisoned["dsl_single"].discard("resolve_dsl_step_args")   # ← 呼び出しをメモリ上で消す
 
     mismatches = reality_mismatches(poisoned)
     assert ("dsl_single", "grounding", "declared_true_not_found") in mismatches, (
@@ -196,12 +207,12 @@ def test_guard_fires_when_a_none_cell_is_promoted_to_true_without_a_real_call():
 
 def test_guard_fires_when_a_true_cell_is_downgraded_to_none_while_the_call_still_exists():
     """(b) ★ 逆向き実演: 「None と宣言したマス目の器官が、実際には呼ばれている」ケース。
-       dsl_single × grounding は実際に verify_dsl_args を呼んでいる（True・確認済み）。
+       dsl_single × grounding は実際に resolve_dsl_step_args を呼んでいる（True・確認済み）。
        これを None に書き換えると『無いと言ったのに実は在る』状態になる ―― reality
        チェックがこれも赤にすることを実演する。"""
     found = _found_names_by_stage()
     assert STAGE_ORGANS["dsl_single"]["grounding"] is True
-    assert "verify_dsl_args" in found["dsl_single"], "前提が崩れている（現状 True なのに見つからない）"
+    assert "resolve_dsl_step_args" in found["dsl_single"], "前提が崩れている（現状 True なのに見つからない）"
 
     poisoned_table = {stage: dict(row) for stage, row in STAGE_ORGANS.items()}
     poisoned_table["dsl_single"]["grounding"] = None   # ← 宣言を「無い」に書き換える

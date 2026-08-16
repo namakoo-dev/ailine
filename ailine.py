@@ -70,6 +70,9 @@ from ailine_core.claim import (   # ★ C5: Claim 型と『✓ 機械検証済�
     Claim, format_plan_report, overall_verdict, render_single_op_claim,
     _VERIFY_SCOPE_NOTE, _VERIFY_SCOPE_NOTE_PLAN,
 )
+from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 段が共有する実行エンジン
+    DslStepDeps, resolve_dsl_step_args, print_dsl_confirmation, apply_dsl_step, compose_dsl_step_advisories,
+)
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
@@ -4500,39 +4503,45 @@ def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None
     return None
 
 
+def _make_dsl_step_deps() -> DslStepDeps:
+    """★ C7: 呼び出しのたびに毎回新しく組み立てる依存の束（monkeypatch を効かせるため・dsl_step.py 参照）。"""
+    return DslStepDeps(
+        format_confirmation_line=format_confirmation_line,
+        maybe_warn_header_col_mismatch=_maybe_warn_header_col_mismatch,
+        maybe_warn_target_overwrite=_maybe_warn_target_overwrite,
+        interpretation_summary_line=_interpretation_summary_line, confirm_overwrite_or_gate=_confirm_overwrite_or_gate,
+        basrun_apply=basrun_apply, snapshot=snapshot, diff_snapshots=diff_snapshots,
+        run_postcondition=run_postcondition, progress_start=progress_start, progress_end=progress_end,
+        pivot_caveat=PIVOT_CAVEAT, verify_dsl_args=verify_dsl_args,
+        apply_new_column_fallback=_apply_new_column_fallback, build_advisories=build_advisories,
+        structural_advisories=_structural_advisories, unrequested_new_sheet_advisory=unrequested_new_sheet_advisory,
+        neutralize_new_column_ghost_warning=_neutralize_new_column_ghost_warning,
+        neutralize_declared_new_sheet_warning=_neutralize_declared_new_sheet_warning,
+        neutralize_declared_sheet_replace_warning=_neutralize_declared_sheet_replace_warning)
+
+
 def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta: dict,
                  op: str, raw_args: dict) -> int:
     """M2b の決定論パイプライン本体。②検証 → ③確認行 → ④codegen → ⑤適用 → ⑥事後条件。
-       ★ W3: source_book は cmd_run が翻訳より前に正規化済み（同じ LO 往復で StructDump も
-       済ませてある）。ここでは正規化をやり直さない（二重 LO 起動を避ける）。
-       book_meta["header_rows"] を codegen/事後条件へ一貫して渡す（三層とも同じ見出し推定）。"""
+       ★ W3: source_book は cmd_run が翻訳より前に正規化済み・やり直さない。
+       ★ C7: ②③⑤⑥は ailine_core.dsl_step の共有エンジン（_run_dsl_plan_step と同じコード・
+       「単発 = 1 段の計画」）。--ask・.bas/変更点の印字・_truncation_notice は単発固有のまま。"""
     vocab = load_vocab()
-    ok, resolved, inferred, err = verify_dsl_args(op, raw_args, book_meta, task=a.task, vocab=vocab)
-    if not ok:
-        print(f"？ {err}")
+    deps = _make_dsl_step_deps()
+    ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, deps=deps)
+    if not ground.ok:
+        print(f"？ {ground.err}")
         return 3
+    resolved, inferred = ground.resolved, ground.inferred
 
     first_sheet = book_meta["sheets"][0] if book_meta.get("sheets") else None
     header_row = book_meta.get("header_rows", {}).get(first_sheet, 1)
     use_formula = not getattr(a, "values", False)
 
-    line = format_confirmation_line(op, resolved, inferred)
     print(f"■ ailine（DSL 経路）  model={a.model}  book={book.name}")
-    print(line)
-    if op == "PIVOT":   # ★ W9 項目4: 確認行の直後にも既知の癖を一言添える。
-        print(f"（{PIVOT_CAVEAT}）")
-    warn_overwrite = _maybe_warn_target_overwrite(op, resolved, book_meta, book)
-    if warn_overwrite:
-        summary = _interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
-        if summary:
-            print(summary)
-        print(warn_overwrite)
-    for w in resolved.get("_warnings", []):   # ★ A': LLM由来の値と機械抽出の食い違い
-        print(f"⚠ {w}")
-
-    gate_exit = _confirm_overwrite_or_gate(a, warn_overwrite)   # ★ W10a 項目1: 破壊の関所
-    if gate_exit is not None:
-        return gate_exit
+    confirm = print_dsl_confirmation(op, resolved, inferred, a.task, meta=book_meta, warn_book=book, new_cols=None, a=a, deps=deps)
+    if confirm.gate_exit is not None:   # ★ W10a 項目1: 破壊の関所
+        return confirm.gate_exit
 
     if a.ask:
         try:
@@ -4552,14 +4561,13 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
-    # ★ W8a 項目5: 「決定論」はユーザー向け文字列から排除（内部の設計語彙のまま出すと
-    #   事務職には伝わらない）。内部名・コメント・関数名（codegen_dsl 等）は不変。
+    # ★ W8a 項目5: 「決定論」はユーザー向け文字列から排除（内部名・関数名は不変）。
     print(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────")
     print(code)
     print("──────────────────────────────────────────")
 
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
-              "path": "dsl", "command": line, "postcondition": None,
+              "path": "dsl", "command": confirm.line, "postcondition": None,
               "provenance": resolved.get("_sources")}
 
     if a.dry:
@@ -4570,48 +4578,37 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         return 0
 
     before = snapshot(source_book)
-
     shutil.copy2(source_book, out_book)   # 原本は触らず、正規化済みコピーに適用
-    t0 = progress_start("⏳ LibreOffice で適用中…")
-    okrun, err_apply, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
-    progress_end(t0)
-    if not okrun:
-        print(f"× 実行時エラー: {short_error_summary(err_apply)}（詳細は履歴に記録）。")
-        result["last_error_full"] = err_apply
-        _finish_run(a, book, result, "runtime_error", error_detail=err_apply)
+
+    # ★ C7: ⑤適用〜⑥事後条件（共有エンジン）。print_changes は単発固有（docstring 参照）。
+    apply_result = apply_dsl_step(
+        op, resolved, code, apply_target=out_book, before=before, before_charts=before["charts"],
+        workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout, header_row=header_row,
+        use_formula=use_formula, source_book=source_book, deps=deps,
+        apply_progress_label="⏳ LibreOffice で適用中…", print_changes=True)
+
+    if apply_result.runtime_error is not None:
+        print(f"× 実行時エラー: {short_error_summary(apply_result.runtime_error)}（詳細は履歴に記録）。")
+        result["last_error_full"] = apply_result.runtime_error
+        _finish_run(a, book, result, "runtime_error", error_detail=apply_result.runtime_error)
         return 1
 
-    after = snapshot(out_book)
-    changed, lines = diff_snapshots(before, after)
-    print("\n変更点:" if changed else "\n（文書に変化は検出されなかった）")
-    for ln in lines:
-        print(ln)
-    # ★ 止血3: DSL 経路は事後条件チェッカーが openpyxl で out ファイルを直接・全行
-    #   読むため「表示だけ」が切り詰められている（適用・検証は全行）。
+    after, lines = apply_result.after, apply_result.changes
+    # ★ 止血3/C7: 単発は常に呼ぶ（複合計画の DSL 段は呼ばない未修正の穴。理由は dsl_step.py 参照）。
     notice = _truncation_notice(before, after, exhaustive_postcondition=True)
     if notice:
         print(notice)
-    # ★ W10b 項目4b(摩擦): LOOKUP_FILL の参照専用シート(source_sheet)は書き換えない
-    #   （読み取り専用が正しい操作）ので「変更されていません」の対象から除外する。
+    # ★ W10b 項目4b(摩擦): LOOKUP_FILL の参照専用シート(source_sheet)は「変更なし」対象から除外。
     exclude_sheets = {resolved["source_sheet"]} if op == "LOOKUP_FILL" else None
-    advisories = build_advisories(a.task, before, after, exclude_sheets=exclude_sheets)
-    # ★ W10b 項目4a(摩擦): COMPUTE_COLUMN の新規列作成は宣言どおりの効果なので、
-    #   その新規列1本に収まる『範囲外』警報は中立表示に落とす。
-    advisories = _neutralize_new_column_ghost_warning(advisories, op, resolved, book_meta)
-    # ★ W10c 中: AGGREGATE/PIVOT の新規シート作成も同じ考え方で中立表示に落とす。
-    advisories = _neutralize_declared_new_sheet_warning(advisories, op, before, after)
-    # ★ 致命2(W10e): AGGREGATE/PIVOT が既存の同名シートを宣言どおり再生成する場合も同じ考え方。
-    advisories = _neutralize_declared_sheet_replace_warning(advisories, op, before, after)
+    advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
+        "flat", op, resolved, book_meta, a.task, before, after, exclude_sheets=exclude_sheets, deps=deps)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
     result["advisories"] = advisories
 
-    status, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"],
-                                        header_row=header_row, use_formula=use_formula,
-                                        source_book=source_book)
-    # ★ 止血1/2: status は "pass"/"warn"/"fail"/"error"。"error" はチェッカー内の
-    #   予期しない例外を捕まえた印（--json 上は "fail" に丸める）。
+    status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
+    # ★ 止血1/2: "error"(チェッカー内の予期しない例外)は --json 上 "fail" に丸める。
     result["postcondition"] = "fail" if status == "error" else status
     if status == "error":
         print(f"\n× {reason}")
@@ -4624,22 +4621,17 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         _finish_run(a, book, result, "postcondition_fail")
         return 1
     if status == "warn":
-        # ★ 止血1: 検証対象が少なすぎて意味を持たない場合、「機械検証済み」とは名乗らない。
+        # ★ 止血1: 検証対象が少なすぎる場合、「機械検証済み」とは名乗らない。
         print(f"\n⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
         result["ok"] = True
     else:
-        # ★ C5: scope は上で表示済みの「解釈: ...」行から「解釈: 」を除いた宣言テキスト
-        #   （＝計画が宣言した対象そのもの。format_plan_report 側の label と同じ取り方）。
-        claim = Claim(verified=True, basis="declaration",
-                       scope=line[len("解釈: "):], evidence=reason,
-                       observation_complete=True)
+        # ★ C5: scope は「解釈: ...」行から「解釈: 」を除いた宣言テキスト（＝計画が宣言した対象）。
+        claim = Claim(verified=True, basis="declaration", scope=confirm.label, evidence=reason, observation_complete=True)
         for out_line in render_single_op_claim(claim, OP_LABELS.get(op, op)):
             print(out_line)
         result["ok"] = True
 
-    # ★ W8b-2: DSL 経路はルールベース codegen（自由生成ではない）ので、postcondition が
-    #   warn(検証対象不足)でも trailing メッセージは常に ✓「反映しました」側を使う
-    #   （postcondition の warn/pass は上ですでに正直に出し分けている＝別レイヤ）。
+    # ★ W8b-2: DSL 経路は postcondition が warn でも trailing は常に ✓「反映しました」側。
     _finish_apply(a, book, out_book, workdir, result, machine_verified=True)
 
     _finish_run(a, book, result, "none")
@@ -5147,19 +5139,108 @@ def _dedup_step_advisories(entries: list) -> list:
     return lines
 
 
-def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta: dict,
-                  plan: list) -> int:
+def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_meta: dict, original_headers: dict,
+                        first_sheet: str | None, out_book: Path, workdir: Path, helper_files, apply_timeout,
+                        use_formula: bool, header_rows: dict, before_charts: int, a: argparse.Namespace, vocab: dict) -> tuple:
+    """★ C7: cmd_run_plan の DSL 語彙段の1段分。cmd_run_dsl と同じ ailine_core.dsl_step の共有エンジンを通る
+       （非対称は dsl_step.py 参照）。この分離で stage_organs の dsl_plan_step 代表関数はここになる（DoD7）。
+       戻り値: (gate_exit, item, plan_json_entry, step_advisories, provenance_entry, mention_exclude_sheet, current_meta)。"""
+    step_prefix = f"  {i}段目: "
+    deps = _make_dsl_step_deps()
+    # 依存つき連鎖: 直前までの段の適用後の実列構成(current_meta)で接地する（新規列フォールバック込み）
+    ground = resolve_dsl_step_args(op, raw_args, task, current_meta, vocab,
+                                    original_headers=original_headers, first_sheet=first_sheet, deps=deps)
+    if not ground.ok:
+        return (None, (i, f"操作:{OP_LABELS.get(op, op)}", "fail", ground.err),
+                {"op": op, "command": None, "status": "fail", "postcondition": None},
+                [], None, None, current_meta)
+    resolved, inferred = ground.resolved, ground.inferred
+
+    # ★ 致命1(W10e) 要求2: 単発は元々この行を適用前に出す・複合計画は抜けていた（段番号付きで見せる）。
+    confirm = print_dsl_confirmation(op, resolved, inferred, task, meta=current_meta, warn_book=out_book,
+                                      new_cols=ground.new_cols, a=a, deps=deps, step_prefix=step_prefix)
+    if confirm.gate_exit is not None:   # ★ W10a 項目1: 破壊の関所（複合計画の段ごと）
+        return (confirm.gate_exit, None, None, [], None, None, current_meta)
+
+    step_advisories = [confirm.mismatch_warning] if confirm.mismatch_warning else []
+    provenance_entry = {"step": i, **resolved["_sources"]} if resolved.get("_sources") else None
+
+    step_header_row = current_meta.get("header_rows", {}).get(first_sheet, 1) if first_sheet else 1
+    code = codegen_dsl(op, resolved, current_meta, use_formula=use_formula)
+    (workdir / f"plan_step{i}.bas").write_text(code, encoding="utf-8")
+
+    # ★ W9: INSERT_ROWS/AUTOFIT の事後条件が段ごとの before/after を突き合わせられるようコピー。
+    stepsource = workdir / f"plan_step{i}_source{out_book.suffix}"
+    shutil.copy2(out_book, stepsource)
+    step_before = snapshot(stepsource)   # ★ W10d: 助言計算用（この段の適用直前）
+
+    apply_result = apply_dsl_step(
+        op, resolved, code, apply_target=out_book, before=step_before, before_charts=before_charts,
+        workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
+        header_row=step_header_row, use_formula=use_formula, source_book=stepsource, deps=deps,
+        apply_progress_label=f"⏳ {i}段目 LibreOffice で適用中…", print_changes=False)
+
+    if apply_result.runtime_error is not None:
+        detail = f"実行時エラー: {short_error_summary(apply_result.runtime_error)}"
+        return (None, (i, confirm.label, "fail", detail),
+                {"op": op, "command": confirm.line, "status": "fail", "postcondition": None},
+                step_advisories, provenance_entry, None, current_meta)
+
+    # ★ W10d【本命】: mode="structural"（依頼文言との重なり④は呼び出し側が全体で1回評価・dsl_step.py 参照）。
+    step_after = apply_result.after
+    mention_exclude_sheet = resolved["source_sheet"] if op == "LOOKUP_FILL" and resolved.get("source_sheet") else None
+    step_advisories.extend(compose_dsl_step_advisories(
+        "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps))
+
+    status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
+    # ★ 止血1/2: "error"→fail 扱い。"warn"(検証対象不足)は成功は名乗るが機械検証済みとは言わない。
+    if status in ("fail", "error"):
+        return (None, (i, confirm.label, "fail", reason),
+                {"op": op, "command": confirm.line, "status": "fail", "postcondition": "fail"},
+                step_advisories, provenance_entry, mention_exclude_sheet, current_meta)
+    item_status = "warn" if status == "warn" else "ok"
+    return (None, (i, confirm.label, item_status, reason),
+            {"op": op, "command": confirm.line, "status": item_status, "postcondition": status},
+            step_advisories, provenance_entry, mention_exclude_sheet,
+            build_book_meta(out_book, header_rows=header_rows))
+
+
+def _preview_dsl_plan(a: argparse.Namespace, plan: list, book_meta: dict, vocab: dict) -> list:
+    """★ C7: cmd_run_plan の --dry プレビュー（未実行・印字のみ）。--json 用 plan_json を返す。
+       分離により cmd_run_plan 自身は verify_dsl_args を直接呼ばなくなる（DoD7 の材料）。"""
+    preview_items, plan_json = [], []
+    for i, step in enumerate(plan, 1):
+        op = step.get("op")
+        if op == "CLARIFY":
+            q = step.get("question") or "確認が必要です"
+            preview_items.append((i, q, "fail", "計画の途中で確認が必要なため対応できません"))
+            plan_json.append({"op": "CLARIFY", "command": None, "status": "fail", "postcondition": None})
+        elif op not in OP_SCHEMA:
+            about = step.get("about") or "内容不明の依頼"
+            preview_items.append((i, about, "warn", None))
+            plan_json.append({"op": op, "command": about, "status": "warn", "postcondition": None})
+        else:
+            ok_v, resolved, inferred, err = verify_dsl_args(
+                op, step.get("args", {}), book_meta, task=a.task, vocab=vocab)
+            if ok_v:
+                label = format_confirmation_line(op, resolved, inferred)[len("解釈: "):]
+                preview_items.append((i, label, "ok", "未実行・プレビューのみ"))
+                plan_json.append({"op": op, "command": label, "status": "ok", "postcondition": None})
+            else:
+                preview_items.append((i, f"操作:{OP_LABELS.get(op, op)}", "fail", err))
+                plan_json.append({"op": op, "command": None, "status": "fail", "postcondition": None})
+    for ln in format_plan_report(preview_items):
+        print(ln)
+    return plan_json
+
+
+def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta: dict, plan: list) -> int:
     """M2c: 複合依頼の計画実行本体。段ごとに②検証→③確認→④codegen→⑤適用→⑥事後条件
-       （DSL 語彙の段）または FREEFORM（語彙外の段・その段の依頼文だけを渡す）を順に実行し、
-       ★ 項目別の honest な報告を出す。総合判定は最弱の段に従う（cmd_run_plan 直上の
-       overall_verdict）。
-       ★ 依存つき連鎖: 各段の接地(verify_dsl_args)は直前までの段を実際に適用した後の
-       out_book を読み直した列構成(current_meta)で行う。列名が一致しない場合は
-       _apply_new_column_fallback が『直前段が作った新規列』への参照とみなして1回だけ
-       書き換えを試みる。
-       ★ W3: source_book は cmd_run が翻訳より前に正規化済み（--dry のときは book のまま）。
-       header_rows（見出し行の1起点位置）は計画全体を通して不変（並べ替え等は見出し行その
-       ものを動かさない）なので、途中の current_meta 再読み込みでも同じ header_rows を渡す。"""
+       （DSL 語彙の段。_run_dsl_plan_step に委譲）または FREEFORM（語彙外の段・依頼文だけを
+       渡す）を順に実行し、★ 項目別の honest な報告を出す。総合判定は最弱の段に従う。
+       ★ 依存つき連鎖: 各段の接地は直前段を適用した後の列構成(current_meta)で行い、列名
+       不一致時は _apply_new_column_fallback が新規列への参照とみなし1回だけ書き換えを試みる。
+       ★ W3: header_rows は計画全体を通して不変なので current_meta 再読み込みでも同じ値を渡す。"""
     print(f"■ ailine（複合計画・{len(plan)} 段）  model={a.model}  book={book.name}")
 
     workdir = book.parent / f".ailine_{book.stem}"
@@ -5170,38 +5251,13 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     refs_dir = Path(a.refs).resolve() if a.refs else DEFAULT_REFS
     _helper_catalog, helper_files = load_helpers(helpers_dir)
     header_rows = book_meta.get("header_rows", {})
-    use_formula = not getattr(a, "values", False)
-    vocab = load_vocab()
+    use_formula, vocab = not getattr(a, "values", False), load_vocab()
 
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
               "path": "plan", "command": None, "postcondition": None}
-
     if a.dry:
         print("\n（--dry プレビュー・語彙外の段は実行時に AI が直接作成（機械保証なし）で対応します。未実行）")
-        preview_items = []
-        plan_json = []
-        for i, step in enumerate(plan, 1):
-            op = step.get("op")
-            if op == "CLARIFY":
-                q = step.get("question") or "確認が必要です"
-                preview_items.append((i, q, "fail", "計画の途中で確認が必要なため対応できません"))
-                plan_json.append({"op": "CLARIFY", "command": None, "status": "fail", "postcondition": None})
-            elif op not in OP_SCHEMA:
-                about = step.get("about") or "内容不明の依頼"
-                preview_items.append((i, about, "warn", None))
-                plan_json.append({"op": op, "command": about, "status": "warn", "postcondition": None})
-            else:
-                ok_v, resolved, inferred, err = verify_dsl_args(
-                    op, step.get("args", {}), book_meta, task=a.task, vocab=vocab)
-                if ok_v:
-                    label = format_confirmation_line(op, resolved, inferred)[len("解釈: "):]
-                    preview_items.append((i, label, "ok", "未実行・プレビューのみ"))
-                    plan_json.append({"op": op, "command": label, "status": "ok", "postcondition": None})
-                else:
-                    preview_items.append((i, f"操作:{OP_LABELS.get(op, op)}", "fail", err))
-                    plan_json.append({"op": op, "command": None, "status": "fail", "postcondition": None})
-        for ln in format_plan_report(preview_items):
-            print(ln)
+        plan_json = _preview_dsl_plan(a, plan, book_meta, vocab)
         print("\n（--dry: 適用しない。レビュー後に --dry を外して実行）")
         result["ok"] = True
         result["dry"] = True
@@ -5234,8 +5290,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
         if op not in OP_SCHEMA:
             about = step.get("about") or "内容不明の依頼"
-            # ★ W10b 項目1: 関所で拒否/非対話なら、破壊の関所と同じく計画全体をここで止める
-            #   （原本(book)はまだ無傷・out_book はコピーなので途中終了しても安全）。
+            # ★ W10b 項目1: 関所で拒否/非対話なら計画全体をここで止める（out_book はコピーなので安全）。
             try:
                 okf, changes, advisories, _fkind, detail = run_freeform_plan_step(
                     a, about, out_book, workdir, refs_dir, helpers_dir, f"plan{i}", apply_timeout,
@@ -5246,10 +5301,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 items.append((i, about, "warn", None))
                 for ln in changes:
                     print(f"  {ln}")
-                # ★ W10d: 段ごとに即印字せず、他段の助言と合わせてループの後で
-                #   重複を畳んでから出す（run_freeform_plan_step は既にこの段の
-                #   依頼文(about)だけを見た build_advisories を返しており、局所判定のまま流用できる）。
-                step_advisory_entries.extend((i, adv) for adv in advisories)
+                step_advisory_entries.extend((i, adv) for adv in advisories)   # ★ W10d: ループ後に重複を畳む
             else:
                 items.append((i, about, "fail", detail))
             plan_json.append({"op": op, "command": about,
@@ -5257,120 +5309,28 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             current_meta = build_book_meta(out_book, header_rows=header_rows)
             continue
 
-        # 依存つき連鎖: 直前までの段の適用後の実列構成(current_meta)で接地する
-        new_cols = []
-        if first_sheet:
-            new_cols = [c for c in current_meta["headers"].get(first_sheet, [])
-                        if c not in original_headers.get(first_sheet, [])]
-        raw_args = step.get("args", {})
-        ok_v, resolved, inferred, err = verify_dsl_args(
-            op, raw_args, current_meta, task=a.task, vocab=vocab)
-        if not ok_v and new_cols and first_sheet:
-            patched = _apply_new_column_fallback(
-                op, raw_args, current_meta["headers"].get(first_sheet, []), new_cols)
-            if patched != raw_args:
-                ok_v2, resolved2, inferred2, err2 = verify_dsl_args(
-                    op, patched, current_meta, task=a.task, vocab=vocab)
-                if ok_v2:
-                    ok_v, resolved, inferred, err = ok_v2, resolved2, inferred2, err2
-
-        if not ok_v:
-            items.append((i, f"操作:{OP_LABELS.get(op, op)}", "fail", err))
-            plan_json.append({"op": op, "command": None, "status": "fail", "postcondition": None})
-            continue
-
-        line = format_confirmation_line(op, resolved, inferred)
-        label = line[len("解釈: "):]
-        # ★ 致命1(W10e) 要求2: 複合計画では段が流れて気づけない、が査定所見。単発 DSL
-        #   (cmd_run_dsl)は元から適用前にこの行を出しており、複合計画だけ抜けていた
-        #   （警告(_maybe_warn_target_overwrite)がある時だけ間接的に見えていた=不十分）。
-        #   ここで段番号付きで無条件に見せる（1段あたり1行・出しすぎない）。
-        print(f"  {i}段目: {line}")
-        if op == "PIVOT":   # ★ W9 項目4
-            print(f"  {i}段目: （{PIVOT_CAVEAT}）")
-        mismatch_warning = _maybe_warn_header_col_mismatch(op, resolved, new_cols, a.task)
-        if mismatch_warning:
-            print(f"  {i}段目: {mismatch_warning}")
-            step_advisory_entries.append((i, mismatch_warning))
-        warn_overwrite = _maybe_warn_target_overwrite(op, resolved, current_meta, out_book)
-        if warn_overwrite:
-            summary = _interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
-            if summary:
-                print(f"  {i}段目: {summary}")
-            print(f"  {i}段目: {warn_overwrite}")
-        for w in resolved.get("_warnings", []):   # ★ A': LLM由来の値と機械抽出の食い違い
-            print(f"  {i}段目: ⚠ {w}")
-        # ★ W10a 項目1: 破壊の関所（複合計画の段ごと）。原本にはまだ何も反映されていない
-        #   （out_book はコピー・最終段まで揃ってから atomic_replace_inplace される）ので、
-        #   ここで中断すれば原本は無傷のまま run 全体を止められる。
-        gate_exit = _confirm_overwrite_or_gate(a, warn_overwrite, step_prefix=f"  {i}段目: ")
+        # ★ C7: DSL 語彙段。cmd_run_dsl と同じ ailine_core.dsl_step を通る _run_dsl_plan_step に委譲。
+        gate_exit, item, plan_json_entry, step_adv, prov_entry, mention_sheet, current_meta = \
+            _run_dsl_plan_step(
+                i, op, step.get("args", {}), task=a.task, current_meta=current_meta,
+                original_headers=original_headers, first_sheet=first_sheet, out_book=out_book,
+                workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
+                use_formula=use_formula, header_rows=header_rows, before_charts=before_charts, a=a, vocab=vocab)
         if gate_exit is not None:
             return gate_exit
-        if resolved.get("_sources"):
-            plan_provenance.append({"step": i, **resolved["_sources"]})
-        step_header_row = current_meta.get("header_rows", {}).get(first_sheet, 1) if first_sheet else 1
-        code = codegen_dsl(op, resolved, current_meta, use_formula=use_formula)
-        (workdir / f"plan_step{i}.bas").write_text(code, encoding="utf-8")
+        if item is not None:
+            items.append(item)
+        if plan_json_entry is not None:
+            plan_json.append(plan_json_entry)
+        if step_adv:
+            step_advisory_entries.extend((i, adv) for adv in step_adv)
+        if prov_entry is not None:
+            plan_provenance.append(prov_entry)
+        if mention_sheet is not None:
+            mention_exclude_sheets.add(mention_sheet)
 
-        # ★ W9: INSERT_ROWS/AUTOFIT の事後条件が段ごとの before/after を突き合わせられる
-        #   よう、この段の適用直前の out_book をコピーして残す（run_freeform_plan_step と
-        #   同じ考え方・他 op には無害な余分なコピー1回）。
-        stepsource = workdir / f"plan_step{i}_source{out_book.suffix}"
-        shutil.copy2(out_book, stepsource)
-        step_before = snapshot(stepsource)   # ★ W10d: 助言計算用（この段の適用直前）
-
-        t0 = progress_start(f"⏳ {i}段目 LibreOffice で適用中…")
-        okrun, err_apply, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
-        progress_end(t0)
-        if not okrun:
-            detail = f"実行時エラー: {short_error_summary(err_apply)}"
-            items.append((i, label, "fail", detail))
-            plan_json.append({"op": op, "command": line, "status": "fail", "postcondition": None})
-            continue
-
-        # ★ W10d【本命】: 単発 op(cmd_run_dsl)なら出る助言（幽霊データ/一様埋め/件数突き合わせ/
-        #   新規シート中身・申告）が、複合計画の DSL 段では丸ごと欠落していた（build_advisories
-        #   を一度も呼んでいなかった＝前任の W10c 報告の未処置の穴そのもの）。
-        #   ★ 依頼文言との重なり(mention_overlap_advisory)はここに含めない: 段ごとの
-        #   before/after だけでは複合依頼全体に対する充足を判定できない（他段が担当する
-        #   言及まで『この段で変更されていない』と誤検知する＝ W6 でシート混在に見つかった
-        #   ものと同じ「全部該当」崩れの再演）。ループの外で before_all/after_all に対して
-        #   一度だけ評価する。
-        step_after = snapshot(out_book)
-        if op == "LOOKUP_FILL" and resolved.get("source_sheet"):
-            mention_exclude_sheets.add(resolved["source_sheet"])
-        step_adv = _structural_advisories(step_before, step_after)
-        step_adv.extend(unrequested_new_sheet_advisory(a.task, step_before, step_after))
-        step_adv = _neutralize_new_column_ghost_warning(step_adv, op, resolved, current_meta)
-        step_adv = _neutralize_declared_new_sheet_warning(step_adv, op, step_before, step_after)
-        step_adv = _neutralize_declared_sheet_replace_warning(step_adv, op, step_before, step_after)
-        step_advisory_entries.extend((i, adv) for adv in step_adv)
-
-        status, reason = run_postcondition(op, out_book, resolved, before_charts=before_charts,
-                                            header_row=step_header_row, use_formula=use_formula,
-                                            source_book=stepsource)
-        # ★ 止血1/2: status ∈ {"pass","warn","fail","error"}。"error" はチェッカー内の
-        #   例外を捕まえた印（段の報告上は fail 扱い・生トレースバックは出さない）。
-        if status in ("fail", "error"):
-            items.append((i, label, "fail", reason))
-            plan_json.append({"op": op, "command": line, "status": "fail", "postcondition": "fail"})
-            continue
-        if status == "warn":
-            # ★ 止血1: 検証対象が少なすぎて意味を持たない → 段の成功は名乗るが
-            #   『機械検証済み』とは言わない（format_plan_report の warn+detail 分岐）。
-            items.append((i, label, "warn", reason))
-            plan_json.append({"op": op, "command": line, "status": "warn", "postcondition": "warn"})
-            current_meta = build_book_meta(out_book, header_rows=header_rows)
-            continue
-
-        items.append((i, label, "ok", reason))
-        plan_json.append({"op": op, "command": line, "status": "ok", "postcondition": "pass"})
-        current_meta = build_book_meta(out_book, header_rows=header_rows)
-
-    # ★ W10d【本命】: 依頼文言との重なり(④ mention_overlap_advisory)は計画全体に対して
-    #   一度だけ評価する（段ごとの局所判定では『他段が担当する言及』を誤検知するため・
-    #   _structural_advisories のコメント参照）。exclude_sheets は全段の LOOKUP_FILL
-    #   source_sheet を合算する。
+    # ★ W10d【本命】: 依頼文言との重なり④は計画全体に対して1回だけ評価（他段が担当する言及の
+    #   誤検知を避ける）。exclude_sheets は全段の LOOKUP_FILL source_sheet を合算する。
     after_all = snapshot(out_book)
     mentions = extract_task_mentions(a.task, before_all["sheets"])
     final_mention_lines = mention_overlap_advisory(
