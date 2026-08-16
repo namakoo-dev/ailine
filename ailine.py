@@ -60,6 +60,13 @@ try:
 except ImportError:
     sys.exit("openpyxl が要る:  pip install openpyxl")
 
+# ★ C4（再設計 分割の一歩目）: 新しい単位は ailine.py に足さず ailine_core/ に置き、
+#   ここからは import するだけにする（tests/ailine_py_line_budget.txt が単調減少を見張る）。
+#   ailine_core は ailine.py と同じディレクトリの兄弟パッケージなので、python が script
+#   実行時に自動で sys.path[0] に入れる ailine.py の所在ディレクトリからそのまま拾える
+#   （別の作業ディレクトリから `python C:\...\ailine.py run ...` と叩いても同じ）。
+from ailine_core.book_view import BookView
+
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
 DEFAULT_HELPERS = HERE / "helpers"
@@ -2581,22 +2588,17 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
        行が1件でもあれば、その行を除いた残りだけで『順序OK』と判定するのは危険
        （除いた行が実際は順序を崩していても見逃す＝COMPUTE_COLUMN の行独立検証とは違い
        部分採点できない）。0cf9218 空虚な検証合格の禁止の趣旨のまま fail で打ち切る。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    idx = _col_index_by_header(ws, args["col"], header_row=header_row)
-    if idx is None:
-        wb.close()
-        return "fail", f"列『{args['col']}』が見つからない"
-    last = _scan_last_row(ws, header_row=header_row)
-    raw_vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
-    if use_formula:
-        wb_v = openpyxl.load_workbook(path, data_only=True)
-        ws_v = wb_v[wb_v.sheetnames[0]]
-        eff_vals = [ws_v.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
-        wb_v.close()
-    else:
-        eff_vals = raw_vals
-    wb.close()
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        idx = _col_index_by_header(ws, args["col"], header_row=header_row)
+        if idx is None:
+            return "fail", f"列『{args['col']}』が見つからない"
+        last = _scan_last_row(ws, header_row=header_row)
+        raw_vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
+        if use_formula:
+            eff_vals = [bv.cell_value(r, idx) for r in range(header_row + 1, last + 1)]
+        else:
+            eff_vals = raw_vals
     vals = []
     excluded = 0
     uncached = 0
@@ -2647,64 +2649,52 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
     if len(args["operands"]) == 1:
         return check_compute_column_single_factor(path, args, header_row=header_row,
                                                     use_formula=use_formula)
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    op1, op2 = args["operands"]
-    i1 = _col_index_by_header(ws, op1, header_row=header_row)
-    i2 = _col_index_by_header(ws, op2, header_row=header_row)
-    # ★ M2c: target(実在列名) 指定時はその列を検証する。無指定なら従来どおり自動命名の新列。
-    target = args.get("target")
-    newname = target or f"{op1}{args['operator']}{op2}"
-    inew = _col_index_by_header(ws, newname, header_row=header_row)
-    if i1 is None or i2 is None or inew is None:
-        wb.close()
-        return "fail", f"演算対象または対象列『{newname}』が見つからない"
-    last = _scan_last_row(ws, header_row=header_row)
-    wb_v = None
-    ws_v = None
-    if use_formula:
-        wb_v = openpyxl.load_workbook(path, data_only=True)
-        ws_v = wb_v[wb_v.sheetnames[0]]
-    col1_letter = get_column_letter(i1)
-    col2_letter = get_column_letter(i2)
-    checked = 0
-    excluded = 0
-    uncached = 0
-    for r in range(header_row + 1, last + 1):
-        a_raw = ws.cell(row=r, column=i1).value
-        b_raw = ws.cell(row=r, column=i2).value
-        got = ws.cell(row=r, column=inew).value
-        a = ws_v.cell(row=r, column=i1).value if use_formula else a_raw
-        b = ws_v.cell(row=r, column=i2).value if use_formula else b_raw
-        if not _is_number(a) or not _is_number(b):
-            # ★ W10f: operand 自体が式(前段の計算列)で、かつキャッシュ値が無い行は
-            #   『数値でない対象外』と別カウントする（下の note で区別して表示）。
-            if use_formula and (
-                (not _is_number(a) and isinstance(a_raw, str) and a_raw.startswith("="))
-                or (not _is_number(b) and isinstance(b_raw, str) and b_raw.startswith("="))
-            ):
-                uncached += 1
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        op1, op2 = args["operands"]
+        i1 = _col_index_by_header(ws, op1, header_row=header_row)
+        i2 = _col_index_by_header(ws, op2, header_row=header_row)
+        # ★ M2c: target(実在列名) 指定時はその列を検証する。無指定なら従来どおり自動命名の新列。
+        target = args.get("target")
+        newname = target or f"{op1}{args['operator']}{op2}"
+        inew = _col_index_by_header(ws, newname, header_row=header_row)
+        if i1 is None or i2 is None or inew is None:
+            return "fail", f"演算対象または対象列『{newname}』が見つからない"
+        last = _scan_last_row(ws, header_row=header_row)
+        col1_letter = get_column_letter(i1)
+        col2_letter = get_column_letter(i2)
+        checked = 0
+        excluded = 0
+        uncached = 0
+        for r in range(header_row + 1, last + 1):
+            a_raw = ws.cell(row=r, column=i1).value
+            b_raw = ws.cell(row=r, column=i2).value
+            got = ws.cell(row=r, column=inew).value
+            a = bv.cell_value(r, i1) if use_formula else a_raw
+            b = bv.cell_value(r, i2) if use_formula else b_raw
+            if not _is_number(a) or not _is_number(b):
+                # ★ W10f: operand 自体が式(前段の計算列)で、かつキャッシュ値が無い行は
+                #   『数値でない対象外』と別カウントする（下の note で区別して表示）。
+                if use_formula and (
+                    (not _is_number(a) and isinstance(a_raw, str) and a_raw.startswith("="))
+                    or (not _is_number(b) and isinstance(b_raw, str) and b_raw.startswith("="))
+                ):
+                    uncached += 1
+                else:
+                    excluded += 1   # 例: 合計行で演算対象セルが空欄
+                continue
+            want = _apply_operator(a, b, args["operator"])
+            if use_formula:
+                expect_formula = f"={col1_letter}{r}{args['operator']}{col2_letter}{r}"
+                if not isinstance(got, str) or got.replace(" ", "") != expect_formula:
+                    return "fail", f"{r}行目: 式が期待形でない (期待 {expect_formula} 実際 {got!r})"
+                got_cached = bv.cell_value(r, inew)
+                if not _is_number(got_cached) or abs(got_cached - want) > 1e-6:
+                    return "fail", f"{r}行目: 式のキャッシュ値が不一致 (期待 {want} 実際 {got_cached!r})"
             else:
-                excluded += 1   # 例: 合計行で演算対象セルが空欄
-            continue
-        want = _apply_operator(a, b, args["operator"])
-        if use_formula:
-            expect_formula = f"={col1_letter}{r}{args['operator']}{col2_letter}{r}"
-            if not isinstance(got, str) or got.replace(" ", "") != expect_formula:
-                wb.close(); wb_v.close()
-                return "fail", f"{r}行目: 式が期待形でない (期待 {expect_formula} 実際 {got!r})"
-            got_cached = ws_v.cell(row=r, column=inew).value
-            if not _is_number(got_cached) or abs(got_cached - want) > 1e-6:
-                wb.close(); wb_v.close()
-                return "fail", f"{r}行目: 式のキャッシュ値が不一致 (期待 {want} 実際 {got_cached!r})"
-        else:
-            if not _is_number(got) or abs(got - want) > 1e-6:
-                wb.close()
-                return "fail", f"{r}行目: 期待 {want} 実際 {got}"
-        checked += 1
-    wb.close()
-    if wb_v is not None:
-        wb_v.close()
+                if not _is_number(got) or abs(got - want) > 1e-6:
+                    return "fail", f"{r}行目: 期待 {want} 実際 {got}"
+            checked += 1
     note_parts = []
     if excluded:
         note_parts.append(f"数値でない {excluded} 行は対象外")
@@ -2728,57 +2718,45 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
        （check_compute_column と同型・前段が式で作った計算列(小計等)を operand にした
        場合の同じバグをここでも直す）。キャッシュ値が無い(式はあるが未計算)行は
        『数値でない対象外』と別カウントする（0cf9218 空虚な検証合格の禁止の趣旨）。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    op1 = args["operands"][0]
-    operator = args["operator"]
-    factor = float(args.get("factor", 1) or 1)
-    i1 = _col_index_by_header(ws, op1, header_row=header_row)
-    target = args.get("target")
-    # ★ W10c 中: codegen_dsl と同じ見出し名決定（_new_col_label があれば自然な日本語見出し）。
-    newname = target or args.get("_new_col_label") or f"{op1}{operator}{factor:g}"
-    inew = _col_index_by_header(ws, newname, header_row=header_row)
-    if i1 is None or inew is None:
-        wb.close()
-        return "fail", f"演算対象または対象列『{newname}』が見つからない"
-    last = _scan_last_row(ws, header_row=header_row)
-    wb_v = None
-    ws_v = None
-    if use_formula:
-        wb_v = openpyxl.load_workbook(path, data_only=True)
-        ws_v = wb_v[wb_v.sheetnames[0]]
-    col1_letter = get_column_letter(i1)
-    checked = 0
-    excluded = 0
-    uncached = 0
-    for r in range(header_row + 1, last + 1):
-        a_raw = ws.cell(row=r, column=i1).value
-        got = ws.cell(row=r, column=inew).value
-        a = ws_v.cell(row=r, column=i1).value if use_formula else a_raw
-        if not _is_number(a):
-            if use_formula and isinstance(a_raw, str) and a_raw.startswith("="):
-                uncached += 1   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        op1 = args["operands"][0]
+        operator = args["operator"]
+        factor = float(args.get("factor", 1) or 1)
+        i1 = _col_index_by_header(ws, op1, header_row=header_row)
+        target = args.get("target")
+        # ★ W10c 中: codegen_dsl と同じ見出し名決定（_new_col_label があれば自然な日本語見出し）。
+        newname = target or args.get("_new_col_label") or f"{op1}{operator}{factor:g}"
+        inew = _col_index_by_header(ws, newname, header_row=header_row)
+        if i1 is None or inew is None:
+            return "fail", f"演算対象または対象列『{newname}』が見つからない"
+        last = _scan_last_row(ws, header_row=header_row)
+        col1_letter = get_column_letter(i1)
+        checked = 0
+        excluded = 0
+        uncached = 0
+        for r in range(header_row + 1, last + 1):
+            a_raw = ws.cell(row=r, column=i1).value
+            got = ws.cell(row=r, column=inew).value
+            a = bv.cell_value(r, i1) if use_formula else a_raw
+            if not _is_number(a):
+                if use_formula and isinstance(a_raw, str) and a_raw.startswith("="):
+                    uncached += 1   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
+                else:
+                    excluded += 1   # 例: 合計行で演算対象セルが空欄
+                continue
+            want = _apply_operator(a, factor, operator)
+            if use_formula:
+                expect_formula = f"={col1_letter}{r}{operator}{factor:g}"
+                if not isinstance(got, str) or got.replace(" ", "") != expect_formula:
+                    return "fail", f"{r}行目: 式が期待形でない (期待 {expect_formula} 実際 {got!r})"
+                got_cached = bv.cell_value(r, inew)
+                if not _is_number(got_cached) or abs(got_cached - want) > 1e-6:
+                    return "fail", f"{r}行目: 式のキャッシュ値が不一致 (期待 {want} 実際 {got_cached!r})"
             else:
-                excluded += 1   # 例: 合計行で演算対象セルが空欄
-            continue
-        want = _apply_operator(a, factor, operator)
-        if use_formula:
-            expect_formula = f"={col1_letter}{r}{operator}{factor:g}"
-            if not isinstance(got, str) or got.replace(" ", "") != expect_formula:
-                wb.close(); wb_v.close()
-                return "fail", f"{r}行目: 式が期待形でない (期待 {expect_formula} 実際 {got!r})"
-            got_cached = ws_v.cell(row=r, column=inew).value
-            if not _is_number(got_cached) or abs(got_cached - want) > 1e-6:
-                wb.close(); wb_v.close()
-                return "fail", f"{r}行目: 式のキャッシュ値が不一致 (期待 {want} 実際 {got_cached!r})"
-        else:
-            if not _is_number(got) or abs(got - want) > 1e-6:
-                wb.close()
-                return "fail", f"{r}行目: 期待 {want} 実際 {got}"
-        checked += 1
-    wb.close()
-    if wb_v is not None:
-        wb_v.close()
+                if not _is_number(got) or abs(got - want) > 1e-6:
+                    return "fail", f"{r}行目: 期待 {want} 実際 {got}"
+            checked += 1
     note_parts = []
     if excluded:
         note_parts.append(f"数値でない {excluded} 行は対象外")
@@ -2812,53 +2790,41 @@ def check_lookup_fill(path: Path, args: dict, header_row: int = 1,
        読めたのに1件も一致しない場合でも、本当に列順が違うのか単にキー値そのものが
        対応表と食い違うのかはこのデータだけでは区別できないため、断定をやめて
        『可能性』として並べる。"""
-    wb = openpyxl.load_workbook(path)
-    if args["target_sheet"] not in wb.sheetnames or args["source_sheet"] not in wb.sheetnames:
-        wb.close()
-        return "fail", "対象/参照シートが無い"
-    tws = wb[args["target_sheet"]]
-    sws = wb[args["source_sheet"]]
-    key_idx = _col_index_by_header(tws, args["key_col"], header_row=header_row)
-    tgt_idx = _col_index_by_header(tws, args["target_col"], header_row=header_row)
-    if key_idx is None or tgt_idx is None:
-        wb.close()
-        return "fail", "対象シートにキー列/対象列が無い"
-    lookup = {}
-    r = 2
-    while sws.cell(row=r, column=1).value not in (None, ""):
-        lookup[sws.cell(row=r, column=1).value] = sws.cell(row=r, column=2).value
-        r += 1
-    wb_v = None
-    tws_v = None
-    if use_formula:
-        wb_v = openpyxl.load_workbook(path, data_only=True)
-        tws_v = wb_v[args["target_sheet"]]
-    scanned = 0   # ★ 止血1: 対象シートに行が1件も無い(0件)場合と、行はあるが1件も
-                  #   対応表に載っていない場合を別のメッセージで区別する。
-    checked = 0
-    uncached = 0
-    r = header_row + 1
-    while tws.cell(row=r, column=key_idx).value not in (None, ""):
-        scanned += 1
-        key_raw = tws.cell(row=r, column=key_idx).value
-        key = tws_v.cell(row=r, column=key_idx).value if use_formula else key_raw
-        if use_formula and key is None and isinstance(key_raw, str) and key_raw.startswith("="):
-            uncached += 1   # ★ W10f: キー列に式はあるがキャッシュ値が無い（『対象が無い』とは別）
+    with BookView(path) as bv:
+        if (args["target_sheet"] not in bv.sheetnames
+                or args["source_sheet"] not in bv.sheetnames):
+            return "fail", "対象/参照シートが無い"
+        tws = bv.sheet(args["target_sheet"])
+        sws = bv.sheet(args["source_sheet"])
+        key_idx = _col_index_by_header(tws, args["key_col"], header_row=header_row)
+        tgt_idx = _col_index_by_header(tws, args["target_col"], header_row=header_row)
+        if key_idx is None or tgt_idx is None:
+            return "fail", "対象シートにキー列/対象列が無い"
+        lookup = {}
+        r = 2
+        while sws.cell(row=r, column=1).value not in (None, ""):
+            lookup[sws.cell(row=r, column=1).value] = sws.cell(row=r, column=2).value
             r += 1
-            continue
-        if key in lookup:
-            got = tws.cell(row=r, column=tgt_idx).value
-            want = lookup[key]
-            if got != want:
-                wb.close()
-                if wb_v is not None:
-                    wb_v.close()
-                return "fail", f"{r}行目: キー『{key}』の転記値が不一致 (期待 {want!r} 実際 {got!r})"
-            checked += 1
-        r += 1
-    wb.close()
-    if wb_v is not None:
-        wb_v.close()
+        scanned = 0   # ★ 止血1: 対象シートに行が1件も無い(0件)場合と、行はあるが1件も
+                      #   対応表に載っていない場合を別のメッセージで区別する。
+        checked = 0
+        uncached = 0
+        r = header_row + 1
+        while tws.cell(row=r, column=key_idx).value not in (None, ""):
+            scanned += 1
+            key_raw = tws.cell(row=r, column=key_idx).value
+            key = bv.cell_value(r, key_idx, sheet=args["target_sheet"]) if use_formula else key_raw
+            if use_formula and key is None and isinstance(key_raw, str) and key_raw.startswith("="):
+                uncached += 1   # ★ W10f: キー列に式はあるがキャッシュ値が無い（『対象が無い』とは別）
+                r += 1
+                continue
+            if key in lookup:
+                got = tws.cell(row=r, column=tgt_idx).value
+                want = lookup[key]
+                if got != want:
+                    return "fail", f"{r}行目: キー『{key}』の転記値が不一致 (期待 {want!r} 実際 {got!r})"
+                checked += 1
+            r += 1
     if scanned == 0:
         return "fail", _ZERO_TARGET_REASON
     if uncached == scanned:
@@ -2892,65 +2858,53 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
        AGGREGATE は合計という『全行をまたぐ』検証のため、式にキャッシュ値が無く読めない
        行が1件でもあれば期待値そのものが信頼できない。COMPUTE_COLUMN の行独立検証と違い
        部分採点はせず、fail で理由を示して打ち切る（0cf9218 空虚な検証合格の禁止の趣旨）。"""
-    wb = openpyxl.load_workbook(path)
-    if "集計" not in wb.sheetnames:
-        wb.close()
-        return "fail", "『集計』シートが無い"
-    src = wb[wb.sheetnames[0]]
-    gi = _col_index_by_header(src, args["group_col"], header_row=header_row)
-    vi = _col_index_by_header(src, args["value_col"], header_row=header_row)
-    if gi is None or vi is None:
-        wb.close()
-        return "fail", "分類列/集計列が見つからない"
-    wb_v = ws_v = None
-    if use_formula:
-        wb_v = openpyxl.load_workbook(path, data_only=True)
-        ws_v = wb_v[wb_v.sheetnames[0]]
-    expect: dict = {}
-    uncached = 0
-    r = header_row + 1
-    while src.cell(row=r, column=1).value not in (None, ""):
-        k_raw = src.cell(row=r, column=gi).value
-        v_raw = src.cell(row=r, column=vi).value
-        if use_formula:
-            k = ws_v.cell(row=r, column=gi).value
-            v = ws_v.cell(row=r, column=vi).value
-        else:
-            k, v = k_raw, v_raw
-        k_uncached = use_formula and k is None and isinstance(k_raw, str) and k_raw.startswith("=")
-        v_uncached = use_formula and not _is_number(v) and isinstance(v_raw, str) and v_raw.startswith("=")
-        if k_uncached or v_uncached:   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
-            uncached += 1
+    with BookView(path) as bv:
+        if "集計" not in bv.sheetnames:
+            return "fail", "『集計』シートが無い"
+        src = bv.sheet()
+        gi = _col_index_by_header(src, args["group_col"], header_row=header_row)
+        vi = _col_index_by_header(src, args["value_col"], header_row=header_row)
+        if gi is None or vi is None:
+            return "fail", "分類列/集計列が見つからない"
+        expect: dict = {}
+        uncached = 0
+        r = header_row + 1
+        while src.cell(row=r, column=1).value not in (None, ""):
+            k_raw = src.cell(row=r, column=gi).value
+            v_raw = src.cell(row=r, column=vi).value
+            if use_formula:
+                k = bv.cell_value(r, gi)
+                v = bv.cell_value(r, vi)
+            else:
+                k, v = k_raw, v_raw
+            k_uncached = use_formula and k is None and isinstance(k_raw, str) and k_raw.startswith("=")
+            v_uncached = use_formula and not _is_number(v) and isinstance(v_raw, str) and v_raw.startswith("=")
+            if k_uncached or v_uncached:   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
+                uncached += 1
+                r += 1
+                continue
+            v = v if _is_number(v) else 0   # ★ 止血2: 非数値/None は0扱い（クラッシュさせない）
+            expect[k] = expect.get(k, 0) + v
             r += 1
-            continue
-        v = v if _is_number(v) else 0   # ★ 止血2: 非数値/None は0扱い（クラッシュさせない）
-        expect[k] = expect.get(k, 0) + v
-        r += 1
-    if wb_v is not None:
-        wb_v.close()
-    if uncached:
-        wb.close()
-        return "fail", (f"分類列/集計列に式はあるがキャッシュ値が無く検証できない行が "
-                         f"{uncached} 件あり、集計を検証できません"
-                         f"（LibreOffice を通していない可能性）")
-    if not expect:
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON   # ★ 止血1: 集計元データが0件を「合格」にしない
-    out = wb["集計"]
-    seen = set()
-    r = 2
-    while True:
-        k = out.cell(row=r, column=1).value
-        if k in (None, "") or k == "合計":
-            break
-        v = out.cell(row=r, column=2).value
-        v = v if _is_number(v) else 0
-        if k not in expect or abs(v - expect[k]) > 1e-6:
-            wb.close()
-            return "fail", f"グループ『{k}』の合計が不一致 (期待 {expect.get(k)} 実際 {v})"
-        seen.add(k)
-        r += 1
-    wb.close()
+        if uncached:
+            return "fail", (f"分類列/集計列に式はあるがキャッシュ値が無く検証できない行が "
+                             f"{uncached} 件あり、集計を検証できません"
+                             f"（LibreOffice を通していない可能性）")
+        if not expect:
+            return "fail", _ZERO_TARGET_REASON   # ★ 止血1: 集計元データが0件を「合格」にしない
+        out = bv.sheet("集計")
+        seen = set()
+        r = 2
+        while True:
+            k = out.cell(row=r, column=1).value
+            if k in (None, "") or k == "合計":
+                break
+            v = out.cell(row=r, column=2).value
+            v = v if _is_number(v) else 0
+            if k not in expect or abs(v - expect[k]) > 1e-6:
+                return "fail", f"グループ『{k}』の合計が不一致 (期待 {expect.get(k)} 実際 {v})"
+            seen.add(k)
+            r += 1
     if seen != set(expect.keys()):
         return "fail", "集計に含まれないグループがある"
     return "pass", f"{len(expect)} グループを検証"
@@ -2959,27 +2913,24 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
 def check_bold(path: Path, args: dict, header_row: int = 1) -> tuple:
     """★ W3: "col:" 対象は見出し(header_row)を含めて検証する（codegen の
        StyleBold(oDoc, col, hr0, col, lastRow) が見出しも含めて太字にするため）。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    kind, val = args["target"].split(":", 1)
-    if kind == "row":
-        last_col = _scan_last_col(ws, header_row=header_row)
-        row = int(val)
-        cells = [ws.cell(row=row, column=c) for c in range(1, last_col + 1)]
-        label = f"{row}行目"
-    else:
-        idx = _col_index_by_header(ws, val, header_row=header_row)
-        if idx is None:
-            wb.close()
-            return "fail", f"列『{val}』が見つからない"
-        last_row = _scan_last_row(ws, header_row=header_row)
-        cells = [ws.cell(row=r, column=idx) for r in range(header_row, last_row + 1)]
-        label = f"列『{val}』"
-    if not cells:   # ★ 止血1: 検証対象0件（見出しすら無い空シート等）を合格にしない
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON
-    ok = all(c.font and c.font.bold for c in cells)
-    wb.close()
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        kind, val = args["target"].split(":", 1)
+        if kind == "row":
+            last_col = _scan_last_col(ws, header_row=header_row)
+            row = int(val)
+            cells = [ws.cell(row=row, column=c) for c in range(1, last_col + 1)]
+            label = f"{row}行目"
+        else:
+            idx = _col_index_by_header(ws, val, header_row=header_row)
+            if idx is None:
+                return "fail", f"列『{val}』が見つからない"
+            last_row = _scan_last_row(ws, header_row=header_row)
+            cells = [ws.cell(row=r, column=idx) for r in range(header_row, last_row + 1)]
+            label = f"列『{val}』"
+        if not cells:   # ★ 止血1: 検証対象0件（見出しすら無い空シート等）を合格にしない
+            return "fail", _ZERO_TARGET_REASON
+        ok = all(c.font and c.font.bold for c in cells)
     if not ok:
         return "fail", f"{label} に太字でないセルがある"
     return "pass", f"{len(cells)} セルが太字"
@@ -2988,63 +2939,55 @@ def check_bold(path: Path, args: dict, header_row: int = 1) -> tuple:
 def check_fill_color(path: Path, args: dict, header_row: int = 1) -> tuple:
     """★ W3: "col:" 対象は見出し(header_row)を含めて検証する（codegen が見出しも
        含めて塗るため）。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    want_hex = COLOR_MAP[args["color"]].upper()
-    kind, val = args["target"].split(":", 1)
-    if kind == "row":
-        last_col = _scan_last_col(ws, header_row=header_row)
-        row = int(val)
-        cells = [ws.cell(row=row, column=c) for c in range(1, last_col + 1)]
-        label = f"{row}行目"
-    else:
-        idx = _col_index_by_header(ws, val, header_row=header_row)
-        if idx is None:
-            wb.close()
-            return "fail", f"列『{val}』が見つからない"
-        last_row = _scan_last_row(ws, header_row=header_row)
-        cells = [ws.cell(row=r, column=idx) for r in range(header_row, last_row + 1)]
-        label = f"列『{val}』"
-    if not cells:   # ★ 止血1
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        want_hex = COLOR_MAP[args["color"]].upper()
+        kind, val = args["target"].split(":", 1)
+        if kind == "row":
+            last_col = _scan_last_col(ws, header_row=header_row)
+            row = int(val)
+            cells = [ws.cell(row=row, column=c) for c in range(1, last_col + 1)]
+            label = f"{row}行目"
+        else:
+            idx = _col_index_by_header(ws, val, header_row=header_row)
+            if idx is None:
+                return "fail", f"列『{val}』が見つからない"
+            last_row = _scan_last_row(ws, header_row=header_row)
+            cells = [ws.cell(row=r, column=idx) for r in range(header_row, last_row + 1)]
+            label = f"列『{val}』"
+        if not cells:   # ★ 止血1
+            return "fail", _ZERO_TARGET_REASON
 
-    def _matches(cell) -> bool:
-        if cell.fill is None or not cell.fill.patternType:
-            return False
-        return str(cell.fill.start_color.rgb).upper().endswith(want_hex)
+        def _matches(cell) -> bool:
+            if cell.fill is None or not cell.fill.patternType:
+                return False
+            return str(cell.fill.start_color.rgb).upper().endswith(want_hex)
 
-    ok = all(_matches(c) for c in cells)
-    wb.close()
+        ok = all(_matches(c) for c in cells)
     if not ok:
         return "fail", f"{label} に色『{args['color']}』が付いていないセルがある"
     return "pass", f"{len(cells)} セルの背景色を確認"
 
 
 def check_number_format(path: Path, args: dict, header_row: int = 1) -> tuple:
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    idx = _col_index_by_header(ws, args["col"], header_row=header_row)
-    if idx is None:
-        wb.close()
-        return "fail", f"列『{args['col']}』が見つからない"
-    last = _scan_last_row(ws, header_row=header_row)
-    if last < header_row + 1:   # ★ 止血1: データ行0件を合格にしない
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON
-    ok = all("#,##0" in (ws.cell(row=r, column=idx).number_format or "")
-             for r in range(header_row + 1, last + 1))
-    wb.close()
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        idx = _col_index_by_header(ws, args["col"], header_row=header_row)
+        if idx is None:
+            return "fail", f"列『{args['col']}』が見つからない"
+        last = _scan_last_row(ws, header_row=header_row)
+        if last < header_row + 1:   # ★ 止血1: データ行0件を合格にしない
+            return "fail", _ZERO_TARGET_REASON
+        ok = all("#,##0" in (ws.cell(row=r, column=idx).number_format or "")
+                 for r in range(header_row + 1, last + 1))
     if not ok:
         return "fail", f"列『{args['col']}』に桁区切り書式が付いていないセルがある"
     return "pass", f"{last - header_row} 行に桁区切り書式を確認"
 
 
 def check_merge(path: Path, args: dict, header_row: int = 1) -> tuple:
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    ranges = {str(r) for r in ws.merged_cells.ranges}
-    wb.close()
+    with BookView(path) as bv:
+        ranges = {str(r) for r in bv.sheet().merged_cells.ranges}
     if args["range"] not in ranges:
         return "fail", f"範囲『{args['range']}』が結合されていない"
     return "pass", f"{args['range']} の結合を確認"
@@ -3060,29 +3003,26 @@ def check_chart(path: Path, before_charts: int) -> tuple:
 def check_center_align(path: Path, args: dict, header_row: int = 1) -> tuple:
     """★ W3: "all"/"col:" とも見出し(header_row)を含めて検証する（codegen の
        AlignCenter/inline テンプレが見出しも含めて中央揃えにするため）。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    target = args["target"]
-    if target == "all":
-        last_row = _scan_last_row(ws, header_row=header_row)
-        last_col = _scan_last_col(ws, header_row=header_row)
-        cells = [ws.cell(row=r, column=c) for r in range(header_row, last_row + 1)
-                 for c in range(1, last_col + 1)]
-        label = "表全体"
-    else:
-        colname = target[4:]
-        idx = _col_index_by_header(ws, colname, header_row=header_row)
-        if idx is None:
-            wb.close()
-            return "fail", f"列『{colname}』が見つからない"
-        last_row = _scan_last_row(ws, header_row=header_row)
-        cells = [ws.cell(row=r, column=idx) for r in range(header_row, last_row + 1)]
-        label = f"列『{colname}』"
-    if not cells:   # ★ 止血1
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON
-    ok = all(c.alignment and c.alignment.horizontal == "center" for c in cells)
-    wb.close()
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        target = args["target"]
+        if target == "all":
+            last_row = _scan_last_row(ws, header_row=header_row)
+            last_col = _scan_last_col(ws, header_row=header_row)
+            cells = [ws.cell(row=r, column=c) for r in range(header_row, last_row + 1)
+                     for c in range(1, last_col + 1)]
+            label = "表全体"
+        else:
+            colname = target[4:]
+            idx = _col_index_by_header(ws, colname, header_row=header_row)
+            if idx is None:
+                return "fail", f"列『{colname}』が見つからない"
+            last_row = _scan_last_row(ws, header_row=header_row)
+            cells = [ws.cell(row=r, column=idx) for r in range(header_row, last_row + 1)]
+            label = f"列『{colname}』"
+        if not cells:   # ★ 止血1
+            return "fail", _ZERO_TARGET_REASON
+        ok = all(c.alignment and c.alignment.horizontal == "center" for c in cells)
     if not ok:
         return "fail", f"{label} に中央揃えでないセルがある"
     return "pass", f"{len(cells)} セルの中央揃えを確認"
@@ -3115,47 +3055,40 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
          数えられ off-by-one になる（実測）。
        "=SUM(" という固有の目印を対象列自身の中だけで探すので、他列の中身にも
        COMPUTE_COLUMN の式の形にも影響されない。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    idx = _col_index_by_header(ws, args["col"], header_row=header_row)
-    if idx is None:
-        wb.close()
-        return "fail", f"列『{args['col']}』が見つからない"
-    r = header_row + 1
-    while True:
-        v = ws.cell(row=r, column=idx).value
-        if v is None:
-            break
-        if isinstance(v, str) and v.replace(" ", "").startswith("=SUM("):
-            break
-        r += 1
-    last = r - 1
-    if last < header_row + 1:
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON
-    total_row = r
-    got_formula = ws.cell(row=total_row, column=idx).value
-    got_formula_norm = got_formula.replace(" ", "") if isinstance(got_formula, str) else ""
-    if not _APPEND_TOTAL_FORMULA_RE.match(got_formula_norm):
-        wb.close()
-        detail = f"{total_row}行目: 合計の式が期待形(挿入耐性 SUM 型)でない (実際 {got_formula!r})"
-        return "fail", detail
-    label_ok = True
-    want_label = str(args.get("label") or "合計")
-    got_label = None
-    if idx > 1:
-        got_label = ws.cell(row=total_row, column=idx - 1).value
-        label_ok = got_label == want_label
-    wb.close()
-    if not label_ok:
-        return "fail", f"{total_row}行目: ラベルが期待『{want_label}』と不一致 (実際 {got_label!r})"
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        idx = _col_index_by_header(ws, args["col"], header_row=header_row)
+        if idx is None:
+            return "fail", f"列『{args['col']}』が見つからない"
+        r = header_row + 1
+        while True:
+            v = ws.cell(row=r, column=idx).value
+            if v is None:
+                break
+            if isinstance(v, str) and v.replace(" ", "").startswith("=SUM("):
+                break
+            r += 1
+        last = r - 1
+        if last < header_row + 1:
+            return "fail", _ZERO_TARGET_REASON
+        total_row = r
+        got_formula = ws.cell(row=total_row, column=idx).value
+        got_formula_norm = got_formula.replace(" ", "") if isinstance(got_formula, str) else ""
+        if not _APPEND_TOTAL_FORMULA_RE.match(got_formula_norm):
+            detail = f"{total_row}行目: 合計の式が期待形(挿入耐性 SUM 型)でない (実際 {got_formula!r})"
+            return "fail", detail
+        label_ok = True
+        want_label = str(args.get("label") or "合計")
+        got_label = None
+        if idx > 1:
+            got_label = ws.cell(row=total_row, column=idx - 1).value
+            label_ok = got_label == want_label
+        if not label_ok:
+            return "fail", f"{total_row}行目: ラベルが期待『{want_label}』と不一致 (実際 {got_label!r})"
 
-    wb_v = openpyxl.load_workbook(path, data_only=True)
-    ws_v = wb_v[wb_v.sheetnames[0]]
-    raw_vals = [ws_v.cell(row=rr, column=idx).value for rr in range(header_row + 1, last + 1)]
-    nums = [v for v in raw_vals if _is_number(v)]
-    got_cached = ws_v.cell(row=total_row, column=idx).value
-    wb_v.close()
+        raw_vals = [bv.cell_value(rr, idx) for rr in range(header_row + 1, last + 1)]
+        nums = [v for v in raw_vals if _is_number(v)]
+        got_cached = bv.cell_value(total_row, idx)
     if not nums:
         return "fail", _ZERO_TARGET_REASON
     factor = float(args.get("factor", 1) or 1)
@@ -3181,42 +3114,38 @@ def check_insert_rows(path: Path, args: dict, header_row: int = 1,
     count = int(args.get("count", 1) or 1)
 
     if source_book is None or not Path(source_book).exists():
-        wb = openpyxl.load_workbook(path)
-        ws = wb[wb.sheetnames[0]]
-        last_col = max(_scan_last_col(ws, header_row=header_row), 1)
-        row_cells = [ws.cell(row=at, column=c).value for c in range(1, last_col + 1)]
-        wb.close()
+        with BookView(path) as bv:
+            ws = bv.sheet()
+            last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+            row_cells = [ws.cell(row=at, column=c).value for c in range(1, last_col + 1)]
         if all(v in (None, "") for v in row_cells):
             return "warn", "挿入位置が空欄であることのみ確認（適用前ファイルとの突き合わせ無し）"
         return "fail", f"{at}行目が空欄でない（挿入されていない可能性）"
 
-    wb_before = openpyxl.load_workbook(source_book)
-    ws_before = wb_before[wb_before.sheetnames[0]]
-    last_before = _scan_last_row(ws_before, header_row=header_row)
-    last_col = _scan_last_col(ws_before, header_row=header_row)
-    if last_col < 1 or last_before < header_row + 1:
-        wb_before.close()
-        return "fail", _ZERO_TARGET_REASON
+    with BookView(source_book) as bv_before, BookView(path) as bv_after:
+        ws_before = bv_before.sheet()
+        last_before = _scan_last_row(ws_before, header_row=header_row)
+        last_col = _scan_last_col(ws_before, header_row=header_row)
+        if last_col < 1 or last_before < header_row + 1:
+            return "fail", _ZERO_TARGET_REASON
 
-    wb_after = openpyxl.load_workbook(path)
-    ws_after = wb_after[wb_after.sheetnames[0]]
+        ws_after = bv_after.sheet()
 
-    # ★ 挿入は AFTER 側に意図的な空行（挿入行そのもの）を作るため、連続データを前提にする
-    #   _scan_last_row を AFTER 側の「最終行」検出には使わない（挿入行で即座に打ち切られて
-    #   しまう）。BEFORE の各データ行が「count 行下」に正しく現れているかを直接照合する。
-    mismatches = checked = 0
-    for r in range(max(at, header_row + 1), last_before + 1):
-        for c in range(1, last_col + 1):
-            checked += 1
-            if ws_before.cell(row=r, column=c).value != ws_after.cell(row=r + count, column=c).value:
-                mismatches += 1
-    inserted_ok = all(ws_after.cell(row=r, column=c).value in (None, "")
-                       for r in range(at, at + count) for c in range(1, last_col + 1))
-    # 期待される最終データ行のさらに1行下が空欄であること（想定外の余剰データが無いこと）。
-    expect_last_after = last_before + count
-    extra_row_empty = all(ws_after.cell(row=expect_last_after + 1, column=c).value in (None, "")
-                           for c in range(1, last_col + 1))
-    wb_before.close(); wb_after.close()
+        # ★ 挿入は AFTER 側に意図的な空行（挿入行そのもの）を作るため、連続データを前提にする
+        #   _scan_last_row を AFTER 側の「最終行」検出には使わない（挿入行で即座に打ち切られて
+        #   しまう）。BEFORE の各データ行が「count 行下」に正しく現れているかを直接照合する。
+        mismatches = checked = 0
+        for r in range(max(at, header_row + 1), last_before + 1):
+            for c in range(1, last_col + 1):
+                checked += 1
+                if ws_before.cell(row=r, column=c).value != ws_after.cell(row=r + count, column=c).value:
+                    mismatches += 1
+        inserted_ok = all(ws_after.cell(row=r, column=c).value in (None, "")
+                           for r in range(at, at + count) for c in range(1, last_col + 1))
+        # 期待される最終データ行のさらに1行下が空欄であること（想定外の余剰データが無いこと）。
+        expect_last_after = last_before + count
+        extra_row_empty = all(ws_after.cell(row=expect_last_after + 1, column=c).value in (None, "")
+                               for c in range(1, last_col + 1))
 
     if checked == 0:
         return "fail", _ZERO_TARGET_REASON
@@ -3233,16 +3162,14 @@ def check_draw_borders(path: Path, args: dict, header_row: int = 1) -> tuple:
     """DRAW_BORDERS の事後条件。使用範囲の全セルに上下左右の罫線属性が付いているかを見る
        （DrawTableBorders ヘルパは格子罫線を範囲全体に一括で付けるため、1セルでも
        欠けていれば ヘルパが動いていないか範囲がずれている）。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    last_row = _scan_last_row(ws, header_row=header_row)
-    last_col = _scan_last_col(ws, header_row=header_row)
-    if last_col < 1 or last_row < header_row:
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON
-    cells = [ws.cell(row=r, column=c) for r in range(header_row, last_row + 1)
-             for c in range(1, last_col + 1)]
-    wb.close()
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        last_row = _scan_last_row(ws, header_row=header_row)
+        last_col = _scan_last_col(ws, header_row=header_row)
+        if last_col < 1 or last_row < header_row:
+            return "fail", _ZERO_TARGET_REASON
+        cells = [ws.cell(row=r, column=c) for r in range(header_row, last_row + 1)
+                 for c in range(1, last_col + 1)]
     if not cells:
         return "fail", _ZERO_TARGET_REASON
 
@@ -3262,28 +3189,25 @@ def check_autofit(path: Path, args: dict, header_row: int = 1,
     """AUTOFIT の事後条件。source_book が渡されれば、使用中の各列の幅が適用前後で
        変化した列数を数える（1列でも変化していれば pass）。source_book が無ければ、
        AFTER 側で幅が明示的に設定されている列があることだけを見る warn 判定に落とす。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    last_col = _scan_last_col(ws, header_row=header_row)
-    if last_col < 1:
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON
-    after_widths = {}
-    for c in range(1, last_col + 1):
-        letter = get_column_letter(c)
-        dim = ws.column_dimensions.get(letter)
-        after_widths[letter] = dim.width if dim and dim.width else None
-    wb.close()
-
-    if source_book is not None and Path(source_book).exists():
-        wb_b = openpyxl.load_workbook(source_book)
-        ws_b = wb_b[wb_b.sheetnames[0]]
-        before_widths = {}
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        last_col = _scan_last_col(ws, header_row=header_row)
+        if last_col < 1:
+            return "fail", _ZERO_TARGET_REASON
+        after_widths = {}
         for c in range(1, last_col + 1):
             letter = get_column_letter(c)
-            dim = ws_b.column_dimensions.get(letter)
-            before_widths[letter] = dim.width if dim and dim.width else None
-        wb_b.close()
+            dim = ws.column_dimensions.get(letter)
+            after_widths[letter] = dim.width if dim and dim.width else None
+
+    if source_book is not None and Path(source_book).exists():
+        with BookView(source_book) as bv_b:
+            ws_b = bv_b.sheet()
+            before_widths = {}
+            for c in range(1, last_col + 1):
+                letter = get_column_letter(c)
+                dim = ws_b.column_dimensions.get(letter)
+                before_widths[letter] = dim.width if dim and dim.width else None
         changed = sum(1 for k in after_widths if after_widths[k] != before_widths.get(k))
         if changed == 0:
             return "fail", "列幅が変化していない"
@@ -3301,9 +3225,8 @@ def check_pivot(path: Path, args: dict, header_row: int = 1) -> tuple:
        LO を再起動しない）。★ W9 項目4: DataPilot は開き直すたび再描画で値キャッシュが
        変わりうる既知の癖があるため、集計値そのものの照合（check_aggregate 相当）はせず
        構造の存在確認に留める（PIVOT_CAVEAT として案内も添える）。"""
-    wb = openpyxl.load_workbook(path, read_only=True)
-    has_sheet = "ピボット" in wb.sheetnames
-    wb.close()
+    with BookView(path, read_only=True) as bv:
+        has_sheet = "ピボット" in bv.sheetnames
     if not has_sheet:
         return "fail", "『ピボット』シートが無い"
     try:
@@ -3321,19 +3244,16 @@ def check_set_column_value(path: Path, args: dict, header_row: int = 1) -> tuple
     """★ 致命3(W10e): SET_COLUMN_VALUE の事後条件。対象列のデータ行が全部、機械抽出した
        定数値(args["value"])と一致するかを見る（型を問わず文字列表現で比較 — codegen は
        setString で書くため、読み戻しも文字列として揃える）。"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb[wb.sheetnames[0]]
-    idx = _col_index_by_header(ws, args["col"], header_row=header_row)
-    if idx is None:
-        wb.close()
-        return "fail", f"列『{args['col']}』が見つからない"
-    last = _scan_last_row(ws, header_row=header_row)
-    if last < header_row + 1:   # ★ 止血1: データ行0件を合格にしない
-        wb.close()
-        return "fail", _ZERO_TARGET_REASON
-    value = args["value"]
-    vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
-    wb.close()
+    with BookView(path) as bv:
+        ws = bv.sheet()
+        idx = _col_index_by_header(ws, args["col"], header_row=header_row)
+        if idx is None:
+            return "fail", f"列『{args['col']}』が見つからない"
+        last = _scan_last_row(ws, header_row=header_row)
+        if last < header_row + 1:   # ★ 止血1: データ行0件を合格にしない
+            return "fail", _ZERO_TARGET_REASON
+        value = args["value"]
+        vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
     if not all(str(v) == str(value) for v in vals):
         return "fail", f"列『{args['col']}』に『{value}』でないセルがある"
     return "pass", f"{len(vals)} 行を『{value}』に統一"
