@@ -73,6 +73,10 @@ from ailine_core.claim import (   # ★ C5: Claim 型と『✓ 機械検証済�
 from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 段が共有する実行エンジン
     DslStepDeps, resolve_dsl_step_args, print_dsl_confirmation, apply_dsl_step, compose_dsl_step_advisories,
 )
+from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手書きしていた表示の純関数化
+    render_code_block, render_retry_options, render_aborted, render_run_header,
+    render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
+)
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
@@ -3622,19 +3626,15 @@ def cmd_restore(a: argparse.Namespace) -> int:
     book = Path(a.book).resolve()
     if a.list:
         backups = list_backups(book)
-        if not backups:
-            print(f"{book.name} のバックアップは無い")
-            return 0
-        print(f"{book.name} のバックアップ（{len(backups)} 世代・新しい順）:")
-        for p in backups:
-            print(p.name)
+        for ln in render_backup_list(book.name, backups):
+            print(ln)
         return 0
     try:
         used = restore_backup(book)
     except FileNotFoundError as e:
         print(f"× {e}")
         return 1
-    print(f"✓ {book.name} を {used.name} から復元した")
+    print(render_restore_done(book.name, used.name))
     return 0
 
 
@@ -3646,12 +3646,8 @@ def cmd_undo(a: argparse.Namespace) -> int:
     book = Path(a.book).resolve()
     if a.list:
         backups = list_backups(book)
-        if not backups:
-            print(f"{book.name} のバックアップは無い")
-            return 0
-        print(f"{book.name} のバックアップ（{len(backups)} 世代・新しい順）:")
-        for p in backups:
-            print(p.name)
+        for ln in render_backup_list(book.name, backups):
+            print(ln)
         return 0
     try:
         used = restore_backup(book)
@@ -3659,7 +3655,7 @@ def cmd_undo(a: argparse.Namespace) -> int:
         print(f"× {e}")
         return 1
     remaining = len(list_backups(book))
-    print(f"✓ {book.name} を {used.name} から復元した（あと {remaining} 回戻せます）")
+    print(render_restore_done(book.name, used.name, remaining=remaining))
     return 0
 
 
@@ -4199,16 +4195,12 @@ def cmd_vocab(a: argparse.Namespace) -> int:
        直接編集すればよい）。"""
     if a.vocab_cmd == "add":
         ok, msg = vocab_add(a.term, a.value)
-        print(("✓ " if ok else "× ") + msg)
+        print(render_vocab_add_result(ok, msg))
         return 0 if ok else 1
     # list
     vocab = load_vocab()
-    if not vocab:
-        print(f"（用語集は空。{VOCAB_FILE} に登録するか `ailine vocab add <語> <値>` で追加）")
-        return 0
-    print(f"用語集（{VOCAB_FILE}・{len(vocab)}件）:")
-    for term in sorted(vocab):
-        print(f"  {term} = {vocab[term]:g}")
+    for ln in render_vocab_listing(vocab, VOCAB_FILE):
+        print(ln)
     return 0
 
 
@@ -4357,9 +4349,10 @@ def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
                 if getattr(a, "accept_loss", False):
                     print("→ --accept-loss 指定のため続行します（失われても ailine undo で元に戻せます）")
                 else:
-                    print("この処理を続けるには、以下のいずれかを指定して再実行してください:")
-                    print("  --accept-loss  失われてよい（バックアップから ailine undo で復元可能）")
-                    print("  --copy         原本には触らず .out に結果を作る（原本は無変更）")
+                    for ln in render_retry_options("", [
+                            ("--accept-loss", "失われてよい（バックアップから ailine undo で復元可能）"),
+                            ("--copy", "原本には触らず .out に結果を作る（原本は無変更）")]):
+                        print(ln)
                     return 4
 
     sheets = build_book_meta(source_book).get("sheets", [])
@@ -4493,12 +4486,13 @@ def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None
     try:
         ans = input(f"{step_prefix}上書きしますか？ [y/N]: ").strip().lower()
     except EOFError:
-        print(f"{step_prefix}この処理を続けるには、以下のいずれかを指定して再実行してください:")
-        print(f"{step_prefix}  --overwrite  上書きを承知して続行する（バックアップから ailine undo で戻せる）")
-        print(f"{step_prefix}  --copy       原本には触らず .out に結果を作る（原本は無変更）")
+        for ln in render_retry_options(step_prefix, [
+                ("--overwrite", "上書きを承知して続行する（バックアップから ailine undo で戻せる）"),
+                ("--copy", "原本には触らず .out に結果を作る（原本は無変更）")]):
+            print(ln)
         return 7
     if ans not in ("y", "yes"):
-        print(f"{step_prefix}× 中止した")
+        print(render_aborted(step_prefix))
         return 1
     return None
 
@@ -4538,7 +4532,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     header_row = book_meta.get("header_rows", {}).get(first_sheet, 1)
     use_formula = not getattr(a, "values", False)
 
-    print(f"■ ailine（DSL 経路）  model={a.model}  book={book.name}")
+    print(render_run_header("DSL 経路", a.model, book.name))
     confirm = print_dsl_confirmation(op, resolved, inferred, a.task, meta=book_meta, warn_book=book, new_cols=None, a=a, deps=deps)
     if confirm.gate_exit is not None:   # ★ W10a 項目1: 破壊の関所
         return confirm.gate_exit
@@ -4549,7 +4543,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         except EOFError:
             ans = ""
         if ans not in ("y", "yes"):
-            print("× 中止した")
+            print(render_aborted())
             return 1
 
     workdir = book.parent / f".ailine_{book.stem}"
@@ -4562,9 +4556,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
     # ★ W8a 項目5: 「決定論」はユーザー向け文字列から排除（内部名・関数名は不変）。
-    print(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────")
-    print(code)
-    print("──────────────────────────────────────────")
+    for ln in render_code_block(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
+        print(ln)
 
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
               "path": "dsl", "command": confirm.line, "postcondition": None,
@@ -4744,11 +4737,12 @@ def _confirm_freeform_apply(a: argparse.Namespace, sweep_warning: str | None = N
     try:
         ans = input(f"{step_prefix}このコードは機械検証できません。適用しますか？ [y/N]: ").strip().lower()
     except EOFError:
-        print(f"{step_prefix}この処理を続けるには、以下のいずれかを指定して再実行してください:")
-        print(f"{step_prefix}  --allow-freeform  機械検証できないことを承知の上で適用する")
+        for ln in render_retry_options(step_prefix, [
+                ("--allow-freeform", "機械検証できないことを承知の上で適用する")]):
+            print(ln)
         return 8
     if ans not in ("y", "yes"):
-        print(f"{step_prefix}× 中止した")
+        print(render_aborted(step_prefix))
         return 1
     return None
 
@@ -4807,7 +4801,7 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
 
     # ★ W8a 項目5: 「自由生成経路」→「AI が直接作成（機械保証なし）」（operator の
     #   検品リストの語彙翻訳。内部の変数名・関数名・コメントは不変）。
-    print(f"■ ailine（AI が直接作成・機械保証なし）  model={a.model}  book={book.name}")
+    print(render_run_header("AI が直接作成・機械保証なし", a.model, book.name))
     print(f"■ 参照ライブラリ: {refs_dir}  ({len(list(refs_dir.glob('*.bas'))) if refs_dir.is_dir() else 0} 例)")
     print(f"■ ヘルパ: {helpers_dir}  ({len(helper_files)} 本を同梱・Call で呼ばせる)")
 
@@ -4831,9 +4825,8 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
         code = extract_bas(raw)
         (workdir / f"attempt{attempt}.bas").write_text(code, encoding="utf-8")
 
-        print(f"\n─ 試行 {attempt+1} ─ 生成した .bas ───────────────")
-        print(code)
-        print("──────────────────────────────────────────")
+        for ln in render_code_block(f"\n─ 試行 {attempt+1} ─ 生成した .bas ───────────────", code):
+            print(ln)
 
         if not valid_signature(code):
             print("× 署名が違う（Sub Run(oDoc As Object) が無い）。修復する。")
@@ -5053,9 +5046,9 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
         # ★ W10b 項目1: 自由生成の関所。単発 cmd_run_freeform と違い、この経路はこれまで
         #   生成コードを一切表示していなかった（黙って確認を求めても判断できない）ので、
         #   ここで初めて表示してから y/N を聞く。
-        print(f"{step_prefix}─ 生成した .bas（語彙外・AI が直接作成）───────────────")
-        print(code)
-        print(f"{step_prefix}──────────────────────────────────────────")
+        for ln in render_code_block(f"{step_prefix}─ 生成した .bas（語彙外・AI が直接作成）───────────────",
+                                     code, step_prefix=step_prefix):
+            print(ln)
         sweep_warning = detect_helper_sweep(code, known_helper_names)
         gate_exit = _confirm_freeform_apply(a, sweep_warning, step_prefix=step_prefix)
         if gate_exit is not None:
@@ -5241,7 +5234,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
        ★ 依存つき連鎖: 各段の接地は直前段を適用した後の列構成(current_meta)で行い、列名
        不一致時は _apply_new_column_fallback が新規列への参照とみなし1回だけ書き換えを試みる。
        ★ W3: header_rows は計画全体を通して不変なので current_meta 再読み込みでも同じ値を渡す。"""
-    print(f"■ ailine（複合計画・{len(plan)} 段）  model={a.model}  book={book.name}")
+    print(render_run_header(f"複合計画・{len(plan)} 段", a.model, book.name))
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
