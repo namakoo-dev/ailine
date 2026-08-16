@@ -2946,6 +2946,55 @@ def test_check_aggregate_fails_when_sheet_missing(tmp_path):
     assert status == "fail"
     assert "集計" in reason
 
+# --- ★ W10f 項目1: check_aggregate も同型（operand を式ビューから読むと非数値→0扱いで
+#   偽の不一致 fail になる）。use_formula=True で data_only 側から読むよう直した後の挙動。
+
+def test_check_aggregate_use_formula_default_false_keeps_old_behavior(tmp_path):
+    # use_formula 省略時=False は旧テストと同じ挙動（回帰確認）。
+    wb = openpyxl.Workbook(); ws = wb.active
+    for row in [["部門", "金額"], ["営業", 100], ["営業", 200]]:
+        ws.append(row)
+    out = wb.create_sheet("集計")
+    out.append(["部門", "合計 - 金額"]); out.append(["営業", 300])
+    p = tmp_path / "agg_default.xlsx"
+    wb.save(p)
+    status, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
+    assert status == "pass"
+
+def test_check_aggregate_operand_from_prior_formula_column_passes_when_cache_present(tmp_path):
+    p = tmp_path / "agg_chain.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "部門", "金額"])
+    ws.append(["a", 3, 100, "営業", None]); ws["E2"] = "=B2*C2"
+    ws.append(["b", 2, 50, "営業", None]); ws["E3"] = "=B3*C3"
+    out = wb.create_sheet("集計")
+    out.append(["部門", "合計 - 金額"])
+    out.append(["営業", 400])
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"E2": 300, "E3": 100})
+    status, reason = ailine.check_aggregate(
+        p, {"group_col": "部門", "value_col": "金額"}, use_formula=True)
+    assert status == "pass"
+
+def test_check_aggregate_operand_from_prior_formula_column_no_cache_fails_with_distinct_reason(tmp_path):
+    # ★ 直る前は非数値(式文字列)→0扱いで「偽の不一致 fail」になっていた（本当は300なのに
+    # 0として合算され集計『集計』シートの実測値と食い違って見える）。直った後は『0扱いで
+    # 不一致』という誤診断ではなく『キャッシュ値が無く検証できない』という正確な診断になる。
+    p = tmp_path / "agg_chain_nocache.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "部門", "金額"])
+    ws.append(["a", 3, 100, "営業", None]); ws["E2"] = "=B2*C2"
+    out = wb.create_sheet("集計")
+    out.append(["部門", "合計 - 金額"])
+    out.append(["営業", 300])
+    wb.save(p)
+    status, reason = ailine.check_aggregate(
+        p, {"group_col": "部門", "value_col": "金額"}, use_formula=True)
+    assert status == "fail"
+    assert "キャッシュ値が無く検証できない行が 1 件" in reason
+    assert "集計を検証できません" in reason
+    assert "不一致" not in reason
+
 def test_check_bold_row_passes_when_all_bold(tmp_path):
     from openpyxl.styles import Font
     wb = openpyxl.Workbook()
@@ -3071,6 +3120,27 @@ def test_run_postcondition_dispatches_by_op(tmp_path):
     status, reason = ailine.run_postcondition("SORT", p, {"col": "金額", "order": "desc"})
     assert status == "pass"
 
+def test_run_postcondition_threads_use_formula_to_sort_and_aggregate(tmp_path, monkeypatch):
+    # ★ W10f 項目1: use_formula は元は COMPUTE_COLUMN 専用の配線だったが、SORT/AGGREGATE
+    # にも同型バグがあったため広げた。run_postcondition がちゃんとその2つにも渡すことを
+    # （中身の挙動でなく配線そのものを）確認する。
+    calls = {}
+
+    def fake_sort(path, args, header_row=1, use_formula=False):
+        calls["sort"] = use_formula
+        return "pass", "ok"
+
+    def fake_aggregate(path, args, header_row=1, use_formula=False):
+        calls["aggregate"] = use_formula
+        return "pass", "ok"
+
+    monkeypatch.setitem(ailine.POSTCONDITIONS, "SORT", fake_sort)
+    monkeypatch.setitem(ailine.POSTCONDITIONS, "AGGREGATE", fake_aggregate)
+    p = tmp_path / "x.xlsx"
+    ailine.run_postcondition("SORT", p, {}, use_formula=True)
+    ailine.run_postcondition("AGGREGATE", p, {}, use_formula=True)
+    assert calls == {"sort": True, "aggregate": True}
+
 
 # ---------------------------------------------------------------------------
 # ★ 止血: 空虚な検証合格の禁止（対象0件/少数を「合格」にしない）・None安全・
@@ -3108,6 +3178,55 @@ def test_check_sort_fails_when_all_rows_non_numeric(tmp_path):
     assert status == "fail"
     assert "検証対象が0件" in reason
     assert "数値でない 2 行は対象外" in reason
+
+# --- ★ W10f 項目1: check_sort も同型（対象列を式ビューから読むと全行『数値でない』
+#   扱いになる）。SORT は全行をまたぐ検証なので、キャッシュ欠落は部分採点せず fail で
+#   打ち切る設計であることも確認する。
+
+def test_check_sort_use_formula_default_false_keeps_old_behavior(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    status, reason = ailine.check_sort(p, {"col": "金額", "order": "asc"})
+    assert status == "pass"
+
+def test_check_sort_operand_from_prior_formula_column_passes_when_cache_present(tmp_path):
+    p = tmp_path / "sort_chain.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "小計"])
+    ws.append(["a", 2, 50, None]); ws["D2"] = "=B2*C2"
+    ws.append(["b", 3, 100, None]); ws["D3"] = "=B3*C3"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"D2": 100, "D3": 300})
+    status, reason = ailine.check_sort(p, {"col": "小計", "order": "asc"}, use_formula=True)
+    assert status == "pass"
+    assert "2 行を検証" in reason
+
+def test_check_sort_operand_from_prior_formula_column_no_cache_fails_with_distinct_reason(tmp_path):
+    p = tmp_path / "sort_chain_nocache.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "小計"])
+    ws.append(["a", 2, 50, None]); ws["D2"] = "=B2*C2"
+    ws.append(["b", 3, 100, None]); ws["D3"] = "=B3*C3"
+    wb.save(p)
+    status, reason = ailine.check_sort(p, {"col": "小計", "order": "asc"}, use_formula=True)
+    assert status == "fail"
+    assert "キャッシュ値が無く検証できない行が 2 件" in reason
+    assert "順序を検証できません" in reason
+
+def test_check_sort_uncached_row_forces_fail_even_when_other_rows_are_plain_numbers(tmp_path):
+    # ★ 設計判断: SORTは全行をまたぐ検証。1行でも実値が読めなければ、除いた残りだけで
+    # 『順序OK』と判定するのは危険（除いた行が実際は順序を崩していても見逃す）。
+    # COMPUTE_COLUMN の行独立検証(部分採点あり)とは対照的に、混在時も部分採点せず fail で
+    # 打ち切ることを確認する。
+    p = tmp_path / "sort_mixed.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "小計"])
+    ws.append(["a", 1, 10, 10])                             # 小計=プレーン数値
+    ws.append(["b", 2, 50, None]); ws["D3"] = "=B3*C3"       # 小計=式・キャッシュ無し
+    ws.append(["c", 1, 30, 30])
+    wb.save(p)
+    status, reason = ailine.check_sort(p, {"col": "小計", "order": "asc"}, use_formula=True)
+    assert status == "fail"
+    assert "キャッシュ値が無く検証できない行が 1 件" in reason
 
 # --- check_compute_column: 0件は合格にしない・演算対象が空欄の行は対象外 --------
 
@@ -3490,6 +3609,45 @@ def test_cmd_run_plan_mixes_dsl_success_and_freeform_warns(tmp_path, monkeypatch
     assert "⚠ 語彙外のため AI が直接作成（機械保証なし）で実行（確認してください）" in captured.out
     assert "⚠ 一部は確認が必要です" in captured.out
     assert "すべて機械検証済み" not in captured.out
+
+def test_cmd_run_plan_freeform_step_rate_literal_scan_fires(tmp_path, monkeypatch, capsys):
+    # ★ W10f 項目2: A' 原則（LLM に率や値を確定させない）を機械で守る唯一の走査
+    # (scan_rate_literals) が、単発の自由生成(cmd_run_freeform)には元から通っていたが、
+    # 複合計画の自由生成段(run_freeform_plan_step)には通っていなかった（独立監査が発見・
+    # 査定5回は偶然当たらなかっただけの穴）。複合計画経由でも率らしい数値の助言が
+    # 出ることを確認する（test_cmd_run_freeform_rate_literal_scan_fires_when_task_silent_on_rate
+    # の複合計画版）。
+    p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                                  {"op": "OUT_OF_VOCAB", "about": "税込み合計"}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    code = ("Sub Run(oDoc As Object)\n"
+            "  oDoc.Sheets.getByIndex(0).getCellByPosition(2, 0).setValue(100 * 1.08)\n"
+            "End Sub")
+    monkeypatch.setattr(ailine, "ollama_generate", lambda model, msgs, temperature=0.2: code)
+
+    def fake_apply(out_book, c, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        cell = ws2.cell(row=1, column=10)   # postcondition が見ない列にダミーの変化を残す
+        cell.value = (cell.value or 0) + 1
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    ns = argparse.Namespace(
+        book=str(p), task="金額で降順に並べ替えて税込み合計も出して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)
+    rc = ailine.cmd_run(ns)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "★ 率らしい数値 (1.08) が依頼に無いのに使われています — 検算してください" in captured.out
 
 def test_cmd_run_plan_all_steps_fail_grounding_gives_overall_failure(tmp_path, monkeypatch, capsys):
     p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300]])
@@ -4033,6 +4191,72 @@ def test_check_compute_column_values_mode_unaffected_by_formula_flag_default(tmp
     status, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
     assert status == "pass"
     assert "キャッシュ値" not in reason
+
+
+# --- ★ W10f 項目1: 計算列を operand にすると計画ごとロールバックする（Namakoo 実測の再現） ---
+#   check_compute_column が operands を式ビュー(raw)から読んでいたため、前段が式で作った
+#   計算列(小計等)を次段の operand にすると全行『数値でない』で除外され、
+#   『検証対象0件』で fail → 計画全体が反映されなかった。data_only(計算後の値)側から
+#   読むよう直した後の挙動を確認する。
+
+def test_check_compute_column_operand_from_prior_formula_column_passes_when_cache_present(tmp_path):
+    # ★ 実運用の形: 1段目(小計=数量*単価)を式のまま basrun/LibreOffice が保存時に
+    # 再計算してキャッシュ値を埋める。2段目(税込=小計*数量)が小計を operand にする。
+    p = tmp_path / "chain.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "小計", "税込"])
+    ws.append(["a", 3, 100, None, None]); ws["D2"] = "=B2*C2"; ws["E2"] = "=D2*B2"
+    ws.append(["b", 2, 50, None, None]); ws["D3"] = "=B3*C3"; ws["E3"] = "=D3*B3"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml",
+                           {"D2": 300, "E2": 900, "D3": 100, "E3": 200})
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["小計", "数量"], "operator": "*", "target": "税込"}, use_formula=True)
+    assert status == "pass"
+    assert "2 行を検証" in reason
+
+def test_check_compute_column_operand_from_prior_formula_column_no_cache_fails_with_distinct_reason(tmp_path):
+    # ★ Namakoo が貼った純関数レベルの再現をそのまま使う回帰テスト（LLM も LibreOffice も
+    # 通さない）。直った後もキャッシュ値が無ければ検証はできない(fail のまま)が、理由が
+    # 『数値でない』という誤診断ではなく『キャッシュ値が無く検証できない』という正確な
+    # 診断に変わる（0cf9218 空虚な検証合格の禁止 — 『対象が無い』と『対象はあるが
+    # 読めない』を混同しない）。
+    p = tmp_path / "chain_nocache.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "小計", "税込"])
+    ws.append(["a", 3, 100, None, None]); ws["D2"] = "=B2*C2"
+    ws.append(["b", 2, 50, None, None]); ws["D3"] = "=B3*C3"
+    wb.save(p)
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["小計", "数量"], "operator": "*", "target": "税込"}, use_formula=True)
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+    assert "キャッシュ値が無く検証できない 2 行" in reason
+    assert "数値でない" not in reason
+
+def test_check_compute_column_single_factor_operand_from_prior_formula_column_passes_when_cache_present(tmp_path):
+    p = tmp_path / "chain_sf.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "小計", "税込"])
+    ws.append(["a", 3, 100, None, None]); ws["D2"] = "=B2*C2"; ws["E2"] = "=D2*1.1"
+    wb.save(p)
+    _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"D2": 300, "E2": 330})
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["小計"], "operator": "*", "factor": 1.1, "target": "税込"}, use_formula=True)
+    assert status == "pass"
+
+def test_check_compute_column_single_factor_operand_from_prior_formula_column_no_cache_fails_with_distinct_reason(tmp_path):
+    p = tmp_path / "chain_sf_nocache.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["商品", "数量", "単価", "小計", "税込"])
+    ws.append(["a", 3, 100, None, None]); ws["D2"] = "=B2*C2"
+    wb.save(p)
+    status, reason = ailine.check_compute_column(
+        p, {"operands": ["小計"], "operator": "*", "factor": 1.1, "target": "税込"}, use_formula=True)
+    assert status == "fail"
+    assert "検証対象が0件" in reason
+    assert "キャッシュ値が無く検証できない 1 行" in reason
+    assert "数値でない" not in reason
 
 
 # --- codegen: COMPUTE_COLUMN の式化は LO 方言(;/.) を要さない（formula_spike の実測どおり） --

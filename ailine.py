@@ -2567,13 +2567,20 @@ def _is_number(v) -> bool:
 _ZERO_TARGET_REASON = "事後条件の検証対象が0件（何も検証できていない）"
 
 
-def check_sort(path: Path, args: dict, header_row: int = 1) -> tuple:
+def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = False) -> tuple:
     """SORT の事後条件。戻り値は (status, reason)。status ∈ {"pass","warn","fail"}。
        ★ 止血1: 検証対象が0件なら fail、1件（順序が定義できない）なら warn とし、
        どちらも「機械検証済み」とは名乗らない。
        ★ 止血2: 合計行等の非数値/None セルは比較から除外し、除外件数を表示する
        （C②: None >= int の生トレースバックの根治）。全部除外なら0件と同じ扱い。
-       ★ W3: header_row(1起点、省略時1) が『接地・codegen』と同じ見出し行を指す。"""
+       ★ W3: header_row(1起点、省略時1) が『接地・codegen』と同じ見出し行を指す。
+       ★ W10f 項目1: use_formula のとき対象列を data_only(計算後の値)側から読む
+       （check_compute_column と同型のバグ — 前段が式で作った計算列(小計等)を SORT の
+       対象列にした場合、raw 側は式文字列のままで全行『数値でない』扱いになっていた）。
+       SORT は相対順序という『全行をまたぐ』検証のため、式にキャッシュ値が無く読めない
+       行が1件でもあれば、その行を除いた残りだけで『順序OK』と判定するのは危険
+       （除いた行が実際は順序を崩していても見逃す＝COMPUTE_COLUMN の行独立検証とは違い
+       部分採点できない）。0cf9218 空虚な検証合格の禁止の趣旨のまま fail で打ち切る。"""
     wb = openpyxl.load_workbook(path)
     ws = wb[wb.sheetnames[0]]
     idx = _col_index_by_header(ws, args["col"], header_row=header_row)
@@ -2582,10 +2589,29 @@ def check_sort(path: Path, args: dict, header_row: int = 1) -> tuple:
         return "fail", f"列『{args['col']}』が見つからない"
     last = _scan_last_row(ws, header_row=header_row)
     raw_vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
+    if use_formula:
+        wb_v = openpyxl.load_workbook(path, data_only=True)
+        ws_v = wb_v[wb_v.sheetnames[0]]
+        eff_vals = [ws_v.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
+        wb_v.close()
+    else:
+        eff_vals = raw_vals
     wb.close()
-    vals = [v for v in raw_vals if _is_number(v)]
-    excluded = len(raw_vals) - len(vals)
+    vals = []
+    excluded = 0
+    uncached = 0
+    for rv, ev in zip(raw_vals, eff_vals):
+        if _is_number(ev):
+            vals.append(ev)
+        elif use_formula and isinstance(rv, str) and rv.startswith("="):
+            uncached += 1   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
+        else:
+            excluded += 1
     note = f"（数値でない {excluded} 行は対象外）" if excluded else ""
+    if uncached:
+        return "fail", (f"並び順の検証対象に式はあるがキャッシュ値が無く検証できない行が "
+                         f"{uncached} 件あり、順序を検証できません"
+                         f"（LibreOffice を通していない可能性）{note}")
     if len(vals) == 0:
         return "fail", _ZERO_TARGET_REASON + note
     if len(vals) == 1:
@@ -2608,7 +2634,16 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
        両方合格して初めて pass にする（式だけ合っていて未計算/値だけ合っていて式が
        無いケースの両方を見逃さない）。
        ★ W10b 項目3: operands が1つだけ（税込み/税抜き等「列 × 率」パターン）の場合は
-       check_compute_column_single_factor に委譲する。"""
+       check_compute_column_single_factor に委譲する。
+       ★ W10f 項目1: use_formula のとき operands は data_only(計算後の値)側から読む
+       （旧実装は raw 側=式ビューから読んでいたため、前段が式で作った計算列(小計等)を
+       operand にすると raw 値が式文字列のままで『数値でない』扱いになり、全行除外→
+       検証対象0件failで計画ごとロールバックしていた＝実測の再現形そのもの）。
+       operand 自体が式なのにキャッシュ値が無い(LibreOffice を通していない)行は、
+       『対象が無い』(合計行等の非数値/空欄)とは別に数える（0cf9218 空虚な検証合格の
+       禁止の趣旨 — 対象は本当は有るのに読めていないだけ、と混同しない）。COMPUTE_COLUMN
+       は行ごとに独立な検証なので、うち検証できた行だけを checked に数えても他行の結果は
+       歪めない（AGGREGATE/SORT の全行をまたぐ検証とは違い部分採点できる）。"""
     if len(args["operands"]) == 1:
         return check_compute_column_single_factor(path, args, header_row=header_row,
                                                     use_formula=use_formula)
@@ -2634,12 +2669,23 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
     col2_letter = get_column_letter(i2)
     checked = 0
     excluded = 0
+    uncached = 0
     for r in range(header_row + 1, last + 1):
-        a = ws.cell(row=r, column=i1).value
-        b = ws.cell(row=r, column=i2).value
+        a_raw = ws.cell(row=r, column=i1).value
+        b_raw = ws.cell(row=r, column=i2).value
         got = ws.cell(row=r, column=inew).value
+        a = ws_v.cell(row=r, column=i1).value if use_formula else a_raw
+        b = ws_v.cell(row=r, column=i2).value if use_formula else b_raw
         if not _is_number(a) or not _is_number(b):
-            excluded += 1   # 例: 合計行で演算対象セルが空欄
+            # ★ W10f: operand 自体が式(前段の計算列)で、かつキャッシュ値が無い行は
+            #   『数値でない対象外』と別カウントする（下の note で区別して表示）。
+            if use_formula and (
+                (not _is_number(a) and isinstance(a_raw, str) and a_raw.startswith("="))
+                or (not _is_number(b) and isinstance(b_raw, str) and b_raw.startswith("="))
+            ):
+                uncached += 1
+            else:
+                excluded += 1   # 例: 合計行で演算対象セルが空欄
             continue
         want = _apply_operator(a, b, args["operator"])
         if use_formula:
@@ -2659,7 +2705,12 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
     wb.close()
     if wb_v is not None:
         wb_v.close()
-    note = f"（数値でない {excluded} 行は対象外）" if excluded else ""
+    note_parts = []
+    if excluded:
+        note_parts.append(f"数値でない {excluded} 行は対象外")
+    if uncached:
+        note_parts.append(f"演算対象の式にキャッシュ値が無く検証できない {uncached} 行")
+    note = f"（{'・'.join(note_parts)}）" if note_parts else ""
     if checked == 0:
         return "fail", _ZERO_TARGET_REASON + note
     if use_formula:
@@ -2672,7 +2723,11 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
     """★ W10b 項目3: COMPUTE_COLUMN の「1列 × 率」パターン（税込み/税抜き等）専用の事後条件。
        check_compute_column（2列版）と同じ二層検証（式の期待形・data_only キャッシュ値）を
        1列 + factor に合わせて行う。factor は verify_dsl_args が機械確定済みの値
-       （resolved["factor"]）をそのまま受け取る前提。"""
+       （resolved["factor"]）をそのまま受け取る前提。
+       ★ W10f 項目1: use_formula のとき operand は data_only(計算後の値)側から読む
+       （check_compute_column と同型・前段が式で作った計算列(小計等)を operand にした
+       場合の同じバグをここでも直す）。キャッシュ値が無い(式はあるが未計算)行は
+       『数値でない対象外』と別カウントする（0cf9218 空虚な検証合格の禁止の趣旨）。"""
     wb = openpyxl.load_workbook(path)
     ws = wb[wb.sheetnames[0]]
     op1 = args["operands"][0]
@@ -2695,11 +2750,16 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
     col1_letter = get_column_letter(i1)
     checked = 0
     excluded = 0
+    uncached = 0
     for r in range(header_row + 1, last + 1):
-        a = ws.cell(row=r, column=i1).value
+        a_raw = ws.cell(row=r, column=i1).value
         got = ws.cell(row=r, column=inew).value
+        a = ws_v.cell(row=r, column=i1).value if use_formula else a_raw
         if not _is_number(a):
-            excluded += 1   # 例: 合計行で演算対象セルが空欄
+            if use_formula and isinstance(a_raw, str) and a_raw.startswith("="):
+                uncached += 1   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
+            else:
+                excluded += 1   # 例: 合計行で演算対象セルが空欄
             continue
         want = _apply_operator(a, factor, operator)
         if use_formula:
@@ -2719,7 +2779,12 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
     wb.close()
     if wb_v is not None:
         wb_v.close()
-    note = f"（数値でない {excluded} 行は対象外）" if excluded else ""
+    note_parts = []
+    if excluded:
+        note_parts.append(f"数値でない {excluded} 行は対象外")
+    if uncached:
+        note_parts.append(f"演算対象の式にキャッシュ値が無く検証できない {uncached} 行")
+    note = f"（{'・'.join(note_parts)}）" if note_parts else ""
     if checked == 0:
         return "fail", _ZERO_TARGET_REASON + note
     if use_formula:
@@ -2778,9 +2843,17 @@ def check_lookup_fill(path: Path, args: dict, header_row: int = 1) -> tuple:
     return "pass", f"{checked} 行を検証"
 
 
-def check_aggregate(path: Path, args: dict, header_row: int = 1) -> tuple:
+def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bool = False) -> tuple:
     """★ W3: header_row は集計元(1枚目)の見出し行。出力の「集計」シートは SummaryTable
-       ヘルパが毎回新規作成し常に物理1行目が見出し（検出対象外・そのまま）。"""
+       ヘルパが毎回新規作成し常に物理1行目が見出し（検出対象外・そのまま）。
+       ★ W10f 項目1: use_formula のとき分類列/集計列を data_only(計算後の値)側から読む
+       （check_compute_column と同型のバグ。前段が式で作った計算列を group_col/value_col
+       にした場合、raw 側は式文字列のままで value_col が『数値でない→0扱い』に落ち、
+       偽の不一致 fail になっていた。value_col が0扱いされる止血2 の丸めは残すが、
+       それは『本当に非数値/空欄』の行専用にする）。
+       AGGREGATE は合計という『全行をまたぐ』検証のため、式にキャッシュ値が無く読めない
+       行が1件でもあれば期待値そのものが信頼できない。COMPUTE_COLUMN の行独立検証と違い
+       部分採点はせず、fail で理由を示して打ち切る（0cf9218 空虚な検証合格の禁止の趣旨）。"""
     wb = openpyxl.load_workbook(path)
     if "集計" not in wb.sheetnames:
         wb.close()
@@ -2791,14 +2864,37 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1) -> tuple:
     if gi is None or vi is None:
         wb.close()
         return "fail", "分類列/集計列が見つからない"
+    wb_v = ws_v = None
+    if use_formula:
+        wb_v = openpyxl.load_workbook(path, data_only=True)
+        ws_v = wb_v[wb_v.sheetnames[0]]
     expect: dict = {}
+    uncached = 0
     r = header_row + 1
     while src.cell(row=r, column=1).value not in (None, ""):
-        k = src.cell(row=r, column=gi).value
-        v = src.cell(row=r, column=vi).value
+        k_raw = src.cell(row=r, column=gi).value
+        v_raw = src.cell(row=r, column=vi).value
+        if use_formula:
+            k = ws_v.cell(row=r, column=gi).value
+            v = ws_v.cell(row=r, column=vi).value
+        else:
+            k, v = k_raw, v_raw
+        k_uncached = use_formula and k is None and isinstance(k_raw, str) and k_raw.startswith("=")
+        v_uncached = use_formula and not _is_number(v) and isinstance(v_raw, str) and v_raw.startswith("=")
+        if k_uncached or v_uncached:   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
+            uncached += 1
+            r += 1
+            continue
         v = v if _is_number(v) else 0   # ★ 止血2: 非数値/None は0扱い（クラッシュさせない）
         expect[k] = expect.get(k, 0) + v
         r += 1
+    if wb_v is not None:
+        wb_v.close()
+    if uncached:
+        wb.close()
+        return "fail", (f"分類列/集計列に式はあるがキャッシュ値が無く検証できない行が "
+                         f"{uncached} 件あり、集計を検証できません"
+                         f"（LibreOffice を通していない可能性）")
     if not expect:
         wb.close()
         return "fail", _ZERO_TARGET_REASON   # ★ 止血1: 集計元データが0件を「合格」にしない
@@ -3225,7 +3321,11 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
     """⑥ op 別事後条件。(status, reason)。status ∈ {"pass","warn","fail","error"}。
        CHART だけ before_charts と比較する専用の形。
        ★ W3: header_row（1起点、省略時1）を全チェッカーに一貫して渡す（『三層全部が
-       同じ見出し推定を使う』の事後条件側）。use_formula は COMPUTE_COLUMN 専用（W3 Part3）。
+       同じ見出し推定を使う』の事後条件側）。
+       ★ W10f 項目1: use_formula は元は COMPUTE_COLUMN 専用（W3 Part3）だったが、
+       operand を式ビューから読む同型バグが SORT/AGGREGATE にもあったため、その2つにも
+       渡すよう広げた（同じ理由で check_compute_column_single_factor は
+       check_compute_column からの委譲で既に受け取っている）。
        ★ W9: source_book（適用前のコピー・無ければ None）は INSERT_ROWS/AUTOFIT だけが使う
        （before/after の突き合わせが要る2op・他は無視される安全なキーワード引数）。
        ★ 止血2: チェッカー内で予期しない例外が起きても生の Python トレースバックを
@@ -3239,6 +3339,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
             return "fail", f"未対応の op: {op}"
         if op == "COMPUTE_COLUMN":
             return fn(out_book, resolved_args, header_row, use_formula)
+        if op in ("SORT", "AGGREGATE"):
+            return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
@@ -4947,7 +5049,8 @@ def _apply_new_column_fallback(op: str, args: dict, headers: list, new_cols: lis
 
 def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path, workdir: Path,
                             refs_dir: Path, helpers_dir: Path, tag: str,
-                            apply_timeout: float | None, step_prefix: str = "") -> tuple:
+                            apply_timeout: float | None, step_prefix: str = "",
+                            vocab: dict | None = None) -> tuple:
     """M2c: 複合計画の語彙外(OUT_OF_VOCAB/FREEFORM)段を FREEFORM 経路で実行する。
        cmd_run_freeform と同じ生成→（★ W10b: 関所→）適用→署名/切断/no-op チェックのループを、
        『その段の依頼文だけ』かつ『out_book の現在の状態』を起点に行う版。
@@ -4956,6 +5059,11 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
        投げて cmd_run_plan まで一気に抜ける（破壊の関所と同じ『計画全体を止める』扱い。
        原本(book)はこの時点でまだ一切触れていない＝out_book はコピーなので安全）。
        step_prefix は複合計画の段番号表示用（例: "  2段目: "）。
+       ★ W10f 項目2: vocab（率リテラル走査用の用語集）は cmd_run_freeform（単発の自由生成）
+       には元から渡っていた(scan_rate_literals)が、複合計画のこの経路には渡っておらず
+       A' 原則（LLM に率や値を確定させない）の機械監査が複合計画の自由生成段だけ
+       素通りしていた（独立監査が発見・査定5回は偶然当たらなかっただけの穴）。ここで
+       同じ走査を通す。
        戻り値: (ok, changes:list[str], advisories:list[str], failure_kind:str, detail:str|None)"""
     helper_catalog, helper_files = load_helpers(helpers_dir)
     known_helper_names = _known_helper_names(helper_files)   # ★ W10b 項目2: 総なめ検出用
@@ -5022,6 +5130,9 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
             continue
 
         advisories = build_advisories(task_text, before, after)
+        # ★ W10f 項目2: 単発 cmd_run_freeform と同じ率リテラルの機械スキャン。この段の
+        #   依頼文(task_text)だけを出典として見る（他段の依頼文言に混ざらないよう局所判定）。
+        advisories = advisories + scan_rate_literals(code, task_text, vocab)
         # ★ 止血3: 呼び出し元(cmd_run_plan)は lines をそのまま「  {ln}」で表示するだけ
         #   なので、切り詰め注記はここで lines に混ぜて渡す。
         notice = _truncation_notice(before, after, exhaustive_postcondition=False)
@@ -5203,7 +5314,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             try:
                 okf, changes, advisories, _fkind, detail = run_freeform_plan_step(
                     a, about, out_book, workdir, refs_dir, helpers_dir, f"plan{i}", apply_timeout,
-                    step_prefix=f"  {i}段目: ")
+                    step_prefix=f"  {i}段目: ", vocab=vocab)
             except _FreeformGateAbort as e:
                 return e.exit_code
             if okf:
