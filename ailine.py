@@ -70,7 +70,7 @@ from ailine_core.book_view import BookView
 from ailine_core.claim import (   # ★ C5/C9: Claim 型と『✓』の一元レンダラ（✓ は反映後の1箇所だけ）
     Claim, format_plan_report, format_plan_preview, overall_verdict,
     render_applied_claim, render_applied_unverified, render_applied_unobservable,
-    _VERIFY_SCOPE_NOTE, _VERIFY_SCOPE_NOTE_PLAN,
+    render_scope_notes,   # ★ 単位E: 常時注記を廃止し、その run 固有の②の1文に置き換えた
 )
 from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 段が共有する実行エンジン
     DslStepDeps, resolve_dsl_step_args, print_dsl_confirmation, apply_dsl_step, compose_dsl_step_advisories,
@@ -84,6 +84,12 @@ from ailine_core.formula_health import formula_error_advisory, detect_write_targ
 from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
     format_sheet_field, sheet_conflict_choice_lines, conflict_excluded_sheets,
+    sheet_names_mentioned_in,   # ★ 単位E: シート名照合の素材（決定側と助言側が共有する）
+)
+from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から「対象スロット」へ広げる
+    Slot, Consumed as SubjectConsumed, classify_slots,
+    COLUMN as SUBJ_COLUMN, REGION as SUBJ_REGION, ROW as SUBJ_ROW,
+    SHEET as SUBJ_SHEET, LABEL as SUBJ_LABEL, INPUT as SUBJ_INPUT,
 )
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
@@ -1010,7 +1016,10 @@ def extract_task_mentions(task: str, sheet_names: list) -> dict:
             except ValueError:
                 pass
     rows = {int(m.group(1)) for m in _RE_ROW.finditer(task) if int(m.group(1)) >= 1}
-    sheets = {s for s in sheet_names if s and s in task}
+    # ★ 単位E: 「このシート名は依頼文に含まれるか」の照合は、決定側(resolve_target_sheet)と
+    #   ここ（助言側）が独立に同じ文字列照合を書いていた。素材を1つに寄せ、決定側は1つに
+    #   絞る／助言側は全部使う、という役割の違いだけを残す（判定規則も戻り値も不変）。
+    sheets = set(sheet_names_mentioned_in(task, list(sheet_names or ())))
     return {"cols": cols, "digit_cols": digit_cols, "rows": rows, "sheets": sheets}
 
 
@@ -1608,6 +1617,94 @@ def _declared_reads_only_sheets(op: str | None, resolved: dict | None) -> set:
     if not wt or not wt.reads_only or resolved is None:
         return set()
     return {resolved[k] for k in wt.reads_only if resolved.get(k)}
+
+
+# ★★ 単位E: 「利用者が依頼文で名指ししうる対象」の宣言。OP_WRITE_TARGET（どこに**書く**か）
+#   とは別の事実なので別の表にする ―― 実証: APPEND_TOTAL は writes=new_row_at_end（書く先は
+#   末尾の新規行）だが、利用者が名指しするのは合計する列(col)。同じ事実を2箇所に書くのが
+#   禁じ手であって、違う事実を別々に宣言するのは正しい（両者が食い違うことはありえない）。
+#   ★ 種別は「解決値の形」で決まる: column=列名 / region=col:列名|row:N|all /
+#     row=行番号 / label=書き込むラベル。判定本体は ailine_core/subject.py（純ロジック）。
+#   ★ 空タプルは「名指しできる対象が無いと確認した」宣言（DRAW_BORDERS/AUTOFIT は引数無しで
+#     表全体・MERGE の range は A1:C1 という機械形式で実在名との照合対象が無い）。
+#   ★ 対象シート(_target_sheet)はどの op も持つので、この表でなく共通処理として足す
+#     （複数シートのブックだけ・1枚のブックには曖昧さが存在しない＝出力は従来どおり不変）。
+#   番人: test_op_subject_slots_declares_all_ops / test_op_subject_slots_are_well_formed。
+OP_SUBJECT_SLOTS = {
+    "SORT": (("col", SUBJ_COLUMN),),
+    # target 無指定（新規列作成）なら resolved に無い＝判定対象そのものが無い。
+    # ★ operands は「対象」ではないが計画が実際に使った実在列なので、依頼文の語を消費する
+    #   （input 種別・subject.py 参照）。これが無いと「売上から原価を引いた利益列を作って、
+    #   利益で降順に」の 2 段目が、誰にも拾われない『売上』『原価』を反証と誤読する。
+    "COMPUTE_COLUMN": (("operands", SUBJ_INPUT), ("target", SUBJ_COLUMN)),
+    "LOOKUP_FILL": (("target_col", SUBJ_COLUMN), ("key_col", SUBJ_COLUMN)),
+    "AGGREGATE": (("group_col", SUBJ_COLUMN), ("value_col", SUBJ_COLUMN)),
+    "BOLD": (("target", SUBJ_REGION),),
+    "FILL_COLOR": (("target", SUBJ_REGION),),
+    "CENTER_ALIGN": (("target", SUBJ_REGION),),
+    "NUMBER_FORMAT": (("col", SUBJ_COLUMN),),
+    "MERGE": (),
+    "CHART": (("value_col", SUBJ_COLUMN),),
+    # ★ label は「金額の性質の限定（税込み/税抜き）」が依頼文にある時だけ問う（subject.py 参照）。
+    "APPEND_TOTAL": (("col", SUBJ_COLUMN), ("label", SUBJ_LABEL)),
+    "INSERT_ROWS": (("at", SUBJ_ROW),),
+    "DRAW_BORDERS": (),
+    "AUTOFIT": (),
+    "PIVOT": (("group_col", SUBJ_COLUMN), ("value_col", SUBJ_COLUMN)),
+    "SET_COLUMN_VALUE": (("col", SUBJ_COLUMN),),
+}
+
+
+def _subject_slots(op: str, resolved: dict, sheets: list) -> list:
+    """宣言(OP_SUBJECT_SLOTS)と resolved から判定対象のスロットを組む。
+       ★ 対象シートは全 op 共通で足す ―― ただし**複数シートのブックだけ**
+       （1枚しか無いブックに『どのシートか』の曖昧さは存在しない。format_sheet_field/
+       describe_target_sheet が沈黙するのと同じ線引き＝単一シート帳票の出力は不変）。"""
+    slots = []
+    for key, kind in OP_SUBJECT_SLOTS.get(op, ()):
+        value = resolved.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, (list, tuple)):   # operands のような複数値の slot は1件ずつ
+            slots.extend(Slot(key=key, value=str(v), kind=kind) for v in value if v not in (None, ""))
+            continue
+        context = ""
+        if kind == SUBJ_LABEL:
+            # ★ 率が機械確定していれば（＝1.0 でない）、限定は「率:1.1（依頼文: 消費税10%）」
+            #   として既に解釈行に出ている ―― 二重に問わない（判定対象そのものにしない）。
+            if resolved.get("factor") not in (None, 1.0):
+                continue
+            # 限定語が対象列の名前に現れていれば、解釈は限定を運んでいる
+            # （例: 対象列『税込金額』の合計にラベル『合計』は正しい）。
+            context = str(resolved.get("col") or "")
+        slots.append(Slot(key=key, value=str(value), kind=kind, context=context))
+    target_sheet = resolved.get("_target_sheet")
+    if target_sheet and len(sheets or []) > 1:
+        slots.append(Slot(key="_target_sheet", value=str(target_sheet), kind=SUBJ_SHEET))
+    return slots
+
+
+def classify_subject_provenance(op: str, resolved: dict, meta: dict, task: str, a=None) -> list:
+    """★ 単位E の入口: この段の対象スロットを①②③に仕分ける（SubjectVerdict のリスト）。
+       照合の材料は実在物だけ ―― 対象シートの実在列名・ブックの実在シート名・見出し行。
+       ★ 複合計画では meta が『直前までの段を適用した後』の実体なので、前段が作った新規列も
+       実在列として材料に入る（症状の検体そのもの: `col:数量*単価` は実在するが、依頼文の
+       どの語とも照合できない ―― 断片『数量』『単価』は他の実在列も指しうるので証拠にならない）。
+       ★ 「誰も拾わなかった語だけが反証」を段またぎで成立させるため、消費の台帳(Consumed)は
+       a（run 全体を通して1つ）に持たせる ―― _sheet_conflict 等と同じ置き場所。a を渡さない
+       直接呼び出し（単体テスト）では毎回まっさらな台帳で判定する。"""
+    sheets = list((meta or {}).get("sheets") or [])
+    target_sheet = resolved.get("_target_sheet") or (sheets[0] if sheets else None)
+    columns = list(((meta or {}).get("headers") or {}).get(target_sheet, []))
+    header_row = ((meta or {}).get("header_rows") or {}).get(target_sheet, 1)
+    qualifier = bool(_TAX_INCLUSIVE_RE.search(task or "") or _TAX_EXCLUSIVE_RE.search(task or ""))
+    consumed = getattr(a, "_subject_consumed", None) if a is not None else None
+    if a is not None and consumed is None:
+        consumed = SubjectConsumed()
+        a._subject_consumed = consumed
+    return classify_slots(_subject_slots(op, resolved, sheets), task=task or "",
+                           columns=columns, header_row=header_row, sheets=sheets,
+                           qualifier_signal=qualifier, consumed=consumed)
 
 
 # ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、
@@ -4693,7 +4790,7 @@ def _interpretation_summary_line(resolved: dict, inferred: set) -> str | None:
 
 
 def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None,
-                                step_prefix: str = "") -> int | None:
+                                step_prefix: str = "", subject_mismatch: bool = False) -> int | None:
     """★ W10a 項目1: 破壊の関所。既定(原本へ直接反映)で、既存データへの上書きが起きる
        操作（_maybe_warn_target_overwrite が検出）は、--ask 無指定でも確認を挟む
        （監査実測: target が誤って既存列に解決され、確認なしで実データが上書きされた
@@ -4702,16 +4799,26 @@ def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None
        cmd_run_dsl 側の汎用確認で兼ねる（二重に聞かない）。
        戻り値: 続行してよければ None、中断すべきなら呼び出し側がそのまま return すべき
        exit code（対話で拒否=1・非対話で確認できない=7）。
-       step_prefix は複合計画の段番号表示用（例: "  2段目: "）。単発 DSL では空文字。"""
-    if not (warn_overwrite and getattr(a, "inplace", False) and not getattr(a, "dry", False)
+       step_prefix は複合計画の段番号表示用（例: "  2段目: "）。単発 DSL では空文字。
+       ★★ 単位E: subject_mismatch（依頼文の語と解決値が矛盾する対象がある＝③）も**この関所を
+       再利用**して確認する。新しい関所も新しい exit code も作らない ―― 止める条件
+       （原本へ直接反映する時だけ・--dry/--copy/--ask/--overwrite では素通し）も、拒否 1 /
+       非対話 7 も、上書きの関所とまったく同じ。違うのは聞く文と、非対話時に示す逃げ道だけ。
+       ★ 対象シートの3択（_sheet_conflict_gate）を既に出した run では重ねて聞かない
+       （同じ対象について2度尋ねることになる。✓ の抑制と ⚠ の印字はそのまま行う）。"""
+    reason = warn_overwrite or (subject_mismatch and not getattr(a, "_sheet_conflict_asked", False))
+    if not (reason and getattr(a, "inplace", False) and not getattr(a, "dry", False)
             and not getattr(a, "ask", False) and not getattr(a, "overwrite", False)):
         return None
+    prompt = "上書きしますか？" if warn_overwrite else "この対象で実行しますか？"
     try:
-        ans = input(f"{step_prefix}上書きしますか？ [y/N]: ").strip().lower()
+        ans = input(f"{step_prefix}{prompt} [y/N]: ").strip().lower()
     except EOFError:
-        for ln in render_retry_options(step_prefix, [
-                ("--overwrite", "上書きを承知して続行する（バックアップから ailine undo で戻せる）"),
-                ("--copy", "原本には触らず .out に結果を作る（原本は無変更）")]):
+        options = [("--overwrite", "上書きを承知して続行する（バックアップから ailine undo で戻せる）"),
+                   ("--copy", "原本には触らず .out に結果を作る（原本は無変更）")] if warn_overwrite \
+            else [("--copy", "原本には触らず .out に結果を作る（原本は無変更）"),
+                  ("--sheet / 列名を依頼文に明記", "対象を依頼文で名指しして、もう一度実行する")]
+        for ln in render_retry_options(step_prefix, options):
             print(ln)
         return 7
     if ans not in ("y", "yes"):
@@ -4794,6 +4901,7 @@ def _make_dsl_step_deps() -> DslStepDeps:
         pivot_caveat=PIVOT_CAVEAT, verify_dsl_args=verify_dsl_args,
         apply_new_column_fallback=_apply_new_column_fallback, build_advisories=build_advisories,
         structural_advisories=_structural_advisories, unrequested_new_sheet_advisory=unrequested_new_sheet_advisory,
+        classify_subject_provenance=classify_subject_provenance,   # ★ 単位E
         sheet_conflict_gate=_sheet_conflict_gate)   # ★ 挙動変更#3
 
 
@@ -4925,8 +5033,11 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 
     # ★ C9: postcondition が warn（検証対象不足）なら ✓ は名乗らない。scope は「解釈: ...」行から
     #   「解釈: 」を除いた宣言テキスト（＝計画が宣言した対象）。
-    _finish_apply(a, book, out_book, workdir, result, machine_verified=(status != "warn"),
-                   scope=confirm.label, scope_note=_VERIFY_SCOPE_NOTE)
+    # ★★ 単位E: ③（依頼文の語と矛盾する対象がある）なら、事後条件が通っていても ✓ は出さない
+    #   ―― 検証したのは「計画どおり」であって、その計画は依頼文の語と食い違っている。
+    _finish_apply(a, book, out_book, workdir, result,
+                   machine_verified=(status != "warn" and not confirm.subject_warnings),
+                   scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))))
 
     _finish_run(a, book, result, "none")
     return 0
@@ -5438,10 +5549,14 @@ def _dedup_step_advisories(entries: list) -> list:
 
 def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_meta: dict, original_headers: dict,
                         first_sheet: str | None, out_book: Path, workdir: Path, helper_files, apply_timeout,
-                        use_formula: bool, header_rows: dict, before_charts: int, a: argparse.Namespace, vocab: dict) -> tuple:
+                        use_formula: bool, header_rows: dict, before_charts: int, a: argparse.Namespace, vocab: dict,
+                        subject_sink: dict | None = None) -> tuple:
     """★ C7: cmd_run_plan の DSL 語彙段の1段分。cmd_run_dsl と同じ ailine_core.dsl_step の共有エンジンを通る
        （非対称は dsl_step.py 参照）。この分離で stage_organs の dsl_plan_step 代表関数はここになる（DoD7）。
-       戻り値: (gate_exit, item, plan_json_entry, step_advisories, provenance_entry, mention_exclude_sheets, current_meta)。"""
+       戻り値: (gate_exit, item, plan_json_entry, step_advisories, provenance_entry, mention_exclude_sheets, current_meta)。
+       ★ 単位E: subject_sink（呼び出し側が用意する dict）に、この段の対象スロットの出所を積む
+       ―― ③ の有無は計画全体の ✓ を左右し、② は ✓ の直後の1文になるので、段の外へ運ぶ必要がある
+       （戻り値のタプルはこれ以上広げない ―― 既存の unpack を壊さないための選択）。"""
     step_prefix = f"  {i}段目: "
     deps = _make_dsl_step_deps()
     # 依存つき連鎖: 直前までの段の適用後の実列構成(current_meta)で接地する（新規列フォールバック込み）
@@ -5459,6 +5574,11 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     if confirm.gate_exit is not None:   # ★ W10a 項目1: 破壊の関所（複合計画の段ごと）
         return (confirm.gate_exit, None, None, [], None, None, current_meta)
 
+    if subject_sink is not None:   # ★ 単位E: この段の対象スロットの出所を計画全体へ運ぶ
+        subject_sink.setdefault("warnings", []).extend(confirm.subject_warnings)
+        for phrase in confirm.unspoken:
+            if phrase not in subject_sink.setdefault("unspoken", []):
+                subject_sink["unspoken"].append(phrase)
     step_advisories = [confirm.mismatch_warning] if confirm.mismatch_warning else []
     provenance_entry = {"step": i, **resolved["_sources"]} if resolved.get("_sources") else None
 
@@ -5598,6 +5718,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     plan_provenance: list = []   # ★ A': 段ごとの倍率等の出典（history.jsonl 用）
     step_advisory_entries: list = []   # ★ W10d: [(段番号 or None, 助言文言), ...]
     mention_exclude_sheets: set = set()   # ★ W10d/単位C: 参照専用シート（reads_only 宣言・全段分の合算）
+    subject_sink: dict = {"warnings": [], "unspoken": []}   # ★ 単位E: 対象スロットの出所（全段分）
 
     for i, step in enumerate(plan, 1):
         op = step.get("op")
@@ -5635,7 +5756,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 i, op, step.get("args", {}), task=a.task, current_meta=current_meta,
                 original_headers=original_headers, first_sheet=first_sheet, out_book=out_book,
                 workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
-                use_formula=use_formula, header_rows=header_rows, before_charts=before_charts, a=a, vocab=vocab)
+                use_formula=use_formula, header_rows=header_rows, before_charts=before_charts, a=a, vocab=vocab,
+                subject_sink=subject_sink)
         if gate_exit is not None:
             return gate_exit
         if item is not None:
@@ -5670,10 +5792,11 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             print(ln)
     verdict_line, verdict = overall_verdict(items)
     # ★ C9: 全段 ok のときは verdict_line が None（『✓ すべて機械検証済み』は廃止し、原本が
-    #   確定した後の1行＝_finish_apply に移した）。範囲注記も ✓ と同じ場所へ連れて行く。
+    #   確定した後の1行＝_finish_apply に移した）。
+    # ★ 単位E: 常時の範囲注記はここからも消えた（発火率100%＝情報量ゼロ）。範囲を明示する
+    #   役割は、②の run 固有の1文（✓ の直後・render_scope_notes）が引き継ぐ。
     if verdict_line:
         print(f"\n{verdict_line}")
-        print(_VERIFY_SCOPE_NOTE_PLAN)   # ★ 致命1(W10e) 要求1: 「計画どおり」≠「依頼どおり」を明示
 
     _changed, difflines = diff_snapshots(before_all, after_all)
     result["plan"] = plan_json
@@ -5696,9 +5819,12 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     # ★ W8b-2 項目1: 複合計画は総合判定(overall_verdict)に従う。全段機械検証済み(ok)
     #   の時だけ ✓、語彙外/検証不足の段が混じる(warn)なら ⚠「機械保証はありません」側
     #   （自由生成の段が混じっている以上、全体としても機械保証済みとは名乗れない）。
-    _finish_apply(a, book, out_book, workdir, result, machine_verified=(verdict == "ok"),
+    # ★★ 単位E: ③（依頼文の語と矛盾する対象）を含む段が1つでもあれば ✓ は出さない
+    #   ―― 各段の事後条件が「計画どおり」に通っていても、その計画は依頼文と食い違っている。
+    _finish_apply(a, book, out_book, workdir, result,
+                   machine_verified=(verdict == "ok" and not subject_sink["warnings"]),
                    scope="; ".join(label for _idx, label, _st, _det in items),
-                   scope_note=_VERIFY_SCOPE_NOTE_PLAN)
+                   scope_note="\n".join(render_scope_notes(subject_sink["unspoken"])))
 
     _finish_run(a, book, result, "none")
     return 0

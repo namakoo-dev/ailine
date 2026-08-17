@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from ailine_core.subject import contradiction_lines, unspoken_subjects   # ★ 単位E
+
 
 @dataclass
 class DslStepDeps:
@@ -61,6 +63,9 @@ class DslStepDeps:
     build_advisories: Callable
     structural_advisories: Callable
     unrequested_new_sheet_advisory: Callable
+    # ★ 単位E: 対象スロットの出所を①②③に仕分ける（ailine.py の classify_subject_provenance）。
+    #   None なら仕分けない（既定・後方互換 ―― 直接この関数を呼ぶ既存テストを壊さない）。
+    classify_subject_provenance: Callable | None = None
     # ★ 挙動変更#3: シート名の衝突で既定(1枚目)へ後退した時に「解釈:」行の直後で3択を
     #   聞く関門（ailine.py の _sheet_conflict_gate）。None なら聞かない（既定）。
     #   ★ ここに置く理由: 3択は**解釈行のすぐ後**でなければならない（操作が確定してから
@@ -143,6 +148,11 @@ class DslConfirmResult:
     warn_overwrite: str | None
     mismatch_warning: str | None
     gate_exit: int | None
+    # ★ 単位E: 対象スロットの出所。subject_warnings は③（依頼文の語と矛盾する対象・
+    #   適用前に印字済み・✓ を出さない理由）、unspoken は②（無言なので機械決定した対象・
+    #   ✓ の直後の1文の材料）。仕分けをしない呼び出し（deps 未設定）では両方とも空。
+    subject_warnings: tuple = ()
+    unspoken: tuple = ()
 
 
 def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
@@ -176,6 +186,17 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
     mismatch_warning = deps.maybe_warn_header_col_mismatch(op, resolved, new_cols or [], task)
     if mismatch_warning:
         print(f"{step_prefix}{mismatch_warning}")
+    # ★ 単位E: 対象スロットの出所を①②③に仕分ける。③（依頼文の語と矛盾する対象）はここで
+    #   ⚠ を出し、下の関所へ「止めて確認する理由」として渡す ―― 適用前に言わなければ
+    #   確認にならない。②は印字せず持ち帰り、✓ の直後の1文（範囲を狭める）に使う。
+    subject_warnings: tuple = ()
+    unspoken: tuple = ()
+    if deps.classify_subject_provenance is not None:
+        verdicts = deps.classify_subject_provenance(op, resolved, meta, task, a)
+        subject_warnings = tuple(contradiction_lines(verdicts))
+        unspoken = tuple(unspoken_subjects(verdicts))
+        for w in subject_warnings:
+            print(f"{step_prefix}{w}")
     warn_overwrite = deps.maybe_warn_target_overwrite(op, resolved, meta, warn_book)
     if warn_overwrite:
         summary = deps.interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
@@ -184,9 +205,11 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
         print(f"{step_prefix}{warn_overwrite}")
     for w in resolved.get("_warnings", []):   # ★ A': LLM由来の値と機械抽出の食い違い
         print(f"{step_prefix}⚠ {w}")
-    gate_exit = deps.confirm_overwrite_or_gate(a, warn_overwrite, step_prefix=step_prefix)
+    gate_exit = deps.confirm_overwrite_or_gate(a, warn_overwrite, step_prefix=step_prefix,
+                                                subject_mismatch=bool(subject_warnings))
     return DslConfirmResult(line=line, label=label, warn_overwrite=warn_overwrite,
-                             mismatch_warning=mismatch_warning, gate_exit=gate_exit)
+                             mismatch_warning=mismatch_warning, gate_exit=gate_exit,
+                             subject_warnings=subject_warnings, unspoken=unspoken)
 
 
 @dataclass

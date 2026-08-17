@@ -26,6 +26,7 @@ basrun-ts / ailine-ts の移行実験では完成後に遡って掘った（考�
 - [destruction-gate-declarative](nodes/destruction-gate-declarative.md) — 破壊の関所と OP_WRITE_TARGET の宣言駆動（op ごとの if でなく宣言を読む・宣言は「列」でなく「領域」＝writes/reads_only・全 op 宣言の番人テスト）
 - [verification-scope-honesty](nodes/verification-scope-honesty.md) — 検証が主張する範囲（「計画どおり」≠「依頼どおり」・複合計画にも解釈行・決定論警告）
 - [verified-means-readback](nodes/verified-means-readback.md) — `✓` の意味を1種類に（発生点は原本が確定した後の1箇所・段別と --dry からは外す・読み戻せなければ ✓ を出さない）
+- [subject-provenance](nodes/subject-provenance.md) — 解決された対象の出所を3段階に（①依頼文の語と照合できた=満額 ②無言=範囲を狭める1文 ③矛盾=`✓` を出さず既存の関所で確認・常時注記の廃止・反証は「誰も拾わなかった語」だけ）
 - [formula-readback-duality](nodes/formula-readback-duality.md) — 式で書いた列を読み戻す二重性（openpyxl 式ビュー/値ビュー・行独立は部分採点、全行またぎは打ち切り）
 - [freeform-gate-helper-sweep](nodes/freeform-gate-helper-sweep.md) — 自由生成の関所とヘルパ総なめの機械検出（閾値はプロンプトでなく Call 数の決定論検出）
 - [lo-basic-native-formatting-quirks](nodes/lo-basic-native-formatting-quirks.md) — 太字は CharWeightAsian でしか効かない・PivotSum の再描画癖と SummaryTable の使い分け

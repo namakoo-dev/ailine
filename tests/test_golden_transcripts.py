@@ -13,7 +13,8 @@
   忠実度ゲート(exit 4) / Excelロック(exit 5) / runロック(exit 6)
   header-row 指定
   --dry × 3経路(dsl/plan/freeform)
-= 4+4+4+3+1+1+1+1+3 = 22本。
+  ★ 単位E: 対象スロットの出所（③矛盾で ✓ を出さない / ②無言で範囲を狭める1文）
+= 4+4+4+3+1+1+1+1+3+2 = 24本。
 
 ゴールデンは tests/golden/f9_transcripts/<name>.txt（標準出力そのもの）。
 更新の作法は tests/golden/_harness.py 参照。
@@ -413,7 +414,55 @@ def _t_dry_freeform(tmp_path, monkeypatch, capsys):
     return _run_main(["run", str(book), "何か列を足して", "--dry"], capsys)
 
 
+# ===========================================================================
+# ★ 単位E: 対象スロットの出所（③矛盾 / ②無言）
+# ===========================================================================
+
+def _t_subject_contradiction(tmp_path, monkeypatch, capsys):
+    """★ 症状そのもの: 依頼文には「見出し」とあるのに、2段目の対象が前段の新規列
+       『数量*単価』に解決された run。✓ を出さず、⚠ と（--copy なので聞かないまま）終わる。"""
+    book = _book(tmp_path, [["商品", "数量", "単価"], ["a", 2, 100], ["b", 3, 200]])
+    monkeypatch.setattr(ailine, "translate_task",
+                         lambda model, task, book_meta, temperature=0.1:
+                         {"plan": [{"op": "COMPUTE_COLUMN",
+                                    "args": {"operands": ["数量", "単価"], "operator": "*"}},
+                                   {"op": "BOLD", "args": {"target": "col:数量*単価"}}]})
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb = openpyxl.load_workbook(out_book)
+        ws = wb.active
+        if 'setString("数量*単価")' in code:
+            ws.cell(row=1, column=4, value="数量*単価")
+            for r in range(2, ws.max_row + 1):
+                ws.cell(row=r, column=4,
+                        value=(ws.cell(row=r, column=2).value or 0) * (ws.cell(row=r, column=3).value or 0))
+        if "Call StyleBold(oDoc, 3, " in code:
+            for r in range(1, ws.max_row + 1):
+                if ws.cell(row=r, column=4).value not in (None, ""):
+                    ws.cell(row=r, column=4).font = Font(bold=True)
+        wb.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    return _run_main(["run", str(book), "数量と単価をかけた金額列を作って、見出しを太字にして",
+                       "--copy", "--values"], capsys)
+
+
+def _t_subject_unspoken_note(tmp_path, monkeypatch, capsys):
+    """★ ②: 依頼文は対象について無言（「太字にして」だけ）。✓ は出すが、その run 固有の
+       1文で範囲を狭める（旧・常時注記の置き換え）。"""
+    book = _plan_book_presorted_bold(tmp_path)
+    monkeypatch.setattr(ailine, "translate_task",
+                         lambda model, task, book_meta, temperature=0.1:
+                         {"op": "BOLD", "args": {"target": "row:1"}})
+    monkeypatch.setattr(ailine, "basrun_apply",
+                         lambda out_book, code, workdir, helper_files=(), timeout=None:
+                         (True, None, "ok"))
+    return _run_main(["run", str(book), "太字にして", "--copy"], capsys)
+
+
 CASES = {
+    "subject_contradiction": _t_subject_contradiction,
+    "subject_unspoken_note": _t_subject_unspoken_note,
     "dsl_pass": _t_dsl_pass,
     "dsl_warn": _t_dsl_warn,
     "dsl_fail": _t_dsl_fail,

@@ -70,6 +70,19 @@ def conflict_excluded_sheets(conflict: SheetNameConflict | None) -> set:
     return {conflict.alternative} if conflict else set()
 
 
+def sheet_names_mentioned_in(task: str, sheets: list) -> list:
+    """★ 単位E: 「このシート名は依頼文に含まれるか」という**素材**を1箇所に切り出したもの。
+
+    ★ なぜ: この判定は resolve_target_sheet（決定側）と ailine.py の extract_task_mentions
+      （助言側）が**それぞれ独立に同じ文字列照合を書いていた**。規則が片方だけ変わると
+      静かにずれる（誤爆#3 で払った授業料と同じ形 ―― 同じことを2箇所が別々に決める）。
+      素材はここ1つにして、**決定側は受け取ってから1つに絞る／助言側は全部使う**。
+    ★ 戻り値の契約も判定規則も従来と同一（実在シート名が依頼文に部分文字列として現れるか・
+      順序はブックのシート順）。ここは切り出しであって挙動変更ではない。"""
+    task = task or ""
+    return [s for s in (sheets or []) if s and s in task]
+
+
 def _mentioned_with_marker(task: str, name: str) -> bool:
     """依頼文で name が「〜シート」「〜タブ」の形で言及されているか（明示マーカー）。"""
     return re.search(re.escape(name) + _SHEET_MARKER_SUFFIX, task) is not None
@@ -109,7 +122,7 @@ def resolve_target_sheet(task: str, sheets: list, cli_sheet: str | None = None,
             return None, "cli", f"シート『{cli_sheet}』がありません。あるシート: {', '.join(sheets)}", None
         return cli_sheet, "cli", None, None
     task = task or ""
-    named = [s for s in sheets if s and s in task]
+    named = sheet_names_mentioned_in(task, sheets)   # ★ 単位E: 照合の素材は1箇所（上記）
     named = [s for s in named if not any(s != t and s in t for t in named)]   # 部分文字列は長い方だけ残す
     if len(named) == 1:
         name = named[0]

@@ -64,6 +64,9 @@ ORGANS = (
                              # 新規シート申告/依頼文言との重なり）
     "truncation_notice",      # 切り詰め注記: _truncation_notice（snapshot() の MAX_ROWS
                              # 切り詰めを無言で切らず申告する）
+    "subject_match",          # ★ 単位E: 対象照合（OP_SUBJECT_SLOTS 宣言 →
+                             # classify_subject_provenance → ③なら ✓ を出さず関所へ）。
+                             # 「解決された対象は依頼文の語と照合できるか」を問う器官。
 )
 
 # --- 宣言表 -------------------------------------------------------------------
@@ -80,6 +83,7 @@ STAGE_ORGANS = {
         "helper_sweep_detect": None,
         "advisories": True,            # ailine.py cmd_run_dsl: build_advisories 呼び出し
         "truncation_notice": True,     # ailine.py cmd_run_dsl: _truncation_notice 呼び出し
+        "subject_match": True,         # ★ 単位E: print_dsl_confirmation 経由（deps.classify_subject_provenance）
     },
     "dsl_plan_step": {
         "grounding": True,             # ailine.py cmd_run_plan（DSL 段）: verify_dsl_args 呼び出し
@@ -93,6 +97,7 @@ STAGE_ORGANS = {
         #   塞いだ理由: ✓ の意味を「最終ファイルを読み戻して確かめた」に一本化する以上、
         #   「表示は先頭 MAX_ROWS 行しか見ていない」は ✓ の主張範囲に直接効くため。
         "truncation_notice": True,     # ailine.py _run_dsl_plan_step: _truncation_notice 呼び出し（C9 で追加）
+        "subject_match": True,         # ★ 単位E: dsl_single と同じ共有エンジンを通る（同じ器官が両段種へ自動で伝播する形）
     },
     "freeform_single": {
         # 自由生成は DSL args という構造化された概念を持たない（verify_dsl_args を呼ぶ
@@ -106,6 +111,9 @@ STAGE_ORGANS = {
         "helper_sweep_detect": True,   # ailine.py cmd_run_freeform: detect_helper_sweep + _confirm_freeform_apply
         "advisories": True,            # ailine.py cmd_run_freeform: build_advisories 呼び出し
         "truncation_notice": True,     # ailine.py cmd_run_freeform: _truncation_notice 呼び出し
+        # ★ 自由生成は DSL args（op と解決済みスロット）を持たない＝「対象スロット」という
+        #   構造化された対象そのものが無い（grounding が None なのと同じ理由）。
+        "subject_match": None,
     },
     "freeform_plan_step": {
         "grounding": None,             # freeform_single と同じ理由
@@ -114,6 +122,7 @@ STAGE_ORGANS = {
         "helper_sweep_detect": True,   # ailine.py run_freeform_plan_step: detect_helper_sweep + _confirm_freeform_apply
         "advisories": True,            # ailine.py run_freeform_plan_step: build_advisories 呼び出し
         "truncation_notice": True,     # ailine.py run_freeform_plan_step: _truncation_notice 呼び出し
+        "subject_match": None,         # freeform_single と同じ理由
     },
     "clarify_single": {
         # ★ CLARIFY はコード生成も適用も一切発生しない段（_cmd_run_dispatch は質問を
@@ -128,6 +137,7 @@ STAGE_ORGANS = {
         "helper_sweep_detect": None,
         "advisories": None,
         "truncation_notice": None,
+        "subject_match": None,
     },
     "clarify_plan_step": {
         # 同上（cmd_run_plan 内の CLARIFY 分岐も適用を一切行わず、その段を fail 項目として
@@ -138,6 +148,7 @@ STAGE_ORGANS = {
         "helper_sweep_detect": None,
         "advisories": None,
         "truncation_notice": None,
+        "subject_match": None,
     },
 }
 
@@ -213,6 +224,11 @@ ORGAN_FUNCTION_CANDIDATES = {
     "helper_sweep_detect": ("detect_helper_sweep", "_confirm_freeform_apply"),
     "advisories": ("build_advisories", "_structural_advisories", "compose_dsl_step_advisories"),
     "truncation_notice": ("_truncation_notice",),
+    # ★ 単位E: 対象照合は共有エンジン print_dsl_confirmation の中で行われる（deps 経由で
+    #   ailine.py の classify_subject_provenance を呼ぶ）ので、段の関数本体から AST で
+    #   見えるのはこの名前。destructive_gate と候補名を共有するが、dsl_single/dsl_plan_step は
+    #   どちらの器官も True と宣言しているので判定はぶれない（このモジュール上部の注記と同じ形）。
+    "subject_match": ("print_dsl_confirmation",),
 }
 
 

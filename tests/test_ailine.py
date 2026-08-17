@@ -7124,11 +7124,18 @@ def test_cmd_run_plan_reproduces_bold_target_leak_and_shows_mismatch_warning(tmp
     # 「見出し」と食い違う旨の助言が出ること。
     assert "  2段目: 解釈: 操作:太字 対象:col:数量*単価" in captured.out
     assert "新規作成された列です" in captured.out and "見出し" in captured.out
-    # ★ 致命1 要求1: 範囲注記（『機械検証済み』＝計画どおり、依頼どおりとは別）が出ること
-    assert ailine._VERIFY_SCOPE_NOTE_PLAN in captured.out
+    # ★★ 単位E で強くなった: W10e の時点では「範囲注記が出ること」しか要求できなかった
+    #   （＝『機械検証済み』と言い切ったうえで、あとから範囲を断る形）。今は依頼文の語
+    #   『見出し』と解決値『col:数量*単価』の食い違いを機械が突き合わせるので、
+    #   **そもそも ✓ を出さない**。旧 _VERIFY_SCOPE_NOTE_PLAN（常時注記）は廃止した。
+    assert "は機械検証済みの内容です" not in captured.out
+    assert "依頼文が指しているのは: 見出し" in captured.out
 
 
-def test_cmd_run_dsl_success_prints_scope_note(tmp_path, monkeypatch, capsys):
+def test_cmd_run_dsl_success_does_not_print_an_always_on_scope_note(tmp_path, monkeypatch, capsys):
+    """★ 単位E: 旧 `_VERIFY_SCOPE_NOTE`（✓ が出る全 run で必ず出る注記）を廃止した検体。
+       ここは「見出し行を太字にして」→ `row:1` ＝ 依頼文の語と対象が機械照合できた①なので、
+       ✓ の他には何も足さない（範囲を狭める1文は、照合できなかった run にだけ出る）。"""
     from openpyxl.styles import Font
     p = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200]])
     wb = openpyxl.load_workbook(p)
@@ -7151,7 +7158,9 @@ def test_cmd_run_dsl_success_prints_scope_note(tmp_path, monkeypatch, capsys):
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
-    assert ailine._VERIFY_SCOPE_NOTE in captured.out
+    assert "は機械検証済みの内容です" in captured.out
+    assert "★ ただし" not in captured.out            # ②の1文は出ない（①なので）
+    assert "解釈:」行どおりに実行されたことの検証です" not in captured.out   # 旧・常時注記
 
 
 # --- 致命2: 既存シートの中身が丸ごと置き換わったことの検出 ---------------------
