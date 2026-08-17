@@ -1,0 +1,211 @@
+{
+  "task": "工事台帳を取引先ごとに集計して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "工事台帳"
+    ],
+    "charts": 0,
+    "cells": {
+      "工事台帳!1,1": [
+        "取引先",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "工事台帳": []
+    },
+    "colw": {
+      "工事台帳": {}
+    },
+    "rowh": {
+      "工事台帳": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "工事台帳",
+      "集計"
+    ],
+    "charts": 0,
+    "cells": {
+      "工事台帳!1,1": [
+        "取引先",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "工事台帳!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!1,1": [
+        "取引先",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!1,2": [
+        "合計",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "集計!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "工事台帳": [],
+      "集計": []
+    },
+    "colw": {
+      "工事台帳": {},
+      "集計": {}
+    },
+    "rowh": {
+      "工事台帳": {},
+      "集計": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "（新規シート『集計』の作成は意図どおりです）"
+  ],
+  "op": "AGGREGATE",
+  "resolved": {
+    "group_col": "取引先",
+    "value_col": "金額",
+    "_target_sheet": "工事台帳"
+  },
+  "meta": {
+    "sheets": [
+      "工事台帳"
+    ],
+    "headers": {
+      "工事台帳": [
+        "取引先",
+        "金額"
+      ]
+    },
+    "header_rows": {
+      "工事台帳": 1
+    }
+  }
+}

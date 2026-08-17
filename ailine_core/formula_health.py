@@ -92,13 +92,15 @@ def detect_write_target_type_change(before: dict, after: dict, *, op: str | None
                                      meta: dict | None, op_write_target: dict, is_number: Callable) -> str | None:
     """(b) OP_WRITE_TARGET が宣言する書き込み先列（狙い撃ち）で、変化前が数値・変化後が
        数値に見えない文字列のセルが1件でもあれば予防の確認行を返す（関所にはしない・
-       理由はモジュール docstring 参照）。新規列（元の型という概念が無い）は対象外。"""
+       理由はモジュール docstring 参照）。新規列（元の型という概念が無い）は対象外。
+       ★ 単位C: op_write_target の値は `.col_key` / `.sheet_key` を持つ宣言オブジェクト
+       （呼び出し側が渡す・ここは属性を読むだけで ailine を import しない）。"""
     if not (op and resolved is not None and meta is not None):
         return None
     write_target = op_write_target.get(op)
-    if not write_target:
+    if not write_target or not write_target.col_key:
         return None
-    col_key, sheet_key = write_target
+    col_key, sheet_key = write_target.col_key, write_target.sheet_key
     col_name = resolved.get(col_key)
     if not col_name:
         return None

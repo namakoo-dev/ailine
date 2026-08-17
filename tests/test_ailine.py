@@ -1117,20 +1117,80 @@ def test_structural_advisories_keeps_ghost_warning_for_lookup_fill_existing_colu
     lines = ailine._structural_advisories(before, after, op="LOOKUP_FILL", resolved=resolved, meta=meta)
     assert any(ln.startswith("★ 疑わしい: 変更が元データの範囲外です") for ln in lines)
 
+# ★ 単位C(D10): 合計行（データ末尾の新規行）は定義上ずっと原本の使用範囲の外に出るので、
+#   幽霊データ警告が毎回・確実に誤爆していた。宣言（writes に new_row_at_end）で消す。
+
+def test_structural_advisories_neutralizes_ghost_warning_for_append_total_new_row(tmp_path):
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=4, column=1, value="合計")   # 最終行の下（ラベル）
+    wb.active.cell(row=4, column=2, value=300)      # 最終行の下（合計）
+    wb.save(p)
+    after = ailine.snapshot(p)
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    lines = ailine._structural_advisories(
+        before, after, op="APPEND_TOTAL", resolved={"col": "金額", "label": "合計"}, meta=meta)
+    assert "（表の末尾への追記は意図どおりです）" in lines
+    assert not any(ln.startswith("★ 疑わしい") for ln in lines)
+
+def test_structural_advisories_keeps_ghost_warning_when_append_total_writes_outside_columns(tmp_path):
+    # ★ 抑制しすぎない側: 宣言が『末尾の新規行』でも、原本の列範囲より右へ出たセルが
+    #   混ざっていれば中立化しない（安全器官の減衰は保守的に、が守られていることの確認）。
+    p = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=4, column=2, value=300)
+    wb.active.cell(row=4, column=9, value="謎")   # I列＝原本の列範囲の外
+    wb.save(p)
+    after = ailine.snapshot(p)
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]}}
+    lines = ailine._structural_advisories(
+        before, after, op="APPEND_TOTAL", resolved={"col": "金額"}, meta=meta)
+    assert any(ln.startswith("★ 疑わしい: 変更が元データの範囲外です") for ln in lines)
+
+# ★ 単位C(D8): 名指しされた入力シートを読むだけの op（AGGREGATE/PIVOT）で
+#   「★ …は変更されていません」が毎回・確実に誤爆していた。宣言（reads_only）で消す。
+
+def test_build_advisories_silences_mention_for_declared_reads_only_sheet(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.title = "工事台帳"
+    for row in (["取引先", "金額"], ["a", 100], ["b", 200]):
+        wb.active.append(row)
+    wb.save(p)
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    ws = wb.create_sheet("集計")
+    for row in (["取引先", "合計"], ["a", 100], ["b", 200]):
+        ws.append(row)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    task = "工事台帳を取引先ごとに集計して"
+    meta = {"sheets": ["工事台帳"], "headers": {"工事台帳": ["取引先", "金額"]}}
+    resolved = {"group_col": "取引先", "value_col": "金額", "_target_sheet": "工事台帳"}
+    lines = ailine.build_advisories(task, before, after, None, op="AGGREGATE", resolved=resolved, meta=meta)
+    assert not any("工事台帳" in ln and ln.startswith("★") for ln in lines)
+    # 宣言を渡さなければ従来どおり出る（消えたのが宣言のおかげであることの対照）。
+    plain = ailine.build_advisories(task, before, after, None)
+    assert "★ 依頼で言及された『工事台帳』は存在しません/変更されていません" in plain
+
+
 def test_declared_new_column_letter_driven_by_op_write_target():
     # ★ W10d 番人: 新規列作成の判定が OP_WRITE_TARGET の宣言だけで決まり、op ごとの
     #   個別 if を増やしていないことを全 op について機械的に確認する（宣言効果を持つ全 op が
     #   中立化の対象として自動的に登録されている、ことの検査＝test_op_write_target_declares_all_ops
-    #   と対になる番人）。write_target が None の op は常に None（新規列を作らない）。
-    #   col_key があって resolved にその値が無い(=新規列作成)場合は必ず新規列の列文字が返る。
+    #   と対になる番人）。
+    #   ★ 単位C: 判定の入口が「宣言が None か」から「writes に『新規列』があるか」へ変わった。
+    #   新規列を作ると宣言していない op は常に None。宣言していて resolved にその列名が
+    #   無い(=新規列作成)場合は必ず新規列の列文字が返る。
     #   新しい op を OP_WRITE_TARGET へ登録しさえすれば、ここへの追記なしに正しく振る舞う。
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["既存1", "既存2"]}}
     for op, write_target in ailine.OP_WRITE_TARGET.items():
-        if write_target is None:
+        if ailine.WRITE_NEW_COLUMN not in write_target.writes:
             assert ailine._declared_new_column_letter(op, {}, meta) is None, op
             continue
-        col_key, sheet_key = write_target
-        resolved = {sheet_key: "Sheet"} if sheet_key else {}
+        resolved = {write_target.sheet_key: "Sheet"} if write_target.sheet_key else {}
         letter = ailine._declared_new_column_letter(op, resolved, meta)
         assert letter == "C", f"{op}: 新規列作成のはずが列文字が返らなかった: {letter}"
 
@@ -6056,6 +6116,41 @@ def test_op_write_target_declares_all_ops():
     missing = [op for op in ailine.OP_SCHEMA if op not in ailine.OP_WRITE_TARGET]
     assert missing == [], f"OP_WRITE_TARGET に書き込み先列の宣言が無い op: {missing}"
 
+# ★ 単位C: 宣言が「列」から「領域」へ広がった分だけ、番人も広げる。登録の有無（上）だけでは
+#   「writes を空で登録して素通りさせる」「知らない種類の文字列を書く」「既存列を書くと
+#   言いながら書き込み先列を指さない」が通ってしまう。宣言が宣言として成立していることを
+#   機械で確かめる（新しい op を足す人が最初にぶつかる番人）。
+
+def test_op_write_target_declarations_are_well_formed():
+    for op, wt in ailine.OP_WRITE_TARGET.items():
+        assert wt.writes, f"{op}: writes が空（何を書くかを必ず宣言する）"
+        unknown = set(wt.writes) - ailine.WRITE_KINDS
+        assert not unknown, f"{op}: 未知の書き込み領域の種類: {sorted(unknown)}"
+        assert len(set(wt.writes)) == len(wt.writes), f"{op}: writes に重複がある"
+        # 既存列を書く op だけが書き込み先列を指す（破壊の関所が守る対象と一致させる）。
+        if ailine.WRITE_EXISTING_COLUMN in wt.writes:
+            assert wt.col_key, f"{op}: 既存列を書くと宣言しているのに col_key が無い"
+        else:
+            assert wt.col_key is None, f"{op}: 既存列を書かないのに col_key がある: {wt.col_key}"
+        for key in (wt.sheet_key, *wt.reads_only):
+            assert key is None or (isinstance(key, str) and key), f"{op}: slot 名が不正: {key!r}"
+        # 参照専用シートを、同時に書き込み先シートとして宣言していないこと（自己矛盾）。
+        assert wt.sheet_key not in wt.reads_only, f"{op}: 書き込み先シートを reads_only に入れている"
+
+def test_declared_reads_only_sheets_reads_the_declaration():
+    # ★ 単位C(D8): `if op == "LOOKUP_FILL"` のハードコードを置き換えた宣言読み取り。
+    assert ailine._declared_reads_only_sheets(
+        "LOOKUP_FILL", {"source_sheet": "単価表", "target_sheet": "明細"}) == {"単価表"}
+    # AGGREGATE/PIVOT の入力シートも同じ理屈で「読むだけ」＝旧実装では毎回誤爆していた側。
+    assert ailine._declared_reads_only_sheets(
+        "AGGREGATE", {"_target_sheet": "工事台帳"}) == {"工事台帳"}
+    assert ailine._declared_reads_only_sheets(
+        "PIVOT", {"_target_sheet": "工事台帳"}) == {"工事台帳"}
+    # 書き込み系の op は「読むだけのシート」を持たない（抑制を広げすぎない側の確認）。
+    assert ailine._declared_reads_only_sheets("SET_COLUMN_VALUE", {"col": "備考"}) == set()
+    assert ailine._declared_reads_only_sheets("APPEND_TOTAL", {"col": "金額"}) == set()
+    assert ailine._declared_reads_only_sheets(None, None) == set()
+
 def test_maybe_warn_target_overwrite_fires_for_lookup_fill_existing_target_col(tmp_path):
     # ★ 致命1の再現そのもの: 旧実装はここが常に None だった（op != COMPUTE_COLUMN のため）。
     p = _book(tmp_path, [["商品", "数量", "単価"], ["りんご", 2, 999], ["バナナ", 3, 999]])
@@ -7180,7 +7275,9 @@ def test_check_set_column_value_pass_and_fail(tmp_path):
 
 def test_op_write_target_set_column_value_declares_column_write():
     # ★ 既存列への一括書き込み＝破壊の関所の対象（宣言必須）。
-    assert ailine.OP_WRITE_TARGET["SET_COLUMN_VALUE"] == ("col", None)
+    wt = ailine.OP_WRITE_TARGET["SET_COLUMN_VALUE"]
+    assert wt.writes == (ailine.WRITE_EXISTING_COLUMN,)
+    assert (wt.col_key, wt.sheet_key, wt.reads_only) == ("col", None, ())
 
 def test_set_column_value_end_to_end_via_cmd_run_dsl(tmp_path, monkeypatch, capsys):
     # ★ DoD③: 既存値がある列への一括書き換えは破壊の関所(確認)を経由すること。

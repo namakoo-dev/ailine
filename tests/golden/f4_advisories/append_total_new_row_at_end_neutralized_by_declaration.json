@@ -1,0 +1,175 @@
+{
+  "task": "金額の合計を出して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!4,1": [
+        "合計",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!4,2": [
+        300,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "（表の末尾への追記は意図どおりです）"
+  ],
+  "op": "APPEND_TOTAL",
+  "resolved": {
+    "col": "金額",
+    "label": "合計",
+    "_target_sheet": "Sheet"
+  },
+  "meta": {
+    "sheets": [
+      "Sheet"
+    ],
+    "headers": {
+      "Sheet": [
+        "商品",
+        "金額"
+      ]
+    },
+    "header_rows": {
+      "Sheet": 1
+    }
+  }
+}

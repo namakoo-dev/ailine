@@ -23,7 +23,7 @@ basrun-ts / ailine-ts の移行実験では完成後に遡って掘った（考�
 - [formula-dialect-conversion](nodes/formula-dialect-conversion.md) — COMPUTE_COLUMN/APPEND_TOTAL の式化（setFormula は LO 方言のセミコロン区切りのみ・保存時 Excel 方言(カンマ)へ自動変換・挿入耐性 SUM・二層事後条件）
 - [empty-verification-ban](nodes/empty-verification-ban.md) — 空虚な検証合格の禁止（検証対象 0 件の ✓ を構造的に禁止・MAX_ROWS 切詰時の経路別の正直な注記）
 - [progress-and-diff-humanization](nodes/progress-and-diff-humanization.md) — 進捗表示（stderr）と差分の人間可読化（生 tuple の追放）
-- [destruction-gate-declarative](nodes/destruction-gate-declarative.md) — 破壊の関所と OP_WRITE_TARGET の宣言駆動（op ごとの if でなく宣言を読む・全 op 宣言の番人テスト）
+- [destruction-gate-declarative](nodes/destruction-gate-declarative.md) — 破壊の関所と OP_WRITE_TARGET の宣言駆動（op ごとの if でなく宣言を読む・宣言は「列」でなく「領域」＝writes/reads_only・全 op 宣言の番人テスト）
 - [verification-scope-honesty](nodes/verification-scope-honesty.md) — 検証が主張する範囲（「計画どおり」≠「依頼どおり」・複合計画にも解釈行・決定論警告）
 - [verified-means-readback](nodes/verified-means-readback.md) — `✓` の意味を1種類に（発生点は原本が確定した後の1箇所・段別と --dry からは外す・読み戻せなければ ✓ を出さない）
 - [formula-readback-duality](nodes/formula-readback-duality.md) — 式で書いた列を読み戻す二重性（openpyxl 式ビュー/値ビュー・行独立は部分採点、全行またぎは打ち切り）

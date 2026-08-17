@@ -1,0 +1,155 @@
+{
+  "task": "金額の合計を出して",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "Sheet"
+    ],
+    "charts": 0,
+    "cells": {
+      "Sheet!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!2,2": [
+        100,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!4,1": [
+        "合計",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "Sheet!4,2": [
+        300,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "Sheet": []
+    },
+    "colw": {
+      "Sheet": {}
+    },
+    "rowh": {
+      "Sheet": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "★ 疑わしい: 変更が元データの範囲外です（A4:B4）"
+  ]
+}

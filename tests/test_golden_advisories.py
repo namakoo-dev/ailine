@@ -47,13 +47,18 @@ def _snap(tmp_path, filename, sheets: dict, extra=None) -> dict:
     return ailine.snapshot(p)
 
 
-# 名前 -> (task, before_snap_fn(tmp_path), after_snap_fn(tmp_path), exclude_sheets, use_structural_only)
+# 名前 -> (task, before_snap_fn(tmp_path), after_snap_fn(tmp_path), exclude_sheets,
+#         use_structural_only, op, resolved, meta)
+# ★ 単位C: op/resolved/meta は「その op が何を書くと宣言しているか」(OP_WRITE_TARGET) を
+#   助言側に渡す経路。渡さないケース（既存の全ケース）は従来どおり宣言なしで評価される
+#   ＝ゴールデンのバイト列も payload のキー構成も変わらない。
 CASES: dict = {}
 
 
-def _add(name, task, before_fn, after_fn, exclude_sheets=None, structural_only=False):
+def _add(name, task, before_fn, after_fn, exclude_sheets=None, structural_only=False,
+          op=None, resolved=None, meta=None):
     assert name not in CASES, f"重複した case 名: {name}"
-    CASES[name] = (task, before_fn, after_fn, exclude_sheets, structural_only)
+    CASES[name] = (task, before_fn, after_fn, exclude_sheets, structural_only, op, resolved, meta)
 
 
 # --- 基準: 何も疑わしくない通常の値変更（複数列にまたがる＝③件数突き合わせの対象外にもなる） ---
@@ -160,6 +165,49 @@ _add("structural_only_excludes_mention_overlap", "列B を更新して",
      lambda tp: _snap(tp, "after.xlsx", {"Sheet": [["商品", "金額", "備考"], ["a", 100, "y"]]}),
      structural_only=True)
 
+# --- ★ 単位C: op の宣言（OP_WRITE_TARGET の writes / reads_only）を読む中立化 ---------
+# D10: APPEND_TOTAL の合計行は「データ末尾の新規行」＝定義上ずっと原本の使用範囲の外に出る。
+#   宣言を渡さない場合（下の _no_declaration 版）は従来どおり
+#   「★ 疑わしい: 変更が元データの範囲外です（A4:B4）」が出る ── 同じ before/after で
+#   宣言の有無だけが結果を分けることをゴールデンで対にして凍結する。
+def _append_total_before(tp):
+    return _snap(tp, "before.xlsx", {"Sheet": [["商品", "金額"], ["a", 100], ["b", 200]]})
+
+
+def _append_total_after(tp):
+    return _snap(tp, "after.xlsx",
+                  {"Sheet": [["商品", "金額"], ["a", 100], ["b", 200], ["合計", 300]]})
+
+
+_add("append_total_new_row_at_end_neutralized_by_declaration", "金額の合計を出して",
+     _append_total_before, _append_total_after, structural_only=True,
+     op="APPEND_TOTAL", resolved={"col": "金額", "label": "合計", "_target_sheet": "Sheet"},
+     meta={"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]},
+            "header_rows": {"Sheet": 1}})
+_add("append_total_new_row_at_end_no_declaration_still_warns", "金額の合計を出して",
+     _append_total_before, _append_total_after, structural_only=True)
+
+# D8: AGGREGATE は新規シートを作るだけで、名指しされた入力シートは読むだけ＝無変更が正常。
+#   reads_only の宣言（_target_sheet）を渡すと「★ …は変更されていません」を言わない。
+def _aggregate_before(tp):
+    return _snap(tp, "before.xlsx", {"工事台帳": [["取引先", "金額"], ["a", 100], ["b", 200]]})
+
+
+def _aggregate_after(tp):
+    return _snap(tp, "after.xlsx",
+                  {"工事台帳": [["取引先", "金額"], ["a", 100], ["b", 200]],
+                   "集計": [["取引先", "合計"], ["a", 100], ["b", 200]]})
+
+
+_add("aggregate_reads_only_input_sheet_silent_by_declaration", "工事台帳を取引先ごとに集計して",
+     _aggregate_before, _aggregate_after,
+     op="AGGREGATE", resolved={"group_col": "取引先", "value_col": "金額", "_target_sheet": "工事台帳"},
+     meta={"sheets": ["工事台帳"], "headers": {"工事台帳": ["取引先", "金額"]},
+            "header_rows": {"工事台帳": 1}})
+_add("aggregate_reads_only_input_sheet_no_declaration_warns", "工事台帳を取引先ごとに集計して",
+     _aggregate_before, _aggregate_after)
+
+
 # --- 複合: 幽霊データ + 一様埋め + 件数突き合わせが同時に出るケース -----------------
 # ★ 全変更セルが単一列(J)・原本範囲外・空欄→同一値、の3条件を同時に満たすように
 #   仕組む（ghost は「全部」範囲外の時だけ発火する設計なので、範囲内の変更は混ぜない）。
@@ -177,13 +225,14 @@ def _case_ids():
 
 @pytest.mark.parametrize("name", _case_ids())
 def test_build_advisories_golden(tmp_path, name):
-    task, before_fn, after_fn, exclude_sheets, structural_only = CASES[name]
+    task, before_fn, after_fn, exclude_sheets, structural_only, op, resolved, meta = CASES[name]
     before = before_fn(tmp_path)
     after = after_fn(tmp_path)
     if structural_only:
-        advisories = ailine._structural_advisories(before, after)
+        advisories = ailine._structural_advisories(before, after, op=op, resolved=resolved, meta=meta)
     else:
-        advisories = ailine.build_advisories(task, before, after, exclude_sheets)
+        advisories = ailine.build_advisories(task, before, after, exclude_sheets,
+                                              op=op, resolved=resolved, meta=meta)
     payload = {
         "task": task,
         "exclude_sheets": sorted_list(exclude_sheets) if exclude_sheets else [],
@@ -191,4 +240,8 @@ def test_build_advisories_golden(tmp_path, name):
         "after": after,
         "advisories": advisories,
     }
+    if op is not None:   # ★ 単位C: 宣言を渡すケースだけ payload に足す（既存ゴールデンは不変）
+        payload["op"] = op
+        payload["resolved"] = resolved
+        payload["meta"] = meta
     assert_golden_json(F4_DIR / f"{name}.json", payload, label=name)

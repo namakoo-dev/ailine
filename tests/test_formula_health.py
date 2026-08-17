@@ -19,6 +19,7 @@ import re
 import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import openpyxl
 from openpyxl.utils import get_column_letter
@@ -146,7 +147,15 @@ def _v(val):
 def _is_number(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
-_OP_WRITE_TARGET = {"SET_COLUMN_VALUE": ("col", None), "COMPUTE_COLUMN": ("target", None), "SORT": None}
+# ★ 単位C: 宣言の形が「列」から「領域」へ広がったので、ここの模擬も `.col_key`/`.sheet_key`
+#   を持つオブジェクトにする。ailine_core は ailine を import できない（移植可能性の番人）ので、
+#   本物の ailine.WriteTarget ではなく同じ属性を持つ最小の模擬を置く
+#   （detect_write_target_type_change が読むのはこの2属性だけ、という契約の明示でもある）。
+_OP_WRITE_TARGET = {
+    "SET_COLUMN_VALUE": SimpleNamespace(col_key="col", sheet_key=None),
+    "COMPUTE_COLUMN": SimpleNamespace(col_key="target", sheet_key=None),
+    "SORT": SimpleNamespace(col_key=None, sheet_key=None),   # 書き込み先列は無いと確認した宣言
+}
 
 def test_detect_write_target_type_change_fires_numeric_to_nonnumeric_text():
     before = _snap({"Sheet!1,1": _v("原価"), "Sheet!2,1": _v(300), "Sheet!3,1": _v(200)})

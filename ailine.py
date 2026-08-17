@@ -51,6 +51,7 @@ import sys
 import time
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -791,7 +792,8 @@ def _used_range(before: dict, sheet: str) -> tuple | None:
     return (min(rows), max(rows), min(cols), max(cols))
 
 
-def detect_ghost_data(before: dict, after: dict, *, new_col_letter: str | None = None) -> str | None:
+def detect_ghost_data(before: dict, after: dict, *, new_col_letter: str | None = None,
+                       new_row_at_end: bool = False) -> str | None:
     """★ 幽霊データ検出: 変更セルが全部、原本の使用範囲（データが存在した矩形）の
        外に集中している場合だけ疑わしい旨を返す。1セルでも範囲内なら何も言わない
        （保守的。使用範囲が不明なシートが混ざる場合も判定を保留する）。
@@ -805,11 +807,17 @@ def detect_ghost_data(before: dict, after: dict, *, new_col_letter: str | None =
        ★ C9: new_col_letter（呼び出し側が op の宣言（OP_WRITE_TARGET）から求めた、今回
        新規に作る列の文字）が与えられ、かつ検出範囲が丸ごとその1列に収まる場合は、
        警告でなく中立表示を返す（旧 _neutralize_new_column_ghost_warning が『出してから
-       打ち消す』後処理でやっていたのと同じ判定を、発生源で先取りする）。"""
+       打ち消す』後処理でやっていたのと同じ判定を、発生源で先取りする）。
+       ★ 単位C(D10): new_row_at_end（op の宣言 writes に WRITE_NEW_ROW_AT_END がある＝
+       データ最終行の下に行を足す op）が真で、検出セルが全部『原本の最終行より下・かつ
+       原本の列範囲の中』に収まる場合も同じく中立表示にする。合計行は定義上ずっと原本の
+       使用範囲の外に出るので、この誤警報は毎回・確実に再現していた（APPEND_TOTAL）。
+       列の外（右）へ出たセルが混ざる場合は中立化しない＝検出力は保守的に温存する。"""
     changed = _value_changed_cells(before, after)
     if not changed:
         return None
     outside = []
+    below_only = True   # ★ 単位C(D10): 範囲外セルが全部「原本の最終行より下・列範囲の中」か
     for sheet, r, c in changed:
         if sheet not in before["sheets"]:
             continue   # ★ W6: 新規作成されたシート＝ここでの判定対象外
@@ -819,6 +827,8 @@ def detect_ghost_data(before: dict, after: dict, *, new_col_letter: str | None =
         min_r, max_r, min_c, max_c = rect
         if min_r <= r <= max_r and min_c <= c <= max_c:
             return None  # 1つでも範囲内 → 発火しない
+        if not (r > max_r and min_c <= c <= max_c):
+            below_only = False
         outside.append((r, c))
     if not outside:
         return None   # 変更が全部、新規シートのセルだけだった
@@ -832,6 +842,8 @@ def detect_ghost_data(before: dict, after: dict, *, new_col_letter: str | None =
             new_col_idx = None
         if new_col_idx is not None and min_c == max_c == new_col_idx:
             return "（新規列の追加は意図どおりです）"
+    if new_row_at_end and below_only:
+        return "（表の末尾への追記は意図どおりです）"
     top_left = _cell_ref(min(rows), min_c)
     bot_right = _cell_ref(max(rows), max_c)
     span = top_left if len(outside) == 1 else f"{top_left}:{bot_right}"
@@ -860,11 +872,16 @@ def _declared_new_column_letter(op: str, resolved: dict, book_meta: dict) -> str
        作らない/対象シートが分からない場合は None。
        ★ W10d 番人の土台: OP_WRITE_TARGET だけを見る。新しい op を足しても
        OP_WRITE_TARGET へ登録さえすれば、ここへの追記なしで正しく判定される
-       （test_op_write_target_declares_all_ops が登録漏れ自体を防ぐ）。"""
+       （test_op_write_target_declares_all_ops が登録漏れ自体を防ぐ）。
+       ★ 単位C: 宣言が領域を持つようになったので、まず writes に『新規列』があるかを見る
+       （旧形は col_key の有無だけが手掛かりで、新規列を作らない op でも列名が resolved に
+       無ければ列文字を返してしまう形だった）。"""
     write_target = OP_WRITE_TARGET.get(op)
-    if not write_target:
+    if not write_target or WRITE_NEW_COLUMN not in write_target.writes:
         return None
-    col_key, sheet_key = write_target
+    col_key, sheet_key = write_target.col_key, write_target.sheet_key
+    if not col_key:
+        return None
     if sheet_key:
         sheet = resolved.get(sheet_key)
     else:
@@ -1056,24 +1073,20 @@ def unrequested_new_sheet_advisory(task: str, before: dict, after: dict, *,
        ★ 保守的: 言及があれば（AGGREGATE/CHART/PivotSum 等が意図どおり新設したと見なし）沈黙。
        プロンプト側の抑制（CONTRACT の追記）はあくまで誘導であって保証にならないため、
        この機械申告が最終防衛線（feedback_intent_vs_guarantee: 指示は意図、保証は機械）。
-       ★ C9: op が OP_DECLARED_SHEET_EFFECT（新規シート作成が宣言済みの効果）で、かつ
-       今回ちょうど1枚だけ新規シートができた場合は、その1枚については警告でなく中立表示を
-       返す（旧 _neutralize_declared_new_sheet_warning の後処理を発生源へ先取り。
-       2枚以上できた場合は宣言どおりと断定できないので従来どおり全部警告する＝保守的）。"""
+       ★ C9: op が『新規シートを作る』と宣言していて（OP_WRITE_TARGET の writes に
+       WRITE_NEW_SHEET・AGGREGATE(SummaryTable)/PIVOT(DataPilot)）、かつ今回ちょうど1枚だけ
+       新規シートができた場合は、その1枚については警告でなく中立表示を返す
+       （旧 _neutralize_declared_new_sheet_warning の後処理を発生源へ先取り。
+       2枚以上できた場合は宣言どおりと断定できないので従来どおり全部警告する＝保守的）。
+       ★ 単位C: 以前はここ専用の op 名集合 OP_DECLARED_SHEET_EFFECT を別に持っていたが、
+       「新規シートを作る」は OP_WRITE_TARGET の宣言そのものなので、宣言を1つに畳んだ
+       （宣言が2箇所にあると片方だけ更新されて食い違う）。集合の中身は変わっていない。"""
     new_sheets = _new_sheets(before, after)
     if not new_sheets or _NEW_SHEET_MENTION_RE.search(task):
         return []
-    if op in OP_DECLARED_SHEET_EFFECT and len(new_sheets) == 1:
+    if _op_writes(op, WRITE_NEW_SHEET) and len(new_sheets) == 1:
         return [f"（新規シート『{new_sheets[0]}』の作成は意図どおりです）"]
     return [f"★ 依頼にない新しいシートが作成されました（{s}）" for s in new_sheets]
-
-
-# ★ W10c 中: AGGREGATE(SummaryTable)/PIVOT(DataPilot) は定義上・毎回新規シートを作る
-#   のが op の宣言済みの効果。依頼文が「シート」「ピボット」「別に」のどれも使わない
-#   言い方（例:「部門ごとに金額をまとめて」）だと _NEW_SHEET_MENTION_RE の言及ベース抑制は
-#   効かず、意図した新設のたびに「★ 依頼にない新しいシートが作成されました」が出ていた
-#   （査定で名指しされた摩擦・W10b 項目4a で COMPUTE_COLUMN の新規列にやったのと同じ処置）。
-OP_DECLARED_SHEET_EFFECT = {"AGGREGATE", "PIVOT"}
 
 
 # ★ 致命2(W10e): 「既存シートの中身が置き換わった」検出。自由生成が依頼と無関係な
@@ -1087,10 +1100,11 @@ def existing_sheet_replaced_advisory(before: dict, after: dict, *, op: str | Non
        一部のセルだけが変わった（値の再計算・部分更新等）場合は対象外（保守的）。
        ★ 空欄への一様書き込み等は detect_uniform_fill が別途担当するので、ここでは
        『置き換え後も何かしら値が残っている』ケースだけを見る（全消去は別の懸念）。
-       ★ C9: op が OP_DECLARED_SHEET_EFFECT で、かつそのシートが OP_DECLARED_SHEET_NAME の
-       宣言どおりの出力先（例: AGGREGATE→『集計』）なら、警告でなく中立表示を返す
+       ★ C9: op が『新規シートを作る』と宣言していて（OP_WRITE_TARGET の writes に
+       WRITE_NEW_SHEET）、かつそのシートが OP_DECLARED_SHEET_NAME の宣言どおりの出力先
+       （例: AGGREGATE→『集計』）なら、警告でなく中立表示を返す
        （旧 _neutralize_declared_sheet_replace_warning の後処理を発生源へ先取り）。"""
-    declared_sheet = OP_DECLARED_SHEET_NAME.get(op) if op in OP_DECLARED_SHEET_EFFECT else None
+    declared_sheet = OP_DECLARED_SHEET_NAME.get(op) if _op_writes(op, WRITE_NEW_SHEET) else None
     lines = []
     for sheet in before["sheets"]:
         if sheet not in after["sheets"]:
@@ -1209,7 +1223,8 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
        detect_write_target_type_change（★宣言つき挙動変更#1(b)）にそのまま渡す（旧 _neutralize_* 三兄弟の後処理を発生源へ先取り）。"""
     lines = []
     new_col_letter = _declared_new_column_letter(op, resolved, meta) if (op and resolved is not None and meta is not None) else None
-    for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter}), (detect_uniform_fill, {})):
+    new_row_at_end = _op_writes(op, WRITE_NEW_ROW_AT_END)   # ★ 単位C(D10): 合計行は宣言済みの効果
+    for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter, "new_row_at_end": new_row_at_end}), (detect_uniform_fill, {})):
         msg = fn(before, after, **kwargs)
         if msg:
             lines.append(msg)
@@ -1230,11 +1245,15 @@ def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set |
        ④依頼文言との重なり。
        ★ C9: op/resolved/meta は _structural_advisories/unrequested_new_sheet_advisory へ
        そのまま横流しする（宣言済み効果の中立化を発生源で先取りするための追加引数・
-       省略時は従来どおり無条件で全部発火する）。"""
+       省略時は従来どおり無条件で全部発火する）。
+       ★ 単位C(D8): 参照専用シート（OP_WRITE_TARGET の reads_only 宣言）は、呼び出し側が
+       op ごとの if で渡すのをやめ、ここが宣言から自分で求めて exclude_sheets に足す
+       （明示の exclude_sheets は自由生成経路のために残す＝宣言と和を取る）。"""
     lines = list(_structural_advisories(before, after, op=op, resolved=resolved, meta=meta))
     lines.extend(unrequested_new_sheet_advisory(task, before, after, op=op))
     mentions = extract_task_mentions(task, before["sheets"])
-    lines.extend(mention_overlap_advisory(mentions, before, after, exclude_sheets))
+    excluded = set(exclude_sheets or ()) | _declared_reads_only_sheets(op, resolved)
+    lines.extend(mention_overlap_advisory(mentions, before, after, excluded or None))
     return lines
 
 
@@ -1496,32 +1515,95 @@ OP_SCHEMA = {
 #   `if op != "COMPUTE_COLUMN": return None` の1行で、COMPUTE_COLUMN 以外（LOOKUP_FILL 等）
 #   は関所が構造的に発火しなかった（監査実測: 存在しない転記先列が無関係な既存列へ
 #   解決され、確認なしで上書きされた事故）。
-#   値は (書き込み先列の resolved args キー, 対象シート名の resolved args キー or None)、
-#   または「この op には既存列の値を上書きする効果が無い」ことを示す明示の None。
-#   None は「安全だから省略した」のではなく「対象が無いと確認した」宣言 — 新しい op を
-#   足すたびにここへの追記が必須になる（test_op_write_target_declares_all_ops が
-#   OP_SCHEMA の全 op に対する宣言漏れを機械的に検査する＝再発防止の本体）。
-#   sheet_key が None のときは book_meta の先頭シート（現行 DSL が書き込み対象にする
-#   唯一のシート）を指す。LOOKUP_FILL だけ target_sheet で別シートを明示できる。
+#   ★ 単位C: 宣言の形を「列」から「領域」へ広げた。旧形は (col_key, sheet_key) か None の
+#   2択で、「どこに書くか」を列でしか言えなかった。そのため助言の側は宣言を読めず、
+#   依頼文の表層語や列の形で代用して毎回誤爆していた（実測2件: APPEND_TOTAL の合計行が
+#   必ず「★ 疑わしい: 変更が元データの範囲外です」を出す／AGGREGATE・PIVOT が名指しの
+#   入力シートを読むだけなのに「★ …は変更されていません」を出す）。誤爆は条件分岐でなく
+#   宣言で消す ── writes（書く領域の種類）と reads_only（参照専用シートの slot 名）を足した。
+#   None は廃止し、全 op が WriteTarget を持つ（「安全だから省略した」でなく「対象が無いと
+#   確認した」の明示宣言、という旧 None の思想はそのまま writes/col_key=None が担う）。
+#   sheet_key が None のときは verify_dsl_args が決めた resolved["_target_sheet"]
+#   （後方互換で book_meta の先頭シート）を指す。LOOKUP_FILL だけ target_sheet で明示する。
+#   番人: test_op_write_target_declares_all_ops（OP_SCHEMA の全 op に宣言があるか）と
+#   test_op_write_target_declarations_are_well_formed（未知の種類・矛盾した組み合わせ）。
+
+# 書く領域の種類の語彙（宣言に書けるのはここに載る種類だけ）。
+WRITE_EXISTING_COLUMN = "existing_column"   # 既存列の値を書き換える（＝破壊の関所の対象）
+WRITE_NEW_COLUMN = "new_column"             # データの右端に新しい列を作る
+WRITE_NEW_ROW_AT_END = "new_row_at_end"     # データ最終行の下に新しい行を足す
+WRITE_NEW_SHEET = "new_sheet"               # 新しいシートを作る
+WRITE_FORMAT_ONLY = "format_only"           # セルの値は変えない（書式・罫線・列幅・埋め込みグラフ）
+WRITE_ROW_SHIFT = "row_shift"               # 行を挿入して既存行を下へずらす（値そのものは残る）
+WRITE_REORDER = "reorder"                   # 行を並べ替える（値の集合は保存される）
+WRITE_KINDS = frozenset({
+    WRITE_EXISTING_COLUMN, WRITE_NEW_COLUMN, WRITE_NEW_ROW_AT_END, WRITE_NEW_SHEET,
+    WRITE_FORMAT_ONLY, WRITE_ROW_SHIFT, WRITE_REORDER})
+
+
+@dataclass(frozen=True)
+class WriteTarget:
+    """op が「どこに書くか / どこを読むだけか」の宣言。
+       writes: 書く領域の種類（WRITE_KINDS の部分集合・空は不可＝必ず何かを宣言する）。
+       col_key: 書き込み先列を指す resolved args のキー（既存列を書く op だけが持つ）。
+       sheet_key: 対象シート名を指す resolved args のキー（None = resolved["_target_sheet"]）。
+       reads_only: 参照専用シートを指す resolved args のキー（そのシートが無変更なのは
+                   正常なので、助言側は「変更されていません」を言ってはいけない）。"""
+    writes: tuple = ()
+    col_key: str | None = None
+    sheet_key: str | None = None
+    reads_only: tuple = ()
+
+
 OP_WRITE_TARGET = {
-    "SORT": None,                          # 並べ替えのみ・値そのものは保存される
-    "COMPUTE_COLUMN": ("target", None),    # target 無指定時は新規列（resolved に無い＝安全)
-    "LOOKUP_FILL": ("target_col", "target_sheet"),
-    "AGGREGATE": None,                     # 新規シートを作るだけ（既存列は書かない）
-    "BOLD": None,                          # 書式のみ・値を書かない
-    "FILL_COLOR": None,
-    "NUMBER_FORMAT": None,
-    "MERGE": None,
-    "CHART": None,
-    "CENTER_ALIGN": None,
-    "APPEND_TOTAL": None,                  # データ末尾の新規行に追記するだけ（W6・既存列は不可侵）
-    "INSERT_ROWS": None,                   # 行を挿入するだけ・既存値は下にずれるだけで残る
-    "DRAW_BORDERS": None,
-    "AUTOFIT": None,
-    "PIVOT": None,                         # 新規シートを作るだけ
+    # 並べ替えのみ・値そのものは保存される（書き込み先列という対象は無いと確認した）
+    "SORT": WriteTarget(writes=(WRITE_REORDER,)),
+    # target 有指定なら既存列・無指定なら新規列（resolved に無い＝関所は素通り）
+    "COMPUTE_COLUMN": WriteTarget(writes=(WRITE_EXISTING_COLUMN, WRITE_NEW_COLUMN), col_key="target"),
+    # target_col が対象シートに実在すれば既存列・無ければその名前で新規列を作る（codegen 参照）
+    "LOOKUP_FILL": WriteTarget(writes=(WRITE_EXISTING_COLUMN, WRITE_NEW_COLUMN),
+                                col_key="target_col", sheet_key="target_sheet",
+                                reads_only=("source_sheet",)),
+    # 新規シート（SummaryTable）を作るだけ。入力シートは読むだけ＝無変更が正常
+    "AGGREGATE": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
+    "BOLD": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    "FILL_COLOR": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    "NUMBER_FORMAT": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    "MERGE": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    # 埋め込みグラフを足すだけ（セルの値も見出しも書かない＝値の書き込み先は無いと確認した）
+    "CHART": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    "CENTER_ALIGN": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    # ★ 単位C(D10): データ末尾の新規行に [ラベル|合計式] を書く（W6・既存列は不可侵）。
+    #   合計行は定義上ずっと元データの使用範囲の外に出る＝幽霊データの誤爆源だった。
+    #   args の col は「合計する列」であって書き込み先列ではない（col_key に入れない）。
+    "APPEND_TOTAL": WriteTarget(writes=(WRITE_NEW_ROW_AT_END,)),
+    # 行を挿入するだけ・既存値は下にずれるだけで残る
+    "INSERT_ROWS": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
+    "DRAW_BORDERS": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    "AUTOFIT": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    # 新規シート（DataPilot）を作るだけ。入力シートは読むだけ＝無変更が正常
+    "PIVOT": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
     # ★ 致命3(W10e): 既存列への一括書き込み＝破壊の関所の対象そのもの（宣言必須）。
-    "SET_COLUMN_VALUE": ("col", None),
+    "SET_COLUMN_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN,), col_key="col"),
 }
+
+
+def _op_writes(op: str | None, kind: str) -> bool:
+    """op が kind の領域に書くと宣言しているか（op ごとの if を増やさないための問い合わせ口）。"""
+    wt = OP_WRITE_TARGET.get(op)
+    return bool(wt and kind in wt.writes)
+
+
+def _declared_reads_only_sheets(op: str | None, resolved: dict | None) -> set:
+    """op が「読むだけ」と宣言したシート名の集合（reads_only の slot を resolved で引く）。
+       ★ 単位C(D8): 助言側はこれを exclude_sheets として受け取り、読むだけのシートに
+       『変更されていません』を言わない。旧実装は `if op == "LOOKUP_FILL"` のハードコード
+       2箇所で、AGGREGATE/PIVOT の入力シートは同じ理屈なのに毎回誤爆していた。"""
+    wt = OP_WRITE_TARGET.get(op)
+    if not wt or not wt.reads_only or resolved is None:
+        return set()
+    return {resolved[k] for k in wt.reads_only if resolved.get(k)}
+
 
 # ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、
 #   本番プロンプトはここが唯一の元）。
@@ -4569,11 +4651,13 @@ def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_
        一般化した（監査実測: LOOKUP_FILL がこの関所を素通りしていた事故の再発防止。
        OP_WRITE_TARGET のコメント参照）。
        ★ W10a 項目1: この検出（と件数）を「破壊の関所」（原本適用時に確認を挟む・
-       cmd_run_dsl/cmd_run_plan 側）がそのまま流用する（検出ロジックを二重管理しない）。"""
+       cmd_run_dsl/cmd_run_plan 側）がそのまま流用する（検出ロジックを二重管理しない）。
+       ★ 単位C: 宣言が領域を持つようになったので、『既存列を書く』と宣言した op だけを
+       対象にする（col_key を持つのはその op だけ＝番人テストが両者の一致を検査する）。"""
     write_target = OP_WRITE_TARGET.get(op)
-    if not write_target:
+    if not write_target or not write_target.col_key:
         return None
-    col_key, sheet_key = write_target
+    col_key, sheet_key = write_target.col_key, write_target.sheet_key
     col_name = resolved.get(col_key)
     if not col_name:
         return None
@@ -4790,10 +4874,12 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     notice = _truncation_notice(before, after, exhaustive_postcondition=True)
     if notice:
         print(notice)
-    # ★ W10b 項目4b(摩擦): LOOKUP_FILL の参照専用シート(source_sheet)は「変更なし」対象から除外。
-    exclude_sheets = {resolved["source_sheet"]} if op == "LOOKUP_FILL" else None
+    # ★ W10b 項目4b(摩擦): 参照専用シートは「変更なし」対象から除外。
+    # ★ 単位C(D8): ここにあった `if op == "LOOKUP_FILL"` のハードコードは削除した ──
+    #   除外すべきシートは OP_WRITE_TARGET の reads_only 宣言そのものなので、
+    #   build_advisories が op/resolved から自分で求める（AGGREGATE/PIVOT の入力シートも同じ）。
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
-        "flat", op, resolved, book_meta, a.task, before, after, exclude_sheets=exclude_sheets, deps=deps) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
+        "flat", op, resolved, book_meta, a.task, before, after, deps=deps) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -5339,7 +5425,7 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
                         use_formula: bool, header_rows: dict, before_charts: int, a: argparse.Namespace, vocab: dict) -> tuple:
     """★ C7: cmd_run_plan の DSL 語彙段の1段分。cmd_run_dsl と同じ ailine_core.dsl_step の共有エンジンを通る
        （非対称は dsl_step.py 参照）。この分離で stage_organs の dsl_plan_step 代表関数はここになる（DoD7）。
-       戻り値: (gate_exit, item, plan_json_entry, step_advisories, provenance_entry, mention_exclude_sheet, current_meta)。"""
+       戻り値: (gate_exit, item, plan_json_entry, step_advisories, provenance_entry, mention_exclude_sheets, current_meta)。"""
     step_prefix = f"  {i}段目: "
     deps = _make_dsl_step_deps()
     # 依存つき連鎖: 直前までの段の適用後の実列構成(current_meta)で接地する（新規列フォールバック込み）
@@ -5394,7 +5480,10 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     step_notice = _truncation_notice(step_before, step_after, exhaustive_postcondition=True)
     if step_notice:
         print(f"{step_prefix}{step_notice}")
-    mention_exclude_sheet = resolved["source_sheet"] if op == "LOOKUP_FILL" and resolved.get("source_sheet") else None
+    # ★ 単位C(D8): ここも `if op == "LOOKUP_FILL"` のハードコードを宣言読み取りへ置き換えた。
+    #   複合計画は④を計画全体で1回だけ評価するので、段ごとの「読むだけのシート」を返して
+    #   呼び出し側が全段分を合算する（返り値は集合・空集合なら足すものが無いだけ）。
+    mention_exclude_sheets = _declared_reads_only_sheets(op, resolved)
     step_advisories.extend(compose_dsl_step_advisories(
         "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref))   # ★ 挙動変更#1(a)
 
@@ -5403,11 +5492,11 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     if status in ("fail", "error"):
         return (None, (i, confirm.label, "fail", reason),
                 {"op": op, "command": confirm.line, "status": "fail", "postcondition": "fail"},
-                step_advisories, provenance_entry, mention_exclude_sheet, current_meta)
+                step_advisories, provenance_entry, mention_exclude_sheets, current_meta)
     item_status = "warn" if status == "warn" else "ok"
     return (None, (i, confirm.label, item_status, reason),
             {"op": op, "command": confirm.line, "status": item_status, "postcondition": status},
-            step_advisories, provenance_entry, mention_exclude_sheet,
+            step_advisories, provenance_entry, mention_exclude_sheets,
             build_book_meta(out_book, header_rows=header_rows))
 
 
@@ -5492,7 +5581,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     plan_json: list = []     # --json 用（既存キー不変・新規追加）
     plan_provenance: list = []   # ★ A': 段ごとの倍率等の出典（history.jsonl 用）
     step_advisory_entries: list = []   # ★ W10d: [(段番号 or None, 助言文言), ...]
-    mention_exclude_sheets: set = set()   # ★ W10d: LOOKUP_FILL の参照専用シート（全段分の合算）
+    mention_exclude_sheets: set = set()   # ★ W10d/単位C: 参照専用シート（reads_only 宣言・全段分の合算）
 
     for i, step in enumerate(plan, 1):
         op = step.get("op")
@@ -5525,7 +5614,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             continue
 
         # ★ C7: DSL 語彙段。cmd_run_dsl と同じ ailine_core.dsl_step を通る _run_dsl_plan_step に委譲。
-        gate_exit, item, plan_json_entry, step_adv, prov_entry, mention_sheet, current_meta = \
+        gate_exit, item, plan_json_entry, step_adv, prov_entry, step_reads_only, current_meta = \
             _run_dsl_plan_step(
                 i, op, step.get("args", {}), task=a.task, current_meta=current_meta,
                 original_headers=original_headers, first_sheet=first_sheet, out_book=out_book,
@@ -5541,11 +5630,11 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             step_advisory_entries.extend((i, adv) for adv in step_adv)
         if prov_entry is not None:
             plan_provenance.append(prov_entry)
-        if mention_sheet is not None:
-            mention_exclude_sheets.add(mention_sheet)
+        if step_reads_only:
+            mention_exclude_sheets.update(step_reads_only)
 
     # ★ W10d【本命】: 依頼文言との重なり④は計画全体に対して1回だけ評価（他段が担当する言及の
-    #   誤検知を避ける）。exclude_sheets は全段の LOOKUP_FILL source_sheet を合算する。
+    #   誤検知を避ける）。exclude_sheets は全段の「読むだけのシート」(reads_only 宣言)を合算する。
     after_all = snapshot(out_book)
     mentions = extract_task_mentions(a.task, before_all["sheets"])
     final_mention_lines = mention_overlap_advisory(
