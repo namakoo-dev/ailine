@@ -6,6 +6,7 @@
     "advisories": "list[str]",
     "attempts": "int",
     "changes": "list[str]",
+    "claims": "list[dict{basis:str,compared_with:str,observed_on:str}]",
     "command": "str",
     "fidelity": "null",
     "model": "str",

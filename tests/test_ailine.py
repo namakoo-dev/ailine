@@ -1845,8 +1845,8 @@ def test_cmd_run_inplace_fidelity_gate_accept_loss_continues(tmp_path, monkeypat
     rc = ailine.main(_fidelity_gate_argv(book, accept_loss=True))
     captured = capsys.readouterr()
     assert "続行します" in captured.out
-    # ★ W8b-2: 既定=原本直接適用の trailing メッセージ（FREEFORM 経路なので ⚠ 側）。
-    assert "⚠ 反映しましたが機械保証はありません" in captured.out
+    # ★ W8b-2/C9: 既定=原本直接適用の trailing（FREEFORM 経路なので ⚠ 側・読み戻し付き）。
+    assert "に適用しましたが、機械保証はありません（適用後に読み戻して確認: " in captured.out
 
 def test_cmd_run_copy_flag_skips_fidelity_gate_entirely(tmp_path, monkeypatch, capsys):
     # ★ W8b-2 項目4: --copy 時は原本に一切触れないため、忠実度ゲート自体を走らせない
@@ -3792,21 +3792,26 @@ def test_format_plan_report_ok_warn_fail_lines():
         (3, "操作:並べ替え", "fail", "列『在庫』がありません"),
     ]
     lines = ailine.format_plan_report(items)
-    assert lines[0] == "1. 操作:計算列 対象列:小計 → ✓ 機械検証済み（3 行を検証）"
+    # ★ C9: 段別の行から ✓ を外した（段は evidence だけ述べる）。✓ は原本(--copy なら .out)が
+    #   確定した後に読み戻して確かめた1行だけが名乗る。
+    assert lines[0] == "1. 操作:計算列 対象列:小計 → 実行: 3 行を検証"
     # ★ W8a 項目5: 表示文言「自由生成」→「AI が直接作成（機械保証なし）」に追従。
     assert lines[1] == "2. 税込み合計 → ⚠ 語彙外のため AI が直接作成（機械保証なし）で実行（確認してください）"
     assert lines[2] == "3. 操作:並べ替え → × 未対応: 列『在庫』がありません"
 
 def test_format_plan_report_ok_without_detail_omits_parens():
     lines = ailine.format_plan_report([(1, "操作:太字", "ok", None)])
-    assert lines[0] == "1. 操作:太字 → ✓ 機械検証済み"
+    assert lines[0] == "1. 操作:太字 → 実行"
 
 # --- 総合判定規則 -------------------------------------------------------------
 
 def test_overall_verdict_all_ok():
+    # ★ C9: 全段 ok では総合判定の行そのものを出さない（旧「✓ すべて機械検証済み」）。
+    #   この時点では原本へ反映できるかがまだ分かっていない（--copy か・置換が成功するか）
+    #   ため、✓ は _finish_apply（原本が確定した後）の1行に一本化した。
     line, v = ailine.overall_verdict([(1, "x", "ok", "r")])
     assert v == "ok"
-    assert "すべて機械検証済み" in line
+    assert line is None
 
 def test_overall_verdict_warn_without_fail():
     line, v = ailine.overall_verdict([(1, "x", "ok", "r"), (2, "y", "warn", None)])
@@ -3876,11 +3881,16 @@ def test_cmd_run_plan_all_dsl_steps_pass_gives_full_verdict(tmp_path, monkeypatc
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
-    assert "1. " in captured.out and "✓ 機械検証済み" in captured.out
+    # ★ C9: 段別は evidence だけ（✓ 無し）。✓ は原本(.out)が確定した後の1行に一本化。
+    assert "1. " in captured.out and "→ 実行: " in captured.out
     assert "2. " in captured.out
-    assert "✓ すべて機械検証済み" in captured.out
+    assert "✓ plan_b.out.xlsx は機械検証済みの内容です" in captured.out
+    assert captured.out.count("✓") == 1   # run 全体で ✓ はちょうど1つ
     assert '"path": "plan"' in captured.out
     assert '"status": "ok"' in captured.out
+    # ★ C9: --json は既存キー不変・claims を追加（何と照合し・どのファイルを読み戻したか）。
+    assert '"claims": [{"basis": "declaration"' in captured.out
+    assert '"observed_on"' in captured.out
 
 def test_cmd_run_plan_mixes_dsl_success_and_freeform_warns(tmp_path, monkeypatch, capsys):
     p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
@@ -3911,12 +3921,14 @@ def test_cmd_run_plan_mixes_dsl_success_and_freeform_warns(tmp_path, monkeypatch
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0   # ⚠ は失敗ではない
-    assert "✓ 機械検証済み" in captured.out
+    assert "1. 操作:並べ替え 対象:金額 順:降順 → 実行: " in captured.out
     assert "条件付き書式" in captured.out
     # ★ W8a 項目5: 表示文言「自由生成」→「AI が直接作成（機械保証なし）」に追従。
     assert "⚠ 語彙外のため AI が直接作成（機械保証なし）で実行（確認してください）" in captured.out
     assert "⚠ 一部は確認が必要です" in captured.out
-    assert "すべて機械検証済み" not in captured.out
+    # ★ C9: 語彙外の段が混じる run では ✓ をどこにも出さない（読み戻しの報告は ⚠ 側で行う）。
+    assert "✓" not in captured.out
+    assert "に適用しましたが、機械保証はありません（適用後に読み戻して確認: " in captured.out
 
 def test_cmd_run_plan_freeform_step_rate_literal_scan_fires(tmp_path, monkeypatch, capsys):
     # ★ W10f 項目2: A' 原則（LLM に率や値を確定させない）を機械で守る唯一の走査
@@ -4038,7 +4050,8 @@ def test_cmd_run_plan_dependent_chaining_resolves_new_column_reference(tmp_path,
     captured = capsys.readouterr()
     assert rc == 0
     assert "列『利益』がありません" not in captured.out
-    assert "✓ すべて機械検証済み" in captured.out
+    # ★ C9: 総合の ✓ は原本(.out)が確定した後の1行に移った。
+    assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
 
 
 # --- ★ W10d【本命】: 複合計画の助言（単発では出る助言が丸ごと欠落していた欠陥の修正） ------
@@ -6340,7 +6353,9 @@ def test_cmd_run_dsl_overwrite_gate_bypassed_with_overwrite_flag(tmp_path, monke
     captured = capsys.readouterr()
     assert "上書きしますか" not in captured.out   # 関所自体をスキップ
     assert rc == 0
-    assert "✓ 反映しました" in captured.out
+    # ★ C9: 反映の ✓ は「原本を読み戻して確かめた」1行に統合された。
+    assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
+    assert "（もとに戻す: ailine undo）" in captured.out
 
 def test_cmd_run_dsl_overwrite_gate_bypassed_with_copy_flag(tmp_path, monkeypatch, capsys):
     book = _overwrite_book(tmp_path)
@@ -6373,7 +6388,9 @@ def test_cmd_run_dsl_overwrite_gate_interactive_yes_applies(tmp_path, monkeypatc
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
-    assert "✓ 反映しました" in captured.out
+    # ★ C9: 反映の ✓ は「原本を読み戻して確かめた」1行に統合された。
+    assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
+    assert "（もとに戻す: ailine undo）" in captured.out
 
 def test_cmd_run_dsl_overwrite_gate_interactive_no_aborts(tmp_path, monkeypatch, capsys):
     book = _overwrite_book(tmp_path)
@@ -6484,7 +6501,9 @@ def test_cmd_run_dsl_lookup_fill_overwrite_gate_bypassed_with_overwrite_flag(tmp
     captured = capsys.readouterr()
     assert "上書きしますか" not in captured.out   # 関所自体をスキップ
     assert rc == 0
-    assert "✓ 反映しました" in captured.out
+    # ★ C9: 反映の ✓ は「原本を読み戻して確かめた」1行に統合された。
+    assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
+    assert "（もとに戻す: ailine undo）" in captured.out
 
 def test_cmd_run_dsl_lookup_fill_missing_column_does_not_corrupt_unrelated_column(tmp_path, monkeypatch, capsys):
     # ★ W10c 致命2 の通し確認（査定の再現そのもの）: 明細シートに『単価』列がまだ無い状態
@@ -6722,7 +6741,7 @@ def test_cmd_run_freeform_gate_allow_freeform_flag_applies(tmp_path, monkeypatch
     captured = capsys.readouterr()
     assert rc == 0
     assert "機械検証できません" not in captured.out   # 関所自体をスキップ
-    assert "⚠ 反映しましたが機械保証はありません" in captured.out
+    assert "に適用しましたが、機械保証はありません（適用後に読み戻して確認: " in captured.out
 
 def test_cmd_run_freeform_gate_interactive_yes_applies_then_undo_restores(tmp_path, monkeypatch, capsys):
     book = _freeform_gate_scenario_book(tmp_path)
@@ -7247,8 +7266,9 @@ def _genka_book(tmp_path) -> Path:
 def test_set_column_value_nonnumeric_write_triggers_both_advisories(tmp_path, monkeypatch, capsys):
     """★ DoD1: 査定の再現そのものを回帰テストにする。数値列に文字列『0円』を書く →
        依存する数式が壊れる（#VALUE!）→ (a)(b) 両方の助言が出る。★ 事後条件チェッカー
-       自体は今回変えていないので「✓ 達成を機械検証済み」は今回も出る（claim の主張範囲は
-       変えない設計判断・報告参照）── その上で波及被害の警告が別チャンネルで出ることを見る。"""
+       自体は変えていないので ✓ は今回も出る（★ C9 でその ✓ は「原本(--copy なら .out)を
+       読み戻して確かめた」1行に移った・claim の主張範囲は変えない設計判断）── その上で
+       波及被害の警告が別チャンネルで出ることを見る。"""
     book = _genka_book(tmp_path)
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
@@ -7275,7 +7295,8 @@ def test_set_column_value_nonnumeric_write_triggers_both_advisories(tmp_path, mo
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
-    assert "✓ 達成を機械検証済み" in captured.out   # ★ claim の文言そのものは変えていない
+    # ★ C9: 単発の ✓ バナーも「原本(.out)を読み戻して確かめた」1行に統合された。
+    assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
     assert "★ 疑わしい: 適用後にエラー値のセルが増えました" in captured.out
     assert "Sheet!D2=#VALUE!" in captured.out
     assert "（確認）列『原価』は元は数値でしたが" in captured.out

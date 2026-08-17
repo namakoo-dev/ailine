@@ -145,20 +145,22 @@ def test_declared_cells_match_ailine_py_reality():
     )
 
 
-def test_dsl_plan_step_truncation_notice_gap_stays_green():
-    """★ DoD5: C6 の報告で見つかった穴（dsl_plan_step × truncation_notice）が、この番人でも
-       赤くならないことを固定する。この穴は「本来あるべきなのに無い」欠陥だが、
-       stage_organs.STAGE_ORGANS の宣言自体が None（無いと確認した宣言）になっている
-       ので、宣言と現実は一致している ―― この番人は宣言と現実のズレしか検査しない
-       （あるべき理想との比較はしない、C6 の設計方針をそのまま継承）。緑のままが正しい。"""
-    assert STAGE_ORGANS["dsl_plan_step"]["truncation_notice"] is None
+def test_dsl_plan_step_truncation_notice_gap_is_closed():
+    """★ C9: C6 が「本来あるべきなのに無い」と報告した唯一のマス目
+       （dsl_plan_step × truncation_notice）が塞がったことを固定する。
+
+       C6/C6b の時点では宣言が None（無いと確認した宣言）で、番人は宣言と現実が一致
+       しているので緑だった ―― 旧テスト名 test_..._gap_stays_green はその状態を固定して
+       いた。C9 で ✓ の意味を「最終ファイルを読み戻して確かめた」に一本化するにあたり、
+       「表示は先頭 MAX_ROWS 行しか見ていない」は ✓ の主張範囲に直接効くため、
+       ailine.py `_run_dsl_plan_step` から `_truncation_notice` を呼ぶようにして塞いだ。
+       ★ 穴が再び開いたら（呼び出しが消えたら）ここが赤くなる。"""
+    assert STAGE_ORGANS["dsl_plan_step"]["truncation_notice"] is True
     found = _found_names_by_stage()
     candidates = set(ORGAN_FUNCTION_CANDIDATES["truncation_notice"])
-    assert not (found["dsl_plan_step"] & candidates), (
-        "dsl_plan_step の関数本体 (cmd_run_plan) で _truncation_notice が呼ばれている"
-        "ことが検出された ―― 穴が塞がれたのであれば良い変化。ただしその場合は"
-        "stage_organs.STAGE_ORGANS['dsl_plan_step']['truncation_notice'] を True に更新し、"
-        "このテストの前提コメントも直すこと（None のままでは reality チェックの方が赤くなる）"
+    assert found["dsl_plan_step"] & candidates, (
+        "dsl_plan_step の代表関数 (_run_dsl_plan_step) で _truncation_notice が呼ばれて"
+        "いない ―― C9 で塞いだ穴が再び開いている（宣言だけ True で実装が消えた状態）"
     )
 
 

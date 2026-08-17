@@ -87,14 +87,12 @@ STAGE_ORGANS = {
         "rate_scan": None,             # dsl_single と同じ理由（構造的に対象が無い）
         "helper_sweep_detect": None,   # 同上
         "advisories": True,            # ailine.py cmd_run_plan（DSL 段）: _structural_advisories 等（W10d で追加）
-        # ★★ 発見（この回の本命）: _truncation_notice はこの段種では一度も呼ばれていない。
-        #   _truncation_notice 自身の docstring（ailine.py）は「exhaustive_postcondition=True
-        #   （DSL経路・cmd_run_dsl / cmd_run_plan の DSL 段）」と書いており、複合計画の DSL 段
-        #   にも適用されている前提で書かれているが、実装(cmd_run_plan の DSL 分岐)はこの関数を
-        #   一度も呼んでいない ―― コメントの主張と実装が食い違っている。DSL 経路は事後条件
-        #   チェッカーが全行を検証するため安全性への影響は無いが、「表示が MAX_ROWS で
-        #   切り詰められている」ことを利用者に伝える1行が、この段種だけ出ない。
-        "truncation_notice": None,
+        # ★★ C6 で発見された穴（この段種だけ _truncation_notice が一度も呼ばれておらず、
+        #   _truncation_notice 自身の docstring が主張する適用範囲と実装が食い違っていた）は
+        #   ★ C9 で塞いだ（ailine.py _run_dsl_plan_step が step_before/step_after で呼ぶ）。
+        #   塞いだ理由: ✓ の意味を「最終ファイルを読み戻して確かめた」に一本化する以上、
+        #   「表示は先頭 MAX_ROWS 行しか見ていない」は ✓ の主張範囲に直接効くため。
+        "truncation_notice": True,     # ailine.py _run_dsl_plan_step: _truncation_notice 呼び出し（C9 で追加）
     },
     "freeform_single": {
         # 自由生成は DSL args という構造化された概念を持たない（verify_dsl_args を呼ぶ
@@ -203,11 +201,10 @@ STAGE_ENTRY_FUNCTIONS = {
 #   ★★ truncation_notice には共有関数(apply_dsl_step)を候補に**加えていない**（意図的）:
 #   apply_dsl_step は単発/複合計画の両方から呼ばれるが、_truncation_notice を実際に
 #   呼ぶかどうかは呼び出し側(ailine.py)に残した（ailine_core/dsl_step.py の
-#   apply_dsl_step docstring 参照）。もしここに apply_dsl_step を候補として加えると、
-#   dsl_single(True)と dsl_plan_step(None)が同じ関数名で見分けられなくなり
-#   test_dsl_plan_step_truncation_notice_gap_stays_green が誤って赤くなる
+#   apply_dsl_step docstring 参照）。候補を「呼び出し側に実在する関数名」1つに絞って
+#   おくことで、この器官の在/無は各段の関数本体を見れば必ず判定できる
 #   （AST の名前ベース走査は「関数の中身」までは追えないという、この番人の設計そのものの
-#   限界 ―― モジュール先頭のコメント参照）。
+#   限界 ―― モジュール先頭のコメント参照）。★ C9 で dsl_plan_step 側も True になった。
 ORGAN_FUNCTION_CANDIDATES = {
     "grounding": ("verify_dsl_args", "resolve_dsl_step_args"),
     "destructive_gate": ("_maybe_warn_target_overwrite", "_confirm_overwrite_or_gate",

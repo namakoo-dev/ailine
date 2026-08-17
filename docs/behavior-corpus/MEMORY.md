@@ -25,10 +25,12 @@ basrun-ts / ailine-ts の移行実験では完成後に遡って掘った（考�
 - [progress-and-diff-humanization](nodes/progress-and-diff-humanization.md) — 進捗表示（stderr）と差分の人間可読化（生 tuple の追放）
 - [destruction-gate-declarative](nodes/destruction-gate-declarative.md) — 破壊の関所と OP_WRITE_TARGET の宣言駆動（op ごとの if でなく宣言を読む・全 op 宣言の番人テスト）
 - [verification-scope-honesty](nodes/verification-scope-honesty.md) — 検証が主張する範囲（「計画どおり」≠「依頼どおり」・複合計画にも解釈行・決定論警告）
+- [verified-means-readback](nodes/verified-means-readback.md) — `✓` の意味を1種類に（発生点は原本が確定した後の1箇所・段別と --dry からは外す・読み戻せなければ ✓ を出さない）
 - [formula-readback-duality](nodes/formula-readback-duality.md) — 式で書いた列を読み戻す二重性（openpyxl 式ビュー/値ビュー・行独立は部分採点、全行またぎは打ち切り）
 - [freeform-gate-helper-sweep](nodes/freeform-gate-helper-sweep.md) — 自由生成の関所とヘルパ総なめの機械検出（閾値はプロンプトでなく Call 数の決定論検出）
 - [lo-basic-native-formatting-quirks](nodes/lo-basic-native-formatting-quirks.md) — 太字は CharWeightAsian でしか効かない・PivotSum の再描画癖と SummaryTable の使い分け
 
 保留: 無し（進捗表示/差分表示の人間化は GUI 非導入方針の確定によりノード化済み — progress-and-diff-humanization 参照）
 
-ノード化待ち: 無し（2026-08-16 時点で上記 9 ノードへ全て収載済み）
+ノード化待ち: 無し（2026-08-17 時点で上記の索引に全て収載済み）
+★ 件数は書かない: 旧文は「上記 9 ノード」と書いていたが、索引が伸びても追随せず実数と食い違っていた（実測: 索引 16 件に対し 9 のまま）。数はファイルを数えれば分かるので、手書きの数を持たないことにする。

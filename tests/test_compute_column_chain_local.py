@@ -91,7 +91,8 @@ def test_compound_plan_compute_column_operand_from_prior_step_passes_without_val
 
         assert rc == 0, captured.out
         assert "検証対象が0件" not in captured.out, captured.out   # ★ 直った点そのもの
-        assert "すべて機械検証済み" in captured.out, captured.out
+        # ★ C9: 総合の ✓ は原本(.out)が確定した後に読み戻して確かめた1行に統合された。
+        assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out, captured.out
 
         out_book = book.with_name(book.stem + ".out" + book.suffix)
         wb2 = openpyxl.load_workbook(out_book, data_only=True)

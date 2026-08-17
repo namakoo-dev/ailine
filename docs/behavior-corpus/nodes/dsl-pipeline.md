@@ -8,7 +8,7 @@
 見出し行のみ）: 語彙 10 op のどれか / CLARIFY（確認質問を表示して exit 3）/
 OUT_OF_VOCAB・FREEFORM（従来の自由生成経路へ退避）。語彙内なら **決定論 codegen**
 （テンプレ・LLM 不使用・大半は検証済みヘルパへの Call）→ 適用 → **op 別事後条件**
-（openpyxl で out を機械検証）→「✓ 達成を機械検証済み」。
+（openpyxl で out を機械検証）→「事後条件を確認: …」。★ `✓` そのものは原本（`--copy` なら `.out`）が確定した後に最終ファイルを読み戻して 1 回だけ出す（[verified-means-readback](verified-means-readback.md)）。
 確認行（`解釈: 操作:並べ替え 対象:金額 順:降順`）を適用前に必ず表示する。
 
 ## なぜ

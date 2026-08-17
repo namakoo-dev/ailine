@@ -13,3 +13,4 @@ End Sub
 
 ──────────────────────────────────────────
 × 実行時エラー: BasicError: Object variable not set (line 12)（詳細は履歴に記録）。
+（原本 b.xlsx は変更していません。作業結果は b.out.xlsx に残っています）

@@ -66,8 +66,9 @@ except ImportError:
 #   実行時に自動で sys.path[0] に入れる ailine.py の所在ディレクトリからそのまま拾える
 #   （別の作業ディレクトリから `python C:\...\ailine.py run ...` と叩いても同じ）。
 from ailine_core.book_view import BookView
-from ailine_core.claim import (   # ★ C5: Claim 型と『✓ 機械検証済み』の一元レンダラ
-    Claim, format_plan_report, overall_verdict, render_single_op_claim,
+from ailine_core.claim import (   # ★ C5/C9: Claim 型と『✓』の一元レンダラ（✓ は反映後の1箇所だけ）
+    Claim, format_plan_report, format_plan_preview, overall_verdict,
+    render_applied_claim, render_applied_unverified, render_applied_unobservable,
     _VERIFY_SCOPE_NOTE, _VERIFY_SCOPE_NOTE_PLAN,
 )
 from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 段が共有する実行エンジン
@@ -4261,6 +4262,10 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
     #   乗っている）を history に写す。ゲートを走らせなかった run は None のまま。
     if "fidelity" not in result:
         result["fidelity"] = getattr(a, "_fidelity", None)
+    # ★ C9: --json の新キー。既存キーの意味は変えず、「何と照合し・どのファイルを読み戻して
+    #   ✓ と言ったか」を足すだけ。✓ を出さなかった run（--dry・失敗・機械保証なし）は空リスト
+    #   ＝『主張していない』が機械可読に残る。
+    result.setdefault("claims", [])
     if a.json:
         print("\n" + json.dumps(result, ensure_ascii=False))
     if result.get("path") not in ("dsl", "plan"):
@@ -4276,35 +4281,85 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
         print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
 
 
+# ★ C9: ✓ の唯一の根拠。適用が全部終わった「最終ファイル」を openpyxl で開き直し、
+#   機械が読み取れる事実だけで「今このファイルはこうなっている」を述べる。
+#   ★★ ここで事後条件を再実行しない（明示的に否定された設計）: APPEND_TOTAL の後に SORT が
+#   来れば合計行の位置は正当に動き（check_append_total は "=SUM(" の初出行で合計行を探す）、
+#   再実行すると正しい run が偽 fail になる。読み戻すのは「反映が成功したこと」だけでよい。
+def observe_book_state(path: Path) -> tuple:
+    """(evidence: str|None, error: str|None)。全シート・全行を走査する（切り詰めない＝
+       Claim.observation_complete=True の根拠）。evidence は最終ファイルだけから独立に
+       再導出できる事実（シート名・行数・列数・値のあるセル数）に限る。"""
+    try:
+        wb = openpyxl.load_workbook(path)
+    except Exception as e:
+        return None, short_error_summary(str(e))
+    try:
+        parts = []
+        for ws in wb.worksheets:
+            filled = sum(1 for row in ws.iter_rows() for c in row if c.value not in (None, ""))
+            parts.append(f"{ws.title}: {ws.max_row}行×{ws.max_column}列・値のあるセル {filled}")
+        return "・".join(parts), None
+    finally:
+        wb.close()
+
+
 # ★ W8b-2 項目1: 既定=原本直接適用の終端メッセージを一箇所に集約する
 #   （cmd_run_dsl/cmd_run_freeform/cmd_run_plan の3箇所が同じ形だったのを統合）。
 #   pending/confirm の中間状態は作らない — undo 一本（architect 判定）。
+# ★★ C9: 『✓』の発生点をここ1箇所へ動かした。原本(--copy なら .out)が確定した後に
+#   読み戻し、その結果だけを Claim にして描く。段別 ✓・--dry の ✓・反映前の ✓ は廃止。
 def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Path,
-                   result: dict, machine_verified: bool) -> bool:
+                   result: dict, machine_verified: bool, scope: str = "",
+                   scope_note: str = "") -> bool:
     """--copy（a.inplace が False）なら .out のまま（原本は無変更）。既定(a.inplace)なら
-       backup+原子的置換(atomic_replace_inplace)で原本へ反映する。
-       machine_verified=True（DSL/plan・ルールベース）→「✓ 反映しました」、
-       False（自由生成・機械保証なし）→「⚠ 反映しましたが機械保証はありません」。
+       backup+原子的置換(atomic_replace_inplace)で原本へ反映する。そのうえで**最終ファイルを
+       読み戻し**、machine_verified=True なら ✓ の1行を、False（自由生成・検証対象不足の段を
+       含む計画）なら ⚠ の1行を出す。読み戻せなかったら ✓ は出さない。
+       scope は照合した宣言（Claim.scope・machine_verified=True のとき必須）、
+       scope_note は経路別の範囲注記（単発/複合計画）。
        戻り値: 置換が成功した(または --copy で置換不要だった)か。"""
-    if not a.inplace:
-        print(f"\n適用先: {out_book.name}（原本 {book.name} は無変更）")
-        result["out"] = str(out_book)
-        return True
-
-    ok_ip, err_ip = atomic_replace_inplace(
-        book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
-    if not ok_ip:
-        print(f"× {err_ip}")
-        print(f"適用先: {out_book.name}（原本への反映は中止・原本 {book.name} は無変更）")
-        result["out"] = str(out_book)
-        return False
-
-    if machine_verified:
-        print("\n✓ 反映しました（もとに戻す: ailine undo）")
+    if a.inplace:
+        ok_ip, err_ip = atomic_replace_inplace(
+            book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
+        if not ok_ip:
+            print(f"× {err_ip}")
+            print(_untouched_original_line(book, out_book))
+            result["out"] = str(out_book)
+            return False
+        final, trailer = book, "（もとに戻す: ailine undo）"
+        result["out"] = str(book)
     else:
-        print("\n⚠ 反映しましたが機械保証はありません — 確認して、違えば ailine undo")
-    result["out"] = str(book)
+        final, trailer = out_book, f"（原本 {book.name} は変更していません）"
+        result["out"] = str(out_book)
+
+    evidence, err = observe_book_state(final)
+    if err is not None:
+        for ln in render_applied_unobservable(final.name, err):
+            print(ln)
+    elif machine_verified:
+        claim = Claim(verified=True, basis="declaration", scope=scope, evidence=evidence,
+                       observation_complete=True, observed_on=str(final), observed_after_apply=True)
+        for ln in render_applied_claim(claim, final.name):
+            print(ln)
+        if scope_note:
+            print(scope_note)
+        # ★ --json: 既存キーの意味は変えず、claims を足すだけ（何と照合し・どのファイルを
+        #   読み戻して言っているのかを機械可読にする）。
+        result["claims"] = [{"basis": claim.basis, "compared_with": claim.scope,
+                              "observed_on": claim.observed_on}]
+    else:
+        for ln in render_applied_unverified(final.name, evidence):
+            print(ln)
+    print(trailer)
     return True
+
+
+def _untouched_original_line(book: Path, out_book: Path) -> str:
+    """★ C9: 失敗して終わるときに必ず出す1行。査定2本が「原本がどうなったか分からない」と
+       書いた沈黙の穴 ―― 途中で止まった run は原本無変更を名乗らず、`.out` が黙って隣に
+       残ることも告げていなかった。"""
+    return f"（原本 {book.name} は変更していません。作業結果は {out_book.name} に残っています）"
 
 
 def cmd_run(a: argparse.Namespace) -> int:
@@ -4725,12 +4780,13 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 
     if apply_result.runtime_error is not None:
         print(f"× 実行時エラー: {short_error_summary(apply_result.runtime_error)}（詳細は履歴に記録）。")
+        print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
         result["last_error_full"] = apply_result.runtime_error
         _finish_run(a, book, result, "runtime_error", error_detail=apply_result.runtime_error)
         return 1
 
     after, lines = apply_result.after, apply_result.changes
-    # ★ 止血3/C7: 単発は常に呼ぶ（複合計画の DSL 段は呼ばない未修正の穴。理由は dsl_step.py 参照）。
+    # ★ 止血3/C7: 単発は常に呼ぶ（★ C9 で複合計画の DSL 段の穴も塞いだ・dsl_step.py 参照）。
     notice = _truncation_notice(before, after, exhaustive_postcondition=True)
     if notice:
         print(notice)
@@ -4748,27 +4804,29 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     result["postcondition"] = "fail" if status == "error" else status
     if status == "error":
         print(f"\n× {reason}")
+        print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
         result["out"] = str(out_book)
         _finish_run(a, book, result, "postcondition_error")
         return 1
     if status == "fail":
         print(f"\n× 適用されたが事後条件を満たさない: {reason}")
+        print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
         result["out"] = str(out_book)
         _finish_run(a, book, result, "postcondition_fail")
         return 1
     if status == "warn":
         # ★ 止血1: 検証対象が少なすぎる場合、「機械検証済み」とは名乗らない。
         print(f"\n⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
-        result["ok"] = True
     else:
-        # ★ C5: scope は「解釈: ...」行から「解釈: 」を除いた宣言テキスト（＝計画が宣言した対象）。
-        claim = Claim(verified=True, basis="declaration", scope=confirm.label, evidence=reason, observation_complete=True)
-        for out_line in render_single_op_claim(claim, OP_LABELS.get(op, op)):
-            print(out_line)
-        result["ok"] = True
+        # ★ C9: 事後条件が見た中身（例「3 行を検証（降順）」）はここで述べる。✓ とは呼ばない
+        #   ―― ✓ は原本(--copy なら .out)が確定した後の1行だけ（_finish_apply）。
+        print(f"\n事後条件を確認（操作:{OP_LABELS.get(op, op)}）: {reason}")
+    result["ok"] = True
 
-    # ★ W8b-2: DSL 経路は postcondition が warn でも trailing は常に ✓「反映しました」側。
-    _finish_apply(a, book, out_book, workdir, result, machine_verified=True)
+    # ★ C9: postcondition が warn（検証対象不足）なら ✓ は名乗らない。scope は「解釈: ...」行から
+    #   「解釈: 」を除いた宣言テキスト（＝計画が宣言した対象）。
+    _finish_apply(a, book, out_book, workdir, result, machine_verified=(status != "warn"),
+                   scope=confirm.label, scope_note=_VERIFY_SCOPE_NOTE)
 
     _finish_run(a, book, result, "none")
     return 0
@@ -5051,6 +5109,7 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
         failure_kind = "none"
         # ★ W8b-2 項目1: 自由生成(FREEFORM/OUT_OF_VOCAB)は機械保証が無いので、既定(原本
         #   直接適用)でも trailing メッセージは ⚠「機械保証はありません」側を使う。
+        #   ★ C9: それでも最終ファイルの読み戻し（今どうなっているか）は同じように行う。
         _finish_apply(a, book, out_book, workdir, result, machine_verified=False)
         break
     else:
@@ -5065,11 +5124,11 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
 #   翻訳(①)が返した plan(長さ2以上)を段ごとに実行する。DSL 語彙の段は②〜⑥の決定論
 #   パイプライン、語彙外(OUT_OF_VOCAB/FREEFORM)の段は FREEFORM 経路（その段の依頼文だけ）。
 #   ★ 黙落ゼロ: 計画に載った段は必ず項目別報告の1行になる。
-#   ★ 総合判定は最弱の段に従う。「機械検証済み」の語は実際に機械検証が通った段にだけ付ける。
+#   ★ 総合判定は最弱の段に従う。段別の行は evidence だけを述べ、✓ とは呼ばない（C9）。
 #   ★ C5: _ITEM_STATUS_MARK / _VERIFY_SCOPE_NOTE(_PLAN) / format_plan_report /
-#   overall_verdict は ailine_core/claim.py に移した（『✓ 機械検証済み』相当の文字列は
-#   レンダラ1箇所からしか出さない・冒頭の import で ailine.format_plan_report 等は
-#   従来どおり使える）。
+#   overall_verdict は ailine_core/claim.py に移した（『✓』相当の文字列はレンダラ1箇所
+#   からしか出さない・冒頭の import で ailine.format_plan_report 等は従来どおり使える）。
+#   ★ C9: その ✓ の発生点自体を _finish_apply（原本が確定した後）へ動かした。
 # ---------------------------------------------------------------------------
 
 # col系 slot を持つ op → その slot 名（依存つき連鎖の新規列フォールバック対象）。
@@ -5328,6 +5387,13 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
 
     # ★ W10d【本命】: mode="structural"（依頼文言との重なり④は呼び出し側が全体で1回評価・dsl_step.py 参照）。
     step_after = apply_result.after
+    # ★ C9: 複合計画の DSL 段だけ _truncation_notice が一度も呼ばれていなかった既知の穴
+    #   （stage_organs の dsl_plan_step × truncation_notice が None と宣言していた場所）。
+    #   ✓ の意味を「読み戻して確かめた」にする以上、「先頭 MAX_ROWS 行しか見ていない」は
+    #   ✓ の主張範囲に直接効くので同じ回で塞ぐ。
+    step_notice = _truncation_notice(step_before, step_after, exhaustive_postcondition=True)
+    if step_notice:
+        print(f"{step_prefix}{step_notice}")
     mention_exclude_sheet = resolved["source_sheet"] if op == "LOOKUP_FILL" and resolved.get("source_sheet") else None
     step_advisories.extend(compose_dsl_step_advisories(
         "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref))   # ★ 挙動変更#1(a)
@@ -5369,12 +5435,14 @@ def _preview_dsl_plan(a: argparse.Namespace, plan: list, book_meta: dict, vocab:
                 #   「解釈:」行と同じ形にする・1枚のブックでは従来どおり付かない）。
                 label = format_confirmation_line(op, resolved, inferred, sheets=book_meta.get("sheets"),
                                                  target_sheet=resolved.get("_target_sheet"))[len("解釈: "):]
-                preview_items.append((i, label, "ok", "未実行・プレビューのみ"))
+                preview_items.append((i, label, "ok", None))
                 plan_json.append({"op": op, "command": label, "status": "ok", "postcondition": None})
             else:
                 preview_items.append((i, f"操作:{OP_LABELS.get(op, op)}", "fail", err))
                 plan_json.append({"op": op, "command": None, "status": "fail", "postcondition": None})
-    for ln in format_plan_report(preview_items):
+    # ★ C9: --dry はプレビュー専用レンダラを使う（実行経路と同じ format_plan_report に
+    #   status="ok" を流し込んでいたことが「未実行なのに ✓」の直接の原因だった）。
+    for ln in format_plan_preview(preview_items):
         print(ln)
     return plan_json
 
@@ -5493,8 +5561,11 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
         for ln in dedup_advisories:
             print(ln)
     verdict_line, verdict = overall_verdict(items)
-    print(f"\n{verdict_line}")
-    print(_VERIFY_SCOPE_NOTE_PLAN)   # ★ 致命1(W10e) 要求1: 「計画どおり」≠「依頼どおり」を明示
+    # ★ C9: 全段 ok のときは verdict_line が None（『✓ すべて機械検証済み』は廃止し、原本が
+    #   確定した後の1行＝_finish_apply に移した）。範囲注記も ✓ と同じ場所へ連れて行く。
+    if verdict_line:
+        print(f"\n{verdict_line}")
+        print(_VERIFY_SCOPE_NOTE_PLAN)   # ★ 致命1(W10e) 要求1: 「計画どおり」≠「依頼どおり」を明示
 
     _changed, difflines = diff_snapshots(before_all, after_all)
     result["plan"] = plan_json
@@ -5506,16 +5577,20 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                              for idxs, text in _group_step_advisories(step_advisory_entries)]
 
     if verdict == "fail":
+        # ★ C9: 査定が名指しした沈黙 ―― 全段破棄で終わるのに原本がどうなったかを言って
+        #   いなかった（.out が黙って隣に残ることも無言だった）。
+        print(_untouched_original_line(book, out_book))
         result["out"] = str(out_book)
         _finish_run(a, book, result, "plan_step_failed")
         return 1
 
     result["ok"] = True
     # ★ W8b-2 項目1: 複合計画は総合判定(overall_verdict)に従う。全段機械検証済み(ok)
-    #   の時だけ ✓「反映しました」、語彙外/検証不足の段が混じる(warn)なら
-    #   ⚠「機械保証はありません」側（自由生成の段が混じっている以上、全体としても
-    #   機械保証済みとは名乗れない＝format_plan_report/overall_verdict と同じ誠実さ）。
-    _finish_apply(a, book, out_book, workdir, result, machine_verified=(verdict == "ok"))
+    #   の時だけ ✓、語彙外/検証不足の段が混じる(warn)なら ⚠「機械保証はありません」側
+    #   （自由生成の段が混じっている以上、全体としても機械保証済みとは名乗れない）。
+    _finish_apply(a, book, out_book, workdir, result, machine_verified=(verdict == "ok"),
+                   scope="; ".join(label for _idx, label, _st, _det in items),
+                   scope_note=_VERIFY_SCOPE_NOTE_PLAN)
 
     _finish_run(a, book, result, "none")
     return 0

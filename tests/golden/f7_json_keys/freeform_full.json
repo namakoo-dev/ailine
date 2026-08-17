@@ -6,6 +6,7 @@
     "advisories": "list[str]",
     "attempts": "int",
     "changes": "list[str]",
+    "claims": "list[]",
     "command": "null",
     "fidelity": "null",
     "model": "str",

@@ -4,6 +4,7 @@
   "dry": true,
   "key_type_signature": {
     "attempts": "int",
+    "claims": "list[]",
     "command": "null",
     "dry": "bool",
     "fidelity": "null",

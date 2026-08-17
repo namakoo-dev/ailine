@@ -6,6 +6,7 @@
     "advisories": "list[dict{steps:list[int],text:str}]",
     "attempts": "int",
     "changes": "list[str]",
+    "claims": "list[dict{basis:str,compared_with:str,observed_on:str}]",
     "command": "null",
     "fidelity": "null",
     "items": "list[dict{detail:str,idx:int,label:str,status:str}]",

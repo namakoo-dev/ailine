@@ -84,7 +84,8 @@ def test_set_column_value_nonnumeric_breaks_formula_via_real_basrun(tmp_path, mo
         captured = capsys.readouterr()
 
         assert rc == 0, captured.out
-        assert "✓ 達成を機械検証済み" in captured.out, captured.out
+        # ★ C9: 単発の ✓ バナーも読み戻し後の1行に統合された。
+        assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out, captured.out
         assert "★ 疑わしい: 適用後にエラー値のセルが増えました" in captured.out, captured.out
         assert "#VALUE!" in captured.out, captured.out
         assert "（確認）列『原価』は元は数値でしたが" in captured.out, captured.out
