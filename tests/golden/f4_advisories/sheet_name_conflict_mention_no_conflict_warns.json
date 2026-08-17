@@ -1,0 +1,211 @@
+{
+  "task": "金額を降順に並べ替えて",
+  "exclude_sheets": [],
+  "before": {
+    "sheets": [
+      "売上データ",
+      "金額"
+    ],
+    "charts": 0,
+    "cells": {
+      "売上データ!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!2,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!2,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!3,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!3,2": [
+        300,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "金額!1,1": [
+        "月",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "金額!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "金額!2,1": [
+        "1月",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "金額!2,2": [
+        50,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "売上データ": [],
+      "金額": []
+    },
+    "colw": {
+      "売上データ": {},
+      "金額": {}
+    },
+    "rowh": {
+      "売上データ": {},
+      "金額": {}
+    },
+    "truncated": false
+  },
+  "after": {
+    "sheets": [
+      "売上データ",
+      "金額"
+    ],
+    "charts": 0,
+    "cells": {
+      "売上データ!1,1": [
+        "商品",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!2,1": [
+        "b",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!2,2": [
+        300,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!3,1": [
+        "a",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "売上データ!3,2": [
+        200,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "金額!1,1": [
+        "月",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "金額!1,2": [
+        "金額",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "金額!2,1": [
+        "1月",
+        "General",
+        null,
+        false,
+        null,
+        null
+      ],
+      "金額!2,2": [
+        50,
+        "General",
+        null,
+        false,
+        null,
+        null
+      ]
+    },
+    "merges": {
+      "売上データ": [],
+      "金額": []
+    },
+    "colw": {
+      "売上データ": {},
+      "金額": {}
+    },
+    "rowh": {
+      "売上データ": {},
+      "金額": {}
+    },
+    "truncated": false
+  },
+  "advisories": [
+    "★ 依頼で言及された『金額』は存在しません/変更されていません"
+  ]
+}

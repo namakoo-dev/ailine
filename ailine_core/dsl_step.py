@@ -109,7 +109,7 @@ def resolve_dsl_step_args(op: str, raw_args: dict, task: str, meta: dict, vocab:
 
 def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, task: str,
                                  before: dict, after: dict, *, exclude_sheets: set | None = None,
-                                 deps: DslStepDeps) -> list:
+                                 sheet_conflict=None, deps: DslStepDeps) -> list:
     """⑤適用後の助言。mode="flat"（単発）は build_advisories(exclude_sheets 込み) を丸ごと、
        mode="structural"（複合計画の段）は _structural_advisories + unrequested_new_sheet_advisory
        だけ（依頼文言との重なり④は計画全体に対して1回だけ評価するため、段ごとのここには
@@ -119,10 +119,15 @@ def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, 
        一致する行の中立化は、以前はここで3つの neutralize_* を後処理として適用していたが、
        各生成関数自身が発生源で判定するようになったため、この後処理は不要になった
        （ailine.py の detect_ghost_data/unrequested_new_sheet_advisory/
-       existing_sheet_replaced_advisory 参照）。"""
+       existing_sheet_replaced_advisory 参照）。
+       ★ 誤爆#3: sheet_conflict は resolve_target_sheet が「この語は列名とも一致したので
+       曖昧だから既定へ後退した」と決めた結果（SheetNameConflict）。助言側が同じ判定を
+       やり直さないよう、そのまま build_advisories へ運ぶだけにする（mode="structural" の
+       段は依頼文言との重なり④を評価しないので受け取っても使い道が無く、渡さない）。"""
     if mode == "flat":
         advisories = deps.build_advisories(task, before, after, exclude_sheets=exclude_sheets,
-                                            op=op, resolved=resolved, meta=meta)
+                                            op=op, resolved=resolved, meta=meta,
+                                            sheet_conflict=sheet_conflict)
     else:
         advisories = list(deps.structural_advisories(before, after, op=op, resolved=resolved, meta=meta))
         advisories.extend(deps.unrequested_new_sheet_advisory(task, before, after, op=op))

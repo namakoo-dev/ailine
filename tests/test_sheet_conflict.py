@@ -478,6 +478,47 @@ def test_composite_plan_shows_the_sheet_but_never_asks(tmp_path, monkeypatch, ca
 
 
 # ===========================================================================
+# ⑦ 衝突の判定結果が助言まで届いているか（★ 誤爆#3・到達の検証）
+#    ゴールデン(f4_advisories)は build_advisories 単体を凍結するが、それだけでは
+#    「衝突の記録が実際に助言まで運ばれている」ことは守れない（配線が切れても単体は緑）。
+#    ここは CLI をそのまま通して、出た行で見る。
+# ===========================================================================
+
+_FALSE_STAR = "★ 依頼で言及された『金額』は存在しません/変更されていません"
+
+
+def test_conflict_fallback_does_not_warn_that_the_sheet_was_not_changed(tmp_path, monkeypatch, capsys):
+    """★ 誤爆#3 本命: 曖昧と判定して既定へ後退したのに「『金額』シートは変更されていません」
+       と警告するのは、決めた側の判断を助言側が読んでいないことによる誤爆だった。"""
+    _isolate(monkeypatch, tmp_path)
+    _fixed_sort(monkeypatch)
+    _tty(monkeypatch, False)
+    _never_input(monkeypatch)
+    rc = ailine.main(run_argv(book=str(_sales_book(tmp_path)),
+                              task="金額を降順に並べ替えて", copy=True))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "操作するシート: 1枚目『売上データ』（このブックは2シート）" in out
+    assert _FALSE_STAR not in out
+
+
+def test_same_words_still_warn_when_there_was_no_conflict(tmp_path, monkeypatch, capsys):
+    """★ 対照: --sheet で対象を明示すると衝突判定は起きない（記録が残らない）ので、
+       同じ依頼文・同じ結果でも警告は従来どおり出る ── 誤爆が消えたのは語のせいではなく
+       **衝突の判定結果を読んだから**であることを凍結する。"""
+    _isolate(monkeypatch, tmp_path)
+    _fixed_sort(monkeypatch)
+    _tty(monkeypatch, False)
+    _never_input(monkeypatch)
+    rc = ailine.main(run_argv(book=str(_sales_book(tmp_path)),
+                              task="金額を降順に並べ替えて", sheet="売上データ", copy=True))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "操作するシート: 1枚目『売上データ』（--sheet 指定）" in out
+    assert _FALSE_STAR in out
+
+
+# ===========================================================================
 # ⑥ 部品そのもの（ailine_core.ask_choice・stdin を一切触らない）
 # ===========================================================================
 

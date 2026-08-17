@@ -83,7 +83,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
-    format_sheet_field, sheet_conflict_choice_lines,
+    format_sheet_field, sheet_conflict_choice_lines, conflict_excluded_sheets,
 )
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
@@ -1238,7 +1238,7 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
 
 def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set | None = None, *,
                       op: str | None = None, resolved: dict | None = None,
-                      meta: dict | None = None) -> list:
+                      meta: dict | None = None, sheet_conflict=None) -> list:
     """diff の後に表示する助言行を全部集める。
        ①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身（★ W6・
        _structural_advisories が担当） ⑥依頼にないシート新設の申告（★ W6）
@@ -1248,11 +1248,16 @@ def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set |
        省略時は従来どおり無条件で全部発火する）。
        ★ 単位C(D8): 参照専用シート（OP_WRITE_TARGET の reads_only 宣言）は、呼び出し側が
        op ごとの if で渡すのをやめ、ここが宣言から自分で求めて exclude_sheets に足す
-       （明示の exclude_sheets は自由生成経路のために残す＝宣言と和を取る）。"""
+       （明示の exclude_sheets は自由生成経路のために残す＝宣言と和を取る）。
+       ★ 誤爆#3: sheet_conflict（resolve_target_sheet が「この語は列名とも一致したので
+       曖昧＝既定へ後退した」と決めた記録）に載る同名シートも、同じ和に足す ── 助言側で
+       「曖昧かどうか」を判定し直さず、決めた側の結果をそのまま運ぶ
+       （ailine_core.target_sheet.conflict_excluded_sheets 参照）。"""
     lines = list(_structural_advisories(before, after, op=op, resolved=resolved, meta=meta))
     lines.extend(unrequested_new_sheet_advisory(task, before, after, op=op))
     mentions = extract_task_mentions(task, before["sheets"])
-    excluded = set(exclude_sheets or ()) | _declared_reads_only_sheets(op, resolved)
+    excluded = (set(exclude_sheets or ()) | _declared_reads_only_sheets(op, resolved)
+                | conflict_excluded_sheets(sheet_conflict))
     lines.extend(mention_overlap_advisory(mentions, before, after, excluded or None))
     return lines
 
@@ -4733,9 +4738,13 @@ def _sheet_conflict_gate(a: argparse.Namespace, op: str) -> int | None:
        ★ 聞くのは衝突で後退した時だけ・TTY の時だけ（--json/パイプ/CI/--dry では
        絶対に入力を待たない ── 止めると動いていたスクリプトが黙って壊れる）。"""
     conflict = getattr(a, "_sheet_conflict", None)
-    if not conflict:
+    if not conflict or getattr(a, "_sheet_conflict_asked", False):
         return None
-    a._sheet_conflict = None   # 二重に聞かない（②のやり直しでも再発火させない）
+    # ★ 誤爆#3: ここで a._sheet_conflict は消さない ── 「曖昧なので既定へ後退した」という
+    #   判定結果は実行の最後（助言）まで運ぶ必要がある。消してよいのは『もう聞いた』という
+    #   対話側の状態だけなので、別のフラグに分けた（②で対象シートを差し替えたときだけは
+    #   後退そのものが取り消されるので、_preview_and_run_on_alternative_sheet が記録を落とす）。
+    a._sheet_conflict_asked = True   # 二重に聞かない（②のやり直しでも再発火させない）
     lines, choices = sheet_conflict_choice_lines(conflict, op, OP_LABELS.get(op, op))
     result = ask_choice(lines, [Choice(key=k, text=t) for k, t in choices],
                         interactive=is_interactive(stdin_isatty=_stdin_isatty(),
@@ -4755,6 +4764,9 @@ def _preview_and_run_on_alternative_sheet(a: argparse.Namespace, conflict) -> in
        （原本は無変更）。この時点で原本にはまだ一切触れていない。"""
     book, source_book, struct_dump, sheets = a._rerun_ctx
     a._target_sheet = conflict.alternative
+    # ★ 誤爆#3: ②を選んだ時点で「既定へ後退した」という判定は取り消された（そのシート
+    #   自身が対象になる）。記録を落として、助言側のシート言及の抑制も効かせない。
+    a._sheet_conflict = None
     original_dry, a.dry, a._preview_only = getattr(a, "dry", False), True, True
     rc = _translate_and_dispatch(a, book, source_book, struct_dump, sheets)
     a.dry, a._preview_only = original_dry, False
@@ -4878,8 +4890,10 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     # ★ 単位C(D8): ここにあった `if op == "LOOKUP_FILL"` のハードコードは削除した ──
     #   除外すべきシートは OP_WRITE_TARGET の reads_only 宣言そのものなので、
     #   build_advisories が op/resolved から自分で求める（AGGREGATE/PIVOT の入力シートも同じ）。
+    # ★ 誤爆#3: 対象シートを決めた側の判定結果（曖昧なので既定へ後退した）をそのまま運ぶ。
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
-        "flat", op, resolved, book_meta, a.task, before, after, deps=deps) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
+        "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
+        sheet_conflict=getattr(a, "_sheet_conflict", None)) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -5184,7 +5198,8 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
         notice = _truncation_notice(before, after, exhaustive_postcondition=False)
         if notice:
             print(notice)
-        advisories = build_advisories(a.task, before, after)
+        advisories = build_advisories(a.task, before, after,
+                                       sheet_conflict=getattr(a, "_sheet_conflict", None))   # ★ 誤爆#3
         # ★ W8a 項目4: 率らしい数値リテラルの機械スキャン。★ 挙動変更#1(a): エラー値増加の網。
         advisories = advisories + scan_rate_literals(code, a.task, vocab) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)
         for adv in advisories:
@@ -5363,7 +5378,8 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
                       f"{_REPAIR_SCOPE_GUARD}コードのみ。"}]
             continue
 
-        advisories = build_advisories(task_text, before, after)
+        advisories = build_advisories(task_text, before, after,
+                                       sheet_conflict=getattr(a, "_sheet_conflict", None))   # ★ 誤爆#3
         # ★ W10f 項目2: 単発 cmd_run_freeform と同じ率リテラルの機械スキャン。この段の
         #   依頼文(task_text)だけを出典として見る（他段の依頼文言に混ざらないよう局所判定）。
         advisories = advisories + scan_rate_literals(code, task_text, vocab) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
@@ -5635,6 +5651,9 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
     # ★ W10d【本命】: 依頼文言との重なり④は計画全体に対して1回だけ評価（他段が担当する言及の
     #   誤検知を避ける）。exclude_sheets は全段の「読むだけのシート」(reads_only 宣言)を合算する。
+    # ★ 誤爆#3: 対象シートを決めた側が「曖昧なので既定へ後退した」と記録した語も同じ和に足す
+    #   （単発の build_advisories が中でやっているのと同じ和・ここは④を直接呼ぶ経路）。
+    mention_exclude_sheets |= conflict_excluded_sheets(getattr(a, "_sheet_conflict", None))
     after_all = snapshot(out_book)
     mentions = extract_task_mentions(a.task, before_all["sheets"])
     final_mention_lines = mention_overlap_advisory(

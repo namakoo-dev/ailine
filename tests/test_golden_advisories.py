@@ -12,6 +12,7 @@ before/after は ailine.snapshot() の生 dict をそのままゴールデンに
 （tests/golden/f4_advisories/<name>.json）に {"task", "exclude_sheets", "before",
 "after", "advisories"} をまとめる。
 """
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from openpyxl.styles import Alignment
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ailine  # noqa: E402
+from ailine_core.target_sheet import SheetNameConflict  # noqa: E402
 
 from golden._harness import GOLDEN_ROOT, assert_golden_json, sorted_list  # noqa: E402
 
@@ -48,17 +50,21 @@ def _snap(tmp_path, filename, sheets: dict, extra=None) -> dict:
 
 
 # 名前 -> (task, before_snap_fn(tmp_path), after_snap_fn(tmp_path), exclude_sheets,
-#         use_structural_only, op, resolved, meta)
+#         use_structural_only, op, resolved, meta, sheet_conflict)
 # ★ 単位C: op/resolved/meta は「その op が何を書くと宣言しているか」(OP_WRITE_TARGET) を
 #   助言側に渡す経路。渡さないケース（既存の全ケース）は従来どおり宣言なしで評価される
 #   ＝ゴールデンのバイト列も payload のキー構成も変わらない。
+# ★ 誤爆#3: sheet_conflict は「対象シートを決めた側(resolve_target_sheet)が、その語は
+#   列名とも一致するので曖昧と判断して既定へ後退した」という判定結果を運ぶ経路（同上・
+#   渡さないケースは payload のキー構成もバイト列も変わらない）。
 CASES: dict = {}
 
 
 def _add(name, task, before_fn, after_fn, exclude_sheets=None, structural_only=False,
-          op=None, resolved=None, meta=None):
+          op=None, resolved=None, meta=None, sheet_conflict=None):
     assert name not in CASES, f"重複した case 名: {name}"
-    CASES[name] = (task, before_fn, after_fn, exclude_sheets, structural_only, op, resolved, meta)
+    CASES[name] = (task, before_fn, after_fn, exclude_sheets, structural_only, op, resolved,
+                   meta, sheet_conflict)
 
 
 # --- 基準: 何も疑わしくない通常の値変更（複数列にまたがる＝③件数突き合わせの対象外にもなる） ---
@@ -208,6 +214,32 @@ _add("aggregate_reads_only_input_sheet_no_declaration_warns", "工事台帳を�
      _aggregate_before, _aggregate_after)
 
 
+# --- ★ 誤爆#3: シート名と列名が衝突した語は「シート言及」から外す ---------------------
+# 実測の型: sheets=['売上データ','金額'] に「金額を降順に並べ替えて」。resolve_target_sheet は
+#   『金額』が列名でもあることを見て「曖昧＝既定(1枚目)へ後退」と**既に決めている**のに、
+#   助言側はそれを読まず「『金額』シートは変更されていない」と誤爆していた。
+#   衝突の記録を渡した時だけ黙る ── 同じ before/after で判定の有無だけが結果を分けることを
+#   ゴールデンで対にして凍結する（単位C の append_total/aggregate の対と同じ作法）。
+def _sheet_conflict_before(tp):
+    return _snap(tp, "before.xlsx",
+                  {"売上データ": [["商品", "金額"], ["a", 200], ["b", 300]],
+                   "金額": [["月", "金額"], ["1月", 50]]})
+
+
+def _sheet_conflict_after(tp):
+    """1枚目だけを降順に並べ替えた後（2枚目『金額』シートは読んでも触ってもいない）。"""
+    return _snap(tp, "after.xlsx",
+                  {"売上データ": [["商品", "金額"], ["b", 300], ["a", 200]],
+                   "金額": [["月", "金額"], ["1月", 50]]})
+
+
+_add("sheet_name_conflict_mention_silent_by_conflict", "金額を降順に並べ替えて",
+     _sheet_conflict_before, _sheet_conflict_after,
+     sheet_conflict=SheetNameConflict(word="金額", alternative="金額", chosen="売上データ"))
+_add("sheet_name_conflict_mention_no_conflict_warns", "金額を降順に並べ替えて",
+     _sheet_conflict_before, _sheet_conflict_after)
+
+
 # --- 複合: 幽霊データ + 一様埋め + 件数突き合わせが同時に出るケース -----------------
 # ★ 全変更セルが単一列(J)・原本範囲外・空欄→同一値、の3条件を同時に満たすように
 #   仕組む（ghost は「全部」範囲外の時だけ発火する設計なので、範囲内の変更は混ぜない）。
@@ -225,14 +257,16 @@ def _case_ids():
 
 @pytest.mark.parametrize("name", _case_ids())
 def test_build_advisories_golden(tmp_path, name):
-    task, before_fn, after_fn, exclude_sheets, structural_only, op, resolved, meta = CASES[name]
+    (task, before_fn, after_fn, exclude_sheets, structural_only, op, resolved, meta,
+     sheet_conflict) = CASES[name]
     before = before_fn(tmp_path)
     after = after_fn(tmp_path)
     if structural_only:
         advisories = ailine._structural_advisories(before, after, op=op, resolved=resolved, meta=meta)
     else:
         advisories = ailine.build_advisories(task, before, after, exclude_sheets,
-                                              op=op, resolved=resolved, meta=meta)
+                                              op=op, resolved=resolved, meta=meta,
+                                              sheet_conflict=sheet_conflict)
     payload = {
         "task": task,
         "exclude_sheets": sorted_list(exclude_sheets) if exclude_sheets else [],
@@ -244,4 +278,6 @@ def test_build_advisories_golden(tmp_path, name):
         payload["op"] = op
         payload["resolved"] = resolved
         payload["meta"] = meta
+    if sheet_conflict is not None:   # ★ 誤爆#3: 衝突を渡すケースだけ足す（同上）
+        payload["sheet_conflict"] = dataclasses.asdict(sheet_conflict)
     assert_golden_json(F4_DIR / f"{name}.json", payload, label=name)

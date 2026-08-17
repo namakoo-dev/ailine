@@ -55,6 +55,21 @@ class SheetNameConflict:
     chosen: str
 
 
+def conflict_excluded_sheets(conflict: SheetNameConflict | None) -> set:
+    """★ 誤爆#3: 衝突で既定へ後退したとき、助言側が「シート言及」から外すべきシート名。
+
+    ★ なぜここ（決めた側）に置くのか: 「その語が曖昧か」は resolve_target_sheet が既に
+    決めていて、SheetNameConflict に記録している。助言側（ailine.py の
+    mention_overlap_advisory）はそれを読まず、独立に「シート名が依頼文に含まれるか」だけを
+    見て「★ 依頼で言及された『金額』は…変更されていません」を出していた ── **同じことを
+    2 箇所が別々に決める**形で、後退したのが正しい判断なのに警告だけが誤爆していた。
+    助言側で「衝突かどうか」を判定し直すと 3 箇所目が増えるので、判定はここ 1 箇所に置き、
+    **決めた側の結果を運ぶ**。
+    conflict が None（衝突なし＝そもそも後退していない）なら空集合＝抑制は一切かからない。
+    """
+    return {conflict.alternative} if conflict else set()
+
+
 def _mentioned_with_marker(task: str, name: str) -> bool:
     """依頼文で name が「〜シート」「〜タブ」の形で言及されているか（明示マーカー）。"""
     return re.search(re.escape(name) + _SHEET_MARKER_SUFFIX, task) is not None
