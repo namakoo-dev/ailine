@@ -82,6 +82,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_ops_table,
 )
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
+from ailine_core.write_precondition import check_write_preconditions   # ★ 単位F: 宣言した領域の前提
 from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
     format_sheet_field, sheet_conflict_choice_lines, conflict_excluded_sheets,
@@ -4843,6 +4844,22 @@ def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_
     return None
 
 
+def _maybe_warn_write_precondition(op: str, before: dict, after: dict) -> str | None:
+    """★★ 単位F: op が宣言した書き込み領域(OP_WRITE_TARGET.writes)の**前提**が、適用後の
+       実測で破れていれば1行を返す（無ければ None）。判定本体は
+       ailine_core/write_precondition.py（純ロジック・前提の一覧はそこの docstring）。
+       ★ 上の _maybe_warn_target_overwrite（適用**前**に列の既存値を数える）と、この関数
+       （適用**後**に before/after を突き合わせる）は、同じ破壊の関所の2つの入力にすぎない
+       ―― 返すのは同じ形の1行で、止める判断は両方とも _confirm_overwrite_or_gate が行う。
+       col_key を持つ 3 op しか守れていなかった関所に、行・シート・書式・並べ替えの腕を
+       足すのがこの関数（関所そのものは増やさない）。"""
+    write_target = OP_WRITE_TARGET.get(op)
+    if not write_target:
+        return None
+    return check_write_preconditions(write_target.writes, before, after,
+                                      cell_ref=_cell_ref, fmt_value=_fmt_cell_value)
+
+
 def _interpretation_summary_line(resolved: dict, inferred: set) -> str | None:
     """★ W10a 項目3: 実行前の解釈要約。target が数字表記から列名へ推定解決され、かつ
        （呼び出し側が別途 _maybe_warn_target_overwrite で）既存データありと分かっている
@@ -5094,6 +5111,16 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         #   ―― ✓ は原本(--copy なら .out)が確定した後の1行だけ（_finish_apply）。
         print(f"\n事後条件を確認（操作:{OP_LABELS.get(op, op)}）: {reason}")
     result["ok"] = True
+
+    # ★★ 単位F: 反映の直前（原本はまだ無傷・before/after は両方手元にある）に、宣言した
+    #   書き込み領域の前提を確かめる。破れていたら**同じ破壊の関所**へ渡す（新しい関所も
+    #   新しい exit code も作らない ―― 上書き警告と同じ引数の位置に、同じ形の1行を渡す）。
+    warn_precondition = _maybe_warn_write_precondition(op, before, after)
+    if warn_precondition:
+        print(warn_precondition)
+        gate_exit = _confirm_overwrite_or_gate(a, warn_precondition)
+        if gate_exit is not None:
+            return gate_exit
 
     # ★ C9: postcondition が warn（検証対象不足）なら ✓ は名乗らない。scope は「解釈: ...」行から
     #   「解釈: 」を除いた宣言テキスト（＝計画が宣言した対象）。
@@ -5697,6 +5724,15 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
                 {"op": op, "command": confirm.line, "status": "fail", "postcondition": "fail"},
                 step_advisories, provenance_entry, mention_exclude_sheets, current_meta)
     item_status = "warn" if status == "warn" else "ok"
+    # ★★ 単位F: 単発(cmd_run_dsl)と同じ位置・同じ関所。段ごとの before/after で見る
+    #   （計画全体の before/after で見ると、前の段が既存行を書いたことを次の段の前提破れと
+    #   読み違える ―― 宣言は段ごとに違うので、突き合わせも段ごとでなければならない）。
+    warn_precondition = _maybe_warn_write_precondition(op, step_before, step_after)
+    if warn_precondition:
+        print(f"{step_prefix}{warn_precondition}")
+        gate_exit = _confirm_overwrite_or_gate(a, warn_precondition, step_prefix=step_prefix)
+        if gate_exit is not None:
+            return (gate_exit, None, None, [], None, None, current_meta)
     return (None, (i, confirm.label, item_status, reason),
             {"op": op, "command": confirm.line, "status": item_status, "postcondition": status},
             step_advisories, provenance_entry, mention_exclude_sheets,
