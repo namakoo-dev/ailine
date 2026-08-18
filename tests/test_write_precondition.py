@@ -102,7 +102,14 @@ def test_t1_handwritten_total_row_is_not_silent(tmp_path, monkeypatch, capsys):
     実測（t_a）: 既存の合計行の**下**に新しい行を足し、合計に既存の合計行まで足し込む。
     ★ これは根1（表の下端の判定 _scan_last_row_basic）であって単位F の対象外 ――
     書き込んだ行そのものは before で空なので、宣言した前提は破れていない。
-    期待は「exit 0 で無言でないこと」（追記が起きたことが画面に見えること）。
+
+    ★★ 期待を書き換えた（算術恒等の検算・tests/test_sum_identity.py の T6）:
+    単位F の時点での期待は「exit 0 で無言でないこと」だった ―― 追記が起きたことさえ
+    画面に見えれば良い、という線。だが独立レビューが指摘したとおり、二重計上した 600 に
+    `✓ 機械検証済み` が出て原本が上書きされることは、追記の告知では埋め合わせられない。
+    今の期待は **exit 1・✓ を出さない・原本無傷・該当行(B4)を名指し**。
+    単位F の関所（宣言した書き込み先の前提）は今もここでは鳴らない（それは正しい）――
+    鳴るのは事後条件側の算術の検算。
     """
     book = _book(tmp_path, {"Sheet": [["品名", "金額"], ["あ", 100], ["い", 200], ["合計", 300]]})
 
@@ -118,8 +125,11 @@ def test_t1_handwritten_total_row_is_not_silent(tmp_path, monkeypatch, capsys):
     rc = _run(tmp_path, monkeypatch, book, "金額の合計を一番下に出して",
               "APPEND_TOTAL", {"col": "金額"}, fake)
     out = capsys.readouterr().out
-    assert rc == 0
-    assert "（表の末尾への追記は意図どおりです）" in out   # 無言ではない
+    assert rc == 1, out
+    assert "✓" not in out, out
+    assert "B4" in out and "300" in out, out          # 該当行を名指しする
+    assert "（表の末尾への追記は意図どおりです）" in out   # 追記の告知も今までどおり出る
+    assert _cell(book, "Sheet", "B5") is None        # 原本は無傷
 
 
 def test_t2_existing_total_row_without_label_in_col_a_is_gated(tmp_path, monkeypatch, capsys):

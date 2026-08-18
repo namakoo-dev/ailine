@@ -83,6 +83,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
 )
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import check_write_preconditions   # ★ 単位F: 宣言した領域の前提
+from ailine_core.sum_identity import rows_matching_sum_above   # ★ 算術恒等の検算（二重計上）
 from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
     format_sheet_field, sheet_conflict_choice_lines, conflict_excluded_sheets,
@@ -2805,7 +2806,98 @@ def _is_number(v) -> bool:
 _ZERO_TARGET_REASON = "事後条件の検証対象が0件（何も検証できていない）"
 
 
-def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = False) -> tuple:
+# --- ★ 算術恒等の検算（二重計上・合計行の位置） -------------------------------
+#   独立レビューの実測: check_append_total は期待値を「合計式が生成したのと同じ範囲」から
+#   作っていた ―― 検算が被検算と同じ盲点を使う恒真式。既存の合計 300 を持つ表に合計を
+#   足すと 600 が書かれ「3 行の合計を検証」と言って ✓ が出た。並べ替えにも同型がある
+#   （合計行が2行目に来ても「5 行を検証（降順）」で通る）。
+#   判定は ailine_core/sum_identity.py（語も書式も読まない純粋な算術）に閉じ込め、
+#   ここは「どのセルか」を人が読める文にするだけにする。
+
+def _fmt_amount(v) -> str:
+    """恒等式の説明に出す数値（整数なら小数点を付けない・指数表記にしない）。"""
+    return str(int(v)) if float(v).is_integer() else str(v)
+
+
+def _column_block_values(bv, ws, idx: int, header_row: int, sheet: str | None) -> list:
+    """対象列を見出しの次の行から**空欄まで**走査した (行番号, 計算後の値) の並び。
+
+    ★ 行の広がりは式ビュー（そのセルが空欄か）で決め、値は値ビュー（キャッシュ）から取る
+      ―― 式で埋まった列を『空』と誤読せず、式文字列を数値と誤読しないための組み合わせ。
+    ★ 空欄で切れる＝空行で区切られた2つ目の塊は読まない（別の表を続けて足すと、
+      無関係な行が『上の合計』に当たってしまう）。"""
+    out: list = []
+    r = header_row + 1
+    while ws.cell(row=r, column=idx).value not in (None, ""):
+        out.append((r, bv.cell_value(r, idx, sheet=sheet)))
+        r += 1
+    return out
+
+
+def _nested_total_reason(values: list, sheet_name: str, idx: int) -> str | None:
+    """**足し込んだ範囲の最終行**が『自分より上の全部の合計』なら、その1行を名指しする。
+
+    ★ 位置で判定する（2段構え）:
+      1. 並びの最後の数値行は、今この op が書いた合計そのもの。範囲から外す
+         （自分自身と照合したら恒真式に戻る）。
+      2. 残った範囲の中でも、**最終行**で一致したときだけ鳴らす。既にある合計は
+         その塊の一番下に在り、二重計上はそういう起き方をする。範囲の**真ん中**で
+         一致するのは偶然の側 ―― 実測: demo/sales.xlsx の 部門/金額 =
+         100,200,**300**,400,500,250 は 300 が開発部門のただの売上なのに
+         100+200 と一致し、README の quickstart が exit 1 で落ちていた。
+         手元の実検体 70 数値列で 発火 5 件（うち偽陽性 3）→ 2 件（どちらも本物の
+         合計行）に下がった。語も書式も読まない性質は保たれる（算術＋位置だけ）。
+    ★ 代償は取り逃がし: 『本体→小計→本体→小計→合計』のように**最終行でない**位置に
+      合計がある帳票は、二重に数えていても鳴らない（見えない側に倒した）。"""
+    numeric = [(row, value) for row, value in values if _is_number(value)]
+    for hit in rows_matching_sum_above(numeric[:-1]):
+        if not hit.is_last:
+            continue
+        span = f"{_cell_ref(hit.term_rows[0], idx)}:{_cell_ref(hit.term_rows[-1], idx)}"
+        return (f"{sheet_name}!{_cell_ref(hit.row, idx)} の {_fmt_amount(hit.value)} は "
+                f"{span} の合計と一致します"
+                f"（この行まで足し込むと既にある合計を二重に数えます）")
+    return None
+
+
+def _total_row_left_the_bottom_reason(path: Path, source_book: Path | None, args: dict,
+                                       header_row: int, idx: int, sheet_name: str) -> str | None:
+    """並べ替えの前は最下行が『上の全部の合計』だったのに、後ではそうでなくなったら1行返す。
+
+    ★ 判定は「存在」でなく「位置」: 並べ替え前の表にも合計行は在る（それが正常）。
+      危険なのは合計と一致する行が**最下行でなくなった**とき ―― 合計行がただのデータとして
+      一緒に並べ替えられ、表の途中に混ざった状態。並べ替え前は沈黙し、後にだけ鳴る。
+    ★ source_book（適用前のコピー）が無い経路では黙る ―― before が無ければ位置の変化は
+      測れない。測れないことを鳴らす側にも合格側にも寄せない（断定しない）。"""
+    sheet = args.get("_target_sheet")
+    if source_book is None or not Path(source_book).exists():
+        return None
+    with BookView(source_book) as bv_before:
+        ws_before = bv_before.sheet(sheet)
+        idx_before = _col_index_by_header(ws_before, args["col"], header_row=header_row)
+        if idx_before is None:
+            return None
+        before_values = _column_block_values(bv_before, ws_before, idx_before, header_row, sheet)
+    was_total = next((h for h in rows_matching_sum_above(before_values) if h.is_last), None)
+    if was_total is None:
+        return None                      # 元から最下行に合計は無い＝この検査の対象外
+    with BookView(path) as bv_after:
+        ws_after = bv_after.sheet(sheet)
+        after_values = _column_block_values(bv_after, ws_after, idx, header_row, sheet)
+    if any(h.is_last for h in rows_matching_sum_above(after_values)):
+        return None                      # 合計はまだ最下行にある
+    moved_to = next((r for r, v in after_values
+                     if _is_number(v) and abs(v - was_total.value) <= 1e-6), None)
+    where = (f"{sheet_name}!{_cell_ref(moved_to, idx)}" if moved_to
+             else "並べ替えた後の表の中に見つかりません")
+    return (f"並べ替える前は最下行 {sheet_name}!{_cell_ref(was_total.row, idx_before)} の "
+            f"{_fmt_amount(was_total.value)} が上の {len(was_total.term_rows)} 行の合計でしたが、"
+            f"並べ替えた後は {where} にあり最下行ではありません"
+            f"（合計行がデータとして一緒に並べ替えられています）")
+
+
+def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = False,
+                source_book: Path | None = None) -> tuple:
     """SORT の事後条件。戻り値は (status, reason)。status ∈ {"pass","warn","fail"}。
        ★ 止血1: 検証対象が0件なら fail、1件（順序が定義できない）なら warn とし、
        どちらも「機械検証済み」とは名乗らない。
@@ -2818,9 +2910,14 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
        SORT は相対順序という『全行をまたぐ』検証のため、式にキャッシュ値が無く読めない
        行が1件でもあれば、その行を除いた残りだけで『順序OK』と判定するのは危険
        （除いた行が実際は順序を崩していても見逃す＝COMPUTE_COLUMN の行独立検証とは違い
-       部分採点できない）。0cf9218 空虚な検証合格の禁止の趣旨のまま fail で打ち切る。"""
+       部分採点できない）。0cf9218 空虚な検証合格の禁止の趣旨のまま fail で打ち切る。
+       ★ 算術恒等の検算: 並び順が合っていても、合計行がデータとして一緒に並べ替えられて
+       表の途中に混ざったら ✓ は出さない（source_book が渡された経路のみ・
+       _total_row_left_the_bottom_reason 参照）。"""
+    sheet_name = args.get("_target_sheet")
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
+        sheet_name = sheet_name or ws.title
         idx = _col_index_by_header(ws, args["col"], header_row=header_row)
         if idx is None:
             return "fail", f"列『{args['col']}』が見つからない"
@@ -2854,6 +2951,9 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
           else all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)))
     if not ok:
         return "fail", f"列『{args['col']}』が指定順（{args['order']}）に並んでいない{note}"
+    moved = _total_row_left_the_bottom_reason(path, source_book, args, header_row, idx, sheet_name)
+    if moved:
+        return "fail", moved
     return "pass", f"{len(vals)} 行を検証（{'昇順' if asc else '降順'}）{note}"
 
 
@@ -3286,12 +3386,24 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
          2列だけの帳票）だと、書き込んだラベルの文字列自体が『データ行』として誤って
          数えられ off-by-one になる（実測）。
        "=SUM(" という固有の目印を対象列自身の中だけで探すので、他列の中身にも
-       COMPUTE_COLUMN の式の形にも影響されない。"""
+       COMPUTE_COLUMN の式の形にも影響されない。
+
+       ★★ 算術恒等の検算（二重計上）を**最初に**行う: 下の①②は期待値を「合計式が
+       生成したのと同じ範囲」から作るので、既存の合計を足し込んでいても両方通ってしまう
+       （検算が被検算と同じ盲点を使う恒真式）。しかも既存の合計が『式』で入っている表では
+       "=SUM(" の初出行がその既存行を掴み、①が「合計の式が期待形でない」と**ユーザーが
+       自分で書いた行を責める**誤診断を出す。どちらの誤りも、対象列全体を数値として見る
+       この検算が先に立てば正しい行を名指しできる（_nested_total_reason 参照）。"""
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
         idx = _col_index_by_header(ws, args["col"], header_row=header_row)
         if idx is None:
             return "fail", f"列『{args['col']}』が見つからない"
+        nested = _nested_total_reason(
+            _column_block_values(bv, ws, idx, header_row, args.get("_target_sheet")),
+            args.get("_target_sheet") or ws.title, idx)
+        if nested:
+            return "fail", nested
         r = header_row + 1
         while True:
             v = ws.cell(row=r, column=idx).value
@@ -3531,7 +3643,11 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
             return "fail", f"未対応の op: {op}"
         if op == "COMPUTE_COLUMN":
             return fn(out_book, resolved_args, header_row, use_formula)
-        if op in ("SORT", "AGGREGATE", "LOOKUP_FILL"):
+        if op == "SORT":
+            # ★ 算術恒等の検算: 合計行が最下行から動いたかは before が無いと測れない。
+            return fn(out_book, resolved_args, header_row, use_formula=use_formula,
+                       source_book=source_book)
+        if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)

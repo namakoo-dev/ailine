@@ -256,31 +256,52 @@ def test_append_total_then_sort_still_claims_and_rerunning_postconditions_would_
         tmp_path, monkeypatch, capsys):
     """★ 不健全な代替案の回帰試験。SORT で合計行が最上段へ移った**正しい** run に対して
        `check_append_total` を最終ファイルで再実行すると偽 fail になることを、この
-       テスト自身が実演したうえで、実装の ✓ はそれに影響されないことを固定する。"""
+       テスト自身が実演したうえで、実装の ✓ はそれに影響されないことを固定する。
+
+       ★★ 検体を組み替えた（算術恒等の検算・tests/test_sum_identity.py）。2つ理由がある:
+
+       1. **並べ替える列を、合計を足した列とは別の列にした。** 元の検体は「金額の合計を
+          足して、金額で降順」だった ―― その並びは今や T8b そのもの（合計行が最下行から
+          動いたら ✓ を出さない）で、run が正しく fail する。
+          ★★ **元の検体が「合計を足して、その同じ列で降順」＝ T8b と同型の並びを
+          「正しい run」として ✓ ごと凍結していたこと自体が、この repo が二重計上
+          （合計行がデータに混ざった出力）を正しい結果として凍結していた証拠**である
+          ―― 検体は在ったが、測っていた性質が違った。
+          この回帰試験が測りたいのはそこではなく「最終ファイルで事後条件を再実行する版を
+          選ばなかったこと」なので、✓ が出る形を保ったまま合計行が上へ移る組み合わせに替えた。
+          ★ 裏を返すと、**並べ替えた列以外にある合計行が動いても今の検算は鳴らない** ――
+          この検体はその穴の上に立っている（報告済みの既知の限界）。
+       2. **データを 100/200/300 から 100/250/400 に替えた。** 100+200==300 は
+          「上の全部の合計」の恒等式に当たってしまう ―― 既存の合計行なのか、ただの
+          データなのかは算術だけでは区別できない（T6 の真陽性と同じ数の並びになる）。
+          ★ その後この検算は「足し込んだ範囲の最終行だけ」に絞ったので、今のこの並びは
+          絞りの前後どちらでも黙る。検体はそのまま（余裕を持たせた側に倒しておく）。
+       """
     _isolate(monkeypatch, tmp_path)
-    book = _book(tmp_path, [["部門", "金額"], ["a", 100], ["b", 200], ["c", 300]])
+    book = _book(tmp_path, [["部門", "件数", "金額"], ["a", 3, 100], ["b", 1, 250], ["c", 2, 400]])
     _translate(monkeypatch, {"plan": [{"op": "APPEND_TOTAL", "args": {"col": "金額"}},
-                                       {"op": "SORT", "args": {"col": "金額", "order": "desc"}}]})
+                                       {"op": "SORT", "args": {"col": "件数", "order": "desc"}}]})
 
     def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
         wb = openpyxl.load_workbook(out_book)
         ws = wb.active
-        if "SortByColumn" in code:   # 2段目: 合計(600)が降順の先頭へ移動する
-            rows = [("合計", "=SUM(B2:INDEX(B:B,ROW()-1))"), (None, 300), (None, 200), (None, 100)]
-            for i, (label, val) in enumerate(rows, start=2):
-                ws.cell(row=i, column=1, value=label if label else {2: "合計", 3: "c", 4: "b", 5: "a"}[i])
-                ws.cell(row=i, column=2, value=val)
+        if "SortByColumn" in code:   # 2段目: 件数が空欄の合計行(750)が降順の先頭へ移動する
+            rows = [("合計", "合計", "=SUM(C2:INDEX(C:C,ROW()-1))"),
+                    ("a", 3, 100), ("c", 2, 400), ("b", 1, 250)]
+            for i, row in enumerate(rows, start=2):
+                for c, v in enumerate(row, start=1):
+                    ws.cell(row=i, column=c, value=v)
             wb.save(out_book)
-            _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"B2": 600})
+            _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"C2": 750})
             return True, None, "ok"
-        ws.cell(row=5, column=1, value="合計")            # 1段目: データ末尾の下に合計行
-        ws.cell(row=5, column=2, value="=SUM(B2:INDEX(B:B,ROW()-1))")
+        ws.cell(row=5, column=2, value="合計")            # 1段目: データ末尾の下に合計行
+        ws.cell(row=5, column=3, value="=SUM(C2:INDEX(C:C,ROW()-1))")
         wb.save(out_book)
-        _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"B5": 600})
+        _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"C5": 750})
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
-    rc = ailine.main(["run", str(book), "金額の合計を最後に足して、金額で降順に並べ替えて", "--copy"])
+    rc = ailine.main(["run", str(book), "金額の合計を最後に足して、件数で降順に並べ替えて", "--copy"])
     out = capsys.readouterr().out
     assert rc == 0, out
     final = book.with_name(book.stem + ".out" + book.suffix)

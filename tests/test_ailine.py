@@ -3592,10 +3592,13 @@ def test_run_postcondition_threads_use_formula_to_sort_and_aggregate(tmp_path, m
     # ★ W10f 項目1: use_formula は元は COMPUTE_COLUMN 専用の配線だったが、SORT/AGGREGATE
     # にも同型バグがあったため広げた。run_postcondition がちゃんとその2つにも渡すことを
     # （中身の挙動でなく配線そのものを）確認する。
+    # ★ 算術恒等の検算: SORT は source_book（適用前のコピー）も受け取るようになった
+    #   ―― 合計行が最下行から動いたかは before が無ければ測れない。ここも配線を見る。
     calls = {}
 
-    def fake_sort(path, args, header_row=1, use_formula=False):
+    def fake_sort(path, args, header_row=1, use_formula=False, source_book=None):
         calls["sort"] = use_formula
+        calls["sort_source_book"] = source_book
         return "pass", "ok"
 
     def fake_aggregate(path, args, header_row=1, use_formula=False):
@@ -3605,9 +3608,10 @@ def test_run_postcondition_threads_use_formula_to_sort_and_aggregate(tmp_path, m
     monkeypatch.setitem(ailine.POSTCONDITIONS, "SORT", fake_sort)
     monkeypatch.setitem(ailine.POSTCONDITIONS, "AGGREGATE", fake_aggregate)
     p = tmp_path / "x.xlsx"
-    ailine.run_postcondition("SORT", p, {}, use_formula=True)
+    before = tmp_path / "before.xlsx"
+    ailine.run_postcondition("SORT", p, {}, use_formula=True, source_book=before)
     ailine.run_postcondition("AGGREGATE", p, {}, use_formula=True)
-    assert calls == {"sort": True, "aggregate": True}
+    assert calls == {"sort": True, "sort_source_book": before, "aggregate": True}
 
 
 # ---------------------------------------------------------------------------
