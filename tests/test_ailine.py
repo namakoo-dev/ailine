@@ -1512,11 +1512,11 @@ def test_restore_backup_restores_and_stays_reversible(tmp_path, monkeypatch):
 
     assert used.name == "book.20200101T000000Z.xlsx"
     assert book.read_bytes() == b"BACKED_UP_CONTENT"
-    remaining = ailine.list_backups(book)
-    assert len(remaining) == 2   # 復元前の CURRENT も退避されている＝復元自体も可逆
-    contents = {p.read_bytes() for p in remaining}
-    assert b"CURRENT" in contents
-    assert b"BACKED_UP_CONTENT" in contents
+    # ★ W11: 復元前の CURRENT は退避されている＝復元自体も可逆（この性質は据え置き）。
+    #   ただし置き場は undo の棚で、**遡りの履歴には混ぜない**（混ぜていたので、端に着いた
+    #   後の undo がこれを最新世代として釣り上げ、打ち消したはずの状態が復活していた）。
+    assert {p.read_bytes() for p in ailine.list_undo_shelf(book)} == {b"CURRENT"}
+    assert [p.read_bytes() for p in ailine.list_backups(book)] == [b"BACKED_UP_CONTENT"]
 
 def test_restore_backup_raises_when_none_exist(tmp_path, monkeypatch):
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
@@ -1617,6 +1617,106 @@ def test_cmd_undo_fails_honestly_when_no_backup(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert rc == 1
     assert "×" in captured.out
+
+
+# --- ★ W11: undo は履歴の端で止まる（盲検査定 A が致命に挙げた実測不具合） ----------
+#
+# 旧実装で実測した壊れ方（編集 2 回のあと undo を 4 回）:
+#   undo1 → v1 ✓ / undo2 → v0 ✓ / undo3 → **v0 のまま「✓ 復元した」** /
+#   undo4 → **v1 が復活**（打ち消したはずの状態が戻る）
+# 原因は 2 つの重なり: ①最古に着いても止まらず同じものを復元して成功を名乗る
+# ②undo 自身の退避を遡りの履歴に積むので、端の後は「現在と同じ退避」が最新世代として
+# 並び、その 1 つ内側＝直前に打ち消した状態を釣り上げる。
+# ★ 症状の「3 回目」は編集回数で変わる。バーは構造で書く: **編集 N 回 → undo N+2 回**。
+
+def _seed_edits(tmp_path, monkeypatch, n_edits: int):
+    """v0 から n_edits 回書き換えた book を作る（実際の run と同じく上書き前に退避）。"""
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"v0")
+    for i in range(1, n_edits + 1):
+        ailine.make_backup(book)
+        book.write_bytes(f"v{i}".encode())
+    return book
+
+@pytest.mark.parametrize("n_edits", [1, 2, 3])
+def test_undo_walks_back_then_stops_at_the_oldest(tmp_path, monkeypatch, capsys, n_edits):
+    """★ バー: 編集 N 回 → undo N+2 回。1〜N 回目は一段ずつ v(N-1)…v0、
+       N+1 回目は非零で止まり、N+2 回目も**状態が動かない**。"""
+    book = _seed_edits(tmp_path, monkeypatch, n_edits)
+
+    for k in range(1, n_edits + 1):
+        rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert book.read_bytes() == f"v{n_edits - k}".encode()
+        # 「あと N 回」は残り段数（バックアップの総数ではない）
+        assert f"（あと {n_edits - k} 回戻せます）" in out
+
+    for _ in range(2):   # N+1 回目・N+2 回目とも同じ扱い（押し続けても動かない）
+        rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+        out = capsys.readouterr().out
+        assert rc == 1                                   # 非零（既存体系の 1＝汎用の失敗）
+        assert book.read_bytes() == b"v0"                # 最古のまま動かない
+        assert "これ以上は戻せません" in out and "✓" not in out
+
+def test_undo_at_the_oldest_raises_a_distinct_error_not_file_not_found(tmp_path, monkeypatch):
+    """「もう戻せない」と「そもそもバックアップが無い」は別物（型で分ける）。"""
+    book = _seed_edits(tmp_path, monkeypatch, 1)
+    ailine.restore_backup(book)
+    with pytest.raises(ailine.NoOlderBackupError):
+        ailine.restore_backup(book)
+
+def test_undo_shelf_keeps_the_pre_restore_copy_out_of_the_walk(tmp_path, monkeypatch):
+    """★ undo を可逆にする性質は残す: 退避は棚に残り、遡りの履歴だけが汚れない。"""
+    book = _seed_edits(tmp_path, monkeypatch, 2)
+    before = [p.name for p in ailine.list_backups(book)]
+    ailine.restore_backup(book)
+    assert [p.name for p in ailine.list_backups(book)] == before   # 遡りの履歴は伸びない
+    assert [p.read_bytes() for p in ailine.list_undo_shelf(book)] == [b"v2"]   # 退避は残る
+    assert ailine.undo_shelf_dir(book).parent == ailine.BACKUP_DIR / ailine._backup_namespace(book)
+
+def test_undo_steps_left_counts_the_walk_not_the_backups(tmp_path, monkeypatch):
+    book = _seed_edits(tmp_path, monkeypatch, 3)
+    assert ailine.undo_steps_left(book) == 3     # 実編集の直後＝全世代を遡れる
+    for expected in (2, 1, 0):
+        ailine.restore_backup(book)
+        assert ailine.undo_steps_left(book) == expected
+
+def test_undo_then_new_run_then_undo_still_works(tmp_path, monkeypatch):
+    """★ undo のやり直し: 端まで戻した後に新しい run をしても、その run を undo できる。"""
+    book = _seed_edits(tmp_path, monkeypatch, 2)
+    ailine.restore_backup(book); ailine.restore_backup(book)
+    assert book.read_bytes() == b"v0"
+    ailine.make_backup(book); book.write_bytes(b"v9")   # 新しい run
+    ailine.restore_backup(book)
+    assert book.read_bytes() == b"v0"
+
+def test_undo_list_mentions_the_shelf_without_counting_it_as_a_generation(tmp_path, monkeypatch, capsys):
+    book = _seed_edits(tmp_path, monkeypatch, 2)
+    ailine.restore_backup(book)
+    rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=True))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "2 世代" in out                       # 遡れる世代は増えていない
+    assert "退避が 1 件" in out and "遡りには数えない" in out
+
+def test_legacy_backups_stay_readable_and_walkable(tmp_path, monkeypatch):
+    """★ 既存資産との互換: 名前空間ディレクトリ直下の既存世代も旧フラット領域も、
+       これまでどおり遡りの対象（棚を足したことで読めなくなるものは無い）。"""
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = tmp_path / "book.xlsx"
+    ns = backups / ailine._backup_namespace(book)
+    ns.mkdir(parents=True)
+    (ns / "book.20260101T000000000000Z.xlsx").write_bytes(b"v1")   # 名前空間の既存世代
+    (backups / "book.20200101T000000Z.xlsx").write_bytes(b"v0")    # 旧フラット領域
+    book.write_bytes(b"v2")
+    assert [p.read_bytes() for p in ailine.list_backups(book)] == [b"v1", b"v0"]
+    ailine.restore_backup(book); assert book.read_bytes() == b"v1"
+    ailine.restore_backup(book); assert book.read_bytes() == b"v0"
+    with pytest.raises(ailine.NoOlderBackupError):
+        ailine.restore_backup(book)
 
 
 # --- ★ M2c: バックアップのプルーニング -----------------------------------------
@@ -5715,7 +5815,10 @@ def test_b2_backup_failure_aborts_replacement_book_untouched(tmp_path, monkeypat
 
 def test_b2_undo_remaining_count_matches_after_pruning_beyond_ten(tmp_path, monkeypatch, capsys):
     # ★ B2④ 10世代の剪定を超えてバックアップが積み上がった後も、ailine undo の
-    #   「あと N 回戻せます」が実際のバックアップ件数（剪定後）と整合すること。
+    #   「あと N 回戻せます」が**実際に遡れる残り段数**と整合すること。
+    # ★ W11 で照合先を直した: 旧文はバックアップの総数と突き合わせていたが、それは
+    #   undo が退避を積むほど増える数で、「あと何回押せるか」ではなかった。ここでは
+    #   表示どおりの回数だけ実際に押し、そのあと端で止まることまで見て整合を証明する。
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     book = tmp_path / "book.xlsx"
     book.write_bytes(b"v0")
@@ -5727,8 +5830,15 @@ def test_b2_undo_remaining_count_matches_after_pruning_beyond_ten(tmp_path, monk
     rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
     captured = capsys.readouterr()
     assert rc == 0
-    remaining_after = len(ailine.list_backups(book))
-    assert f"あと {remaining_after} 回戻せます" in captured.out
+    # 現在地は最新世代(v12)と同じ中身だったので 1 段遡って v11・残りは 8 段。
+    assert book.read_bytes() == b"v11"
+    assert "あと 8 回戻せます" in captured.out
+    for _ in range(8):   # 表示どおり 8 回押せる
+        assert ailine.cmd_undo(argparse.Namespace(book=str(book), list=False)) == 0
+    capsys.readouterr()
+    assert book.read_bytes() == b"v3"   # 剪定で v0〜v2 は既に無い（残る最古が v3）
+    rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+    assert rc == 1 and "これ以上は戻せません" in capsys.readouterr().out
 
 
 # ===========================================================================

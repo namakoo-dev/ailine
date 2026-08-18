@@ -109,6 +109,24 @@ def test_exit_1_generic_failure(monkeypatch, capsys):
     assert "中止した" in captured.out
 
 
+def test_exit_1_undo_at_the_oldest_generation(tmp_path, monkeypatch, capsys):
+    """★ W11: undo が履歴の端（最も古い状態）に着いたら非零で止まる。新しい code は
+       増やさず、既存の 1（汎用の失敗・「restore/undo の対象無し」と同じ枠）を使う
+       — 表 tests/golden/f6_exit_codes.md の 1 の行の裏取り。"""
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"v0")
+    ailine.make_backup(book)
+    book.write_bytes(b"v1")
+    assert ailine.cmd_undo(argparse.Namespace(book=str(book), list=False)) == 0
+    capsys.readouterr()
+    rc = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "これ以上は戻せません" in captured.out
+    assert book.read_bytes() == b"v0"   # 止まった＝状態は動かない
+
+
 def test_exit_2_is_argparse_reserved_not_ailine_own(capsys):
     """★ ailine.py 自身は sys.exit(2)/return 2 を一度も書いていない
        （tests/golden/f6_exit_codes.md 参照）。2 が出るのは argparse 自身の

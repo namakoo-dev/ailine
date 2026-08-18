@@ -3688,6 +3688,21 @@ def success_message(result: dict) -> str | None:
 _BACKUP_TS_RE = re.compile(r"^\d{8}T\d{6}(?:\d{6})?Z(?:-\d+)?$")
 _BACKUP_TS_SEQ_RE = re.compile(r"-(\d+)$")
 
+# ★ W11: undo が「復元前の現状」を退避する棚。名前空間ディレクトリの**さらに下**に置く
+#   （BACKUP_DIR/<ns>/undo/）。list_backups は名前空間ディレクトリ直下のファイルしか
+#   見ないので、ここに置いたものは自動的に「遡りの履歴」から外れる。
+#   なぜ分けるか（実測した不具合）: 退避を実編集の世代と同じ棚に積むと、undo のたびに
+#   履歴が伸び、しかも最も古い状態に着いた後は「現在の中身と同じ退避」が最新世代として
+#   並ぶため、次の undo が『その1つ内側』＝直前に打ち消したはずの新しい状態を釣り上げて
+#   いた（N 回編集して N+2 回 undo すると v1 が復活する）。退避を消すのでなく、
+#   **数える場所と遡りの参照点から外す**ことで直す（安全網は減らさない）。
+UNDO_SHELF_DIRNAME = "undo"
+
+
+class NoOlderBackupError(Exception):
+    """★ W11: 最も古い世代に着いていて、これ以上遡れない（＝undo の端）。
+       「バックアップが1つも無い」(FileNotFoundError)とは別物なので型で分ける。"""
+
 
 def _utc_ts() -> str:
     """ファイル名に使える UTC タイムスタンプ（例: 20260814T120000123456Z）。
@@ -3725,17 +3740,24 @@ def _backup_namespace(book: Path) -> str:
     return hashlib.sha1(str(Path(book).resolve().parent).encode("utf-8")).hexdigest()[:8]
 
 
-def backup_path_for(book: Path, ts: str | None = None) -> Path:
+def undo_shelf_dir(book: Path) -> Path:
+    """★ W11: undo が取る「復元前の現状」の退避先（遡りの履歴には数えない棚）。"""
+    return BACKUP_DIR / _backup_namespace(book) / UNDO_SHELF_DIRNAME
+
+
+def backup_path_for(book: Path, ts: str | None = None, shelf: bool = False) -> Path:
     ts = ts or _utc_ts()
-    return BACKUP_DIR / _backup_namespace(book) / f"{book.stem}.{ts}{book.suffix}"
+    base = undo_shelf_dir(book) if shelf else BACKUP_DIR / _backup_namespace(book)
+    return base / f"{book.stem}.{ts}{book.suffix}"
 
 
-def prune_backups(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> list:
+def prune_backups(book: Path, keep: int = DEFAULT_KEEP_BACKUPS, shelf: bool = False) -> list:
     """★ M2c: book の世代のうち keep 件を超える古いもの（list_backups は新しい順）を削除する。
-       戻り値は削除したパスのリスト。keep < 0 は「無制限（削除しない）」扱い。"""
+       戻り値は削除したパスのリスト。keep < 0 は「無制限（削除しない）」扱い。
+       ★ W11: shelf=True のときは undo の退避棚を対象にする（棚も同じ上限で剪定する）。"""
     if keep < 0:
         return []
-    backups = list_backups(book)
+    backups = list_undo_shelf(book) if shelf else list_backups(book)
     stale = backups[keep:]
     deleted = []
     for p in stale:
@@ -3747,7 +3769,7 @@ def prune_backups(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> list:
     return deleted
 
 
-def make_backup(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> Path:
+def make_backup(book: Path, keep: int = DEFAULT_KEEP_BACKUPS, shelf: bool = False) -> Path:
     """book のバックアップを ~/.ailine/backups/<名前空間>/ に作る。戻り値はバックアップ先。
        ★ 失敗したら例外を投げる（呼び出し側が --inplace 中止の判断に使う）。
        ★ M2c: 新しいバックアップを作った後、keep 世代を超えた古いものを剪定する
@@ -3757,16 +3779,19 @@ def make_backup(book: Path, keep: int = DEFAULT_KEEP_BACKUPS) -> Path:
        ★ W8b: Windows の壁時計分解能は実測で粗く（20万回の連続呼び出しで56通りしか
        値が変わらない）、restore_backup が「復元前の現状」を退避する高速な連続呼び出し
        等でファイル名が衝突しうる。衝突したら "-N" 連番を足して必ず別ファイルにする
-       （既存の世代を上書きで消さない・回帰テストで自己顕在化した実際の不具合の修正）。"""
+       （既存の世代を上書きで消さない・回帰テストで自己顕在化した実際の不具合の修正）。
+       ★ W11: shelf=True は undo が「復元前の現状」を退避するときの置き場（BACKUP_DIR/
+       <ns>/undo/）。遡りの履歴には数えないが、ファイルとしては同じ作法で残す
+       （undo を可逆にする性質＝退避そのものは減らさない）。"""
     ts = _utc_ts()
-    dst = backup_path_for(book, ts=ts)
+    dst = backup_path_for(book, ts=ts, shelf=shelf)
     dst.parent.mkdir(parents=True, exist_ok=True)
     n = 2
     while dst.exists():
-        dst = backup_path_for(book, ts=f"{ts}-{n}")
+        dst = backup_path_for(book, ts=f"{ts}-{n}", shelf=shelf)
         n += 1
     shutil.copy2(book, dst)
-    prune_backups(book, keep=keep)
+    prune_backups(book, keep=keep, shelf=shelf)
     return dst
 
 
@@ -3780,31 +3805,72 @@ def _parse_backup_name(name: str, stem: str, suffix: str) -> str | None:
     return ts if _BACKUP_TS_RE.match(ts) else None
 
 
-def list_backups(book: Path) -> list:
-    """book に対応するバックアップを新しい順(タイムスタンプ降順)で返す。
-       ★ W8b 項目3: 名前空間ディレクトリ BACKUP_DIR/<ns>/ を主として見る。
-       旧フラット領域（BACKUP_DIR 直下・名前空間分離前の名残）も読み取り専用互換で
-       あわせて見る（新規はもう書かない・iterdir で拾うのはファイルだけ＝名前空間の
-       サブディレクトリ自体を誤ってバックアップと数えないよう is_file() で絞る）。"""
-    stem, suffix = book.stem, book.suffix
+def _gather_backups(directory: Path, stem: str, suffix: str) -> list:
+    """directory 直下（再帰しない）の `<stem>.<ts><suffix>` 形のファイルを (ts, Path) で集める。
+       iterdir で拾うのはファイルだけ＝サブディレクトリ（名前空間・undo の退避棚）自体を
+       誤ってバックアップと数えない。並べ替えは呼び出し側の責任。"""
     found = []
-    ns_dir = BACKUP_DIR / _backup_namespace(book)
-    if ns_dir.is_dir():
-        for p in ns_dir.iterdir():
-            ts = _parse_backup_name(p.name, stem, suffix)
-            if ts is not None:
-                found.append((ts, p))
-    if BACKUP_DIR.is_dir():
-        for p in BACKUP_DIR.iterdir():
+    if directory.is_dir():
+        for p in directory.iterdir():
             if not p.is_file():
                 continue
             ts = _parse_backup_name(p.name, stem, suffix)
             if ts is not None:
                 found.append((ts, p))
+    return found
+
+
+def _sorted_newest_first(found: list) -> list:
     # ★ W8b: 秒精度(旧)とマイクロ秒精度(新)が混在しうるため、生文字列の辞書順ではなく
     #   _ts_sort_key() でパースした実時刻順に並べる（桁数違いの文字列比較は時刻順にならない）。
     found.sort(key=lambda pair: _ts_sort_key(pair[0]), reverse=True)
     return [p for _ts, p in found]
+
+
+def list_backups(book: Path) -> list:
+    """book に対応するバックアップ（＝遡れる実編集の世代）を新しい順で返す。
+       ★ W8b 項目3: 名前空間ディレクトリ BACKUP_DIR/<ns>/ を主として見る。
+       旧フラット領域（BACKUP_DIR 直下・名前空間分離前の名残）も読み取り専用互換で
+       あわせて見る（新規はもう書かない）。
+       ★ W11: undo の退避棚 BACKUP_DIR/<ns>/undo/ は**含めない**（直下しか見ないので
+       自動的に外れる）。棚を見たいときは list_undo_shelf() を使う。"""
+    stem, suffix = book.stem, book.suffix
+    found = _gather_backups(BACKUP_DIR / _backup_namespace(book), stem, suffix)
+    found += _gather_backups(BACKUP_DIR, stem, suffix)
+    return _sorted_newest_first(found)
+
+
+def list_undo_shelf(book: Path) -> list:
+    """★ W11: undo が取った「復元前の現状」の退避を新しい順で返す（遡りには数えない）。"""
+    return _sorted_newest_first(_gather_backups(undo_shelf_dir(book), book.stem, book.suffix))
+
+
+def _undo_position(book: Path, backups: list) -> int | None:
+    """book の現在の中身が世代列(新しい順)のどこにいるかの添字。どこにも無ければ None
+       （＝実編集の直後で、まだ 1 段も遡っていない）。"""
+    try:
+        current = book.read_bytes()
+    except OSError:
+        return None
+    for i, p in enumerate(backups):
+        try:
+            if p.read_bytes() == current:
+                return i
+        except OSError:
+            continue
+    return None
+
+
+def undo_steps_left(book: Path, backups: list | None = None) -> int:
+    """★ W11: 今の位置から**あと何回 undo できるか**。バックアップの総数ではない
+       （総数を数えていたので、undo が退避を積むたびに『あと N 回』が増えていた）。
+       現在地が世代列の i 番目なら、残りは i より古い世代の数 = len-1-i。
+       現在地がどこにも無い（＝実編集の直後）なら全世代を遡れるので len。"""
+    backups = list_backups(book) if backups is None else backups
+    if not book.exists():
+        return len(backups)
+    i = _undo_position(book, backups)
+    return len(backups) if i is None else len(backups) - 1 - i
 
 
 def restore_backup(book: Path) -> Path:
@@ -3817,27 +3883,24 @@ def restore_backup(book: Path) -> Path:
        book の現在の中身と一致するバックアップがあれば、そのすぐ内側(より古い方)を
        復元先にする（＝現在地がバックアップ履歴のどこかに『既にいる』とみなし、そこから
        もう1段遡る）。一致するものが無ければ（＝直前の実編集の直後・通常の最初の undo）
-       最新のバックアップを復元する。復元前の現状は必ず退避する（undo 自体も可逆）。"""
+       最新のバックアップを復元する。復元前の現状は必ず退避する（undo 自体も可逆）。
+       ★ W11: 最も古い世代に着いていたら NoOlderBackupError を投げて**止まる**
+       （旧実装は同じものを復元して『✓ 復元した』と名乗っていた＝何もしていないのに成功）。
+       ★ W11: 退避先は undo の棚（undo_shelf_dir）で、遡りの履歴には混ぜない
+       （混ぜていたので、端に着いた後の undo が退避を最新世代として釣り上げていた）。"""
     backups = list_backups(book)   # 新しい順
     if not backups:
         raise FileNotFoundError(f"{book.name} のバックアップが無い")
 
     target = backups[0]
     if book.exists():
-        try:
-            current_bytes = book.read_bytes()
-        except OSError:
-            current_bytes = None
-        if current_bytes is not None:
-            for i, p in enumerate(backups):
-                try:
-                    matched = p.read_bytes() == current_bytes
-                except OSError:
-                    continue
-                if matched:
-                    target = backups[i + 1] if i + 1 < len(backups) else backups[i]
-                    break
-        make_backup(book)   # 復元前の現状も退避＝restore 自体も可逆にする
+        i = _undo_position(book, backups)
+        if i is not None:
+            if i + 1 >= len(backups):
+                raise NoOlderBackupError(
+                    f"{book.name} をこれ以上は戻せません（最も古い状態です）")
+            target = backups[i + 1]
+        make_backup(book, shelf=True)   # 復元前の現状も退避＝restore 自体も可逆にする
     shutil.copy2(target, book)
     return target
 
@@ -3851,7 +3914,7 @@ def cmd_restore(a: argparse.Namespace) -> int:
         return 0
     try:
         used = restore_backup(book)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, NoOlderBackupError) as e:
         print(f"× {e}")
         return 1
     print(render_restore_done(book.name, used.name))
@@ -3862,20 +3925,20 @@ def cmd_undo(a: argparse.Namespace) -> int:
     """★ W8b 項目5: `restore` の昇格。真実の源はバックアップファイル自体
        （history.jsonl には依存しない＝history が壊れていても undo できる）。
        名前空間対応(item3)は list_backups/restore_backup 経由でそのまま効く。
-       復元後、まだ戻せる回数（＝現時点で使えるバックアップの総数）を添える。"""
+       復元後、まだ戻せる回数（★ W11: バックアップの総数ではなく**あと何段遡れるか**）を
+       添える。端（最も古い状態）に着いたら復元せずに非零で止まる。"""
     book = Path(a.book).resolve()
     if a.list:
         backups = list_backups(book)
-        for ln in render_backup_list(book.name, backups):
+        for ln in render_backup_list(book.name, backups, shelved=len(list_undo_shelf(book))):
             print(ln)
         return 0
     try:
         used = restore_backup(book)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, NoOlderBackupError) as e:
         print(f"× {e}")
         return 1
-    remaining = len(list_backups(book))
-    print(render_restore_done(book.name, used.name, remaining=remaining))
+    print(render_restore_done(book.name, used.name, remaining=undo_steps_left(book)))
     return 0
 
 

@@ -15,6 +15,7 @@ basrun-ts / ailine-ts の移行実験では完成後に遡って掘った（考�
 - [noop-guard-normalization](nodes/noop-guard-normalization.md) — 適用前の LibreOffice 正規化パス。初回保存の行高実体化が no-op ガードを盲目にする問題への恒久対処
 - [apply-timeout](nodes/apply-timeout.md) — 適用タイムアウト既定 180s・PID kill・★固まった LO は自動復旧しない既知の限界つき
 - [run-history](nodes/run-history.md) — 実行履歴 = ヘルパ昇格経済学の需要センサー（失敗種別を構造化記録）
+- [undo-walk-and-edge](nodes/undo-walk-and-edge.md) — 世代バックアップの遡り（中身一致で現在地を決める）と履歴の端（止まる・undo 自身の退避は別棚・「あと N 回」は残り段数）
 - [doctor](nodes/doctor.md) — セットアップ診断 7 項目。買った人の最初の 5 分を守る器官
 
 - [dsl-pipeline](nodes/dsl-pipeline.md) — 中間命令言語の二段構え（翻訳→決定論 codegen→事後条件・列名を正とする・段階的劣化）

@@ -65,12 +65,17 @@ def render_run_header(label: str, model: str, book_name: str) -> str:
 
 # --- restore/undo のバックアップ一覧・復元結果（cmd_restore と cmd_undo が手書きで重複） --
 
-def render_backup_list(book_name: str, backups: list) -> list:
-    """`ailine restore --list` / `ailine undo --list` の一覧表示。backups は新しい順。"""
+def render_backup_list(book_name: str, backups: list, shelved: int = 0) -> list:
+    """`ailine restore --list` / `ailine undo --list` の一覧表示。backups は新しい順。
+       ★ W11: shelved は「undo が取った復元前の退避」の件数。0 でなければ 1 行だけ添える
+       （遡りには数えないが**捨ててはいない**ので、undo をやり直したい人に在り処を示す）。"""
     if not backups:
         return [f"{book_name} のバックアップは無い"]
     lines = [f"{book_name} のバックアップ（{len(backups)} 世代・新しい順）:"]
     lines.extend(p.name for p in backups)
+    if shelved:
+        lines.append(f"（このほかに undo が取った復元前の退避が {shelved} 件"
+                     f"・backups/<名前空間>/undo/ 内・遡りには数えない）")
     return lines
 
 
