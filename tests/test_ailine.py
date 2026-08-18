@@ -7123,13 +7123,20 @@ def test_cmd_run_plan_reproduces_bold_target_leak_and_shows_mismatch_warning(tmp
     # 2段目の対象『数量*単価』は直前段(COMPUTE_COLUMN)が新規作成した実在列であり、
     # 「見出し」と食い違う旨の助言が出ること。
     assert "  2段目: 解釈: 操作:太字 対象:col:数量*単価" in captured.out
-    assert "新規作成された列です" in captured.out and "見出し" in captured.out
+    # ★ 単位B: 手書きの if の文（「…新規作成された列です。」）は、一般則の③が同じスロットで
+    #   鳴るこの検体では**単独では出ず**、③の ⚠ に注記として畳み込まれる。落としてはいけない
+    #   のは文ではなく**事実**なので、事実の語だけを要求する。
+    assert "この計画の直前の段で新規作成された列" in captured.out and "見出し" in captured.out
     # ★★ 単位E で強くなった: W10e の時点では「範囲注記が出ること」しか要求できなかった
     #   （＝『機械検証済み』と言い切ったうえで、あとから範囲を断る形）。今は依頼文の語
     #   『見出し』と解決値『col:数量*単価』の食い違いを機械が突き合わせるので、
     #   **そもそも ✓ を出さない**。旧 _VERIFY_SCOPE_NOTE_PLAN（常時注記）は廃止した。
     assert "は機械検証済みの内容です" not in captured.out
     assert "依頼文が指しているのは: 見出し" in captured.out
+    # ★ 単位B: 同じスロットについて ⚠ を2度言わない ―― 段の位置に1本だけ（助言欄への
+    #   再掲も無い。畳み込んだ1本が既にその事実を運んでいるため）。
+    step2_warnings = [ln for ln in captured.out.splitlines() if ln.startswith("  2段目: ⚠")]
+    assert len(step2_warnings) == 1, step2_warnings
 
 
 def test_cmd_run_dsl_success_does_not_print_an_always_on_scope_note(tmp_path, monkeypatch, capsys):

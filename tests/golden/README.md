@@ -29,7 +29,7 @@
 | F6 | exit code 表 | `test_golden_exit_codes.py` | `f6_exit_codes.md`（手書き＋裏取りテスト） | 9（0,1,3-8 各1 + 2の調査） |
 | F7 | `--json` キー集合/型 | `test_golden_json_keys.py` | `f7_json_keys/*.json` | 6（+ 不整合の自己検査1） |
 | F8 | `--help` 全出力 | `test_golden_help.py` | `f8_help/*.txt` | 10 |
-| F9 | 端末トランスクリプト | `test_golden_transcripts.py` | `f9_transcripts/*.txt`（`main(argv)` 経由） | 24 |
+| F9 | 端末トランスクリプト | `test_golden_transcripts.py` | `f9_transcripts/*.txt`（`main(argv)` 経由） | 25 |
 
 ## 網羅性（できた分岐 / できていない分岐）— 網羅は主張しない
 
@@ -96,7 +96,8 @@
 - brief の目安どおり22本（dsl 4・plan 4・freeform 4・破壊の関所3・忠実度ゲート1・
   Excelロック1・runロック1・header-row1・--dry×3）＋ ★ 単位E で2本追加
   （subject_contradiction＝③で `✓` を出さない / subject_unspoken_note＝②の run 固有の1文）
-  ＝ 24本。
+  ＋ ★ 単位B で1本追加（subject_substring_contradiction＝「税込金額で」と頼んで『金額』列が
+  並べ替えられた run で `✓` を出さない）＝ 25本。
 - できていない: `ailine run` 以外のサブコマンド（doctor/history/vocab/restore/undo/stop）
   の main(argv) 経由トランスクリプトは対象外（brief のシナリオ一覧が run 系のみのため）。
   freeform の修復ループ（bad_signature/truncated → 再試行 → 成功）の transcript は

@@ -14,7 +14,8 @@
   header-row 指定
   --dry × 3経路(dsl/plan/freeform)
   ★ 単位E: 対象スロットの出所（③矛盾で ✓ を出さない / ②無言で範囲を狭める1文）
-= 4+4+4+3+1+1+1+1+3+2 = 24本。
+  ★ 単位B: 部分文字列の片方向（「税込金額で」→『金額』）でも ✓ を出さない
+= 4+4+4+3+1+1+1+1+3+2+1 = 25本。
 
 ゴールデンは tests/golden/f9_transcripts/<name>.txt（標準出力そのもの）。
 更新の作法は tests/golden/_harness.py 参照。
@@ -447,6 +448,29 @@ def _t_subject_contradiction(tmp_path, monkeypatch, capsys):
                        "--copy", "--values"], capsys)
 
 
+def _t_subject_substring_contradiction(tmp_path, monkeypatch, capsys):
+    """★ 単位B: 依頼は「税込金額で」なのに解決値が『金額』（＝税抜きの列）。『金額』は依頼文に
+       部分文字列としては現れるが、その出現は『税込金額』の一部としてしか説明できないので
+       照合の証拠にしない ―― 適用そのものは成功するが ✓ は出さない。
+       ★ 逆向き（依頼「金額で」→ 解決値『税込金額』）は純関数側の対照の対で凍結してある
+       （tests/test_subject_provenance.py の TestSubstringDirections）。"""
+    book = _book(tmp_path, [["商品", "金額", "税込金額"], ["a", 300, 330], ["b", 200, 220]])
+    monkeypatch.setattr(ailine, "translate_task",
+                         lambda model, task, book_meta, temperature=0.1:
+                         {"op": "SORT", "args": {"col": "金額", "order": "asc"}})
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb = openpyxl.load_workbook(out_book)
+        ws = wb.active
+        for i, row in enumerate([["b", 200, 220], ["a", 300, 330]], start=2):
+            for j, v in enumerate(row, start=1):
+                ws.cell(row=i, column=j, value=v)
+        wb.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    return _run_main(["run", str(book), "税込金額で並べ替えて", "--copy"], capsys)
+
+
 def _t_subject_unspoken_note(tmp_path, monkeypatch, capsys):
     """★ ②: 依頼文は対象について無言（「太字にして」だけ）。✓ は出すが、その run 固有の
        1文で範囲を狭める（旧・常時注記の置き換え）。"""
@@ -462,6 +486,7 @@ def _t_subject_unspoken_note(tmp_path, monkeypatch, capsys):
 
 CASES = {
     "subject_contradiction": _t_subject_contradiction,
+    "subject_substring_contradiction": _t_subject_substring_contradiction,   # ★ 単位B
     "subject_unspoken_note": _t_subject_unspoken_note,
     "dsl_pass": _t_dsl_pass,
     "dsl_warn": _t_dsl_warn,

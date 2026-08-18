@@ -74,6 +74,7 @@ from ailine_core.claim import (   # ★ C5/C9: Claim 型と『✓』の一元レ
 )
 from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 段が共有する実行エンジン
     DslStepDeps, resolve_dsl_step_args, print_dsl_confirmation, apply_dsl_step, compose_dsl_step_advisories,
+    NEW_COLUMN_ORIGIN,   # ★ 単位B: 「直前の段が作った列」の文言の唯一の出どころ
 )
 from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手書きしていた表示の純関数化
     render_code_block, render_retry_options, render_aborted, render_run_header,
@@ -5369,7 +5370,10 @@ _HEADER_WORD_RE = re.compile(r"見出し")
 def _maybe_warn_header_col_mismatch(op: str, resolved: dict, new_cols: list, task: str) -> str | None:
     """★ 致命1: 上のコメント参照。target がこの計画の直前までに新規作成された列
        （new_cols）を指していて、かつ依頼文に「見出し」とある場合だけ、非ブロッキングの
-       助言を返す（M2a と同じ思想＝保守的・ブロックしない・確認を促すだけ）。"""
+       助言を返す（M2a と同じ思想＝保守的・ブロックしない・確認を促すだけ）。
+       ★ 単位B: 一般則（③）が同じスロットで鳴る時は、この文は単独では出ず、③の ⚠ に
+       「（この計画の直前の段で新規作成された列）」として畳み込まれる（dsl_step.py 参照）。
+       事実の文言は NEW_COLUMN_ORIGIN 1箇所が持つ ―― 畳み込み側と文面がずれないため。"""
     if op not in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
         return None
     target = resolved.get("target", "")
@@ -5380,7 +5384,7 @@ def _maybe_warn_header_col_mismatch(op: str, resolved: dict, new_cols: list, tas
         return None
     if not _HEADER_WORD_RE.search(task or ""):
         return None
-    return (f"⚠ 対象の列『{col_name}』はこの計画の直前の段で新規作成された列です。"
+    return (f"⚠ 対象の列『{col_name}』は{NEW_COLUMN_ORIGIN}です。"
             "依頼に「見出し」とあるため、見出し行（行全体）を意図していないか確認してください")
 
 

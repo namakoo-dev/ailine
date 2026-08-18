@@ -136,6 +136,13 @@ class TestFrozenMatchingRule:
             "数量*単価", "数量と単価をかけた金額列を作って、見出しを太字にして",
             others=["商品", "数量", "単価"])
 
+    def test_an_occurrence_swallowed_by_another_real_name_is_not_evidence(self):
+        # ★ 単位B（実測 2026-08-17 の穴）: 『金額』は依頼文に確かに現れるが、その出現は
+        #   『税込金額』の一部としてしか説明できない＝依頼者が言ったのは『税込金額』の方。
+        assert not name_matches_task("金額", "税込金額で並べ替えて", others=["商品", "税込金額"])
+        # 飲み込まれていない出現が1つでもあれば従来どおり照合できる（(i) を狭めすぎない）。
+        assert name_matches_task("金額", "税込金額と金額を比べて", others=["商品", "税込金額"])
+
     def test_fragments_shorter_than_two_characters_are_never_evidence(self):
         # 『金額』は依頼文に無く、共有する断片は1文字の『金』だけ＝証拠にしない
         # （★ 定義(i) の完全一致はそのまま有効なので、実列名が1文字の場合まで禁じてはいない）。
@@ -178,6 +185,81 @@ class TestContrast:
                                 columns=CONTRAST_COLUMNS, consumed=consumed)
         assert [v.tier for v in first] == [MATCHED]
         assert [v.tier for v in second] == [UNSPOKEN]
+
+
+# ===========================================================================
+# ★ 単位B: 部分文字列の**片方向**で ✓ が抜けていた穴の対照の対
+# ===========================================================================
+
+SUBSTRING_COLUMNS = ["商品", "金額", "税込金額"]
+
+
+def _classify_sort_col(task, value):
+    return classify_slots([Slot(key="col", value=value, kind="column")],
+                          task=task, columns=SUBSTRING_COLUMNS, header_row=1,
+                          sheets=["Sheet"], consumed=Consumed())
+
+
+class TestSubstringDirections:
+    """★ 実測 2026-08-17 の穴（単位B の残り）: 列が『商品/金額/税込金額』のブックで
+       「税込金額で並べ替えて」→ 解決値『金額』が①になり **✓ が出ていた**（税込のつもりで
+       頼んで税抜きの列が並べ替えられ、しかも機械検証済みと言う実害のある型）。逆向き
+       「金額で」→『税込金額』は元から③で正しかった ―― **片方向だけ抜けていた**。
+       同じブック・同じ op で依頼文と解決値を入れ替えた4通りをここで凍結する
+       （片方を直して逆を壊す変更が入ったら赤くなる）。"""
+
+    def test_tax_inclusive_request_resolved_to_the_bare_column_is_contradicted(self):
+        # ★ これが塞いだ穴そのもの（単位B 以前は matched ＝ ✓ が出ていた）
+        verdicts = _classify_sort_col("税込金額で並べ替えて", "金額")
+        assert [v.tier for v in verdicts] == [CONTRADICTED]
+        assert verdicts[0].designators == ("税込金額",)
+
+    def test_bare_request_resolved_to_the_tax_inclusive_column_is_contradicted(self):
+        # ★ 元から捕まえていた側（後退させないことの番人）
+        verdicts = _classify_sort_col("金額で並べ替えて", "税込金額")
+        assert [v.tier for v in verdicts] == [CONTRADICTED]
+        assert verdicts[0].designators == ("金額",)
+
+    def test_both_correct_pairings_stay_matched(self):
+        assert [v.tier for v in _classify_sort_col("金額で並べ替えて", "金額")] == [MATCHED]
+        assert [v.tier for v in _classify_sort_col("税込金額で並べ替えて", "税込金額")] == [MATCHED]
+
+    def test_silence_about_the_column_is_still_unspoken(self):
+        assert [v.tier for v in _classify_sort_col("並べ替えて", "金額")] == [UNSPOKEN]
+
+    def test_a_designator_swallowed_by_another_real_name_is_not_left_over(self):
+        """★ 同じ排除を designator 側にも当てた副次効果: 1段目が『税込金額』を拾った後、
+           その中に埋まっているだけの『金額』が2段目の反証に化けない（②のまま＝✓ は残る）。"""
+        task = "税込金額で並べ替えて、太字にして"
+        consumed = Consumed()
+        first = classify_slots([Slot("col", "税込金額", "column")], task=task,
+                               columns=SUBSTRING_COLUMNS, consumed=consumed)
+        second = classify_slots([Slot("target", "row:1", "region")], task=task,
+                                columns=SUBSTRING_COLUMNS, consumed=consumed)
+        assert [v.tier for v in first] == [MATCHED]
+        assert [v.tier for v in second] == [UNSPOKEN]
+
+    def test_end_to_end_the_check_disappears_for_the_wrong_column(self, tmp_path, monkeypatch, capsys):
+        """★ 実害の形そのもの: 「税込金額で」と頼んで『金額』列が並べ替えられた run で
+           ✓ が出ないこと（適用そのものは成功する ―― 止めるのは主張だけ）。"""
+        _isolate(monkeypatch, tmp_path)
+        p = _book(tmp_path, [["商品", "金額", "税込金額"], ["a", 300, 330], ["b", 200, 220]])
+
+        def _sort_by_amount(out_book, code, workdir, helper_files=(), timeout=None):
+            wb = openpyxl.load_workbook(out_book)
+            ws = wb.active
+            for i, row in enumerate([["b", 200, 220], ["a", 300, 330]], start=2):
+                for j, v in enumerate(row, start=1):
+                    ws.cell(row=i, column=j, value=v)
+            wb.save(out_book)
+            return True, None, "ok"
+
+        _fixed(monkeypatch, {"op": "SORT", "args": {"col": "金額", "order": "asc"}}, _sort_by_amount)
+        rc = ailine.main(run_argv(book=str(p), task="税込金額で並べ替えて", copy=True))
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        assert VERIFIED not in out
+        assert "対象『金額』は依頼文の語と機械照合できません（依頼文が指しているのは: 税込金額）" in out
 
 
 # ===========================================================================

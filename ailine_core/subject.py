@@ -40,7 +40,8 @@ f7 のゴールデンが動いた）。依頼文の「金額」は 1 段目が�
 
   (i) `V` が依頼文に部分文字列として現れる（＝この repo が既に3箇所で使っている慣行
       ―― `resolve_target_sheet` の実在シート名照合・`extract_task_mentions`・
-      LOOKUP_FILL の `raw_str in task`）。
+      LOOKUP_FILL の `raw_str in task`）。**ただしその出現が、他の実在名の一部としてしか
+      説明できないなら証拠にしない**（(ii) と同じ曖昧性の排除・下記）。
   (ii) `V` の長さ2以上の連続部分文字列 `s` で、`s` が依頼文に現れ、かつ **`s` が他のどの
       実在名（同じブックの他の列名/シート名）にも現れない**ものが存在する。
 
@@ -52,6 +53,14 @@ f7 のゴールデンが動いた）。依頼文の「金額」は 1 段目が�
 `数量` を含むので、無条件の部分一致だと「数量と単価をかけた…見出しを太字に」の依頼文と
 照合してしまい、**症状そのものが①になって素通りする**。断片が他の実在列も指しうるなら、
 その断片は照合の証拠にならない ―― この曖昧性の排除だけが、両方のバーを同時に満たす線。
+
+**★ (i) にも同じ排除を当てた（実測 2026-08-17 の穴・単位B の残り）**: 列が『商品/金額/
+税込金額』のブックで「税込金額で並べ替えて」→ 解決値『金額』が (i) の素朴な部分文字列だけで
+①になり、**税抜きの列が並べ替えられたまま ✓ が出ていた**。『金額』の依頼文中の出現は
+『税込金額』の一部としてしか説明できない ―― 依頼者が言ったのは『税込金額』の方だ。
+そこで (i) も「他の実在名に飲み込まれていない出現が1つ以上あること」を要求する
+（`_standalone_occurrence`）。★ 逆向き（依頼文「金額で」＋解決値『税込金額』）は元から③で、
+そちらの判定は動かさない ―― 片方向だけ抜けていた穴を塞ぐ変更。
 
 ★ A' 原則はここでも同じ: 照合の材料は**実在物だけ**（実在列名・実在シート名・行番号・
 見出し行）。依頼文から自由に名前を切り出すことはしない（LLM も使わない）。
@@ -163,24 +172,59 @@ def _fragment_credit(name: str, task: str, others) -> bool:
     return False
 
 
+def _standalone_occurrence(name: str, task: str, others) -> bool:
+    """定義 (i): name が依頼文に現れる ―― ただし **他の実在名の一部としてしか説明できない
+       出現は証拠にしない**（(ii) と同じ曖昧性の排除を (i) にも当てる）。
+
+       ★ なぜ（実測 2026-08-17 の穴）: 列が『商品/金額/税込金額』のブックで「税込金額で
+       並べ替えて」→ 解決値『金額』が ① になり ✓ が出ていた。『金額』は依頼文に確かに現れる
+       が、その出現は『税込金額』の一部としてしか現れていない ―― 依頼者が言ったのは
+       『税込金額』であって『金額』ではない。**税込のつもりで頼んで税抜きの列が並べ替えられ、
+       しかも ✓ が出る**という実害のある型なので、この出現は証拠として採らない。
+       ★ 逆向き（依頼文「金額で」＋解決値『税込金額』）は元々③（(i) も (ii) も成立しない）
+       ―― こちらの判定は変えない。"""
+    covers = [o for o in others if name in o and o != name]
+    if not covers:
+        return name in task
+    spans = []
+    for o in covers:   # 他の実在名が依頼文のどこを占めているか
+        at = task.find(o)
+        while at >= 0:
+            spans.append((at, at + len(o)))
+            at = task.find(o, at + 1)
+    at = task.find(name)
+    while at >= 0:
+        if not any(s <= at and at + len(name) <= e for s, e in spans):
+            return True   # 他のどの実在名にも飲み込まれていない出現がある＝依頼者はこの名を言った
+        at = task.find(name, at + 1)
+    return False
+
+
 def name_matches_task(name, task: str, others=()) -> bool:
     """実在名 name が依頼文と機械照合できたか（定義 (i) or (ii)）。
        others は「同じブックの他の実在名」（name 自身は除いて渡してよい・ここでも除く）。"""
     name, task = str(name or ""), str(task or "")
     if not name or not task:
         return False
-    if name in task:
+    others = [str(o) for o in others if o and str(o) != name]
+    if _standalone_occurrence(name, task, others):
         return True
-    return _fragment_credit(name, task, [str(o) for o in others if o and str(o) != name])
+    return _fragment_credit(name, task, others)
 
 
 def task_designators(task: str, columns=(), header_row: int = 1, sheets=()) -> TaskDesignators:
     """依頼文が指している対象を実在物との照合だけで拾う（②と③を分ける材料）。
        ★ ここは完全一致（部分文字列）だけを使う ―― 「依頼文がそのカテゴリについて何か
        言ったか」は保守的に判定する（断片一致まで designator と認めると、②であるべき run が
-       ③に落ちて ✓ が消える）。"""
+       ③に落ちて ✓ が消える）。
+       ★ ただし (i) と同じ曖昧性の排除は当てる（_standalone_occurrence）: 『税込金額』としか
+       現れていない『金額』を「依頼文が指した対象」に数えると、⚠ が「照合できません（依頼文が
+       指しているのは: 金額・税込金額）」と自己矛盾して読め、さらに『税込金額』を拾った次の段が
+       残った『金額』で誤って③に落ちる。"""
     task = str(task or "")
-    cols = tuple(c for c in columns if c and str(c) in task)
+    names = [str(c) for c in columns if c]
+    cols = tuple(c for c in columns if c and _standalone_occurrence(
+        str(c), task, [o for o in names if o != str(c)]))
     rows: list = []
     words: list = []
     for pat in (_ROW_ORDINAL_RE, _ROW_PLAIN_RE):
@@ -196,9 +240,11 @@ def task_designators(task: str, columns=(), header_row: int = 1, sheets=()) -> T
         rows.append(header_row)
         words.append(hm.group(0))
     wm = _WHOLE_WORD_RE.search(task)
+    snames = [str(s) for s in sheets if s]
     return TaskDesignators(columns=cols, rows=tuple(rows), row_words=tuple(words),
                             whole_word=wm.group(0) if wm else "",
-                            sheets=tuple(s for s in sheets if s and str(s) in task))
+                            sheets=tuple(s for s in sheets if s and _standalone_occurrence(
+                                str(s), task, [o for o in snames if o != str(s)])))
 
 
 def _row_value(raw: str):
@@ -299,12 +345,20 @@ def classify_slots(slots, *, task: str, columns=(), header_row: int = 1, sheets=
 
 # --- 表示（③の⚠行・②の素材） -------------------------------------------------
 
-def _subject_phrase(slot: Slot) -> str:
-    return f"対象シート『{slot.value}』" if slot.kind == SHEET else f"対象『{slot.value}』"
+def _subject_phrase(slot: Slot, note: str = "") -> str:
+    head = "対象シート" if slot.kind == SHEET else "対象"
+    return f"{head}『{slot.value}』（{note}）" if note else f"{head}『{slot.value}』"
 
 
-def contradiction_lines(verdicts) -> list:
-    """③ のスロットごとの ⚠ 行（適用前に出す・確認の関所へ渡す理由そのもの）。"""
+def contradiction_lines(verdicts, notes=None) -> list:
+    """③ のスロットごとの ⚠ 行（適用前に出す・確認の関所へ渡す理由そのもの）。
+
+       notes: 解決値 → **その対象の出所を言う1句**（例:「この計画の直前の段で新規作成された
+       列」）。★ 呼び出し側が同じスロットについて別の ⚠ 行を持っている場合、その事実を
+       ここに畳み込んで**1本の ⚠ にする**ためにある ―― 意味の違う2文でも、同じスロットに
+       ついて2行並べば読み手には冗長で、どちらを見て判断すればよいか分からなくなる
+       （事実は落とさない・言うのは1度）。"""
+    notes = notes or {}
     lines = []
     for v in verdicts:
         if v.tier != CONTRADICTED:
@@ -316,8 +370,8 @@ def contradiction_lines(verdicts) -> list:
             continue
         pointed = "・".join(str(w) for w in v.designators) or "（不明）"
         lines.append(
-            f"⚠ {_subject_phrase(v.slot)}は依頼文の語と機械照合できません"
-            f"（依頼文が指しているのは: {pointed}）。意図した対象か確認してください")
+            f"⚠ {_subject_phrase(v.slot, notes.get(str(v.slot.value), ''))}は依頼文の語と機械照合"
+            f"できません（依頼文が指しているのは: {pointed}）。意図した対象か確認してください")
     return lines
 
 

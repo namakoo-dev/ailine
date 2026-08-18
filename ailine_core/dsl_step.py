@@ -40,7 +40,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from ailine_core.subject import contradiction_lines, unspoken_subjects   # ★ 単位E
+from ailine_core.subject import CONTRADICTED, contradiction_lines, unspoken_subjects   # ★ 単位E
+
+# ★ 単位B: 「対象の列がこの計画の直前の段で新規作成された列である」という事実を言う1句。
+#   手書きの if（ailine.py の _maybe_warn_header_col_mismatch）の文と、③の ⚠ に畳み込む
+#   注記の**両方がここを読む** ―― 同じ事実を2箇所に書くと、文面が黙って食い違うため。
+NEW_COLUMN_ORIGIN = "この計画の直前の段で新規作成された列"
 
 
 @dataclass
@@ -146,6 +151,8 @@ class DslConfirmResult:
     line: str                      # "解釈: ..." の全文
     label: str                     # line から "解釈: " を除いたもの
     warn_overwrite: str | None
+    # ★ 単位B: ③の ⚠ へ畳み込んだ場合は None を返す（呼び出し側が助言へ再掲するのを止める
+    #   ―― 畳み込み後の1本は既に段の位置で出ており、助言に同じ事実をもう一度は載せない）。
     mismatch_warning: str | None
     gate_exit: int | None
     # ★ 単位E: 対象スロットの出所。subject_warnings は③（依頼文の語と矛盾する対象・
@@ -184,19 +191,30 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
     if op == "PIVOT":   # ★ W9 項目4
         print(f"{step_prefix}（{deps.pivot_caveat}）")
     mismatch_warning = deps.maybe_warn_header_col_mismatch(op, resolved, new_cols or [], task)
-    if mismatch_warning:
-        print(f"{step_prefix}{mismatch_warning}")
     # ★ 単位E: 対象スロットの出所を①②③に仕分ける。③（依頼文の語と矛盾する対象）はここで
     #   ⚠ を出し、下の関所へ「止めて確認する理由」として渡す ―― 適用前に言わなければ
     #   確認にならない。②は印字せず持ち帰り、✓ の直後の1文（範囲を狭める）に使う。
+    # ★ 単位B: 手書きの if（mismatch_warning）と一般則（③）が**同じスロット**について同時に
+    #   鳴ったら、⚠ を2行並べずに1本へ畳む ―― 手書きの if が持つ固有の事実（この列は直前の段が
+    #   作った）を③の行の注記として運び、判断の材料（依頼文が指している語）はそのまま残す。
+    #   ★ 手書きの if を消すのではない: 一般則が沈黙する反例が実測で在る（前段が作った新規列の
+    #   名前が依頼文にそのまま出る場合・tests/test_subject_provenance.py の
+    #   TestGeneralRuleVsHandWrittenIf）。その時は今までどおり単独で鳴り、助言にも再掲される。
     subject_warnings: tuple = ()
     unspoken: tuple = ()
+    folded = False
     if deps.classify_subject_provenance is not None:
         verdicts = deps.classify_subject_provenance(op, resolved, meta, task, a)
-        subject_warnings = tuple(contradiction_lines(verdicts))
+        target = str(resolved.get("target") or "")
+        folded = bool(mismatch_warning) and any(
+            v.tier == CONTRADICTED and str(v.slot.value) == target for v in verdicts)
+        subject_warnings = tuple(contradiction_lines(
+            verdicts, notes={target: NEW_COLUMN_ORIGIN} if folded else None))
         unspoken = tuple(unspoken_subjects(verdicts))
-        for w in subject_warnings:
-            print(f"{step_prefix}{w}")
+    if mismatch_warning and not folded:
+        print(f"{step_prefix}{mismatch_warning}")
+    for w in subject_warnings:
+        print(f"{step_prefix}{w}")
     warn_overwrite = deps.maybe_warn_target_overwrite(op, resolved, meta, warn_book)
     if warn_overwrite:
         summary = deps.interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
@@ -208,7 +226,8 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
     gate_exit = deps.confirm_overwrite_or_gate(a, warn_overwrite, step_prefix=step_prefix,
                                                 subject_mismatch=bool(subject_warnings))
     return DslConfirmResult(line=line, label=label, warn_overwrite=warn_overwrite,
-                             mismatch_warning=mismatch_warning, gate_exit=gate_exit,
+                             mismatch_warning=None if folded else mismatch_warning,
+                             gate_exit=gate_exit,
                              subject_warnings=subject_warnings, unspoken=unspoken)
 
 
