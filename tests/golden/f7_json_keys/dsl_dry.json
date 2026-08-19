@@ -8,6 +8,7 @@
     "command": "str",
     "dry": "bool",
     "fidelity": "null",
+    "interpretation": "dict{books:list[str],op:str,sheet:str,slots:list[dict{key:str,kind:null,origin:str,value:str}|dict{key:str,kind:str,origin:str,value:str}]}",
     "model": "str",
     "ok": "bool",
     "path": "str",

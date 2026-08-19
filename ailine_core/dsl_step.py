@@ -166,6 +166,11 @@ class DslConfirmResult:
     #   ✓ の直後の1文の材料）。仕分けをしない呼び出し（deps 未設定）では両方とも空。
     subject_warnings: tuple = ()
     unspoken: tuple = ()
+    # ★ 段1: 対象スロットの判定結果そのもの（SubjectVerdict のリスト）。呼び出し側が
+    #   `interpretation`（--json の機械可読な解釈）を組む材料として使う。仕分けをしない
+    #   呼び出し（deps 未設定）では空 ―― ここでも二重に classify_subject_provenance を
+    #   呼ばない（判定は1回・消費の台帳(Consumed)を余計に進めないため）。
+    verdicts: tuple = ()
 
 
 def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
@@ -208,9 +213,10 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
     #   TestGeneralRuleVsHandWrittenIf）。その時は今までどおり単独で鳴り、助言にも再掲される。
     subject_warnings: tuple = ()
     unspoken: tuple = ()
+    verdicts: tuple = ()
     folded = False
     if deps.classify_subject_provenance is not None:
-        verdicts = deps.classify_subject_provenance(op, resolved, meta, task, a)
+        verdicts = tuple(deps.classify_subject_provenance(op, resolved, meta, task, a))
         target = str(resolved.get("target") or "")
         folded = bool(mismatch_warning) and any(
             v.tier == CONTRADICTED and str(v.slot.value) == target for v in verdicts)
@@ -234,7 +240,8 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
     return DslConfirmResult(line=line, label=label, warn_overwrite=warn_overwrite,
                              mismatch_warning=None if folded else mismatch_warning,
                              gate_exit=gate_exit,
-                             subject_warnings=subject_warnings, unspoken=unspoken)
+                             subject_warnings=subject_warnings, unspoken=unspoken,
+                             verdicts=verdicts)
 
 
 @dataclass

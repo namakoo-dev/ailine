@@ -94,6 +94,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
     COLUMN as SUBJ_COLUMN, REGION as SUBJ_REGION, ROW as SUBJ_ROW,
     SHEET as SUBJ_SHEET, LABEL as SUBJ_LABEL, INPUT as SUBJ_INPUT,
 )
+from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
 )
@@ -5201,9 +5202,13 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     for ln in render_code_block(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
         print(ln)
 
+    # ★ 段1: interpretation/provenance は1箇所（build_interpretation）で組む
+    #   （単位C の教訓 ―― 出所を運ぶ場所が2つあると片方だけ更新されて食い違う）。
+    #   provenance は resolved["_sources"] をそのまま返す派生ビュー（値・型は不変）。
+    interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
               "path": "dsl", "command": confirm.line, "postcondition": None,
-              "provenance": resolved.get("_sources")}
+              "interpretation": interpretation, "provenance": provenance}
 
     if a.dry:
         # ★ 挙動変更#3: シート衝突②の内部プレビュー（_preview_and_run_on_alternative_sheet）
@@ -5815,7 +5820,7 @@ def _dedup_step_advisories(entries: list) -> list:
 def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_meta: dict, original_headers: dict,
                         first_sheet: str | None, out_book: Path, workdir: Path, helper_files, apply_timeout,
                         use_formula: bool, header_rows: dict, before_charts: int, a: argparse.Namespace, vocab: dict,
-                        subject_sink: dict | None = None) -> tuple:
+                        book_name: str, subject_sink: dict | None = None) -> tuple:
     """★ C7: cmd_run_plan の DSL 語彙段の1段分。cmd_run_dsl と同じ ailine_core.dsl_step の共有エンジンを通る
        （非対称は dsl_step.py 参照）。この分離で stage_organs の dsl_plan_step 代表関数はここになる（DoD7）。
        戻り値: (gate_exit, item, plan_json_entry, step_advisories, provenance_entry, mention_exclude_sheets, current_meta)。
@@ -5845,7 +5850,10 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
             if phrase not in subject_sink.setdefault("unspoken", []):
                 subject_sink["unspoken"].append(phrase)
     step_advisories = [confirm.mismatch_warning] if confirm.mismatch_warning else []
-    provenance_entry = {"step": i, **resolved["_sources"]} if resolved.get("_sources") else None
+    # ★ 段1: interpretation/provenance は1箇所（build_interpretation）で組む（cmd_run_dsl と同じ）。
+    #   provenance_entry の中身（キー・値）は今までと完全に同じ（resolved["_sources"] のまま）。
+    interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book_name])
+    provenance_entry = {"step": i, **provenance} if provenance else None
 
     # ★ 挙動変更#2: cmd_run_dsl と同じ理由（コメント参照）で、この段の「本当の」対象シート
     #   (resolved["_target_sheet"]) を優先する（LOOKUP_FILL 段が計画全体の対象シートと
@@ -5869,7 +5877,8 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     if apply_result.runtime_error is not None:
         detail = f"実行時エラー: {short_error_summary(apply_result.runtime_error)}"
         return (None, (i, confirm.label, "fail", detail),
-                {"op": op, "command": confirm.line, "status": "fail", "postcondition": None},
+                {"op": op, "command": confirm.line, "status": "fail", "postcondition": None,
+                 "interpretation": interpretation},
                 step_advisories, provenance_entry, None, current_meta)
 
     # ★ W10d【本命】: mode="structural"（依頼文言との重なり④は呼び出し側が全体で1回評価・dsl_step.py 参照）。
@@ -5892,7 +5901,8 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     # ★ 止血1/2: "error"→fail 扱い。"warn"(検証対象不足)は成功は名乗るが機械検証済みとは言わない。
     if status in ("fail", "error"):
         return (None, (i, confirm.label, "fail", reason),
-                {"op": op, "command": confirm.line, "status": "fail", "postcondition": "fail"},
+                {"op": op, "command": confirm.line, "status": "fail", "postcondition": "fail",
+                 "interpretation": interpretation},
                 step_advisories, provenance_entry, mention_exclude_sheets, current_meta)
     item_status = "warn" if status == "warn" else "ok"
     # ★★ 単位F: 単発(cmd_run_dsl)と同じ位置・同じ関所。段ごとの before/after で見る
@@ -5906,12 +5916,13 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
         if gate_exit is not None:
             return (gate_exit, None, None, [], None, None, current_meta)
     return (None, (i, confirm.label, item_status, reason),
-            {"op": op, "command": confirm.line, "status": item_status, "postcondition": status},
+            {"op": op, "command": confirm.line, "status": item_status, "postcondition": status,
+             "interpretation": interpretation},
             step_advisories, provenance_entry, mention_exclude_sheets,
             build_book_meta(out_book, header_rows=header_rows))
 
 
-def _preview_dsl_plan(a: argparse.Namespace, plan: list, book_meta: dict, vocab: dict) -> list:
+def _preview_dsl_plan(a: argparse.Namespace, plan: list, book_meta: dict, vocab: dict, book_name: str) -> list:
     """★ C7: cmd_run_plan の --dry プレビュー（未実行・印字のみ）。--json 用 plan_json を返す。
        分離により cmd_run_plan 自身は verify_dsl_args を直接呼ばなくなる（DoD7 の材料）。"""
     preview_items, plan_json = [], []
@@ -5936,7 +5947,14 @@ def _preview_dsl_plan(a: argparse.Namespace, plan: list, book_meta: dict, vocab:
                 label = format_confirmation_line(op, resolved, inferred, sheets=book_meta.get("sheets"),
                                                  target_sheet=resolved.get("_target_sheet"))[len("解釈: "):]
                 preview_items.append((i, label, "ok", None))
-                plan_json.append({"op": op, "command": label, "status": "ok", "postcondition": None})
+                # ★ 段1: プレビューにも interpretation を足す（--dry でも解釈は決まっている）。
+                #   単発/実行と同じ組み立て（build_interpretation）を使う ―― 判定は
+                #   classify_subject_provenance を1回だけ呼ぶ（単発は print_dsl_confirmation
+                #   の内側で済ませているが、プレビューはそれを呼ばないのでここで直接呼ぶ）。
+                verdicts = classify_subject_provenance(op, resolved, book_meta, a.task, a)
+                interpretation, _provenance = build_interpretation(op, resolved, inferred, verdicts, [book_name])
+                plan_json.append({"op": op, "command": label, "status": "ok", "postcondition": None,
+                                   "interpretation": interpretation})
             else:
                 preview_items.append((i, f"操作:{OP_LABELS.get(op, op)}", "fail", err))
                 plan_json.append({"op": op, "command": None, "status": "fail", "postcondition": None})
@@ -5970,7 +5988,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
               "path": "plan", "command": None, "postcondition": None}
     if a.dry:
         print("\n（--dry プレビュー・語彙外の段は実行時に AI が直接作成（機械保証なし）で対応します。未実行）")
-        plan_json = _preview_dsl_plan(a, plan, book_meta, vocab)
+        plan_json = _preview_dsl_plan(a, plan, book_meta, vocab, book.name)
         print("\n（--dry: 適用しない。レビュー後に --dry を外して実行）")
         result["ok"] = True
         result["dry"] = True
@@ -6032,7 +6050,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 original_headers=original_headers, first_sheet=first_sheet, out_book=out_book,
                 workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
                 use_formula=use_formula, header_rows=header_rows, before_charts=before_charts, a=a, vocab=vocab,
-                subject_sink=subject_sink)
+                book_name=book.name, subject_sink=subject_sink)
         if gate_exit is not None:
             return gate_exit
         if item is not None:

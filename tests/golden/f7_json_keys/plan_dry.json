@@ -11,7 +11,7 @@
     "model": "str",
     "ok": "bool",
     "path": "str",
-    "plan": "list[dict{command:str,op:str,postcondition:null,status:str}]",
+    "plan": "list[dict{command:str,interpretation:dict{books:list[str],op:str,sheet:str,slots:list[dict{key:str,kind:null,origin:str,value:str}|dict{key:str,kind:str,origin:str,value:str}]},op:str,postcondition:null,status:str}|dict{command:str,interpretation:dict{books:list[str],op:str,sheet:str,slots:list[dict{key:str,kind:str,origin:str,value:str}]},op:str,postcondition:null,status:str}]",
     "postcondition": "null",
     "task": "str"
   }
