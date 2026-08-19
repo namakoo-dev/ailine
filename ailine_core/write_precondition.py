@@ -157,6 +157,28 @@ PRECONDITIONS = {
 NO_PRECONDITION = frozenset({"existing_column", "new_column"})
 
 
+def check_write_preconditions_detail(writes, before: dict, after: dict, *,
+                                     cell_ref: Callable, fmt_value: Callable):
+    """破れた前提を **(種類, 文言)** で返す（破れていなければ None）。
+
+    ★ 単位G が種類を要る理由: 「前提が破れた」だけでは、どの宣言が嘘をついたのか分からない。
+    中立化（「（既存シート『集計』の更新は意図どおりです）」）を黙らせてよいのは
+    **new_sheet の前提が破れたとき**であって、format_only や reorder が破れたときではない。
+    種類を返さずに「何か破れた」で中立化を止めると、関係の無い理由で肯定文を消すことになる。
+
+    ★ 検査の順は writes の宣言順に従う（最初に破れたものを返す）。1 op が複数の前提を
+    破ったときに 2 行出すことはしない ── 関所に渡すのは 1 行という約束を変えないため。
+    """
+    for kind in writes or ():
+        check = PRECONDITIONS.get(kind)
+        if check is None:
+            continue
+        message = check(before, after, cell_ref=cell_ref, fmt_value=fmt_value)
+        if message:
+            return kind, message
+    return None
+
+
 def check_write_preconditions(writes, before: dict, after: dict, *,
                                cell_ref: Callable, fmt_value: Callable) -> str | None:
     """宣言した writes の前提が適用後の実測と食い違っていれば、その1行を返す（無ければ None）。
@@ -166,12 +188,10 @@ def check_write_preconditions(writes, before: dict, after: dict, *,
     before/after: ailine.snapshot() の dict（before は原本、after は適用済みのコピー）。
     cell_ref/fmt_value: 表示用の関数（ailine.py の _cell_ref / _fmt_cell_value）。同じ表記を
             2箇所に書かないため、呼び出し時点で受け取る（formula_health.py と同じ作法）。
+
+    ★ 単位G 以降、本体は check_write_preconditions_detail（種類つき）。ここはその文言だけを
+    返す薄い皮で、判定は 1 箇所しか無い（同じ検査を 2 箇所に書かない）。
     """
-    for kind in writes or ():
-        check = PRECONDITIONS.get(kind)
-        if check is None:
-            continue
-        message = check(before, after, cell_ref=cell_ref, fmt_value=fmt_value)
-        if message:
-            return message
-    return None
+    detail = check_write_preconditions_detail(writes, before, after,
+                                              cell_ref=cell_ref, fmt_value=fmt_value)
+    return detail[1] if detail else None

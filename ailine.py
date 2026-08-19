@@ -82,7 +82,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_ops_table,
 )
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
-from ailine_core.write_precondition import check_write_preconditions   # ★ 単位F: 宣言した領域の前提
+from ailine_core.write_precondition import check_write_preconditions_detail   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
 from ailine_core.sum_identity import rows_matching_sum_above   # ★ 算術恒等の検算（二重計上）
 from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
@@ -1106,7 +1106,8 @@ def unrequested_new_sheet_advisory(task: str, before: dict, after: dict, *,
 #   すり替わった）への対抗。detect_ghost_data/detect_uniform_fill と同じ保守的な方針
 #   （両条件とも『原本にあった非空セルが全部』変わった時だけ発火＝一部だけの更新・
 #   再計算は対象外＝誤検知回避優先）。
-def existing_sheet_replaced_advisory(before: dict, after: dict, *, op: str | None = None) -> list:
+def existing_sheet_replaced_advisory(before: dict, after: dict, *, op: str | None = None,
+                                      precondition_broken: str | None = None) -> list:
     """before・after の両方に実在するシート（新規作成ではない）のうち、原本の使用範囲に
        あった非空セルが【全部】別の値に変わっている場合だけ「中身が置き換わった」を返す。
        一部のセルだけが変わった（値の再計算・部分更新等）場合は対象外（保守的）。
@@ -1116,7 +1117,15 @@ def existing_sheet_replaced_advisory(before: dict, after: dict, *, op: str | Non
        WRITE_NEW_SHEET）、かつそのシートが OP_DECLARED_SHEET_NAME の宣言どおりの出力先
        （例: AGGREGATE→『集計』）なら、警告でなく中立表示を返す
        （旧 _neutralize_declared_sheet_replace_warning の後処理を発生源へ先取り）。"""
-    declared_sheet = OP_DECLARED_SHEET_NAME.get(op) if _op_writes(op, WRITE_NEW_SHEET) else None
+    # ★★ 単位G: 中立化は「前提が成立していた時だけ」。宣言(writes=new_sheet)は警告を黙らせる
+    #   権利を持つが、その前提（＝その名前のシートは before に存在しない）が単位F の検査で
+    #   破れていたなら、権利を失う ── 破れた宣言に「意図どおりです」と言わせない。
+    #   ★ 破れた種類を見る（「何か破れた」では、format_only や reorder の破れで無関係に黙らせる）。
+    #   ★ ここで警告に戻すだけで、正常系（前に ailine 自身が作った『集計』の作り直し）を
+    #   肯定文に戻すのは 単位H（出所判定）の仕事。G で H をやると、また恒真を踏む。
+    declared_sheet = (OP_DECLARED_SHEET_NAME.get(op)
+                      if _op_writes(op, WRITE_NEW_SHEET) and precondition_broken != WRITE_NEW_SHEET
+                      else None)
     lines = []
     for sheet in before["sheets"]:
         if sheet not in after["sheets"]:
@@ -1220,7 +1229,8 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
 
 
 def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
-                            resolved: dict | None = None, meta: dict | None = None) -> list:
+                            resolved: dict | None = None, meta: dict | None = None,
+                            precondition_broken: str | None = None) -> list:
     """助言のうち『この差分そのものが疑わしいか』を判定する部分だけ
        （①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身・★ W6）。
        依頼文言との重なり(④ mention_overlap_advisory)は含めない。
@@ -1244,13 +1254,14 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
     if recon:
         lines.append(recon)
     lines.extend(new_sheet_advisories(before, after))
-    lines.extend(existing_sheet_replaced_advisory(before, after, op=op) + [m for m in [detect_write_target_type_change(before, after, op=op, resolved=resolved, meta=meta, op_write_target=OP_WRITE_TARGET, is_number=_is_number)] if m])   # ★ 致命2(W10e) + 挙動変更#1(b)
+    lines.extend(existing_sheet_replaced_advisory(before, after, op=op, precondition_broken=precondition_broken) + [m for m in [detect_write_target_type_change(before, after, op=op, resolved=resolved, meta=meta, op_write_target=OP_WRITE_TARGET, is_number=_is_number)] if m])   # ★ 致命2(W10e) + 挙動変更#1(b)
     return lines
 
 
 def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set | None = None, *,
                       op: str | None = None, resolved: dict | None = None,
-                      meta: dict | None = None, sheet_conflict=None) -> list:
+                      meta: dict | None = None, sheet_conflict=None,
+                      precondition_broken: str | None = None) -> list:
     """diff の後に表示する助言行を全部集める。
        ①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身（★ W6・
        _structural_advisories が担当） ⑥依頼にないシート新設の申告（★ W6）
@@ -1265,7 +1276,8 @@ def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set |
        曖昧＝既定へ後退した」と決めた記録）に載る同名シートも、同じ和に足す ── 助言側で
        「曖昧かどうか」を判定し直さず、決めた側の結果をそのまま運ぶ
        （ailine_core.target_sheet.conflict_excluded_sheets 参照）。"""
-    lines = list(_structural_advisories(before, after, op=op, resolved=resolved, meta=meta))
+    lines = list(_structural_advisories(before, after, op=op, resolved=resolved, meta=meta,
+                                        precondition_broken=precondition_broken))
     lines.extend(unrequested_new_sheet_advisory(task, before, after, op=op))
     mentions = extract_task_mentions(task, before["sheets"])
     excluded = (set(exclude_sheets or ()) | _declared_reads_only_sheets(op, resolved)
@@ -4960,7 +4972,7 @@ def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_
     return None
 
 
-def _maybe_warn_write_precondition(op: str, before: dict, after: dict) -> str | None:
+def _maybe_warn_write_precondition(op: str, before: dict, after: dict):
     """★★ 単位F: op が宣言した書き込み領域(OP_WRITE_TARGET.writes)の**前提**が、適用後の
        実測で破れていれば1行を返す（無ければ None）。判定本体は
        ailine_core/write_precondition.py（純ロジック・前提の一覧はそこの docstring）。
@@ -4972,8 +4984,8 @@ def _maybe_warn_write_precondition(op: str, before: dict, after: dict) -> str | 
     write_target = OP_WRITE_TARGET.get(op)
     if not write_target:
         return None
-    return check_write_preconditions(write_target.writes, before, after,
-                                      cell_ref=_cell_ref, fmt_value=_fmt_cell_value)
+    return check_write_preconditions_detail(write_target.writes, before, after,
+                                             cell_ref=_cell_ref, fmt_value=_fmt_cell_value)
 
 
 def _interpretation_summary_line(resolved: dict, inferred: set) -> str | None:
@@ -5196,9 +5208,18 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     #   除外すべきシートは OP_WRITE_TARGET の reads_only 宣言そのものなので、
     #   build_advisories が op/resolved から自分で求める（AGGREGATE/PIVOT の入力シートも同じ）。
     # ★ 誤爆#3: 対象シートを決めた側の判定結果（曖昧なので既定へ後退した）をそのまま運ぶ。
+    # ★★ 単位G: 前提の検査を「助言を組む前」に move した（検査の中身は 単位F のまま）。
+    #   理由: 中立化（「（既存シート『集計』の更新は意図どおりです）」）は助言の発生源で
+    #   決まるので、前提が破れたことを 発生源が知っていなければならない。
+    #   ★ 後から該当行を消す方式は採らない ── ailine.py の中立化は W10c/W10d で
+    #   「出してから打ち消す」を捨てて発生源へ先取りした経緯がある（この関数の上の注記）。
+    #   ★ 印字と関所は 位置を変えていない（後段のまま）。ここでやるのは判定だけ。
+    precondition = _maybe_warn_write_precondition(op, before, after)
+    precondition_broken = precondition[0] if precondition else None
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
-        sheet_conflict=getattr(a, "_sheet_conflict", None)) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
+        sheet_conflict=getattr(a, "_sheet_conflict", None),
+        precondition_broken=precondition_broken) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -5231,7 +5252,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     # ★★ 単位F: 反映の直前（原本はまだ無傷・before/after は両方手元にある）に、宣言した
     #   書き込み領域の前提を確かめる。破れていたら**同じ破壊の関所**へ渡す（新しい関所も
     #   新しい exit code も作らない ―― 上書き警告と同じ引数の位置に、同じ形の1行を渡す）。
-    warn_precondition = _maybe_warn_write_precondition(op, before, after)
+    warn_precondition = precondition[1] if precondition else None   # ★ 単位G: 上で 1 度だけ検査済み
     if warn_precondition:
         print(warn_precondition)
         gate_exit = _confirm_overwrite_or_gate(a, warn_precondition)
@@ -5843,7 +5864,8 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     # ★★ 単位F: 単発(cmd_run_dsl)と同じ位置・同じ関所。段ごとの before/after で見る
     #   （計画全体の before/after で見ると、前の段が既存行を書いたことを次の段の前提破れと
     #   読み違える ―― 宣言は段ごとに違うので、突き合わせも段ごとでなければならない）。
-    warn_precondition = _maybe_warn_write_precondition(op, step_before, step_after)
+    _precondition = _maybe_warn_write_precondition(op, step_before, step_after)
+    warn_precondition = _precondition[1] if _precondition else None
     if warn_precondition:
         print(f"{step_prefix}{warn_precondition}")
         gate_exit = _confirm_overwrite_or_gate(a, warn_precondition, step_prefix=step_prefix)

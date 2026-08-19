@@ -484,6 +484,52 @@ def _t_subject_unspoken_note(tmp_path, monkeypatch, capsys):
     return _run_main(["run", str(book), "太字にして", "--copy"], capsys)
 
 
+def _book_with_handmade_summary(tmp_path):
+    """★ 単位G: 人が手で作った『集計』シートがあるブック。盲検査定の致命2件目の実物
+       （無関係な手作りの『集計』(年度/予算) が SummaryTable の removeByName で全滅した）。"""
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    for r in [["部門", "金額"], ["営業", 100], ["営業", 200], ["開発", 300]]:
+        ws.append(r)
+    s = wb.create_sheet("集計")
+    for r in [["年度", "予算"], [2025, 5000], [2026, 6000]]:
+        s.append(r)
+    wb.save(p)
+    return p
+
+
+def _t_unit_g_declared_sheet_premise_broken(tmp_path, monkeypatch, capsys):
+    """★★ 単位G: 宣言(writes=new_sheet)は「その名前のシートは before に存在しない」を前提に
+       警告を黙らせる権利を持つ。手作りの『集計』が既に在る＝前提が破れているので、権利を失う。
+       ★ この golden が凍結するのは **「（既存シート『集計』の更新は意図どおりです）」が
+       画面に出ないこと**（単位G の完了条件）。関所が止めた 1 行上に肯定文が出ていたのが
+       元の欠陥で、純関数のテストではその並びまでは測れない。
+       ★ 正常系（前に ailine 自身が作った『集計』の作り直し）を肯定文へ戻すのは 単位H の仕事。"""
+    book = _book_with_handmade_summary(tmp_path)
+    monkeypatch.setattr(ailine, "translate_task",
+                         lambda model, task, book_meta, temperature=0.1:
+                         {"op": "AGGREGATE", "args": {"group_col": "部門", "value_col": "金額"}})
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        # SummaryTable ヘルパの removeByName("集計") → 作り直し を模す（中身が全部変わる）
+        wb = openpyxl.load_workbook(out_book)
+        del wb["集計"]
+        s = wb.create_sheet("集計")
+        for r in [["部門", "合計"], ["営業", 300], ["開発", 300]]:
+            s.append(r)
+        wb.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    def _raise_eof(prompt=""):
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    # --copy なし = 既定(原本直接) → 前提が破れれば破壊の関所が非対話で exit 7
+    return _run_main(["run", str(book), "部門ごとに金額をまとめて"], capsys)
+
+
 CASES = {
     "subject_contradiction": _t_subject_contradiction,
     "subject_substring_contradiction": _t_subject_substring_contradiction,   # ★ 単位B
@@ -510,7 +556,22 @@ CASES = {
     "dry_dsl": _t_dry_dsl,
     "dry_plan": _t_dry_plan,
     "dry_freeform": _t_dry_freeform,
+    "unit_g_declared_sheet_premise_broken": _t_unit_g_declared_sheet_premise_broken,   # ★ 単位G
 }
+
+
+# ★★ 単位G の番人（ゴールデンとは別に置く）: 承認テストは AILINE_REGEN_GOLDEN=1 で
+#   再生成できてしまうので、「肯定文が戻ってきた」を凍結ファイルだけに頼ると、再生成した
+#   瞬間に黙って通る。★ 消えたことは diff に出ない（feedback_negative_coverage）ので、
+#   禁止文字列の不在をここで直接主張する ── この assert は再生成では消えない。
+def test_unit_g_affirmative_line_never_returns(tmp_path, monkeypatch, capsys):
+    _isolate(monkeypatch, tmp_path)
+    rc, out = _t_unit_g_declared_sheet_premise_broken(tmp_path, monkeypatch, capsys)
+    assert "意図どおりです" not in out, out
+    # 対の主張: 黙らせる代わりに、破れた前提と置き換えの両方をちゃんと述べていること
+    assert "既存シート『集計』の中身が置き換わりました" in out
+    assert "新しいシートを作るはずが" in out
+    assert rc == 7   # 非対話で関所が止めた（原本は無変更）
 
 
 _ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2}")

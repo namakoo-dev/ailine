@@ -7337,6 +7337,38 @@ def test_existing_sheet_replaced_advisory_neutral_for_aggregate():
     out = ailine.existing_sheet_replaced_advisory(before, after, op="AGGREGATE")
     assert out == ["（既存シート『集計』の更新は意図どおりです）"]
 
+# ★★ 単位G: 中立化は「前提が成立していた時だけ」。宣言（writes=new_sheet）が黙らせる権利を
+#   持つのは、その前提（＝その名前のシートは before に存在しない）が破れていない時だけ。
+#   盲検査定の致命: 人が手で作った『集計』シートが SummaryTable に全滅させられたのに、
+#   「（既存シート『集計』の更新は意図どおりです）」という肯定文まで出ていた。
+#   ★ 単位G の完了条件は「肯定文が消える」ことであって、正常系（前に ailine 自身が作った
+#   『集計』の作り直し）を肯定文に戻すのは 単位H（出所判定）の仕事。ここではやらない。
+
+def test_unit_g_neutralization_withdrawn_when_new_sheet_precondition_broke():
+    before = _sheet_snapshot({"集計!1,1": _v("年度"), "集計!2,1": _v("予算")}, sheets=("Sheet", "集計"))
+    after = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("営業")}, sheets=("Sheet", "集計"))
+    lines = ailine.existing_sheet_replaced_advisory(before, after, op="AGGREGATE",
+                                                    precondition_broken="new_sheet")
+    # ★ 負の被覆: 「出るべきものが出るか」でなく「出てはいけないものが消えたか」を測る
+    assert not any("意図どおりです" in ln for ln in lines), lines
+    assert len(lines) == 1
+    assert "既存シート『集計』の中身が置き換わりました" in lines[0]
+
+def test_unit_g_neutralization_kept_when_other_precondition_broke():
+    # ★ 破れたのが別の種類（format_only 等）なら、new_sheet の宣言は権利を失わない。
+    #   「何か破れた」で黙らせると、無関係な理由で肯定文を消すことになる。
+    before = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("旧")}, sheets=("Sheet", "集計"))
+    after = _sheet_snapshot({"集計!1,1": _v("日付"), "集計!2,1": _v("新")}, sheets=("Sheet", "集計"))
+    out = ailine.existing_sheet_replaced_advisory(before, after, op="AGGREGATE",
+                                                  precondition_broken="format_only")
+    assert out == ["（既存シート『集計』の更新は意図どおりです）"]
+
+def test_unit_g_default_is_unchanged_from_unit_f():
+    # ★ 退行の番人: precondition_broken を渡さない呼び出し（既存の全経路）は挙動不変。
+    before = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("旧")}, sheets=("Sheet", "集計"))
+    after = _sheet_snapshot({"集計!1,1": _v("日付"), "集計!2,1": _v("新")}, sheets=("Sheet", "集計"))
+    assert ailine.existing_sheet_replaced_advisory(before, after, op="AGGREGATE") ==            ["（既存シート『集計』の更新は意図どおりです）"]
+
 def test_existing_sheet_replaced_advisory_warns_for_other_ops():
     before = _sheet_snapshot({"集計!1,1": _v("部署"), "集計!2,1": _v("旧")}, sheets=("Sheet", "集計"))
     after = _sheet_snapshot({"集計!1,1": _v("日付"), "集計!2,1": _v("新")}, sheets=("Sheet", "集計"))
