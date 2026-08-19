@@ -1,6 +1,6 @@
 """C1-F5: format_confirmation_line(op, resolved_args, inferred) の確認行文字列を凍結する。
 
-対象: 全16 op（_CONFIRM_FIELDS に載っている全部）。★推定タグ(推定)・出典タグ
+対象: 全17 op（_CONFIRM_FIELDS に載っている全部）。★推定タグ(推定)・出典タグ
 （_sources 由来）・M2c のフィールド省略（キー自体が resolved_args に無い任意項目）も
 それぞれ最低1ケース収載する。
 
@@ -53,6 +53,7 @@ _add("autofit_no_fields", "AUTOFIT", {})
 _add("pivot", "PIVOT", {"group_col": "商品", "value_col": "金額"})
 _add("set_column_value_with_source", "SET_COLUMN_VALUE",
      {"col": "商品", "value": "確認済み", "_sources": {"value": "依頼文: 「確認済み」"}})
+_add("extract", "EXTRACT", {"col": "金額", "cmp": "gte", "value": 40000.0})
 
 
 def _case_ids():

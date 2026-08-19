@@ -433,3 +433,93 @@ Sub BoldRange(oSheet As Object, col1 As Integer, row1 As Integer, col2 As Intege
         Next c
     Next r
 End Sub
+
+
+' EXTRACT: 単一条件（col × cmp × value）に一致する行を新しいシート(dstName)へ抜き出す。
+' ★ 型を保つコピー: 数値セルは getValue/setValue・文字列セルは getString/setString で
+'   分岐する（getType() で判定・VLookupFromTable と同じ作法）。自由生成の実弾で観測した
+'   事故（全セルを setString で書き、'59,400' のようにカンマごと文字列として焼き込む）を
+'   直接潰す設計 ―― ここでは逆を書く（値を型どおりに保つ）。
+'   headerRow : 元シートの見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
+'   colIdx    : 条件を判定する列（0 起点）
+'   cmpCode   : 比較の種類（0=以上 1=以下 2=超 3=未満 4=等しい 5=を含む）
+'   cmpValue  : 比較する値（gte/lte/gt/lt は数値・eq は数値か文字列・contains は文字列）
+'   dstName   : 出力先シート名（Python 側 codegen が col/cmp/value から決め打ちで組む。
+'               既に同名シートがあれば作り直す ―― 単位F/H が「前回の自分の出力の作り
+'               直しか、人の物の破壊か」を before/after の見出し署名で見分ける）
+Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode As Integer, cmpValue As Variant, dstName As String)
+    Dim oSheet As Object, oOut As Object
+    Dim lastRow As Long, lastCol As Integer, i As Long, j As Integer
+    Dim oCell As Object, oSrc As Object, oDst As Object
+    Dim outRow As Long, matched As Boolean, isNumericCell As Boolean
+    oSheet = oDoc.Sheets.getByIndex(0)
+
+    ' 最終データ行（A 列を見出しの直下から走査）
+    lastRow = headerRow + 1
+    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
+        lastRow = lastRow + 1
+    Loop
+    lastRow = lastRow - 1
+    ' 最終列（見出し行を走査）
+    lastCol = 0
+    Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
+        lastCol = lastCol + 1
+    Loop
+    lastCol = lastCol - 1
+    If lastRow < headerRow + 1 Or lastCol < 0 Then Exit Sub
+
+    If oDoc.Sheets.hasByName(dstName) Then oDoc.Sheets.removeByName(dstName)
+    oDoc.Sheets.insertNewByName(dstName, oDoc.Sheets.Count)
+    oOut = oDoc.Sheets.getByName(dstName)
+
+    ' 見出し行のコピー（単位H の署名: 出力の1行目 = 元シートの見出し行そのもの）
+    For j = 0 To lastCol
+        oOut.getCellByPosition(j, 0).setString(oSheet.getCellByPosition(j, headerRow).getString())
+    Next j
+
+    outRow = 1
+    For i = headerRow + 1 To lastRow
+        oCell = oSheet.getCellByPosition(colIdx, i)
+        isNumericCell = (oCell.getType() <> com.sun.star.table.CellContentType.TEXT) And (oCell.getType() <> com.sun.star.table.CellContentType.EMPTY)
+
+        Select Case cmpCode
+            Case 0   ' 以上
+                matched = (oCell.getValue() >= CDbl(cmpValue))
+            Case 1   ' 以下
+                matched = (oCell.getValue() <= CDbl(cmpValue))
+            Case 2   ' 超
+                matched = (oCell.getValue() > CDbl(cmpValue))
+            Case 3   ' 未満
+                matched = (oCell.getValue() < CDbl(cmpValue))
+            Case 4   ' 等しい（数値セルは数値比較・それ以外は文字列比較）
+                If isNumericCell Then
+                    matched = (oCell.getValue() = CDbl(cmpValue))
+                Else
+                    matched = (oCell.getString() = CStr(cmpValue))
+                End If
+            Case 5   ' を含む（常に文字列の部分一致）
+                matched = (InStr(oCell.getString(), CStr(cmpValue)) > 0)
+            Case Else
+                matched = False
+        End Select
+
+        If matched Then
+            For j = 0 To lastCol
+                oSrc = oSheet.getCellByPosition(j, i)
+                oDst = oOut.getCellByPosition(j, outRow)
+                If oSrc.getType() = com.sun.star.table.CellContentType.TEXT Then
+                    oDst.setString(oSrc.getString())
+                ElseIf oSrc.getType() = com.sun.star.table.CellContentType.EMPTY Then
+                    ' 何もしない（空欄のまま。0 で埋めない＝型を保つコピーの一部）
+                Else
+                    oDst.setValue(oSrc.getValue())
+                    ' ★ 数値セルは NumberFormat も一緒に運ぶ。実測 (2026-08-20): 日付セルは getValue() が
+                    '   シリアル値 (46237) を返すため、書式を運ばないと日付がただの整数に化け、
+                    '   check_extract の型保存検査が正しく fail した。書式キーは同一ドキュメント内で有効。
+                    oDst.NumberFormat = oSrc.NumberFormat
+                End If
+            Next j
+            outRow = outRow + 1
+        End If
+    Next i
+End Sub

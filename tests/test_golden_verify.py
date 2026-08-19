@@ -191,6 +191,15 @@ _add("set_column_value_no_quoted_literal_errors", "SET_COLUMN_VALUE", {"col": "�
 _add("set_column_value_unknown_col", "SET_COLUMN_VALUE", {"col": "不明"},
      task="不明列を全部『確認済み』にして")
 
+# --- EXTRACT --------------------------------------------------------------
+_add("extract_ok_numeric_gte", "EXTRACT", {"col": "金額", "cmp": "gte", "value": "40000"})
+_add("extract_ok_string_contains", "EXTRACT", {"col": "商品", "cmp": "contains", "value": "セット"})
+_add("extract_unknown_column", "EXTRACT", {"col": "不明", "cmp": "gte", "value": "100"})
+_add("extract_bad_cmp", "EXTRACT", {"col": "金額", "cmp": "between", "value": "100"})
+_add("extract_numeric_cmp_needs_number", "EXTRACT", {"col": "金額", "cmp": "gte", "value": "abc"})
+_add("extract_eq_falls_back_to_string", "EXTRACT", {"col": "商品", "cmp": "eq", "value": "ノートPC"})
+_add("extract_missing_value", "EXTRACT", {"col": "金額", "cmp": "gte", "value": ""})
+
 # --- 境界: verify_dsl_args 自体の全体ガード ----------------------------------
 _add("no_sheets_in_book", "SORT", {"col": "金額", "order": "asc"}, book_meta=BM_NO_SHEETS)
 _add("unsupported_op", "FOOBAR", {})

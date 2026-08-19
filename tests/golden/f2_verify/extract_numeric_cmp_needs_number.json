@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "金額",
+    "cmp": "gte",
+    "value": "abc",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "比較『gte』には数値の値が必要ですが『abc』は数値に変換できません"
+}

@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "商品",
+    "cmp": "eq",
+    "value": "ノートPC",
+    "_target_sheet": "Sheet",
+    "_source_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_new_sheet": "商品ノートPC等しい"
+  },
+  "inferred": [],
+  "err": null
+}

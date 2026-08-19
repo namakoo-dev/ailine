@@ -9,6 +9,7 @@
   "compute_column_with_target_inferred": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:* 対象列:金額(推定)",
   "compute_column_without_target_omits_field": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:*",
   "draw_borders_no_fields": "解釈: 操作:けい線",
+  "extract": "解釈: 操作:抽出 対象列:金額 条件:以上 値:40000",
   "fill_color_row": "解釈: 操作:背景色 対象:row:1 色:red",
   "insert_rows_count_inferred": "解釈: 操作:行挿入 挿入位置:3 行数:1(推定)",
   "lookup_fill_key_col_inferred": "解釈: 操作:転記 対象シート:Sheet 対象列:単価 参照シート:単価表 キー列:商品(推定)",

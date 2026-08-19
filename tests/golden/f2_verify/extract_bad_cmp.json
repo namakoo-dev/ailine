@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "金額",
+    "cmp": "between",
+    "value": "100",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "比較『between』は gte/lte/gt/lt/eq/contains のどれでもありません"
+}

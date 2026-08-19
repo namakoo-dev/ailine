@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "商品",
+    "cmp": "contains",
+    "value": "セット",
+    "_target_sheet": "Sheet",
+    "_source_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_new_sheet": "商品セットを含む"
+  },
+  "inferred": [],
+  "err": null
+}

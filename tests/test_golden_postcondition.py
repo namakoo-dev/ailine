@@ -1,6 +1,6 @@
 """C1-F3: run_postcondition(op, fixture, resolved, ...) の (status, reason) を凍結する。
 
-対象: 事後条件が定義された全 op（POSTCONDITIONS の15 op + CHART の計16）について、
+対象: 事後条件が定義された全 op（POSTCONDITIONS の16 op + CHART の計17）について、
 pass/warn/fail の各系（warn が定義されている op のみ）と、実行時例外を "error" に
 変換する境界を1件収載する。
 
@@ -493,6 +493,31 @@ def _b_setcol_fail(tmp_path):
 _add("set_column_value_pass", "SET_COLUMN_VALUE", {"col": "備考", "value": "確認済み"}, _b_setcol_pass)
 _add("set_column_value_fail_not_uniform", "SET_COLUMN_VALUE", {"col": "備考", "value": "確認済み"},
      _b_setcol_fail)
+
+# --- EXTRACT --------------------------------------------------------------
+def _b_extract_pass(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    for row in [["商品", "金額"], ["a", 30000], ["b", 50000], ["c", 45000]]:
+        ws.append(row)
+    out = wb.create_sheet("金額40000以上")
+    out.append(["商品", "金額"])
+    out.append(["b", 50000])
+    out.append(["c", 45000])
+    wb.save(p)
+    return p, None
+
+
+def _b_extract_fail_missing_sheet(tmp_path):
+    return _book(tmp_path, "b.xlsx", [["商品", "金額"], ["a", 30000], ["b", 50000]]), None
+
+
+_EXTRACT_ARGS = {"col": "金額", "cmp": "gte", "value": 40000.0,
+                  "_target_sheet": "Sheet", "_new_sheet": "金額40000以上"}
+_add("extract_pass", "EXTRACT", _EXTRACT_ARGS, _b_extract_pass)
+_add("extract_fail_missing_sheet", "EXTRACT", _EXTRACT_ARGS, _b_extract_fail_missing_sheet)
 
 # --- error 状態（事後条件チェッカー自身の例外をキャッチして "error" に変換する境界） -----
 _add("error_missing_required_arg_key", "SORT", {}, _b_sort_pass)   # args["col"] で KeyError

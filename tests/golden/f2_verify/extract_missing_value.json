@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "金額",
+    "cmp": "gte",
+    "value": "",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "抽出する値(value)が依頼文から読み取れません"
+}

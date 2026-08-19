@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "金額",
+    "cmp": "gte",
+    "value": 40000.0,
+    "_target_sheet": "Sheet",
+    "_source_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_new_sheet": "金額40000以上"
+  },
+  "inferred": [],
+  "err": null
+}

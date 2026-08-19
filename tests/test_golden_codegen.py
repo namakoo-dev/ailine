@@ -2,9 +2,9 @@
 
 ★★ 本番コード(ailine.py)は一切変更しない。ここは凍結用のテスト追加のみ。
 
-対象: 全16 op（SORT/COMPUTE_COLUMN/LOOKUP_FILL/AGGREGATE/BOLD/FILL_COLOR/NUMBER_FORMAT/
+対象: 全17 op（SORT/COMPUTE_COLUMN/LOOKUP_FILL/AGGREGATE/BOLD/FILL_COLOR/NUMBER_FORMAT/
 MERGE/CHART/CENTER_ALIGN/APPEND_TOTAL/INSERT_ROWS/DRAW_BORDERS/AUTOFIT/PIVOT/
-SET_COLUMN_VALUE）。各 op について、生成に効く軸（use_formula・header_row・target有無・
+SET_COLUMN_VALUE/EXTRACT）。各 op について、生成に効く軸（use_formula・header_row・target有無・
 target 種別 row:/col:/all）が意味を持つ場合だけ変化させる。効かない軸（例: BOLD に
 use_formula を渡しても出力が変わらない）は 1 通りだけ回して「不変であること」も
 ゴールデンで検証する（同じ内容が 2 通り生成されて golden も同一になる）。
@@ -148,6 +148,16 @@ _add("pivot_hr3", "PIVOT", {"group_col": "商品", "value_col": "金額"}, book_
 _add("set_column_value_hr1", "SET_COLUMN_VALUE", {"col": "商品", "value": "確認済み"})
 _add("set_column_value_hr3", "SET_COLUMN_VALUE", {"col": "商品", "value": "確認済み"},
      book_meta=BM_HR3)
+
+# --- EXTRACT --------------------------------------------------------------
+# ★ _new_sheet は verify_dsl_args が積む値（_extract_output_sheet_name）だが、ここは
+#   codegen_dsl を直接呼ぶ golden なので、素の resolved args として明示的に渡す。
+_add("extract_numeric_gte_hr1", "EXTRACT",
+     {"col": "金額", "cmp": "gte", "value": 40000, "_new_sheet": "金額40000以上"})
+_add("extract_string_contains_hr1", "EXTRACT",
+     {"col": "商品", "cmp": "contains", "value": "セット", "_new_sheet": "商品セットを含む"})
+_add("extract_numeric_lt_hr3", "EXTRACT",
+     {"col": "金額", "cmp": "lt", "value": 20, "_new_sheet": "金額20未満"}, book_meta=BM_HR3)
 
 # --- 後方互換: header_rows キーが book_meta に無い旧テスト値 ------------------
 _add("sort_legacy_no_header_rows_key", "SORT", {"col": "金額", "order": "asc"},

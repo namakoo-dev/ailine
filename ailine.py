@@ -1526,6 +1526,11 @@ OP_META = {
     #   最も頻繁に行う操作に信頼できる経路が無かった）。
     "SET_COLUMN_VALUE": {"category": "表を編集する", "label": "一括書換",
                            "synonyms": ["全部同じ値にする", "一括で書き換える", "列を統一する"]},
+    # ★ 生まれた時から検証つきの1例目（DESIGN-20260820-extract-op.md）: 単一条件（列×比較×値）
+    #   に一致する行を新シートへ抜き出す。自由生成の実弾2件（全セル文字列化・空シートで
+    #   exit 0）を事後条件(check_extract)が直接殺す形で op に昇格させる。
+    "EXTRACT": {"category": "表を編集する", "label": "抽出",
+                 "synonyms": ["抜き出す", "抽出", "絞り込んでコピー"]},
 }
 
 OP_LABELS = {op: meta["label"] for op, meta in OP_META.items()}
@@ -1554,6 +1559,9 @@ OP_SCHEMA = {
     #   実際に書き込む値は verify_dsl_args が依頼文の引用符から機械抽出する
     #   （抽出できなければ CLARIFY）。翻訳直後の slot 欠落チェックは col だけを見る。
     "SET_COLUMN_VALUE": ("col",),
+    # ★ EXTRACT: col(対象列)・cmp(比較。gte/lte/gt/lt/eq/contains)・value(比較する値)。
+    #   出力シート名は verify_dsl_args が機械で決め打ちする（LLM に決めさせない・A' 原則）。
+    "EXTRACT": ("col", "cmp", "value"),
 }
 
 # ★ W10c 致命1: 「破壊の関所」（既存列への上書き検知・下の _maybe_warn_target_overwrite）が
@@ -1631,6 +1639,10 @@ OP_WRITE_TARGET = {
     "PIVOT": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
     # ★ 致命3(W10e): 既存列への一括書き込み＝破壊の関所の対象そのもの（宣言必須）。
     "SET_COLUMN_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN,), col_key="col"),
+    # ★ EXTRACT: AGGREGATE/PIVOT と同じ形（新規シートを作るだけ・入力シートは読むだけ）。
+    #   出力シート名は動的（col/cmp/value から機械決定）なので OP_DECLARED_SHEET_NAME の
+    #   固定表には乗らない ── 単位H(_own_output_headers)側で動的な名前を扱う。
+    "EXTRACT": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
 }
 
 
@@ -1684,6 +1696,9 @@ OP_SUBJECT_SLOTS = {
     "AUTOFIT": (),
     "PIVOT": (("group_col", SUBJ_COLUMN), ("value_col", SUBJ_COLUMN)),
     "SET_COLUMN_VALUE": (("col", SUBJ_COLUMN),),
+    # ★ EXTRACT: cmp/value は SET_COLUMN_VALUE の value と同じ理由で対象に含めない
+    #   （依頼文が名指しうる「対象」は列だけ・比較の種類や閾値は列名と同種の実在物ではない）。
+    "EXTRACT": (("col", SUBJ_COLUMN),),
 }
 
 
@@ -1778,7 +1793,12 @@ SET_COLUMN_VALUE: 既存列の値を全部、同じ1つの値に書き換える�
   ★ 実際に書き込む値(value)は依頼文の「」または『』で囲まれた引用を機械が抽出する
   （ここに書いてもよいが、依頼文の引用と食い違えば依頼文側が優先される）。税率等の
   倍率計算(COMPUTE_COLUMN)とは別物 — 依頼が「〜を掛けた」のような計算でなく、
-  同じ文字列/値をそのまま代入するだけの依頼はこちらを使う"""
+  同じ文字列/値をそのまま代入するだけの依頼はこちらを使う
+EXTRACT: 単一条件（列×比較×値）に一致する行だけを新しいシートへ抜き出す。
+  args: col(列名), cmp(比較。gte=以上, lte=以下, gt=超, lt=未満, eq=等しい, contains=を含む),
+  value(比較する値。数値または文字列。ここでは数値化しなくてよい・機械が確定する)
+  ★ 出力シート名は機械が決める（LLM は考えなくてよい）。一部の列だけを残す絞り込みや
+  複数条件(AND/OR)、グループごとに分けての抽出は語彙に無い（OUT_OF_VOCAB にする）"""
 
 # ★ M2c: battery(v1) が実測で取り違えた基本パターンに加え、複合依頼(battery v2)を few-shot で
 #   教える。同じ混同/構造を別の言い回しで示す（battery の項目文そのままは使わない＝暗記でなく
@@ -2413,6 +2433,38 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 f"依頼文側('{quoted}')を採用しました"
             ]
 
+    # ★ EXTRACT: 単一条件（col × cmp × value）に一致する行を新シートへ抜き出す
+    #   （DESIGN-20260820-extract-op.md）。col は実在検証、cmp は語彙の6値に限定、value は
+    #   gte/lte/gt/lt なら数値必須・eq は数値化できればそのまま数値・できなければ文字列・
+    #   contains は常に文字列（A' 原則: 数値化は機械が行う。LLM の言い分をそのまま信じない）。
+    elif op == "EXTRACT":
+        if (err := resolve_in("col", first_sheet)):
+            return False, resolved, inferred, err
+        cmp = str(resolved.get("cmp", "")).strip().lower()
+        if cmp not in _EXTRACT_CMPS:
+            return False, resolved, inferred, (
+                f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません"
+            )
+        resolved["cmp"] = cmp
+        raw_value = resolved.get("value")
+        if raw_value in (None, ""):
+            return False, resolved, inferred, "抽出する値(value)が依頼文から読み取れません"
+        if cmp == "contains":
+            resolved["value"] = str(raw_value)
+        else:
+            try:
+                resolved["value"] = float(raw_value)
+            except (TypeError, ValueError):
+                if cmp != "eq":
+                    return False, resolved, inferred, (
+                        f"比較『{cmp}』には数値の値が必要ですが『{raw_value}』は数値に変換できません"
+                    )
+                resolved["value"] = str(raw_value)
+        # ★ 単位H: 出力シートの見出し署名(= 元シートの見出し行そのもの)を _own_output_headers
+        #   が組めるよう、決めた材料をここで resolved に積む（他 op の _target_sheet と同じ作法）。
+        resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
+        resolved["_new_sheet"] = _extract_output_sheet_name(resolved["col"], cmp, resolved["value"])
+
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
 
@@ -2443,7 +2495,36 @@ _CONFIRM_FIELDS = {
     "AUTOFIT": (),
     "PIVOT": (("分類列", "group_col", None), ("集計列", "value_col", None)),
     "SET_COLUMN_VALUE": (("対象列", "col", None), ("値", "value", None)),
+    "EXTRACT": (("対象列", "col", None), ("条件", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
+                 ("値", "value", lambda v: _format_extract_value(v))),
 }
+
+# ★ EXTRACT: 比較の語彙（設計書どおり6種）。gte/lte/gt/lt は数値比較・eq は値の型に応じて
+#   数値/文字列どちらでも・contains は常に文字列の部分一致。
+_EXTRACT_CMPS = ("gte", "lte", "gt", "lt", "eq", "contains")
+_EXTRACT_CMP_LABELS = {"gte": "以上", "lte": "以下", "gt": "超", "lt": "未満",
+                        "eq": "等しい", "contains": "を含む"}
+_EXTRACT_CMP_CODE = {"gte": 0, "lte": 1, "gt": 2, "lt": 3, "eq": 4, "contains": 5}
+_EXTRACT_SHEET_NAME_FORBIDDEN_RE = re.compile(r'[:\\/?*\[\]]')
+
+
+def _format_extract_value(value) -> str:
+    """EXTRACT のシート名/確認行に使う値の表示形。整数相当の float は小数点を付けない
+       （40000.0 でなく 40000）。"""
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else f"{value:g}"
+    return str(value)
+
+
+def _extract_output_sheet_name(col: str, cmp: str, value) -> str:
+    """★ A': 出力シート名は機械が決め打ちで組む（LLM に名前を決めさせない・設計書の例そのまま
+       ―― 列『金額』・cmp gte・value 40000 → 『金額40000以上』）。
+       Excel が禁じる文字(: \\ / ? * [ ])は '_' に置き換え、31文字上限（Excel のシート名
+       制限）で切り詰める。"""
+    label = _EXTRACT_CMP_LABELS.get(cmp, cmp)
+    name = f"{col}{_format_extract_value(value)}{label}"
+    return _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub("_", name)[:31]
+
 
 # ★ W9 項目4: PIVOT(DataPilot) の既知の癖（README 記載・再描画で書式が撥ねる）を
 #   確認行・結果表示の両方に一言添える。AGGREGATE(SummaryTable) との使い分けを促す。
@@ -2764,6 +2845,19 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                 f"        oSheet.getCellByPosition({col_idx}, r).setString(\"{value}\")\n"
                 "    Next r\n")
         return wrap(body)
+
+    if op == "EXTRACT":
+        # ★ ヘルパへの Call 1行だけ（helpers/AiLineHelpers.bas:ExtractRows）。
+        #   型を保つコピー（getValue/setValue・getString/setString の分岐）は helper 側。
+        col_idx = headers[first_sheet].index(resolved_args["col"])
+        cmp_code = _EXTRACT_CMP_CODE[resolved_args["cmp"]]
+        value = resolved_args["value"]
+        if isinstance(value, str):
+            value_lit = '"' + value.replace('"', '""') + '"'
+        else:
+            value_lit = f"{float(value):g}"
+        dst_name = str(resolved_args["_new_sheet"]).replace('"', '""')
+        return wrap(f'    Call ExtractRows(oDoc, {hr0}, {col_idx}, {cmp_code}, {value_lit}, "{dst_name}")\n')
 
     raise ValueError(f"未対応の op: {op}")
 
@@ -3646,6 +3740,110 @@ def check_set_column_value(path: Path, args: dict, header_row: int = 1) -> tuple
     return "pass", f"{len(vals)} 行を『{value}』に統一"
 
 
+def _extract_predicate(cmp: str, threshold):
+    """EXTRACT の判定を Basic 側(ExtractRows/helpers/AiLineHelpers.bas)とは別実装で
+       もう一度書く（同じ勘定を2箇所が違う実装で書いて一致を見る・独立測定）。"""
+    def _match(cell_value) -> bool:
+        if cmp == "contains":
+            return threshold is not None and str(threshold) in ("" if cell_value is None else str(cell_value))
+        if cmp == "eq":
+            if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
+                return _is_number(cell_value) and float(cell_value) == float(threshold)
+            return str(cell_value) == str(threshold)
+        if not _is_number(cell_value):   # gte/lte/gt/lt は数値比較のみ
+            return False
+        v, t = float(cell_value), float(threshold)
+        if cmp == "gte":
+            return v >= t
+        if cmp == "lte":
+            return v <= t
+        if cmp == "gt":
+            return v > t
+        if cmp == "lt":
+            return v < t
+        return False
+    return _match
+
+
+def check_extract(path: Path, args: dict, header_row: int = 1,
+                   source_book: Path | None = None) -> tuple:
+    """EXTRACT の事後条件（DESIGN-20260820-extract-op.md §事後条件・入場料そのもの）。
+       ①行数一致 ②値と型の保存 ③両側の網羅（多い/少ないの両方を落とす）を、1つの位置対応
+       比較で同時に見る: 元シートを独立に走査して『条件に一致する行』を上から順に集めた
+       ものが expected。出力の各行が expected と完全に同じ順・同じ内容で並んでいれば、
+       行数も一致し(①)・値も型も保存され(②。取り違えれば != が拾う ── 数値 59400 と
+       文字列 '59400' は Python の != では等しくない＝昨夜の全セル文字列化バグを直接殺す)・
+       多く含めても少なく埋めても位置がずれて不一致になる(③)。
+       ④ 元シートが無変更（source_book が渡された時だけ突き合わせられる・読むだけの op。
+       source_book が無ければ①②③だけを見る＝INSERT_ROWS/AUTOFIT と同じ劣化フォールバック）。"""
+    dst_name = args.get("_new_sheet")
+    col_name = args.get("col")
+    cmp = args.get("cmp")
+    threshold = args.get("value")
+    if not dst_name:
+        return "fail", "出力シート名が決まっていません（verify_dsl_args を経由していない可能性）"
+    match = _extract_predicate(cmp, threshold)
+
+    with BookView(path) as bv:
+        src = bv.sheet(args.get("_target_sheet"))
+        src_name = src.title
+        if dst_name not in bv.sheetnames:
+            return "fail", f"出力シート『{dst_name}』が作られていません"
+        col_idx = _col_index_by_header(src, col_name, header_row=header_row)
+        if col_idx is None:
+            return "fail", f"対象列『{col_name}』が元シート『{src_name}』に見つかりません"
+        last_col = _scan_last_col(src, header_row=header_row)
+        if last_col < 1:
+            return "fail", _ZERO_TARGET_REASON
+
+        total = 0
+        expected_rows = []
+        r = header_row + 1
+        while src.cell(row=r, column=1).value not in (None, ""):
+            total += 1
+            if match(src.cell(row=r, column=col_idx).value):
+                expected_rows.append([src.cell(row=r, column=c).value for c in range(1, last_col + 1)])
+            r += 1
+        if total == 0:
+            return "fail", _ZERO_TARGET_REASON
+
+        out = bv.sheet(dst_name)
+        out_rows = []
+        r = 2   # 出力は ExtractRows の仕様どおり常に物理1行目が見出し
+        while out.cell(row=r, column=1).value not in (None, ""):
+            out_rows.append([out.cell(row=r, column=c).value for c in range(1, last_col + 1)])
+            r += 1
+
+    denom = f"{total}行中{len(expected_rows)}行が一致"
+    if len(out_rows) != len(expected_rows):
+        return "fail", f"{denom} → 出力は{len(out_rows)}行（行数が期待と不一致）"
+    for i, (want, got) in enumerate(zip(expected_rows, out_rows), start=1):
+        if want == got:
+            continue
+        for c, (wv, gv) in enumerate(zip(want, got), start=1):
+            if wv != gv:
+                letter = get_column_letter(c)
+                return "fail", (
+                    f"{denom} → 出力{i}行目 {letter}列が元と不一致"
+                    f"（元 {wv!r}（{type(wv).__name__}） 出力 {gv!r}（{type(gv).__name__}））"
+                )
+
+    if source_book is not None and Path(source_book).exists():
+        with BookView(source_book) as bv_before, BookView(path) as bv_after:
+            src_before = bv_before.sheet(args.get("_target_sheet"))
+            src_after = bv_after.sheet(args.get("_target_sheet"))
+            last_row_before = _scan_last_row(src_before, header_row=header_row)
+            mismatches = sum(
+                1 for r in range(header_row, last_row_before + 1) for c in range(1, last_col + 1)
+                if src_before.cell(row=r, column=c).value != src_after.cell(row=r, column=c).value)
+        if mismatches:
+            return "fail", (f"{denom} を抽出しましたが、元シート『{src_name}』が {mismatches} セル"
+                             "変更されています（読むだけのはず）")
+        return "pass", f"{denom} → {len(expected_rows)}行を抽出（式・型とも保存・元シート無変更）"
+
+    return "pass", f"{denom} → {len(expected_rows)}行を抽出（式・型とも保存。元シートとの突き合わせ無し）"
+
+
 POSTCONDITIONS = {
     "SORT": check_sort, "COMPUTE_COLUMN": check_compute_column,
     "LOOKUP_FILL": check_lookup_fill, "AGGREGATE": check_aggregate,
@@ -3657,6 +3855,7 @@ POSTCONDITIONS = {
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
+    "EXTRACT": check_extract,
 }
 
 
@@ -3692,7 +3891,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
                        source_book=source_book)
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
-        if op in ("INSERT_ROWS", "AUTOFIT"):
+        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -5012,14 +5211,28 @@ def _own_output_headers(op: str, resolved: dict | None):
       出力の見出しがコード上に無く、静的に決められない。
       → 発火条件つきで残す: DataPilot の実出力の見出しを 1 度実機で観測できたら、ここに足す。
         それまで PIVOT の 2 回目は関所が鳴る（＝安全側で、うるさい側に倒れている）。
+    ★★ EXTRACT（単位H の2例目・DESIGN-20260820-extract-op.md）: ExtractRows ヘルパは
+      出力の1行目に元シートの見出し行をそのままコピーする（helpers/AiLineHelpers.bas 参照）。
+      出力シート名は固定でなく col/cmp/value から動的に決まる（_extract_output_sheet_name。
+      verify_dsl_args が resolved["_new_sheet"] に積む）ので OP_DECLARED_SHEET_NAME の
+      固定表には乗らない ── 署名の材料(見出し全体)は resolved["_source_headers"]（同じく
+      verify_dsl_args が積む）を読む。
     """
-    if op != "AGGREGATE" or not resolved:
+    if not resolved:
         return None
-    sheet = OP_DECLARED_SHEET_NAME.get(op)
-    group, value = resolved.get("group_col"), resolved.get("value_col")
-    if not (sheet and group and value):
-        return None
-    return {sheet: (group, f"合計 - {value}")}
+    if op == "AGGREGATE":
+        sheet = OP_DECLARED_SHEET_NAME.get(op)
+        group, value = resolved.get("group_col"), resolved.get("value_col")
+        if not (sheet and group and value):
+            return None
+        return {sheet: (group, f"合計 - {value}")}
+    if op == "EXTRACT":
+        sheet = resolved.get("_new_sheet")
+        source_headers = resolved.get("_source_headers")
+        if not (sheet and source_headers):
+            return None
+        return {sheet: tuple(source_headers)}
+    return None
 
 
 def _maybe_warn_write_precondition(op: str, before: dict, after: dict, resolved: dict | None = None):

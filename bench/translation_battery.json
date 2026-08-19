@@ -1053,5 +1053,29 @@
         "operator": "*"
       }
     }
+  ],
+  "items_v6": [
+    {
+      "id": 601,
+      "book": "sample",
+      "text": "金額が40000以上の行だけを別シートに抜き出して",
+      "expect": {
+        "op": "EXTRACT",
+        "col": "金額",
+        "cmp": "gte",
+        "value": 40000
+      }
+    },
+    {
+      "id": 602,
+      "book": "sample",
+      "text": "在庫が20未満の行を抜き出して",
+      "expect": {
+        "op": "EXTRACT",
+        "col": "在庫",
+        "cmp": "lt",
+        "value": 20
+      }
+    }
   ]
 }
