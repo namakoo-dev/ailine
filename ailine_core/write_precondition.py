@@ -18,12 +18,20 @@
 
   | writes           | 前提                                   |
   |------------------|----------------------------------------|
-  | new_column       | その列は空（＝既存の関所が守る）        |
+  | new_column       | 同じ内容（見出し・値とも一致）の列が既にブックに無い |
   | new_row_at_end   | 書き込んだ行は before で空だった         |
   | new_sheet        | その名前のシートは before に存在しない   |
   | existing_column  | （前提なし＝上書き前提・既存の関所）     |
   | format_only      | 値が1つも変わらない                     |
   | row_shift/reorder| 値の多重集合が保存される                 |
+
+★★ 単位J: new_column を NO_PRECONDITION から外し、本物の前提を与えた。
+  盲検 operator 査定の実測: title_rows.xlsx に「売上から原価を引いた利益の列」を作らせ、
+  同じ依頼をもう一度実行 → F 列と同じ見出し・同じ値の列が G 列にもう一つでき、警告ゼロで
+  ✓ 機械検証済み まで出た。「反映されたか不安でもう一回実行」は事務職の最もありがちな操作。
+  真因: 既存の関所（_maybe_warn_target_overwrite）が守るのは「書き込み先の列に既存値が
+  あるか」で、新規列は定義上ずっと空だから何も鳴らない。「同じ結果が既にブックに在るか」は
+  誰も聞いていなかった。判定・誤検知回避の設計は _check_new_column の docstring 参照。
 
 ★ 判定は「適用前の予測」でなく「**適用後の実測**」で行える ── 全工程は out_book（原本の
   コピー）の上で走り、原本への反映は最後の1手（atomic_replace_inplace）。before/after が
@@ -136,6 +144,53 @@ def _check_new_sheet(before: dict, after: dict, *, cell_ref: Callable, fmt_value
             f"書き換えました（{_samples(hits, cell_ref=cell_ref, fmt_value=fmt_value)}）")
 
 
+def _columns_by_sheet(values: dict) -> dict:
+    """_values() の出力 {(シート,行,列): 値} を、列単位 {(シート,列): {行: 値}} へ束ね直す。"""
+    out: dict = {}
+    for (sheet, row, col), v in values.items():
+        out.setdefault((sheet, col), {})[row] = v
+    return out
+
+
+def _check_new_column(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable, **_kw):
+    """前提: 同じ内容（見出しセルと全データ値の両方）の列が、そのシートに before の時点で
+    既に無い（＝これは本当に**新しい**列であって、前回と同じ結果の作り直しではない）。
+
+    ★★ 単位J: 実測（盲検 operator 査定）── 「売上-原価」の列を作る依頼をもう一度実行すると、
+    見出しも値も完全に同じ列がもう1本でき、警告ゼロで ✓ が出た。既存の関所は「書き込み先に
+    既存値があるか」しか見ておらず、新規列は定義上ずっと空だから何も鳴らなかった。
+    「同じ結果が既にブックに在るか」を初めて聞くのがこの関数。
+
+    ★ 見出しと値の**両方**一致を要求する（片方だけでは鳴らさない）:
+      - 値だけ一致 → LOOKUP_FILL 等の転記系が参照元と同じ値の列を作るのは正当な動作。
+        値だけで鳴らすと誤爆する。
+      - 見出しだけ一致 → 中身が違えば正当な作り直し（同名でも計算し直した結果）。
+        見出しだけで鳴らすと誤爆する。
+      観測された事故は「同じ依頼を2回実行」で見出しも値も完全に同一 ── まずそこを確実に
+      捕まえる（W10e/単位H と同じ「全部一致した時だけ鳴らす」誤検知回避の作法）。
+
+    ★ 比較は snapshot の範囲内（MAX_ROWS で切れていれば見えている範囲）でよい。保守側に倒れる
+    ── 見える範囲で一致したなら、見えない範囲まで一致を疑って鳴らさないよりは安全（W10c と同じ
+    「切り詰めは前提を緩めない」判断）。
+    """
+    before_vals, after_vals = _values(before), _values(after)
+    before_cols = _columns_by_sheet(before_vals)
+    after_cols = _columns_by_sheet(after_vals)
+    before_keys = {(s, c) for (s, _r, c) in before_vals}
+    after_keys = {(s, c) for (s, _r, c) in after_vals}
+    for sheet, col in sorted(after_keys - before_keys):
+        new_data = after_cols[(sheet, col)]
+        for bsheet, bcol in sorted(before_cols):
+            if bsheet != sheet or bcol == col or before_cols[(bsheet, bcol)] != new_data:
+                continue
+            header = new_data.get(1)
+            header_disp = str(header) if header is not None else "(見出し無し)"
+            letter = cell_ref(1, bcol).rstrip("0123456789")
+            return (f"★ 新しい列を作るはずが、既存の列『{header_disp}』({letter}) と"
+                    "見出しも値も同一の列を作りました（同じ依頼を 2 回実行した可能性）")
+    return None
+
+
 def _check_format_only(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable, **_kw):
     """前提: 値が1つも変わらない（書式・罫線・列幅・埋め込みグラフだけを触ったはず）。"""
     hits = _changed(before, after)
@@ -171,6 +226,7 @@ def _check_value_multiset(before: dict, after: dict, *, cell_ref: Callable, fmt_
 # （tests/test_write_precondition_unit.py）が検査する。ここに載っていない種類は
 # NO_PRECONDITION に載せる＝「前提は無いと確認した」という宣言（忘れたのではない）。
 PRECONDITIONS = {
+    "new_column": _check_new_column,
     "new_row_at_end": _check_new_row_at_end,
     "new_sheet": _check_new_sheet,
     "format_only": _check_format_only,
@@ -179,7 +235,7 @@ PRECONDITIONS = {
 }
 
 # 前提を持たない種類（既存の破壊の関所＝書き込み先列の既存値検知が守る側）。
-NO_PRECONDITION = frozenset({"existing_column", "new_column"})
+NO_PRECONDITION = frozenset({"existing_column"})
 
 
 def check_write_preconditions_detail(writes, before: dict, after: dict, *,

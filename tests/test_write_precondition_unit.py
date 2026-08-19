@@ -41,12 +41,21 @@ def test_every_write_kind_declares_whether_it_has_a_precondition():
 
 
 def test_no_op_mixes_kinds_with_and_without_a_precondition():
+    """★★ 単位J: new_column が NO_PRECONDITION から PRECONDITIONS へ移ったことで、
+       COMPUTE_COLUMN/LOOKUP_FILL は existing_column（前提なし）と new_column（前提あり）を
+       同時に宣言するようになった ── だがこれは判定不能ではない。target が実行時に
+       既存列/新規列のどちらへ解決されるかは呼び出し前には決まらず、_check_new_column 自身が
+       「実際に新規列が出現したか」を実測から判定するので、existing_column 側は
+       PRECONDITIONS に無い（＝チェック関数が無く常に素通り）まま鳴らず、判定が割れることはない。
+       それ以外の組み合わせが混ざるのは依然として判定不能なので禁止のまま。"""
+    allowed_mixed = {"new_column", "existing_column"}
     for op, wt in ailine.OP_WRITE_TARGET.items():
         with_pre = [k for k in wt.writes if k in PRECONDITIONS]
         without = [k for k in wt.writes if k in NO_PRECONDITION]
-        assert not (with_pre and without), (
-            f"{op}: 前提のある領域 {with_pre} と 前提のない領域 {without} を同時に宣言している"
-            f"（どちらの前提で判定すべきか決まらない）")
+        if with_pre and without:
+            assert set(with_pre) | set(without) <= allowed_mixed, (
+                f"{op}: 前提のある領域 {with_pre} と 前提のない領域 {without} を同時に宣言している"
+                f"（許可されている組み合わせは new_column/existing_column のみ）")
 
 
 # --- new_row_at_end -----------------------------------------------------------
@@ -137,6 +146,49 @@ def test_reorder_silent_when_values_are_only_added():
     before = _snap({"Sheet!2,1": "a"})
     after = _snap({"Sheet!2,1": "a", "Sheet!3,1": "新規"})
     assert _check(("reorder",), before, after) is None
+
+
+# --- new_column（単位J） --------------------------------------------------------
+
+def test_new_column_fires_when_header_and_values_both_match_an_existing_column():
+    """★ 事故の再現: 「売上-原価」の列を作る依頼を2回実行 → F列と同じ見出し・同じ値の列が
+       G列にもう一つできる。見出し(1行目)・全データ値とも完全一致なので鳴る。"""
+    before = _snap({"Sheet!1,1": "商品", "Sheet!1,2": "売上", "Sheet!1,3": "原価",
+                    "Sheet!1,6": "売上-原価", "Sheet!2,6": 200, "Sheet!3,6": 300,
+                    "Sheet!2,1": "a", "Sheet!2,2": 300, "Sheet!2,3": 100,
+                    "Sheet!3,1": "b", "Sheet!3,2": 500, "Sheet!3,3": 200})
+    after = _snap({"Sheet!1,1": "商品", "Sheet!1,2": "売上", "Sheet!1,3": "原価",
+                   "Sheet!1,6": "売上-原価", "Sheet!2,6": 200, "Sheet!3,6": 300,
+                   "Sheet!2,1": "a", "Sheet!2,2": 300, "Sheet!2,3": 100,
+                   "Sheet!3,1": "b", "Sheet!3,2": 500, "Sheet!3,3": 200,
+                   "Sheet!1,7": "売上-原価", "Sheet!2,7": 200, "Sheet!3,7": 300})
+    msg = _check(("new_column",), before, after)
+    assert msg == ("★ 新しい列を作るはずが、既存の列『売上-原価』(F) と見出しも値も同一の列を"
+                   "作りました（同じ依頼を 2 回実行した可能性）")
+
+
+def test_new_column_silent_when_values_match_but_header_differs():
+    """★ 対照: 値は同じだが見出しが違う → 正当な可能性（例: 別名で同じ数値の列）。鳴らさない。"""
+    before = _snap({"Sheet!1,6": "売上-原価", "Sheet!2,6": 200, "Sheet!3,6": 300})
+    after = _snap({"Sheet!1,6": "売上-原価", "Sheet!2,6": 200, "Sheet!3,6": 300,
+                   "Sheet!1,7": "利益", "Sheet!2,7": 200, "Sheet!3,7": 300})
+    assert _check(("new_column",), before, after) is None
+
+
+def test_new_column_silent_when_header_matches_but_values_differ():
+    """★ 対照: 見出しは同じだが値が違う → 正当な作り直し（元データが変わった等）。鳴らさない。"""
+    before = _snap({"Sheet!1,6": "売上-原価", "Sheet!2,6": 200, "Sheet!3,6": 300})
+    after = _snap({"Sheet!1,6": "売上-原価", "Sheet!2,6": 200, "Sheet!3,6": 300,
+                   "Sheet!1,7": "売上-原価", "Sheet!2,7": 999, "Sheet!3,7": 300})
+    assert _check(("new_column",), before, after) is None
+
+
+def test_new_column_silent_when_entirely_new_content():
+    """★ 対照: 完全に新しい内容の列（見出しも値も既存のどの列とも一致しない）。鳴らさない。"""
+    before = _snap({"Sheet!1,1": "商品", "Sheet!2,1": "a"})
+    after = _snap({"Sheet!1,1": "商品", "Sheet!2,1": "a",
+                   "Sheet!1,2": "備考", "Sheet!2,2": "確認済み"})
+    assert _check(("new_column",), before, after) is None
 
 
 # --- 前提を持たない領域 ----------------------------------------------------------
