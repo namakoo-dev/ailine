@@ -288,9 +288,11 @@ def test_f4_second_aggregate_on_same_book(tmp_path, monkeypatch, capsys):
 
 @pytest.mark.parametrize("op,args,task", [
     ("BOLD", {"target": "row:1"}, "見出しを太字にして"),
-    pytest.param("CENTER_ALIGN", {"target": "row:1"}, "見出しを中央揃えにして",
-                 marks=pytest.mark.xfail(strict=True, raises=ValueError,
-                     reason="★★ 本物・単位H とは別件: verify_dsl_args(2249) は BOLD/FILL_COLOR/CENTER_ALIGN をまとめて検証して row:N を通すが、codegen(2588) は all と col: しか扱わず ValueError で素の traceback になる。契約文(1743)は col:/all と言っており、verify だけがずれている（判定には3項が要る）")),
+    # ★ 単位I: CENTER_ALIGN×row: は verify_dsl_args が拒否するようになった（契約文(1743)・
+    #   codegen(2588) と合わせた）。fail で静かに終わる（traceback にならない）ので、
+    #   BOLD/AUTOFIT と同じ健全系パラメータとして扱える（かつて xfail(strict=True,
+    #   raises=ValueError) だったが、traceback が出なくなったので凍結は不要になった）。
+    ("CENTER_ALIGN", {"target": "row:1"}, "見出しを中央揃えにして"),
     ("AUTOFIT", {"target": "col:金額"}, "金額の列幅を自動調整して"),
 ])
 def test_f5_format_only_ops_stay_quiet(tmp_path, monkeypatch, capsys, op, args, task):

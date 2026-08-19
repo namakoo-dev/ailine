@@ -3087,6 +3087,37 @@ def test_verify_dsl_args_center_align_all_rejected_for_bold():
     ok, resolved, inferred, err = ailine.verify_dsl_args("BOLD", {"target": "all"}, _SAMPLE_META)
     assert ok is False
 
+def test_verify_dsl_args_center_align_row_rejected():
+    # ★ 単位I: 契約文(1743)・codegen(2588) は CENTER_ALIGN に row: を認めていない。
+    #   verify だけが row:N を通していた不一致を、契約文側に合わせて拒否する。
+    ok, resolved, inferred, err = ailine.verify_dsl_args("CENTER_ALIGN", {"target": "row:1"}, _SAMPLE_META)
+    assert ok is False
+    assert "未対応" in err
+    assert "col:列名" in err and "all" in err
+
+def test_verify_dsl_args_bold_row_still_ok():
+    # ★ 単位I の巻き添え番人: まとめて検証している枝を触るので、BOLD の row: は今までどおり通ることを直接測る。
+    ok, resolved, inferred, err = ailine.verify_dsl_args("BOLD", {"target": "row:1"}, _SAMPLE_META)
+    assert ok is True
+    assert resolved["target"] == "row:1"
+
+def test_verify_dsl_args_fill_color_row_still_ok():
+    # ★ 単位I の巻き添え番人: FILL_COLOR の row: も今までどおり通ることを直接測る。
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "FILL_COLOR", {"target": "row:1", "color": "yellow"}, _SAMPLE_META)
+    assert ok is True
+    assert resolved["target"] == "row:1"
+
+def test_verify_dsl_args_center_align_col_still_ok():
+    ok, resolved, inferred, err = ailine.verify_dsl_args("CENTER_ALIGN", {"target": "col:金額"}, _SAMPLE_META)
+    assert ok is True
+    assert resolved["target"] == "col:金額"
+
+def test_verify_dsl_args_center_align_all_still_ok():
+    ok, resolved, inferred, err = ailine.verify_dsl_args("CENTER_ALIGN", {"target": "all"}, _SAMPLE_META)
+    assert ok is True
+    assert resolved["target"] == "all"
+
 def test_verify_dsl_args_merge_bad_range_format():
     ok, resolved, inferred, err = ailine.verify_dsl_args("MERGE", {"range": "not-a-range"}, _SAMPLE_META)
     assert ok is False

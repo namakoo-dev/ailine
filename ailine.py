@@ -2255,6 +2255,14 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             n = target[4:]
             if not (n.isdigit() and int(n) >= 1):
                 return False, resolved, inferred, f"行番号『{n}』が不正です"
+            # ★ 単位I: 契約文(1743)・codegen(2588)は CENTER_ALIGN に row: を認めておらず、
+            #   ここだけが少数派だった（実測: row:N を通した先で codegen が素の traceback）。
+            #   codegen に row: を実装するのは別作業 ―― ここは契約文に合わせて拒否するだけ。
+            if op == "CENTER_ALIGN":
+                return False, resolved, inferred, (
+                    f"対象『{target}』は {OP_LABELS[op]} では未対応です"
+                    "（col:列名 か all を使ってください）"
+                )
         elif target.startswith("col:"):
             colname = target[4:]
             v, was_inferred, err = resolve_col_ref(colname, headers.get(first_sheet, []))
