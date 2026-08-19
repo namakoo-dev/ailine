@@ -4972,7 +4972,26 @@ def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_
     return None
 
 
-def _maybe_warn_write_precondition(op: str, before: dict, after: dict):
+def _own_output_headers(op: str, resolved: dict | None):
+    """★★ 単位H: 「宣言した出力先に在るのは、自分の前回の出力か」を見分ける見出し署名。
+
+    ★ 署名は実装から取る（想像しない）: `helpers/AiLineHelpers.bas` の SummaryTable は
+      A1 に分類列の見出し名を、B1 に "合計 - " & 集計列名 を書く（同ファイル 374-375 行）。
+    ★ PIVOT は対象外。PivotSum は本物の DataPilot を LibreOffice に描かせるので、
+      出力の見出しがコード上に無く、静的に決められない。
+      → 発火条件つきで残す: DataPilot の実出力の見出しを 1 度実機で観測できたら、ここに足す。
+        それまで PIVOT の 2 回目は関所が鳴る（＝安全側で、うるさい側に倒れている）。
+    """
+    if op != "AGGREGATE" or not resolved:
+        return None
+    sheet = OP_DECLARED_SHEET_NAME.get(op)
+    group, value = resolved.get("group_col"), resolved.get("value_col")
+    if not (sheet and group and value):
+        return None
+    return {sheet: (group, f"合計 - {value}")}
+
+
+def _maybe_warn_write_precondition(op: str, before: dict, after: dict, resolved: dict | None = None):
     """★★ 単位F: op が宣言した書き込み領域(OP_WRITE_TARGET.writes)の**前提**が、適用後の
        実測で破れていれば1行を返す（無ければ None）。判定本体は
        ailine_core/write_precondition.py（純ロジック・前提の一覧はそこの docstring）。
@@ -4985,7 +5004,8 @@ def _maybe_warn_write_precondition(op: str, before: dict, after: dict):
     if not write_target:
         return None
     return check_write_preconditions_detail(write_target.writes, before, after,
-                                             cell_ref=_cell_ref, fmt_value=_fmt_cell_value)
+                                             cell_ref=_cell_ref, fmt_value=_fmt_cell_value,
+                                             own_output_headers=_own_output_headers(op, resolved))
 
 
 def _interpretation_summary_line(resolved: dict, inferred: set) -> str | None:
@@ -5214,7 +5234,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     #   ★ 後から該当行を消す方式は採らない ── ailine.py の中立化は W10c/W10d で
     #   「出してから打ち消す」を捨てて発生源へ先取りした経緯がある（この関数の上の注記）。
     #   ★ 印字と関所は 位置を変えていない（後段のまま）。ここでやるのは判定だけ。
-    precondition = _maybe_warn_write_precondition(op, before, after)
+    precondition = _maybe_warn_write_precondition(op, before, after, resolved)
     precondition_broken = precondition[0] if precondition else None
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
@@ -5864,7 +5884,7 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     # ★★ 単位F: 単発(cmd_run_dsl)と同じ位置・同じ関所。段ごとの before/after で見る
     #   （計画全体の before/after で見ると、前の段が既存行を書いたことを次の段の前提破れと
     #   読み違える ―― 宣言は段ごとに違うので、突き合わせも段ごとでなければならない）。
-    _precondition = _maybe_warn_write_precondition(op, step_before, step_after)
+    _precondition = _maybe_warn_write_precondition(op, step_before, step_after, resolved)
     warn_precondition = _precondition[1] if _precondition else None
     if warn_precondition:
         print(f"{step_prefix}{warn_precondition}")

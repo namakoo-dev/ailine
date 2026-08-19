@@ -80,7 +80,7 @@ def _samples(hits: list, *, cell_ref: Callable, fmt_value: Callable) -> str:
     return body + more
 
 
-def _check_new_row_at_end(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable):
+def _check_new_row_at_end(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable, **_kw):
     """前提: 書き込んだ行は before で空だった（＝末尾に**新しい**行を足したはず）。
 
     ★ 既存の合計行を潰した致命の検出そのもの。「表の下端をどこと判定したか」は問わない
@@ -95,14 +95,39 @@ def _check_new_row_at_end(before: dict, after: dict, *, cell_ref: Callable, fmt_
             f"（{_samples(hits, cell_ref=cell_ref, fmt_value=fmt_value)}）")
 
 
-def _check_new_sheet(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable):
+def _looks_like_own_prior_output(before: dict, sheet: str, expected_header) -> bool:
+    """★★ 単位H: before のそのシートの 1 行目が、**その op 自身の出力の見出し**と一致するか。
+
+    一致すれば「前回そこに書いたのは自分」＝作り直しであって、人の作ったものの破壊ではない。
+    ★ 署名は実装（helpers/*.bas）から取る。想像で決めない ── 呼び出し側が渡す
+    （このモジュールは ailine.py も .bas も知らない）。
+    """
+    if not expected_header:
+        return False
+    cells = before.get("cells") or {}
+    for i, want in enumerate(expected_header):
+        got = cells.get(f"{sheet}!1,{i + 1}")
+        if (got[0] if got is not None else None) != want:
+            return False
+    return True
+
+
+def _check_new_sheet(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable,
+                     own_output_headers=None, **_kw):
     """前提: その名前のシートは before に存在しない（＝**新しい**シートを作ったはず）。
 
     ★ 既に在ったシートの値を書き換えた（消して作り直したものを含む）ら前提が破れている。
     新規シートに書いた分は before に無いシートなので、ここでは一切拾わない。
+
+    ★★ 単位H（誤爆抑制の復元）: ただし、そのシートが **自分の前回の出力**だったなら
+    前提は破れていない ── 2 回目の集計は正常な作り直しであって破壊ではない。
+    実測（2026-08-19）: 単位F/G だけの状態では、元データが増えた後の 2 回目の AGGREGATE が
+    exit 7 で止まっていた。判定材料は呼び出し側から来る見出し署名だけで、ここは形を知らない。
     """
     existing = set(before.get("sheets") or [])
-    hits = [h for h in _changed(before, after) if h[0][0] in existing]
+    own = {s for s in existing
+           if _looks_like_own_prior_output(before, s, (own_output_headers or {}).get(s))}
+    hits = [h for h in _changed(before, after) if h[0][0] in existing and h[0][0] not in own]
     if not hits:
         return None
     sheets = sorted({h[0][0] for h in hits})
@@ -111,7 +136,7 @@ def _check_new_sheet(before: dict, after: dict, *, cell_ref: Callable, fmt_value
             f"書き換えました（{_samples(hits, cell_ref=cell_ref, fmt_value=fmt_value)}）")
 
 
-def _check_format_only(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable):
+def _check_format_only(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable, **_kw):
     """前提: 値が1つも変わらない（書式・罫線・列幅・埋め込みグラフだけを触ったはず）。"""
     hits = _changed(before, after)
     if not hits:
@@ -120,7 +145,7 @@ def _check_format_only(before: dict, after: dict, *, cell_ref: Callable, fmt_val
             f"（{_samples(hits, cell_ref=cell_ref, fmt_value=fmt_value)}）")
 
 
-def _check_value_multiset(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable):
+def _check_value_multiset(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable, **_kw):
     """前提: 値の多重集合が保存される（行を挿入してずらす/並べ替えるだけ）。
 
     ★ 数式は比較から外す: 行が動けば参照も書き換わる（=D2-C2 → =D3-C3）ので、文字列として
@@ -158,7 +183,8 @@ NO_PRECONDITION = frozenset({"existing_column", "new_column"})
 
 
 def check_write_preconditions_detail(writes, before: dict, after: dict, *,
-                                     cell_ref: Callable, fmt_value: Callable):
+                                     cell_ref: Callable, fmt_value: Callable,
+                                     own_output_headers=None):
     """破れた前提を **(種類, 文言)** で返す（破れていなければ None）。
 
     ★ 単位G が種類を要る理由: 「前提が破れた」だけでは、どの宣言が嘘をついたのか分からない。
@@ -173,14 +199,16 @@ def check_write_preconditions_detail(writes, before: dict, after: dict, *,
         check = PRECONDITIONS.get(kind)
         if check is None:
             continue
-        message = check(before, after, cell_ref=cell_ref, fmt_value=fmt_value)
+        message = check(before, after, cell_ref=cell_ref, fmt_value=fmt_value,
+                        own_output_headers=own_output_headers)
         if message:
             return kind, message
     return None
 
 
 def check_write_preconditions(writes, before: dict, after: dict, *,
-                               cell_ref: Callable, fmt_value: Callable) -> str | None:
+                               cell_ref: Callable, fmt_value: Callable,
+                               own_output_headers=None) -> str | None:
     """宣言した writes の前提が適用後の実測と食い違っていれば、その1行を返す（無ければ None）。
 
     writes: op の宣言（OP_WRITE_TARGET[op].writes）。呼び出し側が渡す ── ここは
@@ -193,5 +221,6 @@ def check_write_preconditions(writes, before: dict, after: dict, *,
     返す薄い皮で、判定は 1 箇所しか無い（同じ検査を 2 箇所に書かない）。
     """
     detail = check_write_preconditions_detail(writes, before, after,
-                                              cell_ref=cell_ref, fmt_value=fmt_value)
+                                              cell_ref=cell_ref, fmt_value=fmt_value,
+                                              own_output_headers=own_output_headers)
     return detail[1] if detail else None

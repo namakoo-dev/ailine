@@ -26,6 +26,7 @@ import ailine  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
+from test_ailine import _inject_formula_cache  # noqa: E402 — 小道具を二重管理しない（test_sum_identity.py と同じ流用）
 
 # 一度きりの既定変更の告知は ★ で始まるが警告ではない。★ の本数を数える時は必ず除く。
 _ONE_TIME_NOTICE = "このバージョンから、既定で原本に直接反映します"
@@ -68,11 +69,12 @@ def _book(tmp_path, rows, name="b.xlsx"):
     return p
 
 
-def _book_with_summary(tmp_path, summary_rows, sheet_name="集計", data_rows=None):
+def _book_with_summary(tmp_path, summary_rows, sheet_name="集計", data_rows=None,
+                       data_sheet="Sheet"):
     p = tmp_path / "b.xlsx"
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Sheet"
+    ws.title = data_sheet
     for r in (data_rows or [["部門", "金額"], ["営業", 100], ["営業", 200], ["開発", 300]]):
         ws.append(r)
     s = wb.create_sheet(sheet_name)
@@ -96,33 +98,50 @@ def _rewrite_sheet(sheet_name, rows):
     return fake
 
 
-# ★ APPEND_TOTAL の事後条件は「挿入耐性 SUM 型」の式を要求する（値を書くと正しく落ちる）。
-#   検体作りで一度これを踏んだ ── fake は本物が書く形と同じものを書かないと、
-#   測りたいもの（誤爆の有無）でなく検体の粗を測ることになる。
+# ★ APPEND_TOTAL の事後条件は「挿入耐性 SUM 型」の式(ailine.py:_APPEND_TOTAL_FORMULA_RE)
+#   **かつ** ラベル一致 **かつ** キャッシュ値一致 の三点を要求する
+#   (ailine.py:check_append_total 3380-3454)。式の形自体は当初の当て推量で合っていたが、
+#   openpyxl で書いた数式にはキャッシュ値(<v>)が無い（LibreOffice を経由しないため）ので
+#   キャッシュ値一致だけが必ず落ちていた。tests/test_sum_identity.py が同じ壁を
+#   _inject_formula_cache（xl/worksheets/sheetN.xml へ <v> を直接注ぐ, test_ailine.py:4711）
+#   で越えているので、その小道具をそのまま流用する。
 _TOTAL_FORMULA = "=SUM(B2:INDEX(B:B,ROW()-1))"
 
 
 def _append_total_row(label="合計"):
-    """basrun_apply の差し替え: 1 枚目の末尾に 合計行 を足す（式で書く）。"""
+    """basrun_apply の差し替え: 1 枚目の末尾に 合計行 を足す（式で書く・キャッシュ値も注入）。"""
     def fake(out_book, code, workdir, helper_files=(), timeout=None):
         wb = openpyxl.load_workbook(out_book)
         ws = wb.active
         r = ws.max_row + 1
+        total = sum(v for v in (ws.cell(row=rr, column=2).value for rr in range(2, r))
+                    if isinstance(v, (int, float)))
         ws.cell(row=r, column=1, value=label)
         ws.cell(row=r, column=2, value=_TOTAL_FORMULA)
         wb.save(out_book)
+        _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {f"B{r}": total})
         return True, None, "ok"
     return fake
 
 
 def _overwrite_last_row_with_formula():
     """basrun_apply の差し替え: 既存の最終行（＝既存の合計行）を SUM 式で上書きする。
-       ★ 盲検査定の致命1の実物: 116600 が =SUM(...) に置き換わって 106000 になった。"""
+       ★ 盲検査定の致命1の実物: 116600 が =SUM(...) に置き換わって 106000 になった。
+       ★ 単位H: 致命1のバグの実物そのものを再現する ── 末尾に新しい行を足すはずが
+       既存行(ラベルも値も)を潰す。ラベルと値(キャッシュ)を書き込むのは、これが
+       事後条件(三点)を満たしてしまう＝「反映は正しく通った」上で単位F/G の
+       破壊の関所(_check_new_row_at_end)が鳴る、という T2 が測りたい経路そのものだから
+       （postcondition が先に fail すると関所まで到達しない）。"""
     def fake(out_book, code, workdir, helper_files=(), timeout=None):
         wb = openpyxl.load_workbook(out_book)
         ws = wb.active
-        ws.cell(row=ws.max_row, column=2, value=_TOTAL_FORMULA)
+        r = ws.max_row
+        total = sum(v for v in (ws.cell(row=rr, column=2).value for rr in range(2, r))
+                    if isinstance(v, (int, float)))
+        ws.cell(row=r, column=1, value="合計")
+        ws.cell(row=r, column=2, value=_TOTAL_FORMULA)
         wb.save(out_book)
+        _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {f"B{r}": total})
         return True, None, "ok"
     return fake
 
@@ -142,7 +161,6 @@ def test_t1_handwritten_total_row_with_label(tmp_path, monkeypatch, capsys):
     assert not (rc == 0 and not _warn_stars(out)), f"exit 0 で無言だった:\n{out}"
 
 
-@pytest.mark.xfail(strict=True, reason="★ 検体側が未確定: APPEND_TOTAL の事後条件が求める「挿入耐性 SUM 型」の式の 正確な形 を特定できていない（rc=1=事後条件失敗で止まっており、関所まで到達していない）。製品の欠陥ではなく検体の粗。★ 実装前に確定させること")
 def test_t2_existing_total_row_blank_label(tmp_path, monkeypatch, capsys):
     """T2: 既存の合計行（A 列が空）を上書きする。期待: exit 7・既存値 116600 が保存されている。"""
     _isolate(monkeypatch, tmp_path)
@@ -197,14 +215,18 @@ def test_t5_aggregate_targeting_the_summary_sheet_itself(tmp_path, monkeypatch, 
 # ================================================================ 偽陽性 F1〜F5
 # 期待: ★ が 1 本も出ない（誤爆の復活を防ぐ）
 
-@pytest.mark.xfail(strict=True, reason="★ 検体側が未確定: T2 と同じ根（期待式の形）。★ 誤爆の判定(★ 0 本)自体は通っており、落ちているのは rc の主張だけ")
 def test_f1_plain_table_append_total(tmp_path, monkeypatch, capsys):
-    """F1: 合計行の無い普通の表 + 合計を出して。期待: 中立表示のみ・★ 0 本・exit 0。"""
+    """F1: 合計行の無い普通の表 + 合計を出して。期待: 中立表示のみ・★ 0 本・exit 0。
+       ★ 単位H: 依頼文に対象列『金額』を明記する（単位E: 依頼文が無言の対象スロットは
+       ②UNSPOKEN として ✓ の直後に1文が付く ―― これは誤爆ではなく正しい仕分けなので、
+       ★0本を測る F1 では対象を名指しして UNSPOKEN を起こさない。同じ言い方は
+       tests/test_sum_identity.py の APPEND_TOTAL 検体（「金額の合計を一番下に出して」）
+       にも既にある）。"""
     _isolate(monkeypatch, tmp_path)
     book = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200]])
     _translate(monkeypatch, "APPEND_TOTAL", {"col": "金額"})
     _apply(monkeypatch, _append_total_row())
-    rc, out = _run_main(["run", str(book), "合計を出して", "--copy"], capsys)
+    rc, out = _run_main(["run", str(book), "金額の合計を出して", "--copy"], capsys)
     assert _warn_stars(out) == [], f"rc={rc} stars={_warn_stars(out)}"
     assert rc == 0, f"rc={rc} stars={_warn_stars(out)}"
 
@@ -239,20 +261,27 @@ def test_f3_sheet_name_column_name_conflict(tmp_path, monkeypatch, capsys):
     assert _warn_stars(out) == [], f"rc={rc} stars={_warn_stars(out)}"
 
 
-@pytest.mark.xfail(strict=True, reason="★★ 本物: 単位 H が直す対象。正常な再集計がexit 7 で止まる（実測 2026-08-19）。H を入れたら XPASS になって必ず落ちる")
 def test_f4_second_aggregate_on_same_book(tmp_path, monkeypatch, capsys):
     """★★ F4: AGGREGATE を同じブックで 2 回連続（前回の『集計』は ailine 自身の出力で、
        その後 元データが増えた状態）。期待: 2 回目も exit 0・★ 0 本。
        ★ 実測 2026-08-19: 単位 F/G だけの状態では exit 7 / ★ 1 本 = 赤。単位 H が直す対象。"""
     _isolate(monkeypatch, tmp_path)
     book = _book_with_summary(
-        tmp_path, [["部門", "合計"], ["営業", 300], ["開発", 300]],
+        # ★ 前回の出力は SummaryTable の 本物の署名 で作る（helpers/AiLineHelpers.bas:374-375）
+        #   A1=分類列名 / B1="合計 - 集計列名"。ここを想像で書くと H が効かず別の理由で赤くなる。
+        tmp_path, [["部門", "合計 - 金額"], ["営業", 300], ["開発", 300]],
         data_rows=[["部門", "金額"], ["営業", 100], ["営業", 200], ["営業", 200],
-                   ["開発", 300], ["開発", 400]])
+                   ["開発", 300], ["開発", 400]],
+        data_sheet="工事台帳")
     _translate(monkeypatch, "AGGREGATE", {"group_col": "部門", "value_col": "金額"})
-    _apply(monkeypatch, _rewrite_sheet("集計", [["部門", "合計"], ["営業", 500], ["開発", 700]]))
+    _apply(monkeypatch, _rewrite_sheet("集計", [["部門", "合計 - 金額"], ["営業", 500], ["開発", 700]]))
     _noninteractive(monkeypatch)
-    rc, out = _run_main(["run", str(book), "部門ごとに金額をまとめて"], capsys)
+    # ★ --sheet を明示する: 2 シートあると対象が無言で機械決定され、単位E の②注記（★ 1 本）が
+    #   出る。それは誤爆ではないが、この検体が凍結したい数字（★ 0 本）と混ざる。
+    #   ★ 凍結バーを緩めるのでなく、検体から無関係な変数を外す。
+    # ★ シートを依頼文で名指しする。--sheet フラグでは単位E の②（依頼文の語と照合できたか）が
+    #   「機械決定」のままで注記が出る ── 検体から無関係な変数を外すには 語 で指す必要がある。
+    rc, out = _run_main(["run", str(book), "工事台帳を部門ごとに金額をまとめて"], capsys)
     assert _warn_stars(out) == [], f"rc={rc} stars={_warn_stars(out)}"
     assert rc == 0, f"rc={rc} stars={_warn_stars(out)}"
 

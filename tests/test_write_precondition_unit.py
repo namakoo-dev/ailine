@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ailine  # noqa: E402
 from ailine_core.write_precondition import (  # noqa: E402
     NO_PRECONDITION, PRECONDITIONS, check_write_preconditions,
+    check_write_preconditions_detail,
 )
 
 
@@ -164,3 +165,54 @@ def test_maybe_warn_write_precondition_reads_the_declaration():
     assert ailine._maybe_warn_write_precondition("SET_COLUMN_VALUE", before, after) is None
     # 未知の op（FREEFORM 等・宣言そのものが無い）は判定材料が無いので黙る
     assert ailine._maybe_warn_write_precondition("FREEFORM", before, after) is None
+
+# ★★ 単位H: 「宣言した出力先に在るのは自分の前回の出力か」で、前提の破れを取り消す。
+#   ★ 署名（A1=分類列名 / B1="合計 - 集計列名"）は helpers/AiLineHelpers.bas:374-375 が
+#   実際に書いている形。想像で決めると H が効かず別の理由で赤いままになる（1 度踏んだ）。
+
+_OWN = {"集計": ("部門", "合計 - 金額")}
+
+
+def _detail(writes, before, after, own=None):
+    return check_write_preconditions_detail(
+        writes, before, after, cell_ref=ailine._cell_ref,
+        fmt_value=ailine._fmt_cell_value, own_output_headers=own)
+
+
+def test_unit_h_own_prior_output_does_not_break_the_premise():
+    """自分の前回の出力を作り直しただけなら前提は破れていない（＝関所を鳴らさない）。"""
+    before = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
+                    "集計!2,1": "営業", "集計!2,2": 300}, sheets=("Sheet", "集計"))
+    after = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
+                   "集計!2,1": "営業", "集計!2,2": 500}, sheets=("Sheet", "集計"))
+    assert _detail(("new_sheet",), before, after, _OWN) is None
+
+
+def test_unit_h_handmade_sheet_still_breaks_the_premise():
+    """★ 対照: 人が作った『集計』（年度/予算）は署名が一致せず、今までどおり鳴る。
+       ここが鳴らなくなったら、H が単位F/G の守りを壊したことになる。"""
+    before = _snap({"集計!1,1": "年度", "集計!1,2": "予算",
+                    "集計!2,1": 2025, "集計!2,2": 5000}, sheets=("Sheet", "集計"))
+    after = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
+                   "集計!2,1": "営業", "集計!2,2": 300}, sheets=("Sheet", "集計"))
+    out = _detail(("new_sheet",), before, after, _OWN)
+    assert out is not None and out[0] == "new_sheet", out
+
+
+def test_unit_h_partial_signature_match_is_not_own_output():
+    """★ 片方だけ一致（A1 は同じで B1 が違う）は「自分の出力」と見なさない。
+       2 セルとも一致を要求する ── 緩めると人のシートを自分の物と誤認して破壊を見逃す。"""
+    before = _snap({"集計!1,1": "部門", "集計!1,2": "予算",
+                    "集計!2,1": "営業", "集計!2,2": 5000}, sheets=("Sheet", "集計"))
+    after = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
+                   "集計!2,1": "営業", "集計!2,2": 300}, sheets=("Sheet", "集計"))
+    out = _detail(("new_sheet",), before, after, _OWN)
+    assert out is not None and out[0] == "new_sheet", out
+
+
+def test_unit_h_absent_signature_keeps_unit_f_behaviour():
+    """★ 退行の番人: 署名を渡さない呼び出し（PIVOT 等・H の対象外）は単位F のまま鳴る。"""
+    before = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額"}, sheets=("Sheet", "集計"))
+    after = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 売上"}, sheets=("Sheet", "集計"))
+    out = _detail(("new_sheet",), before, after)
+    assert out is not None and out[0] == "new_sheet", out

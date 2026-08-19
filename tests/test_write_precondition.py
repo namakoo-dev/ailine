@@ -398,6 +398,15 @@ def test_f4b_aggregate_twice_with_edited_source_data(tmp_path, monkeypatch, caps
     ★ F4 が鳴らないのは「2回目だから」ではなく「書いた値が前回と同じで、実測した変化が
     ゼロだから」。間で元データを直すと同じ2回目が鳴る ── 再集計は日常の使い方なので、
     ここは単位F の誤爆の本命候補として測って残す（この回では直さない）。
+
+    ★★ 単位H（2026-08-19）で **主張を反転させた**。単位F が「この回では直さない」と書いて
+    凍結した誤爆が、まさにここで直る対象だった。
+    出力先『集計』の見出しが SummaryTable 自身の署名（A1=分類列名 / B1="合計 - 集計列名"・
+    helpers/AiLineHelpers.bas:374-375）と一致するので「自分の前回の出力の作り直し」と判定し、
+    前提は破れていない ＝ 関所を鳴らさない。
+    ★ 人が手で作った『集計』（署名が一致しない）は今までどおり鳴る
+    ── その対照は tests/test_write_precondition_unit.py と
+    tests/golden/f9_transcripts/unit_g_declared_sheet_premise_broken.txt が持つ。
     """
     book = _book(tmp_path, {"工事台帳": [["取引先", "金額"], ["a", 100], ["b", 200]]})
     totals = {"b": 200}
@@ -426,8 +435,9 @@ def test_f4b_aggregate_twice_with_edited_source_data(tmp_path, monkeypatch, caps
 
     rc2 = _run(tmp_path, monkeypatch, book, *args)
     out2 = capsys.readouterr().out
-    assert rc2 == 7, out2
-    assert "★ 新しいシートを作るはずが、既存のシート『集計』の値を" in out2
+    # ★ 単位H 以前は rc2 == 7（誤爆）。以後は正常な再集計として通す。
+    assert rc2 == 0, out2
+    assert "★ 新しいシートを作るはずが" not in out2, out2
 
 
 # --- F5: format_only 系 8 op を健全系で1回ずつ ------------------------------------
