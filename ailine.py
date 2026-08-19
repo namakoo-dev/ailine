@@ -3451,7 +3451,13 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
     want_total = sum(nums) * factor
     if not _is_number(got_cached) or abs(got_cached - want_total) > 1e-6:
         return "fail", f"{total_row}行目: 合計のキャッシュ値が不一致 (期待 {want_total} 実際 {got_cached!r})"
-    return "pass", f"{len(nums)} 行の合計を検証（式・キャッシュ値・ラベルとも一致）"
+    # ★★ 単位I: 主張の範囲を狭める ── **どの行に合計が立っているか**を pass でも言う。
+    #   非対称だった: 失敗時は「5行目: …」と行番号を言うのに、成功時は言っていなかった。
+    #   ★ 見せる必要が一番あるのは成功したときの方（盲検査定の致命①: 手入力の合計行がある
+    #   ブックで、書かれた先が見えないまま ✓ が出ていた）。
+    #   ★ 「何を検証したか」でなく「どこを検証したか」まで述べる。件数だけでは範囲を主張できない。
+    return "pass", (f"{total_row}行目の合計を検証"
+                    f"（{len(nums)} 行分・式・キャッシュ値・ラベルとも一致）")
 
 
 # --- ★ W9: 検証済みヘルパ4種の事後条件 ---------------------------------------
