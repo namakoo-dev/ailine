@@ -69,7 +69,11 @@
       "Sheet": {},
       "集計": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 1,
+      "集計": 2
+    }
   },
   "after": {
     "sheets": [
@@ -139,7 +143,11 @@
       "Sheet": {},
       "集計": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 1,
+      "集計": 2
+    }
   },
   "advisories": [
     "★ 疑わしい: 既存シート『集計』の中身が置き換わりました（元データ 4 セル分が別の内容に変わっています）"

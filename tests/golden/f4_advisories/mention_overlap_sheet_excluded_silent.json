@@ -55,7 +55,11 @@
       "Sheet": {},
       "参照シート": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 1,
+      "参照シート": 1
+    }
   },
   "after": {
     "sheets": [
@@ -109,7 +113,11 @@
       "Sheet": {},
       "参照シート": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 1,
+      "参照シート": 1
+    }
   },
   "advisories": [
     "列 B: データ 0 行のうち 0 行を変更（0 行は未変更）＋見出し行"

@@ -49,7 +49,10 @@
     "rowh": {
       "Sheet": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 2
+    }
   },
   "after": {
     "sheets": [
@@ -119,7 +122,11 @@
       "Sheet": {},
       "新規": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 2,
+      "新規": 1
+    }
   },
   "advisories": []
 }

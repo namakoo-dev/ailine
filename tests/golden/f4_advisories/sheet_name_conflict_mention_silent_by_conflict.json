@@ -101,7 +101,11 @@
       "売上データ": {},
       "金額": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "売上データ": 3,
+      "金額": 2
+    }
   },
   "after": {
     "sheets": [
@@ -203,7 +207,11 @@
       "売上データ": {},
       "金額": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "売上データ": 3,
+      "金額": 2
+    }
   },
   "advisories": [],
   "sheet_conflict": {

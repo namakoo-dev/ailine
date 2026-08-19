@@ -65,7 +65,10 @@
     "rowh": {
       "Sheet": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 3
+    }
   },
   "after": {
     "sheets": [
@@ -167,7 +170,11 @@
       "Sheet": {},
       "新規": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 3,
+      "新規": 2
+    }
   },
   "advisories": [
     "★ 疑わしい: 空欄への同一値の一括書き込みです（値 0 × 4 セル）",

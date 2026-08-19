@@ -65,7 +65,10 @@
     "rowh": {
       "Sheet": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 2
+    }
   },
   "after": {
     "sheets": [
@@ -131,7 +134,10 @@
     "rowh": {
       "Sheet": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 2
+    }
   },
   "advisories": [
     "列 A: データ 1 行のうち 1 行を変更（0 行は未変更）",

@@ -592,11 +592,16 @@ def snapshot(path: Path) -> dict:
     # ★ 止血3: truncated は「この snapshot が MAX_ROWS/MAX_COLS で切り詰められたか」を
     #   保持する。diff_snapshots 後の表示で「先頭1000行しか見せていない」ことを正直に
     #   注記するために使う（bench/realworld/BASELINE.md の B 検体所見の根治）。
+    # ★ operator 指摘②(2026-08-19): true_rows はシート毎の実際の行数（切り詰め前）。
+    #   count_reconciliation が「データ 999 行のうち…」と 嘘の分母 を出していた根治に使う。
+    #   値は既にこのループで計算していた（捨てていただけ）。
     snap = {"sheets": list(wb.sheetnames), "charts": _charts_count(path),
-            "cells": {}, "merges": {}, "colw": {}, "rowh": {}, "truncated": False}
+            "cells": {}, "merges": {}, "colw": {}, "rowh": {}, "truncated": False,
+            "true_rows": {}}
     for name in wb.sheetnames:
         ws = wb[name]
         true_nrow = ws.max_row or 0
+        snap["true_rows"][name] = true_nrow
         true_ncol = ws.max_column or 0
         if true_nrow > MAX_ROWS or true_ncol > MAX_COLS:
             snap["truncated"] = True
@@ -987,8 +992,19 @@ def count_reconciliation(before: dict, after: dict) -> str | None:
     changed_rows = len(data_changed_rows)
     unchanged_rows = max(data_rows - changed_rows, 0)
     col_letter = get_column_letter(col)
-    msg = (f"列 {col_letter}: データ {data_rows} 行のうち {changed_rows} 行を変更"
-           f"（{unchanged_rows} 行は未変更）")
+    # ★ operator 指摘②(2026-08-19): 1500 行のブックで「データ 999 行のうち 999 行を変更」と
+    #   出ていた ── snapshot が MAX_ROWS で切れているのに、分母を snapshot から数えていた。
+    #   ★ 分母を実データ行数に置き換えることは しない: 1000 行目より下の空/非空は snapshot に
+    #   無いので、その数字はでっち上げになる。代わりに 主張を狭める（単位I と同じ型）──
+    #   確認した範囲を言い、確認していない残りを 物理行数（true_rows・これは実測）で正直に述べる。
+    true_rows = (before.get("true_rows") or {}).get(sheet, 0)
+    if before.get("truncated") and true_rows > MAX_ROWS:
+        hidden = true_rows - MAX_ROWS
+        msg = (f"列 {col_letter}: 確認した先頭 {data_rows} 行のうち {changed_rows} 行を変更"
+               f"（{unchanged_rows} 行は未変更）★ {MAX_ROWS} 行目より下の {hidden} 行は確認していない")
+    else:
+        msg = (f"列 {col_letter}: データ {data_rows} 行のうち {changed_rows} 行を変更"
+               f"（{unchanged_rows} 行は未変更）")
     if header_changed:
         msg += "＋見出し行"
     return msg

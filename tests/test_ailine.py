@@ -826,6 +826,41 @@ def test_count_reconciliation_reports_data_vs_changed_rows(tmp_path):
     msg = ailine.count_reconciliation(before, after)
     assert msg == "列 B: データ 3 行のうち 2 行を変更（1 行は未変更）"
 
+# ★ operator 指摘②(2026-08-19): 1500 行のブックで「データ 999 行のうち 999 行を変更」と
+#   出ていた ── 分母が MAX_ROWS=1000 の snapshot に引きずられ、実データと違う数字を主張した。
+#   分母つき報告は信用の条件1 なので、その根が黙って切り詰められるのは致命。
+#   ★ 直し方は分母のでっち上げではなく 主張を狭める（単位I と同じ型）。
+
+def test_count_reconciliation_narrows_claim_when_rows_truncated(tmp_path):
+    """★ operator の指摘の再現そのもの: 実物の 1500 行ブックを snapshot に通す。"""
+    rows = [["商品", "金額"]] + [[f"品{i}", i] for i in range(1, 1500)]   # 見出し+1499 データ行
+    p = _book(tmp_path, rows)
+    before = ailine.snapshot(p)
+    assert before["truncated"] and before["true_rows"]["Sheet"] == 1500
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    for r in range(2, 1501):
+        ws.cell(row=r, column=2, value=99999)   # 全データ行を変更（うち snapshot が見るのは先頭のみ）
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.count_reconciliation(before, after)
+    # ★ 負の被覆: 嘘の分母「データ 999 行のうち」を 出さない ことを直接主張する
+    assert "データ 999 行のうち" not in msg, msg
+    assert msg.startswith("列 B: 確認した先頭 999 行のうち 999 行を変更"), msg
+    assert "★ 1000 行目より下の 500 行は確認していない" in msg, msg
+
+
+def test_count_reconciliation_untruncated_message_is_unchanged(tmp_path):
+    """★ 退行の番人: 切り詰めが無い普通のブックでは文言が 1 文字も変わらない。"""
+    p = _book(tmp_path, [["商品", "金額"], ["りんご", 100], ["バナナ", 200]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    wb.active.cell(row=2, column=2, value=999)
+    wb.save(p)
+    after = ailine.snapshot(p)
+    assert ailine.count_reconciliation(before, after) == "列 B: データ 2 行のうち 1 行を変更（1 行は未変更）"
+
+
 def test_count_reconciliation_none_when_multiple_columns_changed(tmp_path):
     p = _book(tmp_path, [["商品", "金額"], ["りんご", 100], ["バナナ", 200]])
     before = ailine.snapshot(p)

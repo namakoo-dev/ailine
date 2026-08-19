@@ -65,7 +65,10 @@
     "rowh": {
       "Sheet": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 3
+    }
   },
   "after": {
     "sheets": [
@@ -147,7 +150,10 @@
     "rowh": {
       "Sheet": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 4
+    }
   },
   "advisories": [
     "★ 疑わしい: 変更が元データの範囲外です（A4:B4）"

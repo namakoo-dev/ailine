@@ -101,7 +101,11 @@
       "売上データ": {},
       "金額": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "売上データ": 3,
+      "金額": 2
+    }
   },
   "after": {
     "sheets": [
@@ -203,7 +207,11 @@
       "売上データ": {},
       "金額": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "売上データ": 3,
+      "金額": 2
+    }
   },
   "advisories": [
     "★ 依頼で言及された『金額』は存在しません/変更されていません"

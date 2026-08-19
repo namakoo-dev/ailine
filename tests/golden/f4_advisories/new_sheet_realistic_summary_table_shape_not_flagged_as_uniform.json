@@ -65,7 +65,10 @@
     "rowh": {
       "Sheet": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 3
+    }
   },
   "after": {
     "sheets": [
@@ -183,7 +186,11 @@
       "Sheet": {},
       "集計": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 3,
+      "集計": 3
+    }
   },
   "advisories": [
     "★ 依頼にない新しいシートが作成されました（集計）"

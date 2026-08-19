@@ -69,7 +69,11 @@
       "Sheet": {},
       "集計": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 1,
+      "集計": 2
+    }
   },
   "after": {
     "sheets": [
@@ -139,7 +143,11 @@
       "Sheet": {},
       "集計": {}
     },
-    "truncated": false
+    "truncated": false,
+    "true_rows": {
+      "Sheet": 1,
+      "集計": 2
+    }
   },
   "advisories": [
     "列 B: データ 1 行のうち 0 行を変更（1 行は未変更）＋見出し行"
