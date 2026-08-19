@@ -1,0 +1,59 @@
+{
+ "_meta": {
+  "purpose": "op を1つ追加するとは「翻訳(battery)×生成×検証(事後条件)×安全(writes)×表示(8表)」の束を足すことである。この番人(tests/test_op_completeness.py)は、その束のどこが欠けているかを op を足した瞬間に赤で知らせる。この免除簿は『今は欠けているが番人には言わせない』箇所を宣言駆動で列挙する台帳であって、欠けを恒久的に許すものではない。",
+  "rule": "免除には reason（なぜ欠けているか・調べた上での正直な理由。分からなければ『未調査』と書く）と unlock（何をすれば免除を消せるか＝発火条件）を必ず書くこと。unlock の条件が実際に満たされたら、番人（tests/test_op_completeness.py の③）がそれを検出して赤にする ── そうしたら reason/unlock ではなくこのエントリ自体を削除すること。",
+  "generated": "2026-08-20",
+  "requirement_kinds": [
+   "postcondition",
+   "op_verbs",
+   "battery>=2"
+  ]
+ },
+ "registered_op_tables": [
+  "ailine.py:OP_META",
+  "ailine.py:OP_WRITE_TARGET",
+  "ailine.py:OP_SUBJECT_SLOTS",
+  "ailine.py:_CONFIRM_FIELDS",
+  "ailine.py:POSTCONDITIONS",
+  "ailine.py:_COLUMN_ARG_KEYS",
+  "ailine_core/target_sheet.py:_OP_VERBS"
+ ],
+ "exemptions": [
+  {
+   "op": "CHART",
+   "requirement": "postcondition",
+   "reason": "CHART の事後条件チェッカー自体は実在する（check_chart, ailine.py:3365）。ただし他14 op のチェッカーは全員 (out_book, resolved_args, header_row) という共通シグネチャで POSTCONDITIONS dict に登録され run_postcondition が辞書引きで呼ぶのに対し、CHART だけは『適用前のグラフ数と比べて+1か』を見る必要があり before_charts:int という追加引数を要る。この非対称なシグネチャは共通の dict には素直に載らないため、run_postcondition (ailine.py:3682-3683) が `if op == \"CHART\": return check_chart(out_book, before_charts)` で先に特別扱いしてから、それ以外だけ POSTCONDITIONS.get(op) を引く形になっている。つまり『検証が無い』のではなく『登録方式（辞書）に乗らない』が正確な実態。",
+   "unlock": "check_chart を他チェッカーと同じ (out_book, resolved_args, header_row) 形に包むアダプタ（before_charts を resolved_args 経由で受け取る等）を書いて POSTCONDITIONS dict に統合し、run_postcondition 側の if 分岐を消したとき。"
+  },
+  {
+   "op": "AGGREGATE",
+   "requirement": "op_verbs",
+   "reason": "ailine_core/target_sheet.py:173-177 のコメントが明示している設計: 「ここに無い op は `ラベル+する / ラベル+した`（転記する/集計する のように自然に読める形）」。AGGREGATE のラベルは『集計』で、まさにこのコメントが自然な例として名指ししている語そのもの（フォールバックで『集計する/集計した』になる）。意図的な省略であり未整備ではない。",
+   "unlock": "AGGREGATE の3択文言（sheet_conflict_choice_lines 経由）が実際に日本語として不自然だと判明したとき、または _OP_VERBS に個別の活用形が必要な具体的な検体が見つかったとき。"
+  },
+  {
+   "op": "LOOKUP_FILL",
+   "requirement": "op_verbs",
+   "reason": "AGGREGATE と同じ設計コメント（target_sheet.py:173-177）が『転記する』を自然な例としてそのまま名指ししている。さらに tests/test_sheet_conflict.py:588 (`test_op_verbs_falls_back_to_label_plus_suru`) が `op_verbs(\"LOOKUP_FILL\", \"転記\") == (\"転記する\", \"転記した\")` を凍結しており、フォールバックの結果が自然であることは既存テストで既に確認・固定されている。",
+   "unlock": "AGGREGATE と同じ（3択文言が不自然と判明した、または個別活用が要る具体例が出たとき）。"
+  },
+  {
+   "op": "MERGE",
+   "requirement": "op_verbs",
+   "reason": "★ 未調査（設計意図か単なる未整備か特定できず）。target_sheet.py:173-177 のコメントは AGGREGATE(集計)/LOOKUP_FILL(転記) の2例だけを名指ししており、MERGE には触れていない。MERGE のラベルは『セル結合』で、フォールバックは『セル結合する/セル結合した』になる ── 日本語として破綻はしていないが、コメントに名指しされた2例ほど明確に『これで良い』と著者が判断した形跡はない。tests/test_sheet_conflict.py にも MERGE 用の固定テストは無く（LOOKUP_FILL しか凍結されていない）、golden にも MERGE の3択文言が出る検体は見当たらない。著者が意図して省いたのか単に手が回っていないのか、コードからは判別できなかった。",
+   "unlock": "MERGE の3択文言が実際に発火する検体を作って自然さを確認したとき、または原著者/変更履歴から意図が判明したとき。"
+  },
+  {
+   "op": "APPEND_TOTAL",
+   "requirement": "battery>=2",
+   "reason": "bench/translation_battery.json を expect.op / expect_plan[*].op で構造的に数えると APPEND_TOTAL は1件（items_v2 id=102 の複合計画 [COMPUTE_COLUMN, APPEND_TOTAL] の2段目のみ）。単発の検体（items に op=APPEND_TOTAL の行）は0件。看板機能（税込み合計を一番下に追加）なのに、翻訳精度がほぼ測られていない。★ 2026-08-19の実測メモは『検体0件』としていたが、構造的な数え直しでは1件だった（複合計画の中の段まで数えると増える）。過小報告だったので訂正して1件と記録する。",
+   "unlock": "bench/translation_battery.json に APPEND_TOTAL を expected op とする検体を新たに1件以上足し、合計2件以上にしたとき（単発 items でも複合計画の1段でもよい）。"
+  },
+  {
+   "op": "SET_COLUMN_VALUE",
+   "requirement": "battery>=2",
+   "reason": "検体 0 件（構造カウント・2026-08-20 確認）。査定が足した op が翻訳の測定対象外 ── 2026-08-19 実測で該当依頼（氏名の列を全部『退職済み』に 等）は全部自由生成落ちだった",
+   "unlock": "bench/translation_battery.json に APPEND_TOTAL を expected op とする検体を新たに1件以上足し、合計2件以上にしたとき（単発 items でも複合計画の1段でもよい）。"
+  }
+ ]
+}
