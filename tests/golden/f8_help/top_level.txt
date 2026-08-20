@@ -1,13 +1,14 @@
-usage: ailine [-h] {run,stop,doctor,ops,history,restore,undo,vocab} ...
+usage: ailine [-h] {run,stop,doctor,ops,scan,history,restore,undo,vocab} ...
 
 自然言語 → LibreOffice Basic → 適用 → 検証
 
 positional arguments:
-  {run,stop,doctor,ops,history,restore,undo,vocab}
+  {run,stop,doctor,ops,scan,history,restore,undo,vocab}
     run                 タスクを生成・適用・検証する
     stop                起動した LibreOffice を落とす
     doctor              セットアップを診断する
     ops                 頼める操作の一覧を表示する（何ができるか）
+    scan                フォルダ内の複数ブックを棚卸しする（書き込みゼロ）
     history             実行履歴を表示する
     restore             原本への反映前のバックアップから復元する（ailine undo と同じ）
     undo                原本への反映前のバックアップから復元する（あと何回戻せるかを表示）

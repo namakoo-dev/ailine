@@ -181,3 +181,26 @@ def _needed_info(op: str, op_schema: dict, confirm_fields: dict) -> str:
     """必須 slot を日本語ラベルに直す。ラベルは確認行の登録簿から引く（新しい語を作らない）。"""
     labels = {slot: label for label, slot, _fmt in confirm_fields.get(op, ())}
     return "・".join(labels.get(slot, slot) for slot in op_schema.get(op, ()))
+
+
+# --- `ailine scan` の人間向け出力（M1読み・DESIGN-20260821-multifile.md §2骨） ------------
+
+def render_scan_report(folder_label: str, result: dict) -> list:
+    """分母つき報告（「N ファイル中 M 照合できた」）・失敗は名指し+理由・並べ替えは開示する。
+       ★ ⚠ の連打はしない ── 異常のあるファイル（取れなかった）だけ名指しする。"""
+    files = result["files"]
+    matched = sum(1 for f in files if f["status"] == "取れた")
+    lines = [f"■ ailine scan  folder={folder_label}"]
+    lines.append(f"基準: {result['base']}" if result["base"] else "基準: 見つかりません（読める .xlsx が無い）")
+    lines.append(f"{result['denominator']} ファイル中 {matched} 照合できた")
+    excluded = result["excluded"]
+    if excluded.get("temp"):
+        lines.append(f"対象外: 一時ファイル {excluded['temp']} 件（~$ で除外）")
+    if excluded.get("subdirs"):
+        lines.append(f"対象外: サブフォルダ {excluded['subdirs']} 件（中は見ていません）")
+    for f in files:
+        if f["status"] == "取れなかった":
+            lines.append(f"  ⚠ {f['name']}: 取れなかった（{f['reason']}）")
+        elif f.get("reordered"):
+            lines.append(f"  {f['name']}: 取れた（並べ替え）")
+    return lines

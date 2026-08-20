@@ -81,7 +81,9 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
     render_ops_table,
     freeform_notice_reason, render_freeform_notice, render_freeform_notice_compact,   # ★ K-1
+    render_scan_report,   # ★ M1読み: `ailine scan`
 )
+from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -6475,6 +6477,35 @@ def cmd_stop(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scan(a: argparse.Namespace) -> int:
+    """`ailine scan <folder>`: M1読み ── 複数ブックの棚卸し（書き込みゼロ・LO は起動しない）。
+       DESIGN-20260821-multifile.md v2 §1(M1読み)・§2(骨)。分類・照合は ailine_core/multifile.py
+       に置く。見出し行の推定だけ既存の detect_header_row/_row_char_stats を基準ファイル1冊分
+       だけ呼ぶ（このモジュールが持つ元々の機能をそのまま流用・LO 往復は無い）。"""
+    folder = Path(a.folder).resolve()
+    candidates, excluded = multifile.classify_folder_contents(folder)
+    base_path, base_wb = multifile.open_base_workbook(candidates)
+    base_headers, base_sheet, header_row = [], None, 1
+    if base_wb is not None:
+        base_sheet = base_wb.sheetnames[0]
+        ws = base_wb[base_sheet]
+        scan_end = min(ws.max_row or 1, MAX_ROWS, STRUCT_HEADER_SCAN_ROWS)
+        rows = _row_char_stats(ws, 1, scan_end, 1, min(ws.max_column or 1, MAX_COLS))
+        row, confident = detect_header_row({"rows": rows})
+        header_row = row if confident else 1
+        base_headers = multifile.read_row_headers(ws, header_row)
+        base_wb.close()
+    files = [multifile.evaluate_file(p, base_headers, base_sheet, header_row) for p in candidates]
+    result = {"denominator": len(candidates), "base": base_path.name if base_path else None,
+              "files": files, "excluded": excluded}
+    if a.json:
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    for ln in render_scan_report(str(folder), result):
+        print(ln)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ailine", description="自然言語 → LibreOffice Basic → 適用 → 検証")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -6530,6 +6561,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     o = sub.add_parser("ops", help="頼める操作の一覧を表示する（何ができるか）")
     o.set_defaults(func=cmd_ops)
+
+    sc = sub.add_parser("scan", help="フォルダ内の複数ブックを棚卸しする（書き込みゼロ）")
+    sc.add_argument("folder", help="対象フォルダ（直下の .xlsx / .xls のみ・サブフォルダは見ない）")
+    sc.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
+    sc.set_defaults(func=cmd_scan)
 
     h = sub.add_parser("history", help="実行履歴を表示する")
     h.add_argument("--max", type=int, default=10, help="表示件数（既定 10、新しい順）")
