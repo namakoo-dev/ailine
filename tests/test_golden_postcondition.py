@@ -56,10 +56,13 @@ def _inject_formula_cache(path: Path, sheet_index: int, updates: dict) -> None:
         xml = z.read(member).decode("utf-8")
         others = {n: z.read(n) for n in z.namelist() if n != member}
     for ref, val in updates.items():
-        pattern = re.compile(rf'(<c r="{ref}"[^>]*><f>[^<]*</f>)<v>[^<]*</v>')
-        new_xml, n = pattern.subn(rf'\1<v>{val}</v>', xml)
-        assert n == 1, f"{ref} の <f><v> セルが見つからない（xml 断片は上の pattern 参照）"
-        xml = new_xml
+        # ★ CI の長期赤の一因（2026-08-21 実測）: openpyxl の XML 直列化は lxml の有無で変わる。
+        #   lxml あり（ローカル）は <f>式</f><v></v> と空の <v> 枠を書くが、lxml なし（CI）は
+        #   et_xmlfile 直列化で <v> 枠そのものを書かないことがある。両方の形を受け、無ければ挿す。
+        pattern = re.compile(rf'(<c r="{ref}"[^>]*><f>[^<]*</f>)(<v/>|<v>[^<]*</v>)?')
+        m = pattern.search(xml)
+        assert m, f"{ref} の <f> セルが見つからない（xml 断片は上の pattern 参照）"
+        xml = xml[:m.start()] + m.group(1) + f"<v>{val}</v>" + xml[m.end():]
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for n, data in others.items():
             z.writestr(n, data)

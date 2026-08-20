@@ -20,4 +20,9 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Run pure-logic tests (ollama / LibreOffice / basrun を要さない範囲)
+        # ★ PYTHONUTF8=1: runner のロケールは cp1252 で、subprocess 経由の CLI 検体が
+        #   日本語出力で UnicodeEncodeError になっていた（2026-08-21 実測・CI の長期赤の一因）。
+        #   製品側にも errors=replace の生存保証を入れた上で、CI は UTF-8 で内容まで検証する。
+        env:
+          PYTHONUTF8: "1"
         run: python -m pytest tests -q -m "not local"

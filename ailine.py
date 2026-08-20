@@ -6810,6 +6810,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    # ★ 日本語出力の生存保証（2026-08-21・CI の長期赤で発覚した製品バグ）: 端末やパイプの
+    #   符号化が日本語を持たない環境（英語圏 Windows の cp1252 等）では、print が
+    #   UnicodeEncodeError で落ちて「黙って失敗するより悪い、途中で死ぬ」になる。
+    #   符号化はそのまま・書けない文字だけ置換に倒す（クラッシュしない、が保証の中身）。
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass
     a = build_parser().parse_args(argv)
     return a.func(a)
 
