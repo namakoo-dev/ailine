@@ -85,3 +85,47 @@ def test_style_bold_actually_bolds_japanese_header_via_basrun(tmp_path):
         f"basrun 終了後も soffice.bin が残っている可能性がある（前={before_procs} 後={after_procs}）。"
         " ★ ここから先の後始末は名前一括 kill をせず、PID を特定して個別に kill すること。"
     )
+
+@pytest.mark.local
+def test_style_bold_bolds_mixed_script_header_via_basrun(tmp_path):
+    """★ 混在文字（日本語+英字）の見出しセルに太字が効くか。
+
+    実測 (2026-08-19 デモ制作): 見出し行 7 セルのうち『注文ID』だけが LO 往復後に
+    openpyxl の Font.bold=False のまま残り、事後条件が正しく fail した。純日本語の
+    6 セル（受注日・取引先…）は太字になっていた ── 7 セルで唯一の混在文字セルだけが落ちた。
+    このテストはその再現。緑になるまでが修正。"""
+    book = tmp_path / "mixed.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["注文ID", "受注日", "金額"])   # ★ 先頭が混在文字（CJK+ASCII）
+    ws.append(["J-1041", "2026-08-03", 100])
+    wb.save(book)
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    _catalog, helper_files = ailine.load_helpers(HELPERS_DIR)
+
+    code = (
+        "Option VBASupport 1\nOption Explicit\n\n"
+        "Sub Run(oDoc As Object)\n"
+        "    Call StyleBold(oDoc, 0, 0, 2, 0)\n"
+        "End Sub\n"
+    )
+    # ★ 再現の鍵: 太字の前に LO の保存を一度通す（実機の事故は、先行 op で何度も
+    #   LO 保存を経たブックで起きた。openpyxl 直後のブックでは再現しない ── 実測）。
+    noop = (
+        "Option VBASupport 1\nOption Explicit\n\n"
+        "Sub Run(oDoc As Object)\n"
+        "    oDoc.Sheets.getByIndex(0).getCellByPosition(5, 5).setString(\"x\")\n"
+        "End Sub\n"
+    )
+    ok, err, raw = ailine.basrun_apply(book, noop, workdir, helper_files)
+    assert ok, f"前段の LO 保存が失敗した: {err}"
+
+    ok, err, raw = ailine.basrun_apply(book, code, workdir, helper_files)
+    assert ok, f"basrun_apply が失敗した: {err}"
+
+    ws2 = openpyxl.load_workbook(book).active
+    got = {c.coordinate: c.font.bold for c in ws2[1] if c.value}   # noop が広げた空セルは対象外
+    assert got == {"A1": True, "B1": True, "C1": True}, f"太字の読み戻し: {got}"
+

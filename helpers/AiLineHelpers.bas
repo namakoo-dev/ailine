@@ -427,6 +427,14 @@ Sub BoldRange(oSheet As Object, col1 As Integer, row1 As Integer, col2 As Intege
     For r = row1 To row2
         For c = col1 To col2
             oCell = oSheet.getCellByPosition(c, r)
+            ' ★ 混在文字（日本語+英字）のセルは、LO が保存時にスクリプト別のリッチテキスト run
+            '   に分割し（「注文」=和文フォント/「ID」=欧文フォント）、run の書式がセルレベルの
+            '   太字より勝つため、xlsx 上で太字が立たない（実測 2026-08-19: 見出し 7 セル中
+            '   混在の『注文ID』だけ落ちた）。文字列を張り直して run を潰してから太字を当てる。
+            '   ★ TEXT 型に限定: 数式セルに setString(getString()) すると式が表示値に化ける。
+            If oCell.getType() = com.sun.star.table.CellContentType.TEXT Then
+                oCell.setString(oCell.getString())
+            End If
             oCell.CharWeight = com.sun.star.awt.FontWeight.BOLD
             oCell.CharWeightAsian = com.sun.star.awt.FontWeight.BOLD
             oCell.CharWeightComplex = com.sun.star.awt.FontWeight.BOLD
