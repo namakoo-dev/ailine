@@ -40,6 +40,25 @@
             "単価"
           ]
         }
+      },
+      "staff": {
+        "sheets": {
+          "Sheet": [
+            "氏名",
+            "部署",
+            "金額"
+          ]
+        }
+      },
+      "product_calc": {
+        "sheets": {
+          "Sheet": [
+            "商品",
+            "数量",
+            "単価",
+            "金額"
+          ]
+        }
       }
     },
     "v2": {
@@ -133,6 +152,16 @@
         "op_accuracy": 0.833,
         "factor_machine_determined": 1.0,
         "note": "W10b: COMPUTE_COLUMN の「1列 × 率」パターン(税込み/税抜き)を DSL 語彙に収載した後の翻訳精度。合格線は分類成功 5/6=83.3%以上。倍率(factor)は LLM に確定させない(A原則) - verify_dsl_args が machine 抽出(extract_rate_factor/lookup_vocab_factor)だけで全件確定できること(LLM確定0件)も併せて測る。"
+      }
+    },
+    "v7": {
+      "frozen": "2026-08-20 (C9 実測3穴の battery 追加・実行前凍結)",
+      "bar": {
+        "target": "COMPUTE_COLUMN の target 反映 2/2 (n=2・比率でなく件数で見る)",
+        "scv": "SET_COLUMN_VALUE op 一致 90%+ / slot 一致 80%+ (n=2・v1/v4 と同じ合格線を暫定適用)",
+        "total_factor_true_clarify": "1/1 (n=1・v3 と同じ 90%+ 相当)",
+        "total_factor_false_clarify": "1/1 (n=1・v3 と同じ 誤CLARIFYなし=false_clarify_ok/n 90%+ 相当)",
+        "note": "n が極小のため比率でなく件数で報告する（bench/PREREG_translation_v7.md 参照）。予測・反証の線・反復上限(最大2回)は同ファイルに事前登録済み。"
       }
     }
   },
@@ -1076,6 +1105,87 @@
         "cmp": "lt",
         "value": 20
       }
+    }
+  ],
+  "items_v7": [
+    {
+      "id": 701,
+      "book": "staff",
+      "kind": "scv",
+      "text": "部署列をすべて『本社』にして",
+      "expect": {
+        "op": "SET_COLUMN_VALUE",
+        "col": "部署",
+        "value": "本社"
+      }
+    },
+    {
+      "id": 702,
+      "book": "staff",
+      "kind": "scv",
+      "text": "氏名の列をすべて『契約終了』に書き換えて",
+      "expect": {
+        "op": "SET_COLUMN_VALUE",
+        "col": "氏名",
+        "value": "契約終了"
+      }
+    },
+    {
+      "id": 703,
+      "book": "invoice",
+      "kind": "total_factor",
+      "vocab": {
+        "消費税": 1.1
+      },
+      "text": "消費税込みの合計を一番下に出して",
+      "expect": {
+        "op": "APPEND_TOTAL",
+        "clarify": false,
+        "factor": 1.1
+      }
+    },
+    {
+      "id": 704,
+      "book": "invoice",
+      "kind": "total_factor",
+      "vocab": {},
+      "text": "税込みの合計を出して",
+      "expect": {
+        "op": "APPEND_TOTAL",
+        "clarify": true
+      }
+    },
+    {
+      "id": 705,
+      "book": "product_calc",
+      "kind": "target",
+      "text": "金額を数量×単価で埋めて",
+      "expect_plan": [
+        {
+          "op": "COMPUTE_COLUMN",
+          "operands": [
+            "数量",
+            "単価"
+          ],
+          "target": "金額"
+        }
+      ]
+    },
+    {
+      "id": 706,
+      "book": "product_calc",
+      "kind": "target",
+      "text": "単価と数量をかけて金額の列に入れて",
+      "expect_plan": [
+        {
+          "op": "COMPUTE_COLUMN",
+          "operands": [
+            "単価",
+            "数量"
+          ],
+          "target": "金額"
+        }
+      ]
     }
   ]
 }

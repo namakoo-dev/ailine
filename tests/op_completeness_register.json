@@ -42,18 +42,6 @@
    "requirement": "op_verbs",
    "reason": "★ 未調査（設計意図か単なる未整備か特定できず）。target_sheet.py:173-177 のコメントは AGGREGATE(集計)/LOOKUP_FILL(転記) の2例だけを名指ししており、MERGE には触れていない。MERGE のラベルは『セル結合』で、フォールバックは『セル結合する/セル結合した』になる ── 日本語として破綻はしていないが、コメントに名指しされた2例ほど明確に『これで良い』と著者が判断した形跡はない。tests/test_sheet_conflict.py にも MERGE 用の固定テストは無く（LOOKUP_FILL しか凍結されていない）、golden にも MERGE の3択文言が出る検体は見当たらない。著者が意図して省いたのか単に手が回っていないのか、コードからは判別できなかった。",
    "unlock": "MERGE の3択文言が実際に発火する検体を作って自然さを確認したとき、または原著者/変更履歴から意図が判明したとき。"
-  },
-  {
-   "op": "APPEND_TOTAL",
-   "requirement": "battery>=2",
-   "reason": "bench/translation_battery.json を expect.op / expect_plan[*].op で構造的に数えると APPEND_TOTAL は1件（items_v2 id=102 の複合計画 [COMPUTE_COLUMN, APPEND_TOTAL] の2段目のみ）。単発の検体（items に op=APPEND_TOTAL の行）は0件。看板機能（税込み合計を一番下に追加）なのに、翻訳精度がほぼ測られていない。★ 2026-08-19の実測メモは『検体0件』としていたが、構造的な数え直しでは1件だった（複合計画の中の段まで数えると増える）。過小報告だったので訂正して1件と記録する。",
-   "unlock": "bench/translation_battery.json に APPEND_TOTAL を expected op とする検体を新たに1件以上足し、合計2件以上にしたとき（単発 items でも複合計画の1段でもよい）。"
-  },
-  {
-   "op": "SET_COLUMN_VALUE",
-   "requirement": "battery>=2",
-   "reason": "検体 0 件（構造カウント・2026-08-20 確認）。査定が足した op が翻訳の測定対象外 ── 2026-08-19 実測で該当依頼（氏名の列を全部『退職済み』に 等）は全部自由生成落ちだった",
-   "unlock": "bench/translation_battery.json に APPEND_TOTAL を expected op とする検体を新たに1件以上足し、合計2件以上にしたとき（単発 items でも複合計画の1段でもよい）。"
   }
  ]
 }

@@ -1844,6 +1844,17 @@ TRANSLATION_FEWSHOT = [
     ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
      '依頼: 「金額の合計を最後に」',
      '{"plan": [{"op": "APPEND_TOTAL", "args": {"col": "金額"}}]}'),
+    # ★ C9: items_v7 の実測（2026-08-20・round0）で見つかった穴 ── 「税込み」と言っている
+    #   のに依頼文に倍率の数字が一切無い依頼（例:「消費税込みでいくらになるか教えて」）を、
+    #   モデルが APPEND_TOTAL ではなく OUT_OF_VOCAB に退避させることがあった（既存の
+    #   #304/#704 で再現）。倍率が無いなら CLARIFY で聞き返すのが正しい挙動だが、それは
+    #   APPEND_TOTAL に翻訳された後でしか起動しない（factor は machine-determined・
+    #   verify_dsl_args 側の仕事）。ここでは「倍率の数字が無くても税込み/消費税の言及だけで
+    #   op は APPEND_TOTAL」であることを教える（label に税/込を残せば、機械側が倍率不明を
+    #   検出して CLARIFY に倒す）。
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「消費税込みでいくらになるか教えて」',
+     '{"plan": [{"op": "APPEND_TOTAL", "args": {"col": "金額", "label": "消費税込み合計"}}]}'),
     # ★ W9: 検証済みヘルパ4種の語彙昇格。PIVOT/AGGREGATE の分岐（「ピボット」と明示
     #   された時だけ PIVOT・それ以外の集計語は AGGREGATE）と INSERT_ROWS を1例ずつ教える。
     ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'

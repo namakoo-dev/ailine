@@ -283,7 +283,153 @@ def run_v5(model: str) -> None:
         print(f"  #{fid}: {msg}")
 
 
-RUNNERS = {"v2": run_v2, "v3": run_v3, "v4": run_v4, "v5": run_v5}
+# ===========================================================================
+# v6 — EXTRACT battery: 単一条件抽出の op 分類（items_v6・薄いランナー・W10 系実測時点で
+#   未配線だったものをここで配線する。_meta.v6 の凍結バー宣言は無いため、v1/v4 と同じ
+#   合格線 op90%/slot80% を暫定適用する（items_v6 のコミットメッセージが「battery 2件も
+#   構造カウント済み」と述べる op 完全性番人の要件を、実行して確かめる薄いランナー）。
+# ===========================================================================
+def run_v6(model: str) -> None:
+    """★ v4/v5 と同じ単一依頼スコアリングを EXTRACT (items_v6) に適用するだけの薄いランナー。
+       翻訳呼び出し・採点方式(score_slots)は v4/v5 と揃える。"""
+    books = _books()
+
+    op_ok = op_n = slot_ok = slot_n = 0
+    fails = []
+
+    for item in BATTERY["items_v6"]:
+        headers = books[item["book"]]["sheets"]
+        book_meta = {"sheets": list(headers.keys()), "headers": headers}
+        plan_result = ailine.translate_task(model, item["text"], book_meta, temperature=0.1)
+        got = (plan_result.get("plan") or [{"op": "FREEFORM", "args": {}}])[0]
+        got_op = str(got.get("op", "")).upper()
+        exp = item["expect"]
+
+        op_n += 1
+        if got_op == exp["op"]:
+            op_ok += 1
+            h, t = score_slots(exp, got)
+            slot_ok += h
+            slot_n += t
+            if h < t:
+                fails.append((item["id"], f"slot {h}/{t}: {got}"))
+        else:
+            fails.append((item["id"], f"op {got_op} ← 期待 {exp['op']} (got={got})"))
+
+    print(f"model: {model}  (ailine.translate_task 経由・本番プロンプト・EXTRACT items_v6・暫定バー"
+          " op90%/slot80%＝_meta.v6 未宣言のため v1/v4 準拠)")
+    print(f"op 分類: {op_ok}/{op_n} = {op_ok/op_n:.1%}  (合格線 90%)")
+    print(f"必須 slot: {slot_ok}/{max(slot_n,1)} = {slot_ok/max(slot_n,1):.1%}  (合格線 80%)")
+    print("\n-- 不一致の明細:")
+    for fid, msg in fails:
+        print(f"  #{fid}: {msg}")
+
+
+# ===========================================================================
+# v7 — C9 実測3穴 battery: COMPUTE_COLUMN target / SET_COLUMN_VALUE / APPEND_TOTAL
+#   税込み系言い回し。事前登録は bench/PREREG_translation_v7.md 参照。
+# ===========================================================================
+def run_v7(model: str) -> None:
+    """items_v7 は kind で3種に分かれ、採点方式もそれぞれ既存 battery の方式を流用する
+       （target→run_v2 の target 検査と同じ考え方・scv→run_v4 と同じ op/slot・
+       total_factor→run_v3 と同じ verify_dsl_args 通し）。n が極小のため件数もそのまま出す。"""
+    books = _books()
+    items = BATTERY["items_v7"]
+
+    target_checks = target_hits = 0
+    scv_op_ok = scv_op_n = scv_slot_ok = scv_slot_n = 0
+    true_clarify_n = true_clarify_ok = 0
+    false_clarify_n = false_clarify_ok = 0
+    per_item = []
+
+    for item in items:
+        headers = books[item["book"]]["sheets"]
+        book_meta = {"sheets": list(headers.keys()), "headers": headers}
+        kind = item["kind"]
+
+        if kind == "target":
+            plan_result = ailine.translate_task(model, item["text"], book_meta, temperature=0.1)
+            got_plan = plan_result.get("plan") or []
+            exp_step = item["expect_plan"][0]
+            target_checks += 1
+            got0 = got_plan[0] if got_plan else {}
+            got_op = str(got0.get("op", "")).upper()
+            got_target = (got0.get("args") or {}).get("target")
+            ok = got_op == "COMPUTE_COLUMN" and got_target == exp_step["target"]
+            if ok:
+                target_hits += 1
+            per_item.append((item["id"], "target",
+                              f"{'✓' if ok else '×'} 実行op={got_op} target={got_target!r} "
+                              f"期待target={exp_step['target']!r} (got={got0})"))
+
+        elif kind == "scv":
+            plan_result = ailine.translate_task(model, item["text"], book_meta, temperature=0.1)
+            got = (plan_result.get("plan") or [{"op": "FREEFORM", "args": {}}])[0]
+            got_op = str(got.get("op", "")).upper()
+            exp = item["expect"]
+            scv_op_n += 1
+            if got_op == exp["op"]:
+                scv_op_ok += 1
+                h, t = score_slots(exp, got)
+                scv_slot_ok += h
+                scv_slot_n += t
+                per_item.append((item["id"], "scv", f"{'✓' if h == t else '△'} slot {h}/{t}: {got}"))
+            else:
+                per_item.append((item["id"], "scv", f"× op {got_op} ← 期待 {exp['op']} (got={got})"))
+
+        elif kind == "total_factor":
+            plan = ailine.translate_task(model, item["text"], book_meta, temperature=0.1)
+            steps = plan.get("plan") or [{"op": "FREEFORM", "args": {}}]
+            step = next((s for s in steps if str(s.get("op", "")).upper() == "APPEND_TOTAL"), None)
+            exp = item["expect"]
+            if step is None:
+                got_ops = [str(s.get("op", "")).upper() for s in steps]
+                per_item.append((item["id"], "total_factor",
+                                  f"× APPEND_TOTAL段なし(実行plan={got_ops})"))
+                continue
+            ok_v, resolved, inferred, err = ailine.verify_dsl_args(
+                "APPEND_TOTAL", step.get("args", {}), book_meta, task=item["text"],
+                vocab=item.get("vocab") or {})
+            if exp.get("clarify"):
+                true_clarify_n += 1
+                got_clarify = not ok_v
+                if got_clarify:
+                    true_clarify_ok += 1
+                outcome = "CLARIFY" if not ok_v else f"確定(factor={resolved.get('factor')})"
+                per_item.append((item["id"], "total_factor",
+                                  f"{'✓' if got_clarify else '×'} 真CLARIFY期待 → {outcome}"))
+            else:
+                if ok_v:
+                    false_clarify_n += 1
+                    got_ok = abs(resolved.get("factor", -1) - exp["factor"]) < 1e-9
+                    if got_ok:
+                        false_clarify_ok += 1
+                    per_item.append((item["id"], "total_factor",
+                                      f"{'✓' if got_ok else '×'} factor={resolved.get('factor')}"
+                                      f"(期待{exp['factor']})"))
+                elif "倍率が分かりません" in (err or ""):
+                    false_clarify_n += 1
+                    per_item.append((item["id"], "total_factor", "× 誤CLARIFY(倍率不明の番人が誤発火)"))
+                else:
+                    per_item.append((item["id"], "total_factor", f"△ 別要因のfail(集計対象外): {err}"))
+        else:
+            raise ValueError(f"未知の kind: {kind}")
+
+    print(f"model: {model}  (ailine.translate_task 経由・本番プロンプト・items_v7・n極小のため件数を主とする)")
+    print(f"[target] COMPUTE_COLUMN target 反映: {target_hits}/{target_checks}"
+          f"{'' if target_checks == 0 else f' = {target_hits/target_checks:.1%}'}")
+    print(f"[scv] op 分類: {scv_op_ok}/{scv_op_n} = {scv_op_ok/max(scv_op_n,1):.1%}  (合格線 90%)")
+    print(f"[scv] 必須 slot: {scv_slot_ok}/{max(scv_slot_n,1)} = {scv_slot_ok/max(scv_slot_n,1):.1%}  (合格線 80%)")
+    print(f"[total_factor] 真CLARIFY: {true_clarify_ok}/{true_clarify_n}"
+          f"{'' if true_clarify_n == 0 else f' = {true_clarify_ok/true_clarify_n:.1%}'}")
+    print(f"[total_factor] 誤CLARIFYなし: {false_clarify_ok}/{false_clarify_n}"
+          f"{'' if false_clarify_n == 0 else f' = {false_clarify_ok/false_clarify_n:.1%}'}")
+    print("\n-- 項目別:")
+    for iid, kind, msg in per_item:
+        print(f"  #{iid}[{kind}]: {msg}")
+
+
+RUNNERS = {"v2": run_v2, "v3": run_v3, "v4": run_v4, "v5": run_v5, "v6": run_v6, "v7": run_v7}
 
 
 if __name__ == "__main__":
