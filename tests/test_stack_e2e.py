@@ -206,3 +206,20 @@ def test_data_row_with_empty_numeric_cell_is_still_stacked(tmp_path):
     rows = [[c.value for c in r] for r in ws.iter_rows(min_row=2)]
     assert any(r[0] == "J-2" for r in rows), "金額が空のデータ行が黙って消えた"
     assert len(rows) == 2, f"データ行 2（J-1, J-2）のはず: {len(rows)}"
+
+
+def test_suffixed_provenance_output_is_still_recognized_as_own(tmp_path):
+    """★ 凍結予測③が的中した穴（2026-08-21 06:1x 実機で確認）: 基準が『元ファイル』列を
+       持つと出所列は 元ファイル_2 になるが、①その事実の開示が無く ②自分の前回出力の
+       署名判定が素の列名しか見ず exit 7 で誤って閉まった。署名はサフィックス形も自分と
+       認識し、衝突の開示も 1 行出すこと。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", ["注文ID", "元ファイル", "金額"], [("J-1", "memo1", 100)])
+    _book(folder / "b.xlsx", ["注文ID", "元ファイル", "金額"], [("J-2", "memo2", 200)])
+    out = tmp_path / "out.xlsx"
+    p1 = _stack(folder, out)
+    assert p1.returncode == 0
+    assert "元ファイル_2" in p1.stdout, f"サフィックスの開示が無い:\n{p1.stdout}"
+    p2 = _stack(folder, out)   # 2 周目: 自分のサフィックスつき出力の上に
+    assert p2.returncode == 0, f"自分の出力を他人と誤認して閉まった (exit={p2.returncode})"
+    assert "前回" in p2.stdout or "作り直" in p2.stdout

@@ -204,3 +204,65 @@ def render_scan_report(folder_label: str, result: dict) -> list:
         elif f.get("reordered"):
             lines.append(f"  {f['name']}: 取れた（並べ替え）")
     return lines
+
+
+# --- `ailine stack` / `ailine verify` の人間向け出力 -------------------------------------
+# ★ ここも他の render_* と同じ流儀: 渡すのはプリミティブ型だけの dict（dataclass をそのまま
+#   渡さない）── cli_render.py は他の ailine_core module を import しない、という既存の
+#   自己完結を保つ（呼び出し側の ailine.py が dataclass → dict へ整形してから渡す）。
+
+def _fmt_num(v) -> str:
+    """数値表示: 整数値は小数点なしで（650.0 でなく 650）。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(f)) if f.is_integer() else str(f)
+
+
+def render_stack_report(folder_label: str, out_label: str, result: dict) -> list:
+    """M1書き `ailine stack` の人間向け報告。分母つき + 除外の名指し + Σ の両側表示。
+       ★ ⚠ は異常のあるファイルだけ（合計行の不一致・A列/used range の食い違い）。"""
+    lines = [f"■ ailine stack  folder={folder_label}  out={out_label}"]
+    if result.get("self_excluded"):
+        lines.append(f"（自分の出力『{result['self_excluded']}』を入力から除外しました）")
+    if result.get("collision_notice"):
+        lines.append(f"（{result['collision_notice']}）")
+    lines.append(f"{result['denominator']} ファイル中 {result['stacked_files']} 積んだ")
+    for f in result.get("skipped", ()):
+        lines.append(f"  ⚠ {f['name']}: 積めなかった（{f['reason']}）")
+    for f in result.get("files", ()):
+        if f.get("reordered"):
+            lines.append(f"  {f['name']}: 取れた（並べ替え）")
+    for entry in result.get("excluded_detail", ()):
+        rows_txt = "、".join(f"{r['row']}行目" for r in entry["rows"])
+        lines.append(f"  {entry['name']}: 合計行を{len(entry['rows'])}件除外（{rows_txt}）")
+    for entry in result.get("mismatches", ()):
+        for m in entry["rows"]:
+            lines.append(f"  ⚠ {entry['name']}: 合計行({m['row']}行目) の値 "
+                         f"{_fmt_num(m['excluded_value'])} ≠ 明細の和 {_fmt_num(m['adopted_sum'])}")
+    for w in result.get("col_a_warnings", ()):
+        lines.append(f"  ⚠ {w['name']}: A列走査 {w['col_a']} 行 / used range {w['used_range']} 行"
+                     "（分母の食い違い・根1には触れない可視化）")
+    lines.append(f"出力データ行数: {result['rows_written']}")
+    for col, both in result.get("sums", {}).items():
+        lines.append(f"Σ{col}: 元 {_fmt_num(both['source'])} / 出力 {_fmt_num(both['output'])}")
+    if result.get("rebuilt_own_output"):
+        lines.append(f"（前回の縦積み出力『{out_label}』を作り直しました）")
+    return lines
+
+
+def render_verify_report(out_label: str, folder_label: str, result: dict) -> list:
+    """`ailine verify` の人間向け報告。合格: 両側の数字を並べる／不合格: 列名 + 両側の数字。"""
+    lines = [f"■ ailine verify  out={out_label}  folder={folder_label}"]
+    mismatch = result.get("mismatch")
+    if mismatch and mismatch["kind"] == "row_count":
+        lines.append(f"⚠ 行数が一致しません: 元 {mismatch['source']} / 出力 {mismatch['output']}")
+        return lines
+    lines.append(f"行数: 元 {result['row_count']['source']} / 出力 {result['row_count']['output']}")
+    for col, both in result.get("sums", {}).items():
+        lines.append(f"Σ{col}: 元 {_fmt_num(both['source'])} / 出力 {_fmt_num(both['output'])}")
+    if mismatch and mismatch["kind"] == "sum":
+        lines.append(f"⚠ {mismatch['column']} の合計が一致しません: "
+                     f"元 {_fmt_num(mismatch['source'])} / 出力 {_fmt_num(mismatch['output'])}")
+    return lines

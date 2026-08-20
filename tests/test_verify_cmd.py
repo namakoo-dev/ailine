@@ -87,3 +87,41 @@ def test_verify_is_read_only_on_both_sides(tmp_path):
     after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
              for p in [*folder.glob("*.xlsx"), out]}
     assert before == after
+
+
+def test_verify_passes_on_output_whose_totals_were_excluded(tmp_path):
+    """★ 実機の敵対検分（2026-08-21 06:1x）で踏んだ穴の凍結: 合計行を正しく除外した
+       正当な出力に対して、verify が除外の意味論を再現できず 元7/出力4 で誤 FAIL した。
+       verify は stack と同じ除外規則（total_row）を XML 直読みの側でも再現すること。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS,
+          [("J-1", "甲", 600), ("J-2", "乙", 400),
+           ("小計", None, 1000), ("消費税", None, 100), ("合計", None, 1100)])
+    out = tmp_path / "out.xlsx"
+    p = _run("stack", folder, "--out", out)
+    assert p.returncode == 0, p.stdout + p.stderr[-500:]
+    v = _run("verify", out, folder)
+    assert v.returncode == 0, f"正当な出力で verify が落ちた:\n{v.stdout}"
+    assert v.stdout.count("1100") >= 2, f"Σ の両側（税込 1100）が無い:\n{v.stdout}"
+
+
+def test_verify_agrees_with_stack_when_dates_and_reorder_present(tmp_path):
+    """★ 予測①の的中を凍結（2026-08-21 06:1x 実機 probe の再現）: XML 直読みは日付の
+       シリアル値を数値と見るため、数値列の引き当てが stack(openpyxl=datetime は非数値)と
+       食い違い、除外規則が別の列で走って 元7/出力4 の誤 FAIL になった。
+       両側の読み手は『日付書式のセルは数値列の候補にしない』で一致すること。"""
+    import datetime
+    folder = tmp_path / "src"
+    _book(folder / "inv1.xlsx", ["注文ID", "受注日", "金額"],
+          [("J-1", datetime.date(2026, 8, 1), 600), ("J-2", datetime.date(2026, 8, 3), 400),
+           ("小計", None, 1000), ("消費税", None, 100), ("合計", None, 1100)])
+    _book(folder / "inv2.xlsx", ["金額", "注文ID", "受注日"],
+          [(300, "J-3", datetime.date(2026, 8, 5)), (999, "合計", None)])
+    out = tmp_path / "out.xlsx"
+    p = _run("stack", folder, "--out", out)
+    assert p.returncode == 0, p.stdout + p.stderr[-500:]
+    assert "Σ受注日" not in p.stdout, "日付列を合計している"
+    v = _run("verify", out, folder)
+    assert v.returncode == 0, f"正当な出力で verify が落ちた:\n{v.stdout}"
+    assert v.stdout.count("1400") >= 2, f"Σ金額の両側（1400）が無い:\n{v.stdout}"
+    assert "Σ受注日" not in v.stdout

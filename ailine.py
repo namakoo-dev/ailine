@@ -48,6 +48,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import zipfile
@@ -82,8 +83,12 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_ops_table,
     freeform_notice_reason, render_freeform_notice, render_freeform_notice_compact,   # ★ K-1
     render_scan_report,   # ★ M1読み: `ailine scan`
+    render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
 )
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
+from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
+from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
+from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -6509,6 +6514,190 @@ def cmd_scan(a: argparse.Namespace) -> int:
     return 0
 
 
+def _peek_headers(path: Path) -> list | None:
+    """先頭シートの1行目をヘッダーとして覗き見る（読めなければ None）。
+       stack の自己参照除外・関所（署名判定）専用の軽い読み。"""
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return None
+    try:
+        return multifile.read_row_headers(wb[wb.sheetnames[0]], 1)
+    except Exception:
+        return None
+    finally:
+        wb.close()
+
+
+def _stack_json(result: dict) -> dict:
+    """--json 契約（検体で凍結済み）: denominator/stacked_files/rows_written/files/sums のみ。"""
+    return {"denominator": result["denominator"], "stacked_files": result["stacked_files"],
+            "rows_written": result["rows_written"], "files": result["files"],
+            "sums": result["sums"]}
+
+
+def _stack_postcondition_fail(label: str, expected, actual) -> int:
+    """事後条件①②が破れた時の唯一の出口。★ tmp_out は移さない（out は無傷のまま）。"""
+    print(f"⚠ 事後条件が破れた: {label}  元(採用時) {multifile_stack.fmt_num(expected)} / "
+          f"出力(書いた直後) {multifile_stack.fmt_num(actual)}")
+    return 5
+
+
+def cmd_stack(a: argparse.Namespace) -> int:
+    """`ailine stack <folder> --out <path>`: M1書き ── 縦積み（UNION ALL）+ 出所列。
+       DESIGN-20260821-multifile.md v2 §1(M1書き)・v2.1(単位L)。列挙・照合・合計行の識別は
+       既存部品（ailine_core/multifile.py・total_row.py）を再利用し、この関数は
+       積む行の決定・出所列つきの書き出し・関所・事後条件の配線だけを持つ（本体は
+       ailine_core/stack.py）。★ workdir は tempfile に作り、最後に out へ移す。"""
+    folder = Path(a.folder).resolve()
+    out = Path(a.out).resolve()
+    candidates, _excluded = multifile.classify_folder_contents(folder)
+
+    # ★ 自己参照除外（V6）: out が入力フォルダ内にあり、署名が自分の前回出力なら列挙から外す。
+    self_excluded = None
+    filtered = []
+    for p in candidates:
+        if p.resolve() == out:
+            headers = _peek_headers(p)
+            if headers is not None and multifile_stack.is_own_signature(headers):
+                self_excluded = p.name
+                continue
+        filtered.append(p)
+    candidates = filtered
+    denominator = len(candidates)
+
+    base_path, base_wb = multifile.open_base_workbook(candidates)
+    if base_path is None:
+        result = {"denominator": denominator, "stacked_files": 0, "rows_written": 0,
+                  "files": [], "skipped": [{"name": p.name, "reason": "旧形式(.xls)または読み込み失敗"}
+                                            for p in candidates],
+                  "sums": {}, "excluded_detail": [], "mismatches": [], "col_a_warnings": [],
+                  "self_excluded": self_excluded, "rebuilt_own_output": False}
+        if a.json:
+            print(json.dumps(_stack_json(result), ensure_ascii=False))
+        else:
+            for ln in render_stack_report(str(folder), str(out), result):
+                print(ln)
+        return 0
+
+    base_sheet = base_wb.sheetnames[0]
+    ws = base_wb[base_sheet]
+    scan_end = min(ws.max_row or 1, MAX_ROWS, STRUCT_HEADER_SCAN_ROWS)
+    rows_stats = _row_char_stats(ws, 1, scan_end, 1, min(ws.max_column or 1, MAX_COLS))
+    row, confident = detect_header_row({"rows": rows_stats})
+    header_row = row if confident else 1
+    base_headers = multifile.read_row_headers(ws, header_row)
+    value_col = multifile.numeric_value_column(ws, header_row, len(base_headers) or MAX_COLS)
+    value_col_name = base_headers[value_col - 1] if value_col else None
+    base_wb.close()
+
+    skipped, files_json, excluded_detail, mismatches, col_a_warnings = [], [], [], [], []
+    stacked_rows = []   # [(base 列順の値, 元ファイル名, 元行), ...]
+    sums_source = {value_col_name: 0.0} if value_col_name else {}
+
+    for p in candidates:
+        r = multifile_stack.evaluate_and_stack(p, base_headers, base_sheet, header_row, value_col_name)
+        if r.status == "積めなかった":
+            skipped.append({"name": r.name, "reason": r.reason})
+            continue
+        for values, src_row in r.rows:
+            stacked_rows.append((values, r.name, src_row))
+            if value_col_name:
+                v = values[base_headers.index(value_col_name)]
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    sums_source[value_col_name] += v
+        files_json.append({"name": r.name, "rows_stacked": len(r.rows),
+                           "total_rows_excluded": len(r.excluded), "reordered": r.reordered})
+        if r.excluded:
+            excluded_detail.append({"name": r.name, "rows": [
+                {"row": e.row, "value": e.value, "reason": e.reason} for e in r.excluded]})
+        if r.mismatches:
+            mismatches.append({"name": r.name, "rows": [
+                {"row": m.row, "excluded_value": m.excluded_value, "adopted_sum": m.adopted_sum}
+                for m in r.mismatches]})
+        if r.col_a_mismatch:
+            col_a_warnings.append({"name": r.name, "col_a": r.col_a_mismatch[0],
+                                   "used_range": r.col_a_mismatch[1]})
+
+    stacked_files = len(files_json)
+    prov_headers = multifile_stack.own_output_headers(base_headers)
+    out_headers = base_headers + prov_headers
+    collision_notice = None
+    if tuple(prov_headers) != multifile_stack.PROVENANCE_HEADERS:
+        collision_notice = f"列名の衝突: 出所列は {prov_headers[0]} / {prov_headers[1]} として追加"
+
+    workdir = Path(tempfile.mkdtemp(prefix="ailine_stack_"))
+    try:
+        tmp_out = workdir / out.name
+        wb_out = openpyxl.Workbook()
+        ws_out = wb_out.active
+        ws_out.title = base_sheet
+        ws_out.append(out_headers)
+        for values, fname, src_row in stacked_rows:
+            ws_out.append(list(values) + [fname, src_row])
+        wb_out.save(tmp_out)
+        wb_out.close()
+
+        # ★ 事後条件①②: 独立読み実装（xml_readback）で書いた直後の中身を検算する
+        #   （openpyxl で書いて openpyxl で読み返すだけでは、同じ道具の同じ盲点を通る）。
+        readback = xml_readback.read_grid(tmp_out)
+        out_row_nums = xml_readback.data_row_numbers(readback, header_row=1)
+        if len(out_row_nums) != len(stacked_rows):
+            return _stack_postcondition_fail("採用行数", len(stacked_rows), len(out_row_nums))
+        sums_output = {}
+        if value_col_name:
+            idx = base_headers.index(value_col_name) + 1
+            total = 0.0
+            for rr in out_row_nums:
+                v = readback["grid"].get((rr, idx))
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    total += v
+            sums_output[value_col_name] = total
+            if abs(total - sums_source.get(value_col_name, 0.0)) > 1e-6:
+                return _stack_postcondition_fail(f"Σ{value_col_name}",
+                                                 sums_source.get(value_col_name, 0.0), total)
+
+        # ★ 関所（writes=new_book）: 移す直前に判定。
+        rebuilt_own_output = False
+        if out.exists():
+            existing_headers = _peek_headers(out)
+            if existing_headers is not None and multifile_stack.is_own_signature(existing_headers):
+                rebuilt_own_output = True
+            elif not getattr(a, "overwrite", False):
+                return 7
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tmp_out, out)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    sums = {col: {"source": sums_source[col], "output": sums_output.get(col, sums_source[col])}
+            for col in sums_source}
+    result = {"denominator": denominator, "stacked_files": stacked_files,
+              "rows_written": len(stacked_rows), "files": files_json, "skipped": skipped,
+              "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,
+              "col_a_warnings": col_a_warnings, "self_excluded": self_excluded,
+              "rebuilt_own_output": rebuilt_own_output, "collision_notice": collision_notice}
+    if a.json:
+        print(json.dumps(_stack_json(result), ensure_ascii=False))
+        return 0
+    for ln in render_stack_report(str(folder), str(out), result):
+        print(ln)
+    return 0
+
+
+def cmd_verify(a: argparse.Namespace) -> int:
+    """`ailine verify <out.xlsx> <srcfolder>`: 検算の単独再実行（信用の条件⑥）。
+       stack の出力ブックと元フォルダだけから、行数照合・数値列ごとの Σ 照合を独立に
+       再実行する（読みは ailine_core/xml_readback.py・openpyxl は経由しない）。
+       本体（ailine_core/verify.py）が検算そのものを持ち、この関数は配線だけ。"""
+    out = Path(a.out).resolve()
+    folder = Path(a.srcfolder).resolve()
+    result = multifile_verify.verify_output(out, folder)
+    for ln in render_verify_report(str(out), str(folder), result):
+        print(ln)
+    return 5 if result.get("mismatch") else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ailine", description="自然言語 → LibreOffice Basic → 適用 → 検証")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -6569,6 +6758,19 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("folder", help="対象フォルダ（直下の .xlsx / .xls のみ・サブフォルダは見ない）")
     sc.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     sc.set_defaults(func=cmd_scan)
+
+    st = sub.add_parser("stack", help="フォルダ内の複数ブックを縦積みする（新ブック + 出所列）")
+    st.add_argument("folder", help="対象フォルダ（直下の .xlsx / .xls のみ・サブフォルダは見ない）")
+    st.add_argument("--out", required=True, help="出力ブックのパス")
+    st.add_argument("--overwrite", action="store_true",
+                    help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
+    st.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
+    st.set_defaults(func=cmd_stack)
+
+    vf = sub.add_parser("verify", help="stack の出力を検算だけ独立に再実行する（読むだけ）")
+    vf.add_argument("out", help="ailine stack が作った出力ブック")
+    vf.add_argument("srcfolder", help="元ファイルがあるフォルダ")
+    vf.set_defaults(func=cmd_verify)
 
     h = sub.add_parser("history", help="実行履歴を表示する")
     h.add_argument("--max", type=int, default=10, help="表示件数（既定 10、新しい順）")
