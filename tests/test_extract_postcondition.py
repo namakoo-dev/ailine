@@ -1,4 +1,5 @@
-"""EXTRACT の事後条件(check_extract)の純ロジック検体（DESIGN-20260820-extract-op.md §事後条件）。
+"""EXTRACT の事後条件(check_extract)の純ロジック検体（4点を1つの位置対応比較で同時に見る
+   設計・コミット 2edcb08「EXTRACT op」参照）。
 
 ★ 昨夜の実弾2件をそのまま検体化する:
   - 行抽出は意味は当たったが全セルが文字列化（getString/setString コピーで

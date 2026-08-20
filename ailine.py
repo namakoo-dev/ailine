@@ -82,7 +82,10 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_ops_table,
 )
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
-from ailine_core.write_precondition import check_write_preconditions_detail   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
+from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
+    check_write_preconditions_detail,
+    own_prior_output_notice_lines,   # ★ 単位H 開示: 関所が黙った理由を1行で見せる
+)
 from ailine_core.sum_identity import rows_matching_sum_above   # ★ 算術恒等の検算（二重計上）
 from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
@@ -1528,9 +1531,9 @@ OP_META = {
     #   最も頻繁に行う操作に信頼できる経路が無かった）。
     "SET_COLUMN_VALUE": {"category": "表を編集する", "label": "一括書換",
                            "synonyms": ["全部同じ値にする", "一括で書き換える", "列を統一する"]},
-    # ★ 生まれた時から検証つきの1例目（DESIGN-20260820-extract-op.md）: 単一条件（列×比較×値）
-    #   に一致する行を新シートへ抜き出す。自由生成の実弾2件（全セル文字列化・空シートで
-    #   exit 0）を事後条件(check_extract)が直接殺す形で op に昇格させる。
+    # ★ 生まれた時から検証つきの1例目（コミット 2edcb08「EXTRACT op」参照）: 単一条件
+    #   （列×比較×値）に一致する行を新シートへ抜き出す。自由生成の実弾2件（全セル文字列化・
+    #   空シートで exit 0）を事後条件(check_extract)が直接殺す形で op に昇格させる。
     "EXTRACT": {"category": "表を編集する", "label": "抽出",
                  "synonyms": ["抜き出す", "抽出", "絞り込んでコピー"]},
 }
@@ -2064,6 +2067,37 @@ def resolve_col_ref(raw, headers: list) -> tuple:
     return None, False, f"列『{s}』がありません。ある列: {known}"
 
 
+# ★ 単位B 照合の断片ガード（呼び出し側で・単位B 本体＝ailine_core/subject.py は変更しない）。
+#   name_matches_task の呼び出し元は「実在するかどうか未確認の raw_target」を渡すことがあり
+#   （下の COMPUTE_COLUMN target 経路）、_standalone_occurrence は「他の“実在名”の一部でしか
+#   ない出現」しか除外しない ── raw_target が「実在しない・別の複合語」の断片（例:『小計』の
+#   『計』）であっても素通りする。ailine_core/subject.py の _MIN_FRAGMENT=2（「1文字の漢字は
+#   偶然一致しすぎる」）と同じ理由で、①長さ2未満は最初から証拠にしない、②2文字以上でも
+#   依頼文中の全出現が「より長い連続した漢字の内部」（＝別の複合語の内側）でしかないなら
+#   証拠にしない。
+_CJK_KANJI_RE = re.compile(u"[㐀-䶿一-鿿豈-﫿]")
+
+
+def _raw_target_not_embedded_in_task(raw_target: str, task: str) -> bool:
+    """raw_target の依頼文中の出現のうち、少なくとも1つが「より長い連続した漢字の内部」
+       ではない（＝独立した語としての出現がある）なら True。ひらがな/カタカナ/記号は
+       日本語の語境界（助詞など）として扱う ―― 漢字が両隣にも続く場合だけ『内部』とみなす。
+       出現が無ければ False（そもそも証拠が無い）。"""
+    if not raw_target or not task:
+        return False
+    at = task.find(raw_target)
+    if at < 0:
+        return False
+    n = len(raw_target)
+    while at >= 0:
+        before_ok = at == 0 or not _CJK_KANJI_RE.match(task[at - 1])
+        after_ok = (at + n) >= len(task) or not _CJK_KANJI_RE.match(task[at + n])
+        if before_ok and after_ok:
+            return True
+        at = task.find(raw_target, at + 1)
+    return False
+
+
 def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab: dict | None = None,
                      target_sheet: str | None = None) -> tuple:
     """② 検証。(ok, resolved_args, inferred_keys, error_message)。
@@ -2227,7 +2261,13 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             if err:
                 if "一意に決まりません" in err:
                     return False, resolved, inferred, err
-                if name_matches_task(raw_target, task, others=headers.get(first_sheet, [])):
+                # ★ 単位B 照合の断片ガード（呼び出し側・上の _raw_target_not_embedded_in_task
+                #   docstring 参照）: raw_target は「実在するか未確認」の生の文字列なので、
+                #   name_matches_task を素通しに使う前に (1) 1文字を弾き (2) 依頼文中の全出現が
+                #   「他の複合語（実在列とは限らない）の内部」でしかないなら弾く。
+                if (len(raw_target) >= 2
+                        and _raw_target_not_embedded_in_task(raw_target, task)
+                        and name_matches_task(raw_target, task, others=headers.get(first_sheet, []))):
                     resolved["_new_col_label"] = raw_target
                 del resolved["target"]
             else:
@@ -2459,7 +2499,7 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             ]
 
     # ★ EXTRACT: 単一条件（col × cmp × value）に一致する行を新シートへ抜き出す
-    #   （DESIGN-20260820-extract-op.md）。col は実在検証、cmp は語彙の6値に限定、value は
+    #   （コミット 2edcb08「EXTRACT op」参照）。col は実在検証、cmp は語彙の6値に限定、value は
     #   gte/lte/gt/lt なら数値必須・eq は数値化できればそのまま数値・できなければ文字列・
     #   contains は常に文字列（A' 原則: 数値化は機械が行う。LLM の言い分をそのまま信じない）。
     elif op == "EXTRACT":
@@ -3799,7 +3839,7 @@ def _extract_predicate(cmp: str, threshold):
 
 def check_extract(path: Path, args: dict, header_row: int = 1,
                    source_book: Path | None = None) -> tuple:
-    """EXTRACT の事後条件（DESIGN-20260820-extract-op.md §事後条件・入場料そのもの）。
+    """EXTRACT の事後条件（コミット 2edcb08「EXTRACT op」―「番人が入場料を徴収した初の op」）。
        ①行数一致 ②値と型の保存 ③両側の網羅（多い/少ないの両方を落とす）を、1つの位置対応
        比較で同時に見る: 元シートを独立に走査して『条件に一致する行』を上から順に集めた
        ものが expected。出力の各行が expected と完全に同じ順・同じ内容で並んでいれば、
@@ -3871,9 +3911,9 @@ def check_extract(path: Path, args: dict, header_row: int = 1,
         if mismatches:
             return "fail", (f"{denom} を抽出しましたが、元シート『{src_name}』が {mismatches} セル"
                              "変更されています（読むだけのはず）")
-        return "pass", f"{denom} → {len(expected_rows)}行を抽出（式・型とも保存・元シート無変更）"
+        return "pass", f"{denom} → {len(expected_rows)}行を抽出（値・型とも保存・元シート無変更）"
 
-    return "pass", f"{denom} → {len(expected_rows)}行を抽出（式・型とも保存。元シートとの突き合わせ無し）"
+    return "pass", f"{denom} → {len(expected_rows)}行を抽出（値・型とも保存。元シートとの突き合わせ無し）"
 
 
 POSTCONDITIONS = {
@@ -5243,7 +5283,7 @@ def _own_output_headers(op: str, resolved: dict | None):
       出力の見出しがコード上に無く、静的に決められない。
       → 発火条件つきで残す: DataPilot の実出力の見出しを 1 度実機で観測できたら、ここに足す。
         それまで PIVOT の 2 回目は関所が鳴る（＝安全側で、うるさい側に倒れている）。
-    ★★ EXTRACT（単位H の2例目・DESIGN-20260820-extract-op.md）: ExtractRows ヘルパは
+    ★★ EXTRACT（単位H の2例目・コミット 2edcb08「EXTRACT op」）: ExtractRows ヘルパは
       出力の1行目に元シートの見出し行をそのままコピーする（helpers/AiLineHelpers.bas 参照）。
       出力シート名は固定でなく col/cmp/value から動的に決まる（_extract_output_sheet_name。
       verify_dsl_args が resolved["_new_sheet"] に積む）ので OP_DECLARED_SHEET_NAME の
@@ -5282,6 +5322,18 @@ def _maybe_warn_write_precondition(op: str, before: dict, after: dict, resolved:
     return check_write_preconditions_detail(write_target.writes, before, after,
                                              cell_ref=_cell_ref, fmt_value=_fmt_cell_value,
                                              own_output_headers=_own_output_headers(op, resolved))
+
+
+def _maybe_own_prior_output_notice(op: str, before: dict, after: dict, resolved: dict | None = None) -> list:
+    """★★ 単位H 開示: _looks_like_own_prior_output が真になって new_sheet の前提検査を
+       スキップした（＝関所が黙った）ときの理由を、1行ずつ開示する（無ければ空リスト）。
+       助言ではない ── 前提検査（_maybe_warn_write_precondition）が黙って通した理由の
+       開示そのもの。呼び出し側は前提検査の直後で呼ぶ（単発・複合計画の両経路）。
+       ★ new_sheet を writes に宣言していない op は最初から対象外（own 判定自体が起きない）。"""
+    write_target = OP_WRITE_TARGET.get(op)
+    if not write_target or "new_sheet" not in write_target.writes:
+        return []
+    return own_prior_output_notice_lines(before, after, own_output_headers=_own_output_headers(op, resolved))
 
 
 def _interpretation_summary_line(resolved: dict, inferred: set) -> str | None:
@@ -5516,6 +5568,10 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     #   ★ 印字と関所は 位置を変えていない（後段のまま）。ここでやるのは判定だけ。
     precondition = _maybe_warn_write_precondition(op, before, after, resolved)
     precondition_broken = precondition[0] if precondition else None
+    # ★★ 単位H 開示: 関所判定の直後（★ 単位H 導入前は完全な無言だった箇所）。助言ではない
+    #   ── 「前回の自分の出力の作り直し」と判定して関所を黙らせた理由そのものを見せる。
+    for own_notice in _maybe_own_prior_output_notice(op, before, after, resolved):
+        print(own_notice)
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
         sheet_conflict=getattr(a, "_sheet_conflict", None),
@@ -6155,8 +6211,22 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     #   複合計画は④を計画全体で1回だけ評価するので、段ごとの「読むだけのシート」を返して
     #   呼び出し側が全段分を合算する（返り値は集合・空集合なら足すものが無いだけ）。
     mention_exclude_sheets = _declared_reads_only_sheets(op, resolved)
+    # ★★ 単位F: 単発(cmd_run_dsl)と同じ位置・同じ関所。段ごとの before/after で見る
+    #   （計画全体の before/after で見ると、前の段が既存行を書いたことを次の段の前提破れと
+    #   読み違える ―― 宣言は段ごとに違うので、突き合わせも段ごとでなければならない）。
+    # ★★ 単位G(複合計画版): 中立化（「（既存シート『集計』の更新は意図どおりです）」）は
+    #   助言の発生源で決まるので、単発(5517-5522)と同じく advisories を組む「前」に検査する
+    #   ―― ここが単発と非対称のまま(precondition_broken 未配線)だと、破れた宣言でも
+    #   肯定文が出てしまう（単位G の保証が複合計画に配線されていなかった不具合）。
+    #   ★ 検査は段あたり1度だけ（単位C の教訓）。結果は advisories と下の関所の両方で使い回す。
+    _precondition = _maybe_warn_write_precondition(op, step_before, step_after, resolved)
+    precondition_broken = _precondition[0] if _precondition else None
+    # ★★ 単位H 開示(複合計画版): 単発と同じく関所判定の直後（置き場所は単発と対称）。
+    for own_notice in _maybe_own_prior_output_notice(op, step_before, step_after, resolved):
+        print(f"{step_prefix}{own_notice}")
     step_advisories.extend(compose_dsl_step_advisories(
-        "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref))   # ★ 挙動変更#1(a)
+        "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps,
+        precondition_broken=precondition_broken) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref))   # ★ 挙動変更#1(a)
 
     status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
     # ★ 止血1/2: "error"→fail 扱い。"warn"(検証対象不足)は成功は名乗るが機械検証済みとは言わない。
@@ -6166,11 +6236,7 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
                  "interpretation": interpretation},
                 step_advisories, provenance_entry, mention_exclude_sheets, current_meta)
     item_status = "warn" if status == "warn" else "ok"
-    # ★★ 単位F: 単発(cmd_run_dsl)と同じ位置・同じ関所。段ごとの before/after で見る
-    #   （計画全体の before/after で見ると、前の段が既存行を書いたことを次の段の前提破れと
-    #   読み違える ―― 宣言は段ごとに違うので、突き合わせも段ごとでなければならない）。
-    _precondition = _maybe_warn_write_precondition(op, step_before, step_after, resolved)
-    warn_precondition = _precondition[1] if _precondition else None
+    warn_precondition = _precondition[1] if _precondition else None   # ★ 単位G: 上で 1 度だけ検査済み
     if warn_precondition:
         print(f"{step_prefix}{warn_precondition}")
         gate_exit = _confirm_overwrite_or_gate(a, warn_precondition, step_prefix=step_prefix)

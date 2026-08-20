@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ailine  # noqa: E402
 from ailine_core.write_precondition import (  # noqa: E402
     NO_PRECONDITION, PRECONDITIONS, check_write_preconditions,
-    check_write_preconditions_detail,
+    check_write_preconditions_detail, own_prior_output_notice_lines,
 )
 
 
@@ -238,6 +238,35 @@ def test_unit_h_own_prior_output_does_not_break_the_premise():
     after = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
                    "集計!2,1": "営業", "集計!2,2": 500}, sheets=("Sheet", "集計"))
     assert _detail(("new_sheet",), before, after, _OWN) is None
+
+
+# ★★ 単位H 開示: own 判定が関所をスキップしたことの理由を1行で見せる（黙って通さない）。
+def test_unit_h_own_prior_output_notice_prints_when_gate_is_skipped():
+    """own-output 再構築の検体: _looks_like_own_prior_output が真になって前提破れをスキップ
+       した『集計』について、通知が1行返ること（test_unit_h_own_prior_output_does_not_break_
+       the_premise と同じ before/after ─ 前提が黙って通った、その理由の開示）。"""
+    before = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
+                    "集計!2,1": "営業", "集計!2,2": 300}, sheets=("Sheet", "集計"))
+    after = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
+                   "集計!2,1": "営業", "集計!2,2": 500}, sheets=("Sheet", "集計"))
+    assert own_prior_output_notice_lines(before, after, _OWN) == ["（前回の出力『集計』を作り直します）"]
+
+
+def test_unit_h_own_prior_output_notice_empty_when_nothing_changed():
+    """own と判定されても何も変わっていなければ、開示する理由が無い（空リスト）。"""
+    before = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
+                    "集計!2,1": "営業", "集計!2,2": 300}, sheets=("Sheet", "集計"))
+    assert own_prior_output_notice_lines(before, before, _OWN) == []
+
+
+def test_unit_h_own_prior_output_notice_empty_for_handmade_sheet():
+    """★ 対照: 人が作った『集計』（署名不一致）は own でないので通知も出ない
+       （関所が別途 ★ 警告で鳴る・test_unit_h_handmade_sheet_still_breaks_the_premise 参照）。"""
+    before = _snap({"集計!1,1": "年度", "集計!1,2": "予算",
+                    "集計!2,1": 2025, "集計!2,2": 5000}, sheets=("Sheet", "集計"))
+    after = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 金額",
+                   "集計!2,1": "営業", "集計!2,2": 300}, sheets=("Sheet", "集計"))
+    assert own_prior_output_notice_lines(before, after, _OWN) == []
 
 
 def test_unit_h_handmade_sheet_still_breaks_the_premise():

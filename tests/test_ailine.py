@@ -2647,6 +2647,46 @@ def test_verify_dsl_args_compute_column_target_unknown_substring_of_existing_col
     assert "target" not in resolved
     assert "_new_col_label" not in resolved
 
+def test_verify_dsl_args_compute_column_target_fragment_of_unrelated_compound_word_dropped():
+    # ★ 単位B 照合の断片ガード（呼び出し側・敵対検証の再現そのもの）: 依頼文「小計を…」に
+    #   対し target「計」は実在しないが、「計」という文字列自体は依頼文に現れる。ただし
+    #   それは（実在列とは無関係な）別の複合語『小計』の内部としてしか現れていない出現
+    #   なので、意味不明な1文字の列見出しとして採用してはいけない（従来どおり捨てる）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*", "target": "計"}, meta,
+        task="小計を数量×単価で埋めて")
+    assert ok is True
+    assert "target" not in resolved
+    assert "_new_col_label" not in resolved
+
+def test_verify_dsl_args_compute_column_target_two_char_fragment_embedded_in_task_word_dropped():
+    # ★ 単位B 照合の断片ガード・2文字境界の再現: target「金額」は実在せず、依頼文には
+    #   「税込金額を…」しか無い（『税込金額』は実在列でもない＝(c) の片方向ガードとは別経路）。
+    #   「金額」は2文字（_MIN_FRAGMENT を満たす）だが、依頼文中の唯一の出現は『税込金額』の
+    #   内部でしかない ―― 実在しない複合語の内部の断片は名指しの証拠にならない。従来どおり捨てる。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*", "target": "金額"}, meta,
+        task="税込金額を数量×単価で埋めて")
+    assert ok is True
+    assert "target" not in resolved
+    assert "_new_col_label" not in resolved
+
+def test_verify_dsl_args_compute_column_target_fragment_of_unrelated_task_word_dropped():
+    # ★ 同じ断片ガードの別例（敵対検証で独立に確認された症状）: target「利益」は実在せず、
+    #   依頼文の唯一の出現は『利益率』の内部でしかない（『利益率』も実在列ではない）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*", "target": "利益"}, meta,
+        task="利益率を考慮して数量×単価で金額を埋めて")
+    assert ok is True
+    assert "target" not in resolved
+    assert "_new_col_label" not in resolved
+
 def test_verify_dsl_args_compute_column_target_ambiguous_digit_still_errors():
     # ★ W3: 実在しない場合と違い、複数解釈が可能な曖昧なケースは引き続き CLARIFY で止める
     #   （推測で断定しない原則は真に曖昧なケースにだけ残す）。

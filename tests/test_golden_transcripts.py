@@ -530,6 +530,41 @@ def _t_unit_g_declared_sheet_premise_broken(tmp_path, monkeypatch, capsys):
     return _run_main(["run", str(book), "部門ごとに金額をまとめて"], capsys)
 
 
+def _t_unit_g_composite_plan_declared_sheet_premise_broken(tmp_path, monkeypatch, capsys):
+    """★★ 単位G(複合計画版): 上の _t_unit_g_declared_sheet_premise_broken と同じ致命
+       （手作りの『集計』を AGGREGATE が破壊）を、複合計画([AUTOFIT, AGGREGATE])経由で再現する。
+       敵対検証で確認された配線漏れ: _run_dsl_plan_step の compose_dsl_step_advisories 呼び出しに
+       precondition_broken が渡っていなかったため、単発では出ない
+       「（既存シート『集計』の更新は意図どおりです）」が複合計画だけで出ていた。
+       ★ --overwrite で関所は素通しになる（承知の上の続行）が、その先の助言は前提が破れた
+       ことを正しく伝えなければならない ── 関所を通したことと、破れた宣言を「意図どおり」と
+       言うことは別問題（前者は利用者の選択・後者は嘘）。"""
+    book = _book_with_handmade_summary(tmp_path)
+    monkeypatch.setattr(ailine, "translate_task",
+                         lambda model, task, book_meta, temperature=0.1:
+                         {"plan": [{"op": "AUTOFIT", "args": {}},
+                                   {"op": "AGGREGATE",
+                                    "args": {"group_col": "部門", "value_col": "金額"}}]})
+
+    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
+        wb = openpyxl.load_workbook(out_book)
+        if "AutoFitColumns" in code:
+            wb["Sheet"].column_dimensions["A"].width = 20   # ★ check_autofit の pass 条件
+        elif "SummaryTable" in code:
+            # SummaryTable ヘルパの removeByName("集計") → 作り直し を模す（中身が全部変わる）
+            del wb["集計"]
+            s = wb.create_sheet("集計")
+            for r in [["部門", "合計"], ["営業", 300], ["開発", 300]]:
+                s.append(r)
+        wb.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    # --copy なし = 既定(原本直接)。--overwrite = 破壊の関所を承知の上で続行（非対話で exit 7 に
+    # ならない） ── 単発の EOFError 版と違い、ここは「関所を通した後の助言」の正しさを見る。
+    return _run_main(["run", str(book), "列幅を整えて部門ごとに金額をまとめて", "--overwrite"], capsys)
+
+
 CASES = {
     "subject_contradiction": _t_subject_contradiction,
     "subject_substring_contradiction": _t_subject_substring_contradiction,   # ★ 単位B
@@ -557,6 +592,9 @@ CASES = {
     "dry_plan": _t_dry_plan,
     "dry_freeform": _t_dry_freeform,
     "unit_g_declared_sheet_premise_broken": _t_unit_g_declared_sheet_premise_broken,   # ★ 単位G
+    # ★ 単位G(複合計画版・敵対検証で発見された配線漏れの再現)
+    "unit_g_composite_plan_declared_sheet_premise_broken":
+        _t_unit_g_composite_plan_declared_sheet_premise_broken,
 }
 
 
@@ -572,6 +610,20 @@ def test_unit_g_affirmative_line_never_returns(tmp_path, monkeypatch, capsys):
     assert "既存シート『集計』の中身が置き換わりました" in out
     assert "新しいシートを作るはずが" in out
     assert rc == 7   # 非対話で関所が止めた（原本は無変更）
+
+
+# ★★ 単位G(複合計画版) の番人: 上の単発版と対になる ── _run_dsl_plan_step が
+#   precondition_broken を配線し忘れていた不具合そのものの再発防止（単発だけ塞いで
+#   複合計画を塞ぎ忘れる、という同型の事故を機械で止める）。
+def test_unit_g_composite_plan_affirmative_line_never_returns(tmp_path, monkeypatch, capsys):
+    _isolate(monkeypatch, tmp_path)
+    rc, out = _t_unit_g_composite_plan_declared_sheet_premise_broken(tmp_path, monkeypatch, capsys)
+    assert "意図どおりです" not in out, out
+    # 対の主張: 黙らせる代わりに、破れた前提と置き換えの両方をちゃんと述べていること
+    # （★ 警告と旧・誤った肯定文が矛盾して同時に出ていたのが敵対検証の再現そのもの）。
+    assert "既存シート『集計』の中身が置き換わりました" in out
+    assert "新しいシートを作るはずが" in out
+    assert rc == 0   # --overwrite で関所は承知の上で通した（原本は書き換わる）
 
 
 _ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2}")

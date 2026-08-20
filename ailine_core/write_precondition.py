@@ -109,6 +109,15 @@ def _looks_like_own_prior_output(before: dict, sheet: str, expected_header) -> b
     一致すれば「前回そこに書いたのは自分」＝作り直しであって、人の作ったものの破壊ではない。
     ★ 署名は実装（helpers/*.bas）から取る。想像で決めない ── 呼び出し側が渡す
     （このモジュールは ailine.py も .bas も知らない）。
+
+    ★ 限界（単位H の敵対検証で確認済み・2026-08-20）: 署名は**出所（provenance）ではなく
+    形**でしか無い。見出しセル（例: 分類列名『部門』・『合計 - 金額』）がたまたま今回の
+    リクエストと一致する人間の手作りシート（データ行は無関係）を、この判定は区別できない
+    ―― データ行も真の作成者も一切見ないため。さらに ailine が書いた出力を人が手で編集
+    した後に同じ集計を依頼すると、その手編集は見出しの一致だけで「前回の自分の出力」と
+    誤認され、関所を経由せず黙って失われる。真の出所追跡（provenance tracking、例:
+    書き込み時刻や作成者を刻む仕掛け）は未実装 ── 見出し一致は「たぶん自分」の弱い代理
+    指標にすぎない。
     """
     if not expected_header:
         return False
@@ -118,6 +127,29 @@ def _looks_like_own_prior_output(before: dict, sheet: str, expected_header) -> b
         if (got[0] if got is not None else None) != want:
             return False
     return True
+
+
+def own_prior_output_notice_lines(before: dict, after: dict, own_output_headers=None) -> list:
+    """★★ 単位H 開示: `_looks_like_own_prior_output` が真になって関所（前提破れ）をスキップ
+       した既存シートについて、**その理由をユーザーに開示する**1行ずつのリスト
+       （無ければ空リスト）。
+
+    ★ これは助言（advisory）ではない ── 関所が黙る理由の開示そのもの。単位H 導入前は
+    「前提は破れていない」と判定した経緯が画面に一切出ず、完全な無言のまま exit 0 に
+    進んでいた（上の docstring の限界も参照）。せめて「なぜ黙ったか」を1行で見せる。
+    ★ 対象は「実際に変化があった」シートだけ（own と判定されても before/after で
+    何も変わっていなければ、そもそも黙る理由を説明する必要が無い）。
+    ★ 置き場所は呼び出し側 ── 前提検査の直後（単発・複合計画の両経路、
+    ailine.py の `_maybe_own_prior_output_notice` 参照）。
+    """
+    if not own_output_headers:
+        return []
+    existing = set(before.get("sheets") or [])
+    own = {s for s in existing if _looks_like_own_prior_output(before, s, own_output_headers.get(s))}
+    if not own:
+        return []
+    changed_sheets = {h[0][0] for h in _changed(before, after) if h[0][0] in existing}
+    return [f"（前回の出力『{s}』を作り直します）" for s in sorted(changed_sheets & own)]
 
 
 def _check_new_sheet(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable,

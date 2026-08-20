@@ -1,5 +1,5 @@
 """EXTRACT の端から端（`ailine.main(argv)` を実際に叩く）。tests/test_golden_transcripts.py の
-_isolate/_run_main を流用する（DESIGN-20260820-extract-op.md 実装の事前登録どおり、
+_isolate/_run_main を流用する（EXTRACT op 実装（コミット 2edcb08）の方針どおり、
 既存の f9_transcripts golden には一切触れない ── 新規の直接アサーション形式のテスト）。
 
 ★ 昨夜の実弾2件を、端から端で再現・退治する:
