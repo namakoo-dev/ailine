@@ -91,10 +91,45 @@ def classify_headers(base_headers: list, other_headers: list):
     return "取れなかった", "; ".join(parts) if parts else "列名が一致しません"
 
 
-def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, header_row: int) -> dict:
+def numeric_value_column(ws, header_row: int, num_cols: int) -> int | None:
+    """基準シートで、見出し行の下で最初に数値が現れる列（1起点）を返す。無ければ None。
+       ★ 単位L の配線: 基準ファイルで1回だけ決める。呼び出し側がこの列の**列名**を
+       他ファイルへ渡し、各ファイルはその名前を自分の並びで引き直す（_column_index）
+       ── 並べ替えファイルで違う列を数える事故を避ける（implementer 申告・検体化済み）。"""
+    max_row = ws.max_row or header_row
+    for col in range(1, num_cols + 1):
+        for row in range(header_row + 1, max_row + 1):
+            v = ws.cell(row=row, column=col).value
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return col
+    return None
+
+
+def _column_index(headers: list, name: str) -> int | None:
+    """headers（そのファイル自身の並び）の中で name と同名の列位置（1起点）。無ければ None。"""
+    try:
+        return headers.index(name) + 1
+    except ValueError:
+        return None
+
+
+def total_row_candidate_count(ws, header_row: int, label_col: int, value_col: int) -> int:
+    """単位L: ラベル列(label_col)・数値列(value_col) で split_total_rows を走らせ、
+       除外（合計行候補）の件数を返す（--json の分布測定の口・DESIGN v2.1）。"""
+    from ailine_core.total_row import split_total_rows
+    max_row = ws.max_row or header_row
+    rows = [(r, ws.cell(row=r, column=label_col).value, ws.cell(row=r, column=value_col).value)
+            for r in range(header_row + 1, max_row + 1)]
+    return len(split_total_rows(rows).excluded)
+
+
+def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, header_row: int,
+                   value_col_name: str | None = None) -> dict:
     """1ファイルを基準と照合する。戻り値: {"name", "status", "reason"(取れなかった時),
-       "reordered"(並べ替えで取れた時)}。★ どんな失敗でも例外を上げず名指し+理由にして返す
-       （$0 条件「黙って失敗する」の裏返し ── 報告が成果物）。"""
+       "reordered"(並べ替えで取れた時), "total_row_candidates"(取れた時・列名が引ければ)}。
+       ★ どんな失敗でも例外を上げず名指し+理由にして返す
+       （$0 条件「黙って失敗する」の裏返し ── 報告が成果物）。
+       ★ ラベル列・数値列は基準の**列名**で引き当てる（並べ替えファイルでは位置が違う）。"""
     if path.suffix.lower() != ".xlsx":
         return {"name": path.name, "status": "取れなかった", "reason": "旧形式(.xls)"}
     try:
@@ -104,12 +139,18 @@ def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, h
     try:
         ws = find_matching_sheet(wb, base_sheet_name)
         other_headers = read_row_headers(ws, header_row)
+        status, detail = classify_headers(base_headers, other_headers)
+        entry = {"name": path.name, "status": status}
+        if status == "取れなかった":
+            entry["reason"] = detail
+        elif detail:   # "並べ替え"
+            entry["reordered"] = True
+        if status == "取れた" and value_col_name is not None and base_headers:
+            label_col = _column_index(other_headers, base_headers[0])
+            value_col = _column_index(other_headers, value_col_name)
+            if label_col is not None and value_col is not None:
+                entry["total_row_candidates"] = total_row_candidate_count(
+                    ws, header_row, label_col, value_col)
     finally:
         wb.close()
-    status, detail = classify_headers(base_headers, other_headers)
-    entry = {"name": path.name, "status": status}
-    if status == "取れなかった":
-        entry["reason"] = detail
-    elif detail:   # "並べ替え"
-        entry["reordered"] = True
     return entry

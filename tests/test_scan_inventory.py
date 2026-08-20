@@ -143,3 +143,33 @@ def test_folder_with_no_readable_base_still_reports_and_exits_zero(tmp_path):
     assert p.returncode == 0, p.stderr[-500:]
     assert "基準" in p.stdout and ("見つかりません" in p.stdout or "無い" in p.stdout)
     assert "legacy.xls" in p.stdout and "旧形式" in p.stdout
+
+
+def test_json_reports_total_row_candidates_per_file(tmp_path):
+    """単位L の配線（分布測定の口）: --json の各ファイルに total_row_candidates が載る。
+       ★ 人間向け出力は変えない（⚠ の総量を増やさない ── D6）。JSON だけの口。"""
+    folder = tmp_path / "books"
+    _book(folder / "a.xlsx", HDRS, rows=(("J-1", "甲", 100), ("J-2", "乙", 200), ("合計", None, 300)))
+    _book(folder / "b.xlsx", HDRS, rows=(("J-3", "丙", 50),))
+    p = _scan(folder, "--json")
+    assert p.returncode == 0, p.stderr[-500:]
+    data = json.loads(p.stdout)
+    counts = {f["name"]: f.get("total_row_candidates") for f in data["files"]}
+    assert counts["a.xlsx"] == 1, f"合計行 1 本が数えられていない: {counts}"
+    assert counts["b.xlsx"] == 0
+
+
+def test_total_row_candidates_respect_reordered_columns(tmp_path):
+    """★ implementer 申告の設計の穴を検体化（2026-08-21）: 並べ替えファイルでは
+       基準の列位置でなく 列名 で（ラベル列=基準1列目の名前・数値列=基準の数値列の名前）
+       引き当てないと、別の列を数えて候補を取り逃がす。"""
+    folder = tmp_path / "books"
+    _book(folder / "a.xlsx", HDRS, rows=(("J-1", "甲", 100),))
+    # 並びだけ違うファイルに合計行: ラベル『合計』は 注文ID 列（このファイルでは 2 列目）に居る
+    _book(folder / "b.xlsx", ["金額", "注文ID", "取引先"],
+          rows=((300, "J-3", "丙"), (300, "合計", None)))
+    p = _scan(folder, "--json")
+    assert p.returncode == 0, p.stderr[-500:]
+    data = json.loads(p.stdout)
+    counts = {f["name"]: f.get("total_row_candidates") for f in data["files"]}
+    assert counts["b.xlsx"] == 1, f"並べ替えファイルの合計行を取り逃がした: {counts}"

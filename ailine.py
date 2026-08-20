@@ -6485,7 +6485,7 @@ def cmd_scan(a: argparse.Namespace) -> int:
     folder = Path(a.folder).resolve()
     candidates, excluded = multifile.classify_folder_contents(folder)
     base_path, base_wb = multifile.open_base_workbook(candidates)
-    base_headers, base_sheet, header_row = [], None, 1
+    base_headers, base_sheet, header_row, value_col_name = [], None, 1, None
     if base_wb is not None:
         base_sheet = base_wb.sheetnames[0]
         ws = base_wb[base_sheet]
@@ -6494,8 +6494,11 @@ def cmd_scan(a: argparse.Namespace) -> int:
         row, confident = detect_header_row({"rows": rows})
         header_row = row if confident else 1
         base_headers = multifile.read_row_headers(ws, header_row)
+        value_col = multifile.numeric_value_column(ws, header_row, len(base_headers) or MAX_COLS)
+        value_col_name = base_headers[value_col - 1] if value_col else None
         base_wb.close()
-    files = [multifile.evaluate_file(p, base_headers, base_sheet, header_row) for p in candidates]
+    files = [multifile.evaluate_file(p, base_headers, base_sheet, header_row, value_col_name)
+             for p in candidates]
     result = {"denominator": len(candidates), "base": base_path.name if base_path else None,
               "files": files, "excluded": excluded}
     if a.json:
