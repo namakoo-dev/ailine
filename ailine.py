@@ -93,6 +93,8 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
     Slot, Consumed as SubjectConsumed, classify_slots,
     COLUMN as SUBJ_COLUMN, REGION as SUBJ_REGION, ROW as SUBJ_ROW,
     SHEET as SUBJ_SHEET, LABEL as SUBJ_LABEL, INPUT as SUBJ_INPUT,
+    name_matches_task,   # ★ W3 改定(2026-08-20): 実在しない target が「依頼文の名指し」か
+                          #   「翻訳の捏造」かの照合に、単位B の部分文字列規律を再利用する
 )
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
@@ -2209,12 +2211,24 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         #   （複数解釈で曖昧）のとは別の理由なので、その場合だけ target を無指定として扱い
         #   新規列作成にフォールバックする（推測で断定しない CLARIFY の原則は、真に曖昧な
         #   ケース＝digit_candidates の複数一致にだけ残す）。
+        # ★ W3 改定(2026-08-20): 上の前提（実在しない target＝ほぼ捏造）が古くなった実測が
+        #   出た。「金額を数量×単価で埋めて」（金額列がまだ実在しない構成）で翻訳は正しく
+        #   target:"金額" を返す。だが無条件に捨てる旧実装はそれも落とし、新規列が
+        #   『数量*単価』に自動命名されていた（利用者が名前を言っているのに無視される・
+        #   2026-08-19 のデモ制作で3回踏んだ実害）。★ 依頼文を判定者にする: raw_target が
+        #   依頼文に実在する語として機械照合できるなら（単位B の name_matches_task を再利用
+        #   ── 素朴な in 判定はしない。「税込金額を…」+target「金額」のような片方向の部分
+        #   文字列の穴は単位B が塞いだ形そのものなので、同じ判定を2箇所に書かず呼ぶ）、
+        #   捏造ではなく利用者の指名とみなして新規列の名前として使う。依頼文に語が無ければ
+        #   従来どおり捏造とみなして捨てる（W3 本来の防御は生きている）。
         if resolved.get("target"):
             raw_target = resolved["target"]
             v, was_inferred, err = resolve_col_ref(raw_target, headers.get(first_sheet, []))
             if err:
                 if "一意に決まりません" in err:
                     return False, resolved, inferred, err
+                if name_matches_task(raw_target, task, others=headers.get(first_sheet, [])):
+                    resolved["_new_col_label"] = raw_target
                 del resolved["target"]
             else:
                 resolved["target"] = v
@@ -2801,7 +2815,12 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
             header_write = ""   # 既存の見出しはそのまま（上書きしない）
         else:
             new_col = len(headers[first_sheet])   # 0起点で次の空き列
-            header_name = f"{op1}{operator}{op2}".replace('"', '""')
+            # ★ W3 改定(2026-08-20): verify_dsl_args が「target は実在しないが依頼文に
+            #   実在する語」と判定していれば _new_col_label に利用者の指名が入っている
+            #   （単列×率パターンの税込/税抜ラベルと同じ仕組み）。無ければ従来どおりの
+            #   数式風見出し。
+            header_name = str(resolved_args.get("_new_col_label")
+                               or f"{op1}{operator}{op2}").replace('"', '""')
             header_write = f"    oSheet.getCellByPosition({new_col}, {hr0}).setString(\"{header_name}\")\n"
         # ★ W3 Part3: 既定は式（setFormula）。formula_spike の実測どおり、単純な行内の
         #   二項演算（=B2*C2 型）は区切り記号もシート参照も無いため LO 方言(;/.)の
@@ -3128,8 +3147,10 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
         i1 = _col_index_by_header(ws, op1, header_row=header_row)
         i2 = _col_index_by_header(ws, op2, header_row=header_row)
         # ★ M2c: target(実在列名) 指定時はその列を検証する。無指定なら従来どおり自動命名の新列。
+        # ★ W3 改定(2026-08-20): codegen_dsl と同じ見出し名決定（_new_col_label があれば
+        #   利用者が依頼文で名指しした新規列名）。
         target = args.get("target")
-        newname = target or f"{op1}{args['operator']}{op2}"
+        newname = target or args.get("_new_col_label") or f"{op1}{args['operator']}{op2}"
         inew = _col_index_by_header(ws, newname, header_row=header_row)
         if i1 is None or i2 is None or inew is None:
             return "fail", f"演算対象または対象列『{newname}』が見つからない"

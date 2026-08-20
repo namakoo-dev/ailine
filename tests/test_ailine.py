@@ -2608,6 +2608,45 @@ def test_verify_dsl_args_compute_column_target_unknown_falls_back_to_new_column(
     assert "target" not in resolved
     assert err is None
 
+def test_verify_dsl_args_compute_column_target_unknown_but_named_in_task_kept_as_new_col_label():
+    # ★ W3 改定(2026-08-20): target が実在しなくても、依頼文にその語が実在すれば
+    #   （＝翻訳の捏造でなく利用者の指名）新規列の名前として尊重する（(a)）。
+    #   金額列がまだ無いブックで「金額を数量×単価で埋めて」→ target:"金額" は実在しないが
+    #   依頼文に「金額」がある。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*", "target": "金額"}, meta,
+        task="金額を数量×単価で埋めて")
+    assert ok is True
+    assert "target" not in resolved
+    assert resolved["_new_col_label"] == "金額"
+
+def test_verify_dsl_args_compute_column_target_unknown_and_not_in_task_still_dropped():
+    # (b) 依頼文にその語が無ければ従来どおり捏造とみなして捨てる（_new_col_label も付けない）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*", "target": "利益"}, meta,
+        task="数量と単価をかけた列を作って")
+    assert ok is True
+    assert "target" not in resolved
+    assert "_new_col_label" not in resolved
+
+def test_verify_dsl_args_compute_column_target_unknown_substring_of_existing_column_dropped():
+    # ★ (c) 単位B の片方向の穴の再現: 依頼文「税込金額を…」に対し target「金額」は実在
+    #   しないが、「金額」という文字列自体は依頼文に現れる。ただしそれは実在列『税込金額』の
+    #   一部としてしか説明できない出現なので、name_matches_task は証拠として採らない
+    #   （素朴な in 判定なら誤って①=一致にしてしまうところ）。従来どおり捨てる。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価", "税込金額"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*", "target": "金額"}, meta,
+        task="税込金額を数量×単価で埋めて")
+    assert ok is True
+    assert "target" not in resolved
+    assert "_new_col_label" not in resolved
+
 def test_verify_dsl_args_compute_column_target_ambiguous_digit_still_errors():
     # ★ W3: 実在しない場合と違い、複数解釈が可能な曖昧なケースは引き続き CLARIFY で止める
     #   （推測で断定しない原則は真に曖昧なケースにだけ残す）。
@@ -2654,6 +2693,46 @@ def test_codegen_dsl_compute_column_values_mode_writes_static_getvalue():
         use_formula=False)
     assert "getCellByPosition(1, i).setValue" in code
     assert "setFormula" not in code
+
+def test_codegen_dsl_compute_column_new_col_label_used_for_two_operand_header():
+    # ★ W3 改定(2026-08-20): 2列演算の新規列パスは、verify_dsl_args が _new_col_label に
+    #   積んだ「依頼文で名指しされた列名」を見出しに使う（従来は f"{op1}{operator}{op2}"
+    #   固定で、単位F 側の税込/税抜ラベル機構が2列演算には配線されていなかった穴）。
+    code = ailine.codegen_dsl(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*", "_new_col_label": "金額"},
+        {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価"]}})
+    assert 'setString("金額")' in code
+    assert 'setString("数量*単価")' not in code
+
+def test_codegen_dsl_compute_column_falls_back_to_formula_header_without_label():
+    # _new_col_label が無ければ従来どおりの数式風見出し（回帰確認）。
+    code = ailine.codegen_dsl(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*"},
+        {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価"]}})
+    assert 'setString("数量*単価")' in code
+
+def test_compute_column_target_named_in_task_end_to_end_new_column_becomes_that_name(tmp_path):
+    # ★ 端から端: 金額列が無いブック + target:"金額"(実在しない) + 依頼文に「金額」。
+    #   verify_dsl_args → _new_col_label="金額" に落ち、codegen_dsl はその名前で見出しを
+    #   書く。macro 適用後の状態を模したブックに対して check_compute_column が
+    #   その列名で検証して ✓ (pass) になることを確認する（2026-08-19 のデモ失敗形の再現と修正）。
+    meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["数量", "単価"]}}
+    ok, resolved, inferred, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN",
+        {"operands": ["数量", "単価"], "operator": "*", "target": "金額"}, meta,
+        task="金額を数量×単価で埋めて")
+    assert ok is True
+    assert resolved["_new_col_label"] == "金額"
+
+    code = ailine.codegen_dsl("COMPUTE_COLUMN", resolved, meta)
+    assert 'setString("金額")' in code
+
+    # macro 適用後を模したブック（新規列の見出しが『金額』・値は数量*単価）。
+    p = _book(tmp_path, [["数量", "単価", "金額"], [2, 100, 200], [3, 150, 450]])
+    status, reason = ailine.check_compute_column(p, resolved)
+    assert status == "pass"
 
 # --- ★ W10b 項目3: COMPUTE_COLUMN の「1列 × 率」パターン（税込み/税抜き） -----------
 
