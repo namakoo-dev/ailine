@@ -63,6 +63,45 @@ def render_run_header(label: str, model: str, book_name: str) -> str:
     return f"■ ailine（{label}）  model={model}  book={book_name}"
 
 
+# --- K-1: 語彙外に落ちる瞬間の通知（生成に入る前・理由/費用/次の手を1ブロックで言う） -------
+#   ★ 通知だけ。同意の門(y/N)は作らない（K-2として意図的に保留 — operator の盲検査定
+#   2026-08-19: 非対応と文書に明記された操作を頼んだら、説明なしに63秒の自由生成が3回走り、
+#   最後に依頼と無関係なコードを見せられて止まった。橋の実験の根拠2点を踏まえる:
+#   コンパイラ構成＝照合が先・実行は後（照合の結果を即言う）／行政法＝断りは理由の提示を
+#   伴う正式な手続き（黙って省略しない）。門は別（発火頻度が高い門は無視が習慣化して死ぬ、
+#   という設計判断で K-2 は意図的に保留）。
+
+def freeform_notice_reason(op: str, about: str = "") -> str:
+    """通知の1行目（理由）。経路で言い分ける:
+       - OUT_OF_VOCAB: モデルが照合した結果「この語彙には無い」と明示的に答えた経路
+         （about があれば「（何についての依頼か）」を添える）。
+       - それ以外(FREEFORM＝語彙外の op・必須 slot 欠落・JSON 不正・API 不通などの
+         退避先すべて): 翻訳がそもそも DSL の形（op+args）にならなかった経路。"""
+    if op == "OUT_OF_VOCAB":
+        suffix = f"（{about}）" if about else ""
+        return f"この依頼{suffix}は、頼める操作の一覧に照合できませんでした。"
+    return "この依頼は、翻訳が頼める操作の形になりませんでした。"
+
+
+def render_freeform_notice(reason: str) -> list:
+    """単発 FREEFORM 経路（cmd_run_freeform）向け。生成が始まる前に、理由・費用・次の手を
+       1ブロックで言う（3要素は必須・文言はここ1箇所）。
+       ★ 「✓」の文字そのものは使わない ── この repo では ✓ を『機械検証済み』の唯一の
+       発生点(claim.py)に予約している（番人テストが出力全体を"✓" not in で見る）。"""
+    return [
+        reason,
+        "AI の直接生成を試します ── 時間がかかることがあり、機械保証はありません（適用の確認は出ません）。",
+        "次の手: `ailine ops` で頼める操作の一覧を見る / 依頼を言い換える",
+    ]
+
+
+def render_freeform_notice_compact(reason: str, step_prefix: str = "") -> str:
+    """複合計画の語彙外段（run_freeform_plan_step）向け。段の文脈に合わせて1行に畳む
+       （3要素は保つ: 理由・機械保証なし・次の手。★ ✓ は使わない・上記参照）。"""
+    return (f"{step_prefix}{reason} AI が直接生成します（機械保証なし・適用の確認は出ません。"
+            "次の手: `ailine ops` / 依頼を言い換える）。")
+
+
 # --- restore/undo のバックアップ一覧・復元結果（cmd_restore と cmd_undo が手書きで重複） --
 
 def render_backup_list(book_name: str, backups: list, shelved: int = 0) -> list:
@@ -131,7 +170,9 @@ def render_ops_table(op_meta: dict, op_schema: dict, confirm_fields: dict) -> li
             if need:
                 lines.append(f"      必要な情報: {need}")
         lines.append("")
-    lines.append("※ ここに無いことは今はできません（「重複行の削除」「ウィンドウ枠の固定」など）。")
+    # ★ K-1 (2026-08-20): 旧文「ここに無いことは今はできません」は実挙動（一覧外は AI の
+    #   直接生成に落ちる）と食い違っていた。約束は実装に合わせる（Namakoo 決定 2026-08-19）。
+    lines.append("※ ここに無い依頼は、AI の直接生成を試します（機械保証なし・実行時にその旨を表示します）。")
     lines.append("※ 一覧に無い依頼は聞き返します。言い換えても通らないときは未対応です。")
     return lines
 

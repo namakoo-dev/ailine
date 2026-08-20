@@ -80,6 +80,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_code_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
     render_ops_table,
+    freeform_notice_reason, render_freeform_notice, render_freeform_notice_compact,   # ★ K-1
 )
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
@@ -5210,7 +5211,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             return 3
         if op in OP_SCHEMA:
             return cmd_run_dsl(a, book, source_book, book_meta, op, step.get("args", {}))
-        return cmd_run_freeform(a, book, source_book)
+        return cmd_run_freeform(a, book, source_book, step)
 
     return cmd_run_plan(a, book, source_book, book_meta, plan)
 
@@ -5781,11 +5782,15 @@ def detect_helper_sweep(code: str, helper_names: set) -> str | None:
             "— 依頼と無関係な操作が混じっていないか確認してください")
 
 
-def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> int:
+def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path,
+                      step: dict | None = None) -> int:
     """自由生成経路（従来の cmd_run 本体そのまま。M2a の助言つき）。
        ① 翻訳が CLARIFY にも DSL 語彙にも決まらなかった（FREEFORM・翻訳失敗）ときに使う。
        ★ W3: source_book は cmd_run が翻訳より前に正規化済み（--dry のときは book と同じ・
-       正規化していない）。ここでは正規化をやり直さない。"""
+       正規化していない）。ここでは正規化をやり直さない。
+       step は _translate_and_dispatch が振り分けに使った plan[0]（op="FREEFORM"/"OUT_OF_VOCAB"
+       と、OUT_OF_VOCAB なら about）。★ K-1: 生成に入る前の通知の理由1行目に使うだけ
+       （省略時=FREEFORM 扱い・後方互換）。"""
     refs_dir = Path(a.refs).resolve() if a.refs else DEFAULT_REFS
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     helper_catalog, helper_files = load_helpers(helpers_dir)
@@ -5800,6 +5805,14 @@ def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path) -> in
     print(render_run_header("AI が直接作成・機械保証なし", a.model, book.name))
     print(f"■ 参照ライブラリ: {refs_dir}  ({len(list(refs_dir.glob('*.bas'))) if refs_dir.is_dir() else 0} 例)")
     print(f"■ ヘルパ: {helpers_dir}  ({len(helper_files)} 本を同梱・Call で呼ばせる)")
+    # ★ K-1: 語彙外に落ちる瞬間の通知。生成が始まる前（★ の1行目より前）に、
+    #   理由・費用・次の手を1ブロックで言う。通知だけ・同意の門(y/N)は作らない
+    #   （関所は別に _confirm_freeform_apply が適用の直前に持つ・K-2 は意図的に保留）。
+    step = step or {}
+    reason = freeform_notice_reason(str(step.get("op") or "FREEFORM"), step.get("about") or "")
+    print()
+    for ln in render_freeform_notice(reason):
+        print(ln)
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
@@ -5997,7 +6010,8 @@ def _apply_new_column_fallback(op: str, args: dict, headers: list, new_cols: lis
 def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path, workdir: Path,
                             refs_dir: Path, helpers_dir: Path, tag: str,
                             apply_timeout: float | None, step_prefix: str = "",
-                            vocab: dict | None = None) -> tuple:
+                            vocab: dict | None = None, op: str = "FREEFORM",
+                            about: str = "") -> tuple:
     """M2c: 複合計画の語彙外(OUT_OF_VOCAB/FREEFORM)段を FREEFORM 経路で実行する。
        cmd_run_freeform と同じ生成→（★ W10b: 関所→）適用→署名/切断/no-op チェックのループを、
        『その段の依頼文だけ』かつ『out_book の現在の状態』を起点に行う版。
@@ -6006,6 +6020,8 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
        投げて cmd_run_plan まで一気に抜ける（破壊の関所と同じ『計画全体を止める』扱い。
        原本(book)はこの時点でまだ一切触れていない＝out_book はコピーなので安全）。
        step_prefix は複合計画の段番号表示用（例: "  2段目: "）。
+       op/about は呼び出し側(cmd_run_plan)の step から渡す。★ K-1: 生成に入る前の通知の
+       理由1行目に使うだけ（OUT_OF_VOCAB のときだけ about を添える）。
        ★ W10f 項目2: vocab（率リテラル走査用の用語集）は cmd_run_freeform（単発の自由生成）
        には元から渡っていた(scan_rate_literals)が、複合計画のこの経路には渡っておらず
        A' 原則（LLM に率や値を確定させない）の機械監査が複合計画の自由生成段だけ
@@ -6018,6 +6034,10 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
     desc = describe_book(out_book)
     user = f"{desc}\n\nタスク:\n{task_text}\n\n`Sub Run(oDoc As Object)` を1つだけ書け。コードのみ。"
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    # ★ K-1: 語彙外に落ちる瞬間の通知（この段の生成が始まる前・1行に畳んだ版）。
+    reason = freeform_notice_reason(op, about)
+    print(render_freeform_notice_compact(reason, step_prefix=step_prefix))
 
     stepsource = workdir / f"{tag}_source{out_book.suffix}"
     shutil.copy2(out_book, stepsource)
@@ -6355,7 +6375,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
             try:
                 okf, changes, advisories, _fkind, detail = run_freeform_plan_step(
                     a, about, out_book, workdir, refs_dir, helpers_dir, f"plan{i}", apply_timeout,
-                    step_prefix=f"  {i}段目: ", vocab=vocab)
+                    step_prefix=f"  {i}段目: ", vocab=vocab, op=op, about=about)
             except _FreeformGateAbort as e:
                 return e.exit_code
             if okf:

@@ -32,7 +32,9 @@ def test_listing_declares_what_it_cannot_do():
     """★ 「できない」と明言する行があること。査定 A は語彙外の依頼を 4 回言い直して
     4 回とも質問返しになり、未対応だと分からないまま詰んだ。"""
     text = "\n".join(_table())
-    assert "ここに無いことは今はできません" in text
+    # ★ K-1: 旧文の凍結を新しい正直な文へ更新（負の被覆: 旧い約束が復活しないことも見る）
+    assert "ここに無い依頼は、AI の直接生成を試します" in text
+    assert "今はできません" not in text
     assert "未対応" in text
 
 

@@ -4,6 +4,10 @@
 ■ 参照ライブラリ: C:\Dev\ailine\refs  (3 例)
 ■ ヘルパ: C:\Dev\ailine\helpers  (1 本を同梱・Call で呼ばせる)
 
+この依頼は、翻訳が頼める操作の形になりませんでした。
+AI の直接生成を試します ── 時間がかかることがあり、機械保証はありません（適用の確認は出ません）。
+次の手: `ailine ops` で頼める操作の一覧を見る / 依頼を言い換える
+
 ─ 試行 1 ─ 生成した .bas ───────────────
 Sub Run(oDoc As Object)
     Call AutoFitColumns(oDoc)
