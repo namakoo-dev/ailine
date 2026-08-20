@@ -1,0 +1,6 @@
+# golden はバイト列で突合する検体（tests/golden/_harness.py の assert_golden_bytes）。
+# ★ GitHub の Windows runner は core.autocrlf=true で checkout 時に LF→CRLF 変換するため、
+#   属性宣言が無いと CI 上でだけ全 golden がバイト不一致になる（2026-08-21 に実測・
+#   CI は 10 run 以上この理由で赤だった）。-text で変換を禁じ、どの環境でも index の
+#   バイト列のまま置く。
+tests/golden/** -text
