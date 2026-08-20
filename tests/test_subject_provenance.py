@@ -80,9 +80,12 @@ def _inject_formula_cache(path: Path, updates: dict) -> None:
         xml = z.read(member).decode("utf-8")
         others = {n: z.read(n) for n in z.namelist() if n != member}
     for ref, val in updates.items():
-        pattern = re.compile(rf'(<c r="{ref}"[^>]*><f>[^<]*</f>)<v>[^<]*</v>')
-        xml, n = pattern.subn(rf'\1<v>{val}</v>', xml)
-        assert n == 1, f"{ref} の <f><v> セルが見つからない"
+        # ★ lxml 有無で openpyxl の直列化が変わる（<v></v> 枠の有無・2026-08-21 CI 実測）。
+        #   test_golden_postcondition.py の注入ヘルパと同じ両形対応（無ければ挿す）。
+        pattern = re.compile(rf'(<c r="{ref}"[^>]*><f>[^<]*</f>)(<v/>|<v>[^<]*</v>)?')
+        m = pattern.search(xml)
+        assert m, f"{ref} の <f> セルが見つからない"
+        xml = xml[:m.start()] + m.group(1) + f"<v>{val}</v>" + xml[m.end():]
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for n, data in others.items():
             z.writestr(n, data)
