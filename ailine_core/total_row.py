@@ -89,9 +89,12 @@ def split_total_rows(rows) -> TotalRowVerdict:
       b. ラベルが空（None/空文字/空白のみ）かつ数値がある行
       c. 直上の行が空行（ラベルも値も無い）かつ数値がある行
 
-    算術恒等は閉じる検査専用: 各除外行について、除外行の値 == その行より上の
-    採用行の値の和（許容誤差 TOLERANCE）。不一致は mismatches に両側の数字つきで積む
-    （除外自体は維持する ── 除外の正しさを疑うための検査であって、除外を取り消す検査ではない）。
+    算術恒等は閉じる検査専用: 各除外行について、除外行の値が「先頭からの累積和」
+    または「直前の除外行より後ろの区間和」のどちらかと一致すれば閉じる（許容誤差
+    TOLERANCE）。★ jisaku-review#2: 小計を複数持つ表では総計は累積で・各小計は
+    区間で閉じるので、この OR が必要（片方だけだと2個目以降の小計に偽 ⚠ が出る・実測）。
+    両方外れた時だけ本当の不一致 ── mismatches に両側の数字つきで積む（除外自体は
+    維持する ── 除外の正しさを疑うための検査であって、除外を取り消す検査ではない）。
     """
     excluded_raw = []          # (row, label, value, reason)
     adopted_rows = []
@@ -120,13 +123,25 @@ def split_total_rows(rows) -> TotalRowVerdict:
 
         prev_row_is_blank = label_blank and value_blank
 
+    # ★ jisaku-review#2 major の直し: 複数の小計グループを持つ表では、除外行ごとに
+    # 「先頭からの累積和」だけで閉じるかを見ると、2個目以降の小計に偽 ⚠ が出る
+    # （実測: 部署A小計→部署B小計→総計 の表で、部署B小計に部署A分まで足した累積が
+    # 比較されて不一致になった）。閉じ方は2通りあってよい ── 小計は「直前の除外行より
+    # 後ろの区間和」で閉じ、総計は「先頭からの累積和」で閉じる。どちらか一方が合えば
+    # 閉じている（両方外れた時だけ本当の不一致）。
     mismatches = []
     excluded = []
+    prev_excluded_row = None
     for row_num, label, value, reason in excluded_raw:
-        above_sum = sum(v for r, v in adopted_numeric if r < row_num)
+        cumulative_sum = sum(v for r, v in adopted_numeric if r < row_num)
+        lower_bound = prev_excluded_row if prev_excluded_row is not None else -1
+        segment_sum = sum(v for r, v in adopted_numeric if lower_bound < r < row_num)
         excluded_value = float(value)
-        if abs(excluded_value - above_sum) > TOLERANCE:
-            mismatches.append(Mismatch(row=row_num, excluded_value=excluded_value, adopted_sum=above_sum))
+        closes_cumulative = abs(excluded_value - cumulative_sum) <= TOLERANCE
+        closes_segment = abs(excluded_value - segment_sum) <= TOLERANCE
+        if not (closes_cumulative or closes_segment):
+            mismatches.append(Mismatch(row=row_num, excluded_value=excluded_value, adopted_sum=cumulative_sum))
         excluded.append(ExcludedRow(row=row_num, label=label, value=value, reason=reason))
+        prev_excluded_row = row_num
 
     return TotalRowVerdict(excluded=excluded, adopted_rows=adopted_rows, mismatches=mismatches)

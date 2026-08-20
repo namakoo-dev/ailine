@@ -6530,10 +6530,16 @@ def _peek_headers(path: Path) -> list | None:
 
 
 def _stack_json(result: dict) -> dict:
-    """--json 契約（検体で凍結済み）: denominator/stacked_files/rows_written/files/sums のみ。"""
+    """--json 契約（検体で凍結済み）: denominator/stacked_files/rows_written/files/sums/
+       mismatches。★ jisaku-review#4: mismatches はテキストの ⚠ と同じ情報を機械可読で
+       （ファイルごとの入れ子ではなく、[{file, row, excluded_value, adopted_sum}, ...] の
+       平らな形 ── 自動化経路が総なめできるように）。"""
+    mismatches = [{"file": entry["name"], "row": m["row"],
+                   "excluded_value": m["excluded_value"], "adopted_sum": m["adopted_sum"]}
+                  for entry in result.get("mismatches", ()) for m in entry["rows"]]
     return {"denominator": result["denominator"], "stacked_files": result["stacked_files"],
             "rows_written": result["rows_written"], "files": result["files"],
-            "sums": result["sums"]}
+            "sums": result["sums"], "mismatches": mismatches}
 
 
 def _stack_postcondition_fail(label: str, expected, actual) -> int:
@@ -6559,7 +6565,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
     for p in candidates:
         if p.resolve() == out:
             headers = _peek_headers(p)
-            if headers is not None and multifile_stack.is_own_signature(headers):
+            if headers is not None and multifile_stack.is_own_output(p, headers):
                 self_excluded = p.name
                 continue
         filtered.append(p)
@@ -6588,12 +6594,14 @@ def cmd_stack(a: argparse.Namespace) -> int:
     header_row = row if confident else 1
     base_headers = multifile.read_row_headers(ws, header_row)
     value_col = multifile.numeric_value_column(ws, header_row, len(base_headers) or MAX_COLS)
-    value_col_name = base_headers[value_col - 1] if value_col else None
+    value_col_name = base_headers[value_col - 1] if value_col else None   # 合計行検出の keyed 列（変えない）
+    # ★ jisaku-review#3/#6: Σ 照合・報告は全数値列に（value_col_name は合計行検出専用のまま）。
+    numeric_cols = multifile_stack.numeric_column_names(ws, header_row, base_headers)
     base_wb.close()
 
     skipped, files_json, excluded_detail, mismatches, col_a_warnings = [], [], [], [], []
     stacked_rows = []   # [(base 列順の値, 元ファイル名, 元行), ...]
-    sums_source = {value_col_name: 0.0} if value_col_name else {}
+    sums_source = {col: 0.0 for col in numeric_cols}
 
     for p in candidates:
         r = multifile_stack.evaluate_and_stack(p, base_headers, base_sheet, header_row, value_col_name)
@@ -6602,10 +6610,10 @@ def cmd_stack(a: argparse.Namespace) -> int:
             continue
         for values, src_row in r.rows:
             stacked_rows.append((values, r.name, src_row))
-            if value_col_name:
-                v = values[base_headers.index(value_col_name)]
+            for col in numeric_cols:
+                v = values[base_headers.index(col)]
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
-                    sums_source[value_col_name] += v
+                    sums_source[col] += v
         files_json.append({"name": r.name, "rows_stacked": len(r.rows),
                            "total_rows_excluded": len(r.excluded), "reordered": r.reordered})
         if r.excluded:
@@ -6630,6 +6638,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
     try:
         tmp_out = workdir / out.name
         wb_out = openpyxl.Workbook()
+        wb_out.properties.creator = multifile_stack.CREATOR_MARK   # ★ jisaku-review#1: 書き手の印
         ws_out = wb_out.active
         ws_out.title = base_sheet
         ws_out.append(out_headers)
@@ -6644,26 +6653,30 @@ def cmd_stack(a: argparse.Namespace) -> int:
         out_row_nums = xml_readback.data_row_numbers(readback, header_row=1)
         if len(out_row_nums) != len(stacked_rows):
             return _stack_postcondition_fail("採用行数", len(stacked_rows), len(out_row_nums))
+        # ★ jisaku-review#3/#6: 事後条件②も全数値列に（最初の不一致で止める）。
         sums_output = {}
-        if value_col_name:
-            idx = base_headers.index(value_col_name) + 1
+        for col in numeric_cols:
+            idx = base_headers.index(col) + 1
             total = 0.0
             for rr in out_row_nums:
                 v = readback["grid"].get((rr, idx))
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
                     total += v
-            sums_output[value_col_name] = total
-            if abs(total - sums_source.get(value_col_name, 0.0)) > 1e-6:
-                return _stack_postcondition_fail(f"Σ{value_col_name}",
-                                                 sums_source.get(value_col_name, 0.0), total)
+            sums_output[col] = total
+            if abs(total - sums_source.get(col, 0.0)) > 1e-6:
+                return _stack_postcondition_fail(f"Σ{col}", sums_source.get(col, 0.0), total)
 
         # ★ 関所（writes=new_book）: 移す直前に判定。
         rebuilt_own_output = False
         if out.exists():
             existing_headers = _peek_headers(out)
-            if existing_headers is not None and multifile_stack.is_own_signature(existing_headers):
+            if existing_headers is not None and multifile_stack.is_own_output(out, existing_headers):
                 rebuilt_own_output = True
             elif not getattr(a, "overwrite", False):
+                # ★ jisaku-review#5: 無言で閉まらない ── 何が邪魔か（名指し）+ 次の手を言う。
+                print(f"⚠ 出力先に人のファイルがあります: {out}")
+                print(f"（{out.name} は ailine stack の前回出力ではありません。"
+                     "承知の上で上書きするなら --overwrite を付けて実行してください）")
                 return 7
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(tmp_out, out)

@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import re
+import zipfile
 from dataclasses import dataclass, field
+from xml.etree import ElementTree as ET
 
 import openpyxl
 
@@ -22,6 +24,13 @@ PROVENANCE_HEADERS = ("元ファイル", "元行")
 #   「自分」と認める。素の名前そのもの、または末尾に _数字 が付いた形のどちらにも当たる。
 _PROVENANCE_SIGNATURE_RE = tuple(re.compile(rf"^{re.escape(name)}(_\d+)?$")
                                  for name in PROVENANCE_HEADERS)
+
+# ★ jisaku-review#1 critical の直し: 署名を「列名だけ」から「列名 AND 書き手の印」に。
+# stack が出力を書く時に docProps/core.xml の dc:creator へこの印を残す
+# （cmd_stack が wb.properties.creator = CREATOR_MARK を設定）。
+CREATOR_MARK = "ailine stack"
+_CORE_NS = {"cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
+           "dc": "http://purl.org/dc/elements/1.1/"}
 
 
 def _is_blank(v) -> bool:
@@ -51,13 +60,53 @@ def own_output_headers(headers: list) -> list:
 
 def is_own_signature(headers: list) -> bool:
     """headers の末尾2列が出所列の見出し（素の名前 または 衝突時のサフィックス形
-       元ファイル_N / 元行_N）と一致するか（＝『これは ailine stack が前回書いた出力』の
-       署名判定）。★ 赤2: サフィックス形も『自分』と認めないと、基準ファイルが既に
-       『元ファイル』列を持つ場合の前回出力（サフィックスつき）を人の出力と誤認して
-       関所が exit 7 で閉まる（自己参照除外 V6 も同じ判定関数を使うので同じ根で破れる）。"""
+       元ファイル_N / 元行_N）と一致するか。★ 列名だけの一致であり、これ単独では
+       『自分の出力』の証明にならない（jisaku-review#1 実測: たまたま同じ列名の
+       人のファイルを誤認する）── 呼び出し側は `is_own_output` を使うこと。"""
     if len(headers) < 2:
         return False
     return all(pat.match(str(h)) for pat, h in zip(_PROVENANCE_SIGNATURE_RE, headers[-2:]))
+
+
+def _read_creator(path) -> str | None:
+    """docProps/core.xml の dc:creator を直読み（zip 直読み・軽い専用の読み）。
+       読めなければ None（壊れている/該当なし = 印なし = 他人のファイル扱い ── fail closed）。"""
+    try:
+        with zipfile.ZipFile(path) as z:
+            if "docProps/core.xml" not in z.namelist():
+                return None
+            root = ET.fromstring(z.read("docProps/core.xml"))
+    except Exception:
+        return None
+    el = root.find("dc:creator", _CORE_NS)
+    return el.text if el is not None else None
+
+
+def is_own_output(path, headers: list) -> bool:
+    """署名 = 列名の一致 **AND** 書き手の印（docProps/core.xml の creator）。
+       ★★ jisaku-review#1 critical の直し（実機再現済み）: `is_own_signature`（列名だけ）は
+       末尾2列がたまたま『元ファイル』『元行』という名前の人のファイルを前回出力と誤認し、
+       --overwrite 無しで無警告上書きしてデータを消した。名前が合っていても印が無ければ
+       他人のファイル ── fail closed（自己参照除外 V6・書き込み関所のどちらもこの関数を使う）。"""
+    if not is_own_signature(headers):
+        return False
+    return _read_creator(path) == CREATOR_MARK
+
+
+def numeric_column_names(ws, header_row: int, headers: list) -> list:
+    """headers（基準ファイルの列名）のうち、データ行のどこかで数値を持つ列名の一覧。
+       ★ jisaku-review#3/#6 の直し: Σ 照合・報告を『最初の数値列』1本だけでなく
+       全数値列に広げるための土台（合計行検出の keyed 列＝ multifile.numeric_value_column
+       の1本はここでは変えない・呼び出し側で従来どおり別に決める）。"""
+    max_row = ws.max_row or header_row
+    out = []
+    for i, name in enumerate(headers, start=1):
+        for row in range(header_row + 1, max_row + 1):
+            v = ws.cell(row=row, column=i).value
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out.append(name)
+                break
+    return out
 
 
 @dataclass(frozen=True)

@@ -223,3 +223,85 @@ def test_suffixed_provenance_output_is_still_recognized_as_own(tmp_path):
     p2 = _stack(folder, out)   # 2 周目: 自分のサフィックスつき出力の上に
     assert p2.returncode == 0, f"自分の出力を他人と誤認して閉まった (exit={p2.returncode})"
     assert "前回" in p2.stdout or "作り直" in p2.stdout
+
+
+# ---- jisaku-review 確定 6 件の凍結（2026-08-21 06:4x・81b9aa9..bdfc4a8 への盲検レビュー）----
+
+
+def test_foreign_file_with_coincident_provenance_names_is_still_gated(tmp_path):
+    """★ review#1 critical: 末尾 2 列がたまたま『元ファイル』『元行』という名前の
+       人のファイルを、名前だけの署名で自分の前回出力と誤認して無警告上書きした。
+       署名は名前の一致だけで成立してはならない ── 人のデータは exit 7 で守る。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100)])
+    out = tmp_path / "mine.xlsx"
+    _book(out, HDRS + ["元ファイル", "元行"],
+          [("X-1", "人の大事なデータ", 999, "note", "n/a")])
+    sha = hashlib.sha256(out.read_bytes()).hexdigest()
+    p = _stack(folder, out)
+    assert p.returncode == 7, f"人のファイルを署名誤認で通した (exit={p.returncode})\n{p.stdout}"
+    assert hashlib.sha256(out.read_bytes()).hexdigest() == sha, "人のデータが消えた"
+
+
+def test_gate_refusal_discloses_reason_and_next_step(tmp_path):
+    """★ review#5: exit 7 の関所が無言で閉まっていた（報告が成果物、の自己矛盾）。
+       止まる時こそ 理由 + 次の手（--overwrite）を言う。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100)])
+    out = tmp_path / "mine.xlsx"
+    _book(out, ["大事な列"], [("消えては困る",)])
+    p = _stack(folder, out)
+    assert p.returncode == 7
+    combined = p.stdout + p.stderr
+    assert "--overwrite" in combined, f"次の手の開示が無い:\n{combined}"
+    assert "mine.xlsx" in combined, "何が邪魔なのかの名指しが無い"
+
+
+def test_multiple_subtotal_groups_do_not_false_alarm(tmp_path):
+    """★ review#2 major: 閉じる検査が先頭からの累積和としか比べず、2 個目の小計で
+       正しい表に偽 ⚠ を出した。区間和（直前の除外行から）か累積和のどちらかが
+       合えば閉じる、が正しい形（総計は累積で・各小計は区間で閉じる）。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS,
+          [("部署A-1", "x", 100), ("部署A-2", "x", 200), ("小計", None, 300),
+           ("部署B-1", "y", 50), ("部署B-2", "y", 150), ("小計", None, 200),
+           ("総計", None, 500)])
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0
+    assert "≠" not in p.stdout, f"正しい表に偽の不一致 ⚠:\n{p.stdout}"
+    assert p.stdout.count("500") >= 2, "Σ の両側（500）が無い"
+    ws = openpyxl.load_workbook(out).active
+    assert ws.max_row - 1 == 4, "積む行数が違う（明細 4 行のはず）"
+
+
+def test_all_numeric_columns_are_reconciled_not_just_the_first(tmp_path):
+    """★ review#3/#6 major: stack の Σ 照合・報告が最初の数値列 1 本だけだった。
+       契約（このファイル冒頭）は『数値列ごとの Σ 両側表示』── 数量と金額の両方が出ること。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", ["注文ID", "数量", "金額"],
+          [("J-1", 2, 100), ("J-2", 3, 200)])
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out, "--json")
+    assert p.returncode == 0, p.stderr[-500:]
+    data = json.loads(p.stdout)
+    assert "数量" in data["sums"] and "金額" in data["sums"], f"数値列ごとの Σ が無い: {list(data['sums'])}"
+    assert data["sums"]["数量"] == {"source": 5, "output": 5}
+    assert data["sums"]["金額"] == {"source": 300, "output": 300}
+    p2 = _stack(folder, tmp_path / "out2.xlsx")
+    assert "数量" in p2.stdout and "金額" in p2.stdout, "人間向けにも両列の Σ が要る"
+
+
+def test_json_carries_closure_mismatches_for_automation(tmp_path):
+    """★ review#4 major (conv=3): --json に閉じる検査の不一致が載らず、自動化経路だけ
+       データ不整合が見えなかった。テキストの ⚠ と同じ情報を機械可読でも出す。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS,
+          [("J-1", "甲", 600), ("J-2", "乙", 400), ("合計", None, 1200)])
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out, "--json")
+    assert p.returncode == 0, p.stderr[-500:]
+    data = json.loads(p.stdout)
+    mm = data.get("mismatches")
+    assert mm, f"mismatches が JSON に無い: {list(data)}"
+    assert any(m.get("excluded_value") == 1200 and m.get("adopted_sum") == 1000 for m in mm), mm
