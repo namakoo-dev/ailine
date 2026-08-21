@@ -465,3 +465,62 @@ def test_date_column_width_is_not_inflated_by_time_tail(tmp_path):
     ws2 = openpyxl.load_workbook(out).active
     width = ws2.column_dimensions["B"].width
     assert width is not None and 8 <= width <= 14, f"日付列の幅が過大/未設定: {width!r}"
+
+
+# ---- P: 署名の kind 別テーブル（M3 先行・architect 致命2 の凍結）----
+
+_MATCH_HEADERS = ["キー", "A側 件数", "A側 合計", "B側 件数", "B側 合計", "差額", "状態"]
+
+
+def _fake_match_output(path):
+    """M3（照合）出力の形: 1 枚目が『照合』シート・固定見出し・creator 印 ailine match。
+       ★ この見出し集合が match kind の列署名（契約）。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "照合"
+    ws.append(_MATCH_HEADERS)
+    ws.append(["甲社", 1, 220000, 1, 220000, 0, "差額 0"])
+    wb.properties.creator = "ailine match"
+    wb.save(path)
+
+
+def test_match_kind_output_in_folder_is_excluded_not_misread(tmp_path):
+    """★ 致命2: 照合出力は末尾 2 列の出所署名を構造的に持てない。kind 別の列署名
+       （照合シートの固定見出し + 印）で ailine 産と認識し、入力列挙から除外 + 開示。
+       今は『取れなかった（見出し不一致）』の雑音として数えられてしまう。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100)])
+    _fake_match_output(folder / "照合結果.xlsx")
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0, p.stdout
+    assert "1 ファイル中 1 積んだ" in p.stdout, f"照合出力が分母に混ざった:\n{p.stdout}"
+    assert "除外" in p.stdout and "照合結果.xlsx" in p.stdout, "ailine 産としての除外開示が無い"
+    assert "取れなかった" not in p.stdout, "ailine 産を『取れなかった』の雑音にした"
+
+
+def test_match_kind_output_at_gate_is_named_as_ailine_kind(tmp_path):
+    """★ 致命2 の関所側: 出力先が照合出力なら『ailine の別のコマンドの出力（作成: ailine match）』
+       と名指し（人のファイル、の誤認をしない）。exit 7・無傷は従来どおり。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100)])
+    out = tmp_path / "照合結果.xlsx"
+    _fake_match_output(out)
+    sha = hashlib.sha256(out.read_bytes()).hexdigest()
+    p = _stack(folder, out)
+    assert p.returncode == 7
+    assert hashlib.sha256(out.read_bytes()).hexdigest() == sha
+    assert "ailine match" in p.stdout or "別のコマンド" in p.stdout, \
+        f"照合出力を人のファイルと誤認した文言:\n{p.stdout}"
+
+
+def test_creator_mark_sets_and_signature_table_are_in_sync():
+    """★ 番人（片配線の名所の常設監視・2026-08-21）: 印の集合は stack.py と verify.py で
+       意図的に二重管理されている。片方だけに kind を足すと『在っても繋がらない』が再演する
+       ── 両集合の一致と、署名テーブルのキー一致を機械で見張る。"""
+    from ailine_core import stack as st
+    from ailine_core import verify as vf
+    assert set(st.CREATOR_MARKS) == set(vf._CREATOR_MARKS), \
+        f"印の集合が二重管理でずれた: stack={st.CREATOR_MARKS} verify={vf._CREATOR_MARKS}"
+    assert set(st.KIND_SIGNATURES.keys()) == set(st.CREATOR_MARKS), \
+        f"署名テーブルに無い印がある（署名なしの印は fail closed を破る）: {st.KIND_SIGNATURES.keys()}"

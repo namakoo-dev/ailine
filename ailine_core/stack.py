@@ -31,8 +31,12 @@ _PROVENANCE_SIGNATURE_RE = tuple(re.compile(rf"^{re.escape(name)}(_\d+)?$")
 CREATOR_MARK = "ailine stack"
 # ★ architect 致命2 の直し（M2 前置き・2026-08-21）: 「ailine の出力か」は stack 1本だけでなく
 # ailine の複数コマンドに広がる。書く側の定数（CREATOR_MARK）は互換のためそのまま残し、
-# 読む側の判定はこの集合で行う（当面 stack と、将来の extract を先取りして凍結）。
-CREATOR_MARKS = {"ailine stack", "ailine extract"}
+# 読む側の判定はこの集合で行う（stack・extract・そして P 先行 commit で match を追加）。
+CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match"}
+# ★ M3 P 先行 commit（DESIGN-20260821-multifile.md M3 設計 v2）: match の集約出力
+# （1行=1キー）は末尾2列の出所列署名を構造的に持てない。1枚目シート名+固定見出しで判定する。
+MATCH_SHEET_NAME = "照合"
+MATCH_HEADERS = ("キー", "A側 件数", "A側 合計", "B側 件数", "B側 合計", "差額", "状態")
 _CORE_NS = {"cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
            "dc": "http://purl.org/dc/elements/1.1/"}
 
@@ -86,10 +90,67 @@ def _read_creator(path) -> str | None:
     return el.text if el is not None else None
 
 
-def own_output_mark(path, headers: list) -> str | None:
-    """署名 = 列名の一致 **AND** 書き手の印（docProps/core.xml の creator）。
-       一致すれば実際の印（例 "ailine stack" / "ailine extract"）を返す。どちらか片方でも
-       欠ければ None（他人のファイル扱い ── fail closed）。
+def _peek_first_sheet_headers(path) -> list | None:
+    """1枚目シートの1行目をヘッダーとして覗き見る（読めなければ None）。
+       stack/extract kind の列署名判定専用の軽い読み（旧 ailine.py 側 `_peek_headers` を
+       この module へ移した ── own_output_mark が path から自分で読む形になったため）。"""
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return None
+    try:
+        return multifile.read_row_headers(wb.worksheets[0], 1)
+    except Exception:
+        return None
+    finally:
+        wb.close()
+
+
+def _stack_extract_signature(path) -> bool:
+    """stack/extract kind の列署名判定: 末尾2列が出所列見出し（サフィックス形含む）と一致するか。
+       ★ 既存ロジックの流用（is_own_signature）── 変更なし。"""
+    headers = _peek_first_sheet_headers(path)
+    return headers is not None and is_own_signature(headers)
+
+
+def _match_signature(path) -> bool:
+    """match kind の列署名判定: 1枚目シート名が MATCH_SHEET_NAME（『照合』）かつ
+       見出しが MATCH_HEADERS と一致するか。★ M3 P 先行 commit（M3 設計 v2）: 照合は
+       1行=1キーの集約のため、stack/extract のような末尾2列の出所列署名を構造的に
+       持てない ── kind ごとに違う判定を KIND_SIGNATURES テーブルへ分ける理由そのもの。"""
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return False
+    try:
+        ws = wb.worksheets[0]
+        if ws.title != MATCH_SHEET_NAME:
+            return False
+        headers = multifile.read_row_headers(ws, 1)
+        return tuple(headers) == MATCH_HEADERS
+    except Exception:
+        return False
+    finally:
+        wb.close()
+
+
+# ★ P 先行 commit（M3 設計 v2）: 署名を「末尾2列」1本槍から kind 別テーブルへ拡張。
+# 印（creator）ごとに列署名の判定関数を引く ── 未知の印は握っていない = 他人扱い（fail closed）。
+KIND_SIGNATURES = {
+    "ailine stack": _stack_extract_signature,
+    "ailine extract": _stack_extract_signature,
+    "ailine match": _match_signature,
+}
+
+
+def own_output_mark(path) -> str | None:
+    """署名 = kind 別の列署名 **AND** 書き手の印（docProps/core.xml の creator）。
+       一致すれば実際の印（例 "ailine stack" / "ailine extract" / "ailine match"）を返す。
+       どちらか片方でも欠ければ None（他人のファイル扱い ── fail closed）。
+       ★ P 先行 commit（M3 設計 v2）: headers 引数を廃止し path から自分で読む形へ変更 ──
+       match の列署名（1枚目シート名+見出し）は headers（列名リストだけ）では判定できない
+       （シート名の情報が headers に無い）。呼び出し側は事前に headers を覗いてから渡すのでなく
+       この関数へ path だけを渡すこと。
        ★★ jisaku-review#1 critical の直し（実機再現済み）: `is_own_signature`（列名だけ）は
        末尾2列がたまたま『元ファイル』『元行』という名前の人のファイルを前回出力と誤認し、
        --overwrite 無しで無警告上書きしてデータを消した。名前が合っていても印が無ければ
@@ -97,18 +158,19 @@ def own_output_mark(path, headers: list) -> str | None:
        ★ architect 致命2 の直し: 「自分（ailine の何か）の出力か」（V6 の入力自己参照除外）と
        「作り直してよい前回出力か」（書き込み関所）は問いが違う ── 前者はこの関数の戻り値が
        None でないか、後者は戻り値が CREATOR_MARK と完全一致するか、で呼び出し側が分ける。"""
-    if not is_own_signature(headers):
-        return None
     creator = _read_creator(path)
-    return creator if creator in CREATOR_MARKS else None
+    checker = KIND_SIGNATURES.get(creator)
+    if checker is None:
+        return None
+    return creator if checker(path) else None
 
 
-def is_own_output(path, headers: list) -> bool:
+def is_own_output(path) -> bool:
     """『ailine の何らかのコマンドの出力』か（印は問わない・集合のどれかに当たれば真）。
        ★ V6（入力からの自己参照除外）が使う判定はこれ ── ailine 産は種類を問わず除外する。
        『作り直してよい』（書き込み関所）は別問い ── `own_output_mark` の戻り値を
        CREATOR_MARK と完全一致で見る（呼び出し側 = ailine.py cmd_stack）。"""
-    return own_output_mark(path, headers) is not None
+    return own_output_mark(path) is not None
 
 
 def numeric_column_names(ws, header_row: int, headers: list) -> list:

@@ -25,7 +25,11 @@ TOLERANCE = total_row.TOLERANCE
 # ★ M2（architect 致命3）: 検算できる印の集合。ailine_core/stack.py にも同じ集合があるが、
 #   書き側（stack.py）と読み側（この module）は「別の口」で在ることが設計意図なので
 #   import で結ばず、小さな集合リテラルの重複を選ぶ（module の独立性の宣言どおり）。
-_CREATOR_MARKS = {"ailine stack", "ailine extract"}
+#   ★ M3 P 先行 commit: stack.CREATOR_MARKS に "ailine match" を足したのに合わせてここも
+#   足す（片配線を作らない）。match 用の検算（_verify_match）はまだ無く、この集合に
+#   入れても description ガード（下の verify_output）が無ければ {"unmarked": True} のまま
+#   ── 配線は次波（M3 本体）。
+_CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match"}
 
 
 def fmt_num(v) -> str:

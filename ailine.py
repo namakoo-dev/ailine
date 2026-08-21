@@ -6535,21 +6535,6 @@ def cmd_scan(a: argparse.Namespace) -> int:
     return 0
 
 
-def _peek_headers(path: Path) -> list | None:
-    """先頭シートの1行目をヘッダーとして覗き見る（読めなければ None）。
-       stack の自己参照除外・関所（署名判定）専用の軽い読み。"""
-    try:
-        wb = openpyxl.load_workbook(path, data_only=True)
-    except Exception:
-        return None
-    try:
-        return multifile.read_row_headers(wb[wb.sheetnames[0]], 1)
-    except Exception:
-        return None
-    finally:
-        wb.close()
-
-
 def _stack_json(result: dict) -> dict:
     """--json 契約（検体で凍結済み）: denominator/stacked_files/rows_written/files/sums/
        mismatches。★ jisaku-review#4: mismatches はテキストの ⚠ と同じ情報を機械可読で
@@ -6608,8 +6593,7 @@ def _own_extract_output_status(path: Path, col: str, cmp: str, value) -> tuple:
        印は同じでも条件（列/比較/値）が違う前回出力を、条件を見ずに上書きして消していた
        （実機再現: 長いフォルダ名で切り詰めが起きると別条件が同名に潰れる）。
        同じ判定をここ1箇所に集約し、preflight（40冊読む前）と移す直前の再判定の両方が使う。"""
-    headers = _peek_headers(path)
-    mark = (multifile_stack.own_output_mark(path, headers) if headers is not None else None)
+    mark = multifile_stack.own_output_mark(path)
     if mark != extract_multi.CREATOR_MARK:
         return mark, False
     _creator, description = xml_readback.read_core_properties(path)
@@ -6654,8 +6638,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     candidates, _folder_excluded = multifile.classify_folder_contents(folder)
     self_excluded, filtered = [], []
     for p in candidates:
-        headers = _peek_headers(p)
-        if headers is not None and multifile_stack.is_own_output(p, headers):
+        if multifile_stack.is_own_output(p):
             self_excluded.append(p.name)
             continue
         filtered.append(p)
@@ -6943,8 +6926,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
     self_excluded = []
     filtered = []
     for p in candidates:
-        headers = _peek_headers(p)
-        if headers is not None and multifile_stack.is_own_output(p, headers):
+        if multifile_stack.is_own_output(p):
             self_excluded.append(p.name)
             continue
         filtered.append(p)
@@ -7102,9 +7084,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
         #   名指しで止める（無警告の作り直しにしない）。
         rebuilt_own_output = False
         if out.exists():
-            existing_headers = _peek_headers(out)
-            mark = (multifile_stack.own_output_mark(out, existing_headers)
-                    if existing_headers is not None else None)
+            mark = multifile_stack.own_output_mark(out)
             if mark == multifile_stack.CREATOR_MARK:
                 rebuilt_own_output = True
             elif mark is not None:
