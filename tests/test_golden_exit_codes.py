@@ -87,14 +87,17 @@ def _fgate_ns(**overrides):
 
 
 def test_exit_0_success(tmp_path, monkeypatch):
+    # ★ freeform 最終決定でここを FREEFORM 固定にはできなくなった（単発の語彙外はもう
+    #   成功しない＝生成しない即断りに変わった）ので、DSL 語彙（SORT）に差し替える。
+    #   --dry なので basrun_apply は呼ばれない（DSL のプレビューはコード生成だけで
+    #   LibreOffice を要さない）。
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
-    book = _book(tmp_path, [["a", 1], ["b", 2]])
+    book = _book(tmp_path, [["商品", "金額"], ["a", 200], ["b", 100]])
     monkeypatch.setattr(ailine, "translate_task",
-                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                         lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+                         lambda model, task, book_meta, temperature=0.1:
+                         {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
     argv = run_argv(
-        book=str(book), task="何かして", model="qwen2.5-coder:7b",
+        book=str(book), task="金額で降順に並べ替えて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
     rc = ailine.main(argv)

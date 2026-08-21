@@ -202,68 +202,58 @@ def _t_plan_with_clarify(tmp_path, monkeypatch, capsys):
 
 
 # ===========================================================================
-# freeform: 関所y / 関所N / 非対話 / 総なめ検出
+# ★ freeform 最終決定（2026-08-21）: 単発の語彙外は生成に入らず即座に断る（cmd_refuse_
+#   vocab_miss）。旧タイトル「関所y / 関所N / 非対話 / 総なめ検出」は cmd_run_freeform の
+#   生成→適用ループを前提にしており、その前提ごと無くなった（y/N の分岐・sweep 検出は
+#   複合計画側 run_freeform_plan_step にだけ残る ── freeform_plan_step 系の golden は
+#   このブリーフの対象外・触っていない）。
+#   4本の名前はそのまま維持し、中身は「新契約でも同じ断りになる」ことを示す新しい顔に
+#   差し替えた（意図的な再生成 ── ブリーフが明示的に許可）。
 # ===========================================================================
 
-def _freeform_setup(monkeypatch, code="Sub Run(oDoc As Object)\nEnd Sub"):
-    monkeypatch.setattr(ailine, "translate_task",
-                         lambda model, task, book_meta, temperature=0.1:
-                         {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                         lambda model, msgs, temperature=0.2: code)
+def _freeform_setup(monkeypatch, op="FREEFORM", about=""):
+    """単発の語彙外を作るだけ。★ 生成は一切呼ばれない契約なので ollama_generate の
+       固定戻り値はもう要らない（呼んだら test_freeform_out_only.py 側の禁止アサーションが
+       落ちる ── ここでは単に mock しない = 呼ばれたら AttributeError で気づける）。"""
+    def _translate(model, task, book_meta, temperature=0.1):
+        return {"op": op, "about": about} if op == "OUT_OF_VOCAB" else {"op": op, "args": {}}
+    monkeypatch.setattr(ailine, "translate_task", _translate)
 
 
 def _t_freeform_gate_yes(tmp_path, monkeypatch, capsys):
+    """★ 旧「関所 y（承知して適用）」に一番近い操作は --allow-freeform（受理はするが
+       断りの中身は変えない・廃止告知が足される）。"""
     book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
     _freeform_setup(monkeypatch)
-
-    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
-        wb = openpyxl.load_workbook(out_book)
-        wb.active.cell(row=1, column=3, value="備考")
-        wb.save(out_book)
-        return True, None, "ok"
-    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-    return _run_main(["run", str(book), "何か列を足して", "--copy"], capsys)
+    return _run_main(["run", str(book), "何か列を足して", "--copy", "--allow-freeform"], capsys)
 
 
 def _t_freeform_gate_no(tmp_path, monkeypatch, capsys):
+    """素の断り（--allow-freeform 無し）。"""
     book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
     _freeform_setup(monkeypatch)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
     return _run_main(["run", str(book), "何か列を足して", "--copy"], capsys)
 
 
 def _t_freeform_noninteractive(tmp_path, monkeypatch, capsys):
+    """★ 生成/適用が無くなった以上「対話で y/N を聞く」余地自体が無いが、input() に
+       一切触れずに断ることを固定する（呼んだら例外で気づける形にする）。"""
     book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
     _freeform_setup(monkeypatch)
 
-    def _raise_eof(prompt=""):
-        raise EOFError()
-    monkeypatch.setattr("builtins.input", _raise_eof)
+    def _boom(prompt=""):
+        raise AssertionError("★ 廃止後は input() を呼んではいけない（確認そのものが無い）")
+    monkeypatch.setattr("builtins.input", _boom)
     return _run_main(["run", str(book), "何か列を足して", "--copy"], capsys)
 
 
 def _t_freeform_helper_sweep_detected(tmp_path, monkeypatch, capsys):
+    """★ ヘルパ総なめ検出は生成が起きて初めて意味を持つ器官なので、単発の語彙外経路には
+       もう乗らない（複合計画側にだけ残る）。名前は互換のため残し、中身は OUT_OF_VOCAB
+       （about 付き）でも同じ断りになることの固定に置き換える。"""
     book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
-    # ★ detect_helper_sweep の閾値(4種以上)を満たすよう、実在ヘルパ名を5つ Call する。
-    code = ("Sub Run(oDoc As Object)\n"
-            "    Call AutoFitColumns(oDoc)\n"
-            "    Call AlignCenter(oDoc, 0, 1)\n"
-            "    Call FormatThousands(oDoc, 0, 1)\n"
-            "    Call DrawTableBorders(oDoc)\n"
-            "    Call StyleBold(oDoc, 0, 0, 1, 0)\n"
-            "End Sub\n")
-    _freeform_setup(monkeypatch, code=code)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-
-    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
-        wb = openpyxl.load_workbook(out_book)
-        wb.active.cell(row=1, column=3, value="x")
-        wb.save(out_book)
-        return True, None, "ok"
-    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    return _run_main(["run", str(book), "備考の列を足して", "--copy"], capsys)
+    _freeform_setup(monkeypatch, op="OUT_OF_VOCAB", about="条件付き書式")
+    return _run_main(["run", str(book), "条件付き書式で色を付けて", "--copy"], capsys)
 
 
 # ===========================================================================
@@ -410,6 +400,8 @@ def _t_dry_plan(tmp_path, monkeypatch, capsys):
 
 
 def _t_dry_freeform(tmp_path, monkeypatch, capsys):
+    """★ freeform 最終決定: 断りにはレビューする生成物が無いので --dry に実質的な意味は
+       無いが、クラッシュせず同じ断りになることを固定する。"""
     book = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
     _freeform_setup(monkeypatch)
     return _run_main(["run", str(book), "何か列を足して", "--dry"], capsys)

@@ -38,10 +38,16 @@ from __future__ import annotations
 #   どちらも「同じ段種の *single* 版にはあるが *plan_step* 版に無い」形だったため、
 #   single/plan_step を別の段種として分けることが本命（3種に丸めると欠陥そのものが
 #   表から消える）。
+# ★★ freeform 最終決定（DESIGN-20260821-multifile.md・2026-08-21）で "freeform_single" は
+#   ここから削除した ── 単発の語彙外は ailine.py cmd_refuse_vocab_miss（生成に一切入らない
+#   即時の断り）に置き換わり、段種として実行される経路そのものが無くなったため（器官の
+#   True/None を宣言する意味自体が消えた）。この表は現実を写す（モジュール先頭の注記）：
+#   実在しない段を None で埋めて残すのではなく、行ごと削るのが正しい。旧宣言は
+#   git 履歴（このコミットの直前）に残る。"freeform_plan_step" は変えていない（複合計画の
+#   語彙外段は run_freeform_plan_step のまま・生成が残る唯一の経路）。
 STAGES = (
     "dsl_single",          # 単発 DSL 経路（ailine.py cmd_run_dsl）
     "dsl_plan_step",        # 複合計画(cmd_run_plan)の DSL 語彙段
-    "freeform_single",      # 単発自由生成（ailine.py cmd_run_freeform）
     "freeform_plan_step",   # 複合計画(cmd_run_plan)の語彙外(FREEFORM/OUT_OF_VOCAB)段
                              # （ailine.py run_freeform_plan_step。cmd_run_plan は両方を同じ経路で扱う）
     "clarify_single",       # 単発の計画が CLARIFY 1段だけになった場合（_cmd_run_dispatch）
@@ -98,22 +104,6 @@ STAGE_ORGANS = {
         #   「表示は先頭 MAX_ROWS 行しか見ていない」は ✓ の主張範囲に直接効くため。
         "truncation_notice": True,     # ailine.py _run_dsl_plan_step: _truncation_notice 呼び出し（C9 で追加）
         "subject_match": True,         # ★ 単位E: dsl_single と同じ共有エンジンを通る（同じ器官が両段種へ自動で伝播する形）
-    },
-    "freeform_single": {
-        # 自由生成は DSL args という構造化された概念を持たない（verify_dsl_args を呼ぶ
-        # 対象が無い）。
-        "grounding": None,
-        # OP_WRITE_TARGET が守る「書き込み先列」という構造化された対象が無い。代わりに
-        # 別の関所（_confirm_freeform_apply＝「機械検証できません。適用しますか？」）が
-        # あるが、これは helper_sweep_detect 器官の一部として扱う（下記）。
-        "destructive_gate": None,
-        "rate_scan": True,             # ailine.py cmd_run_freeform: scan_rate_literals 呼び出し
-        "helper_sweep_detect": True,   # ailine.py cmd_run_freeform: detect_helper_sweep + _confirm_freeform_apply
-        "advisories": True,            # ailine.py cmd_run_freeform: build_advisories 呼び出し
-        "truncation_notice": True,     # ailine.py cmd_run_freeform: _truncation_notice 呼び出し
-        # ★ 自由生成は DSL args（op と解決済みスロット）を持たない＝「対象スロット」という
-        #   構造化された対象そのものが無い（grounding が None なのと同じ理由）。
-        "subject_match": None,
     },
     "freeform_plan_step": {
         "grounding": None,             # freeform_single と同じ理由
@@ -185,10 +175,12 @@ STAGE_ORGANS = {
 STAGE_ENTRY_FUNCTIONS = {
     "dsl_single": ("cmd_run_dsl",),
     "dsl_plan_step": ("_run_dsl_plan_step",),
-    "freeform_single": ("cmd_run_freeform",),
+    # ★ freeform 最終決定（2026-08-21）で "freeform_single" 行ごと削除（上の STAGES 注記
+    #   参照）。cmd_refuse_vocab_miss は器官（grounding/rate_scan 等）を一切呼ばない
+    #   即時の断りなので、この表で追跡する意味のある「段」がそもそも無くなった。
     "freeform_plan_step": ("run_freeform_plan_step",),
     # ★ 単発の CLARIFY 分岐（plan が1段だけで CLARIFY の場合）は print+return の3行だけで、
-    #   器官の呼び出しは一切無い。かつ同じ関数内の他の分岐（cmd_run_dsl/cmd_run_freeform/
+    #   器官の呼び出しは一切無い。かつ同じ関数内の他の分岐（cmd_run_dsl/cmd_refuse_vocab_miss/
     #   cmd_run_plan の呼び出し）は別関数への委譲であって AST には inline されていないため、
     #   関数単位の走査でも分岐混線が起きない（clarify_plan_step と違い、安全に検証できる）。
     #   ★★ 挙動変更#3 で更新: この分岐は _cmd_run_dispatch から _translate_and_dispatch へ

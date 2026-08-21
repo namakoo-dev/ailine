@@ -100,7 +100,8 @@ def _fake_basrun_apply_touches_cell(out_book, code, workdir, helper_files=(), ti
 
 
 def _run_and_capture(tmp_path, monkeypatch, capsys, translate_result, dry, *,
-                      freeform=False, presorted_and_bold=False, plan=False):
+                      freeform=False, presorted_and_bold=False, plan=False,
+                      vocab_miss=False, allow_freeform=False):
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "translate_task",
@@ -116,15 +117,18 @@ def _run_and_capture(tmp_path, monkeypatch, capsys, translate_result, dry, *,
     else:
         book = _book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
 
-    if freeform:
+    # ★ freeform 最終決定（2026-08-21）: 単発の語彙外(FREEFORM/OUT_OF_VOCAB)はもう
+    #   生成/適用に入らない即断り（path="vocab_miss"）なので、生成/適用の mock は要らない
+    #   （呼ばれたら壊れる契約 ── vocab_miss=True の枝はどちらも設定しない）。
+    if freeform and not vocab_miss:
         monkeypatch.setattr(ailine, "ollama_generate",
                              lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    if not dry:
+    if not dry and not vocab_miss:
         monkeypatch.setattr(
             ailine, "basrun_apply",
             _fake_basrun_apply_touches_cell if freeform else _fake_basrun_apply_noop)
 
-    argv = _base_argv(book, dry, allow_freeform=(freeform and not dry))
+    argv = _base_argv(book, dry, allow_freeform=allow_freeform)
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     result = _extract_json_line(captured.out)
@@ -140,8 +144,14 @@ CASES = {
     "plan_dry": dict(translate_result={"plan": [_SORT_STEP, _BOLD_STEP]}, dry=True),
     "plan_full": dict(translate_result={"plan": [_SORT_STEP, _BOLD_STEP]}, dry=False,
                        presorted_and_bold=True, plan=True),
-    "freeform_dry": dict(translate_result={"op": "FREEFORM", "args": {}}, dry=True, freeform=True),
-    "freeform_full": dict(translate_result={"op": "FREEFORM", "args": {}}, dry=False, freeform=True),
+    # ★ freeform 最終決定（2026-08-21）: "freeform_*" は単発の生成→適用の JSON 形を
+    #   もう作れない（その経路自体が無い）ので、新契約の断り（path="vocab_miss"）の形に
+    #   差し替える。--dry の有無は断りの中身に影響しないので、代わりに --allow-freeform
+    #   の有無で2ケースを区別する（廃止告知の有無だけが違う・JSON キー形は同じはず）。
+    "freeform_dry": dict(translate_result={"op": "FREEFORM", "args": {}}, dry=True,
+                          vocab_miss=True),
+    "freeform_full": dict(translate_result={"op": "FREEFORM", "args": {}}, dry=False,
+                           vocab_miss=True, allow_freeform=True),
 }
 
 

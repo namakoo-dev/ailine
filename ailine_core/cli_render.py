@@ -83,16 +83,26 @@ def freeform_notice_reason(op: str, about: str = "") -> str:
     return "この依頼は、翻訳が頼める操作の形になりませんでした。"
 
 
-def render_freeform_notice(reason: str) -> list:
-    """単発 FREEFORM 経路（cmd_run_freeform）向け。生成が始まる前に、理由・費用・次の手を
-       1ブロックで言う（3要素は必須・文言はここ1箇所）。
-       ★ 「✓」の文字そのものは使わない ── この repo では ✓ を『機械検証済み』の唯一の
-       発生点(claim.py)に予約している（番人テストが出力全体を"✓" not in で見る）。"""
-    return [
-        reason,
-        "AI の直接生成を試します ── 時間がかかることがあり、機械保証はありません（適用の確認は出ません）。",
-        "次の手: `ailine ops` で頼める操作の一覧を見る / 依頼を言い換える",
-    ]
+# ★ freeform 最終決定（DESIGN-20260821-multifile.md「freeform 最終決定」節・
+#   Namakoo 2026-08-21 19:37「廃止しよう」で確定）: 単発の語彙外は生成に入らず即座に断る。
+#   旧 render_freeform_notice（K-1・生成へ進む前提の通知）はここで廃止 ── 使っていた
+#   cmd_run_freeform 自体が消えたため（git が墓場・復活条件は設計書に凍結）。
+#   複合計画側の render_freeform_notice_compact（下）は生成が残る経路なので変えない。
+
+def render_vocab_miss_refusal(about: str = "", sunset_notice: bool = False) -> list:
+    """単発の語彙外（FREEFORM/OUT_OF_VOCAB）の断り。既存の CLARIFY 系（`？` 接頭・
+       「（頼める操作の一覧: ailine ops）」の1文）に文体をそろえる。3要素は必須:
+       理由・vocab_miss を記録する開示・次の手（ops/言い換え/照合への導線）。
+       about があれば OUT_OF_VOCAB が名指しした対象を理由行に添える（FREEFORM は空）。
+       sunset_notice: --allow-freeform を受け取った場合だけ廃止告知を1行足す
+       （自由生成そのものは受理しない ── 断りの中身は変えない）。"""
+    suffix = f"（{about}）" if about else ""
+    lines = [f"？ この依頼{suffix}は、頼める操作の一覧に照合できませんでした。要望として記録します。"]
+    if sunset_notice:
+        lines.append("自由生成は廃止しました（理由: 機械検証できない操作は行わない方針）。")
+    lines.append("  （頼める操作の一覧: ailine ops）")
+    lines.append("  言い換えるか、2 冊の突き合わせなら: ailine run 入金.xlsx 請求.xlsx \"…\"")
+    return lines
 
 
 def render_freeform_notice_compact(reason: str, step_prefix: str = "") -> str:
@@ -170,9 +180,13 @@ def render_ops_table(op_meta: dict, op_schema: dict, confirm_fields: dict) -> li
             if need:
                 lines.append(f"      必要な情報: {need}")
         lines.append("")
-    # ★ K-1 (2026-08-20): 旧文「ここに無いことは今はできません」は実挙動（一覧外は AI の
-    #   直接生成に落ちる）と食い違っていた。約束は実装に合わせる（Namakoo 決定 2026-08-19）。
-    lines.append("※ ここに無い依頼は、AI の直接生成を試します（機械保証なし・実行時にその旨を表示します）。")
+    # ★ freeform 最終決定 (DESIGN-20260821-multifile.md・2026-08-21): K-1 の約束文
+    #   「AI の直接生成を試します」は単発経路ではもう嘘になった（生成せず断る）。
+    #   約束は実装に合わせる（同じ理由で K-1 が旧文を直したときと同じ原則）。
+    #   複合計画は語彙外の段だけ生成が残る（run_freeform_plan_step は今回変えていない）ので
+    #   その例外を1文添える。
+    lines.append("※ ここに無い依頼は、頼める操作の一覧に照合できないため生成せず断ります（要望として記録します）。")
+    lines.append("※ 複合的な依頼の一部だけが語彙外なら、その段だけ AI が直接生成することがあります（機械保証なし）。")
     lines.append("※ 一覧に無い依頼は聞き返します。言い換えても通らないときは未対応です。")
     return lines
 

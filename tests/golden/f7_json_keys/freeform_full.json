@@ -1,11 +1,10 @@
 {
-  "rc": 0,
-  "path": "freeform",
+  "rc": 3,
+  "path": "vocab_miss",
   "dry": false,
   "key_type_signature": {
-    "advisories": "list[str]",
     "attempts": "int",
-    "changes": "list[str]",
+    "changes": "list[]",
     "claims": "list[]",
     "command": "null",
     "fidelity": "null",

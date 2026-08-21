@@ -639,14 +639,13 @@ def test_cmd_run_dry_survives_history_write_failure(tmp_path, monkeypatch, capsy
     #   実ファイル汚染を避けるにはこちらを monkeypatch する。
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     # ★ 履歴の書き込み失敗で run 本体を落とさない（try で包み WARN のみ）ことを
-    #   --dry（ollama 生成だけで LibreOffice を要さない）経路で確認する。
-    book = _book(tmp_path, [["a", 1]])
-    # ★ M2b: run はまず translate_task を呼ぶ。ここは自由生成経路の回帰なので FREEFORM に固定する。
+    #   --dry（DSL のプレビューだけで LibreOffice を要さない）経路で確認する。
+    #   ★ freeform 最終決定でここを FREEFORM 固定にはできなくなった（単発の語彙外は
+    #   もう成功しない＝生成しない即断りに変わった）ので、DSL 語彙（SORT）に差し替える。
+    book = _book(tmp_path, [["商品", "金額"], ["a", 200], ["b", 100]])
     monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2:
-                        "Sub Run(oDoc As Object)\nEnd Sub")
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
     def boom(entry, path=None):
         raise OSError("書き込み失敗（テスト用）")
     monkeypatch.setattr(ailine, "append_history", boom)
@@ -1313,12 +1312,14 @@ def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, 
     # ★ M2a: 端末には最終行だけ、履歴 jsonl には全文（トレースバックをそのまま出さない）。
     # ★ W3: 見出し検出には「見出し行(複数の非空文字列)+データ行(型の混在)」が要るため、
     #   単一行 [["a", 1]] でなく見出し+データの2行にする（意図は runtime_error 経路の確認）。
+    # ★ freeform 最終決定でここを FREEFORM 固定にはできなくなった（単発の語彙外はもう
+    #   生成しない即断りに変わり、runtime_error に到達しない）ので、実行時エラーへ到達できる
+    #   DSL 語彙（SORT）に差し替える（cmd_run_dsl も同じ short_error_summary/last_error_full
+    #   の形を使うため、テストの意図＝runtime_error 経路の確認は保たれる）。
     book = _book(tmp_path, [["商品", "金額"], ["a", 1]])
     monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2:
-                        "Sub Run(oDoc As Object)\nEnd Sub")
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     traceback_text = ("Traceback (most recent call last):\n"
                        '  File "basrun.py", line 10, in <module>\n'
@@ -1345,118 +1346,22 @@ def test_cmd_run_shows_short_error_and_records_full_detail_in_history(tmp_path, 
     assert recorded["error_detail"] == traceback_text
 
 
-# --- ★ W8a 項目4/5: 単段 FREEFORM の正直な⚠枠・率スキャン・語彙翻訳 ----------------
-
-def test_cmd_run_freeform_success_shows_honest_warning_not_checkmark(tmp_path, monkeypatch, capsys):
-    # ★ W8a 項目4: 単段 FREEFORM/OUT_OF_VOCAB は成功しても『✓』でなく『⚠ AI が直接
-    #   作成した処理です（機械保証なし）』の正直な枠で表示する
-    #   （実測: 8%仮定やラベル貼りが「✓できました」で素通りしていた）。
-    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
-    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
-    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
-    monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
-
-    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
-        wb2 = openpyxl.load_workbook(out_book)
-        wb2.active.cell(row=1, column=3, value="税込合計")
-        wb2.save(out_book)
-        return True, None, "ok"
-    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-
-    argv = run_argv(
-        book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
-        refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=True, json=False, timeout=180.0, ask=False,
-        allow_freeform=True)   # ★ W10b: 関所は無関係（自由生成の成功表示を見るテスト）
-    rc = ailine.main(argv)
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert "⚠ AI が直接作成した処理です（機械保証なし）— 確認してください" in captured.out
-    assert "✓ 適用され" not in captured.out
-
-def test_cmd_run_freeform_banner_uses_ai_direct_wording_not_jargon(tmp_path, monkeypatch, capsys):
-    # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
-    #   実ファイル汚染を避けるにはこちらを monkeypatch する。
-    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
-    # ★ W8a 項目5: 「自由生成経路」→「AI が直接作成（機械保証なし）」（operator の語彙翻訳）。
-    book = _book(tmp_path, [["a", 1]])
-    monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    argv = run_argv(
-        book=str(book), task="何かして", model="qwen2.5-coder:7b",
-        refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=True, inplace=False, json=False, timeout=180.0, ask=False)
-    ailine.main(argv)
-    captured = capsys.readouterr()
-    assert "自由生成経路" not in captured.out
-    assert "AI が直接作成" in captured.out
-
-def test_cmd_run_freeform_rate_literal_scan_fires_when_task_silent_on_rate(tmp_path, monkeypatch, capsys):
-    # ★ W8a 項目4: 依頼文にも用語集にも率の出典が無いのに生成コードに率らしい数値が
-    #   あれば、検算を促す助言が変更点の後ろに出る。
-    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
-    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
-    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
-    monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    code = ("Sub Run(oDoc As Object)\n"
-            "  oDoc.Sheets.getByIndex(0).getCellByPosition(2, 0).setValue(100 * 1.08)\n"
-            "End Sub")
-    monkeypatch.setattr(ailine, "ollama_generate", lambda model, msgs, temperature=0.2: code)
-    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
-
-    def fake_apply(out_book, c, workdir, helper_files=(), timeout=None):
-        wb2 = openpyxl.load_workbook(out_book)
-        wb2.active.cell(row=1, column=3, value=108)
-        wb2.save(out_book)
-        return True, None, "ok"
-    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-
-    argv = run_argv(
-        book=str(book), task="税込み合計を出して", model="qwen2.5-coder:7b",
-        refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=True, json=False, timeout=180.0, ask=False,
-        allow_freeform=True)   # ★ W10b: 関所は無関係（率リテラル助言を見るテスト）
-    rc = ailine.main(argv)
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert "★ 率らしい数値 (1.08) が依頼に無いのに使われています — 検算してください" in captured.out
-
-def test_cmd_run_freeform_rate_literal_scan_silent_when_task_states_rate(tmp_path, monkeypatch, capsys):
-    # 対照: 依頼文に率(消費税8%)の出典があれば発火しない。
-    book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
-    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
-    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
-    monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    code = ("Sub Run(oDoc As Object)\n"
-            "  oDoc.Sheets.getByIndex(0).getCellByPosition(2, 0).setValue(100 * 1.08)\n"
-            "End Sub")
-    monkeypatch.setattr(ailine, "ollama_generate", lambda model, msgs, temperature=0.2: code)
-    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
-
-    def fake_apply(out_book, c, workdir, helper_files=(), timeout=None):
-        wb2 = openpyxl.load_workbook(out_book)
-        wb2.active.cell(row=1, column=3, value=108)
-        wb2.save(out_book)
-        return True, None, "ok"
-    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-
-    argv = run_argv(
-        book=str(book), task="消費税8%込みの合計を出して", model="qwen2.5-coder:7b",
-        refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=True, json=False, timeout=180.0, ask=False,
-        allow_freeform=True)   # ★ W10b: 関所は無関係（率リテラル助言の対照テスト）
-    rc = ailine.main(argv)
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert "率らしい数値" not in captured.out
+# --- ★ W8a 項目4/5 → freeform 最終決定で単発は廃止 -----------------------------
+#   ★ 2026-08-21: このブロックの4本（単段 FREEFORM の正直な⚠枠・banner 文言・率スキャン
+#   fires/silent）は cmd_run_freeform（生成→適用）が前提だった。その前提ごと無くなった
+#   ため削除した:
+#   - 「⚠ AI が直接作成した処理です」枠・「AI が直接作成」banner 文言は、単発経路が
+#     生成/適用そのものをしなくなったので、対応する画面が二度と出ない（コード自体も
+#     cmd_run_freeform と一緒に削除済み ── git 履歴に残る）。同じ「⚠ で正直に言う」
+#     性質は複合計画側で健在（このファイル内 "⚠ 語彙外のため AI が直接作成" のアサーション
+#     を持つテスト・複合計画の cmd_run_plan 統合セクション参照）。
+#   - 率スキャン fires（依頼文が率を語らないのに生成コードに率が紛れる）は
+#     test_cmd_run_plan_freeform_step_rate_literal_scan_fires（このファイル下方、
+#     cmd_run_plan 統合セクション）が複合計画版として既に持っている。
+#   - 率スキャン silent（依頼文が率を語っていれば発火しない）の対照は下の
+#     test_cmd_run_plan_freeform_step_rate_literal_scan_silent へ複合計画版として移植した
+#     （scan_rate_literals 自体の純関数レベルの契約は
+#     test_scan_rate_literals_silent_when_task_mentions_percentage が変わらず守る）。
 
 def test_cmd_run_dsl_dry_banner_says_rule_conversion_not_deterministic(tmp_path, monkeypatch, capsys):
     # ★ W8a 項目5: 「決定論」はユーザー向け文字列から排除（内部名・コメントは不変）。
@@ -2027,21 +1932,28 @@ def test_cmd_run_inplace_fidelity_gate_accept_loss_continues(tmp_path, monkeypat
     monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     _patch_lossy_normalize(monkeypatch)
+    # ★ freeform 最終決定でここを FREEFORM 固定にはできなくなった（単発の語彙外はもう
+    #   適用まで進まない即断りに変わった）ので、忠実度ゲートの先で実際に適用が起きる
+    #   DSL 語彙（SORT）に差し替える（このテストの主眼＝ゲート通過後に適用が続くことは
+    #   経路が変わっても同じ形で確認できる）。
     monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
     def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
         wb2 = openpyxl.load_workbook(out_book)
-        wb2.active.cell(row=1, column=2, value="changed")
+        ws2 = wb2.active
+        ws2.cell(row=2, column=1, value="バナナ")
+        ws2.cell(row=2, column=2, value=200)
+        ws2.cell(row=3, column=1, value="りんご")
+        ws2.cell(row=3, column=2, value=100)
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
     rc = ailine.main(_fidelity_gate_argv(book, accept_loss=True))
     captured = capsys.readouterr()
     assert "続行します" in captured.out
-    # ★ W8b-2/C9: 既定=原本直接適用の trailing（FREEFORM 経路なので ⚠ 側・読み戻し付き）。
-    assert "に適用しましたが、機械保証はありません（適用後に読み戻して確認: " in captured.out
+    # ★ W8b-2/C9: 既定=原本直接適用の trailing（DSL 経路なので ✓ 側・機械検証済み）。
+    assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
 
 def test_cmd_run_copy_flag_skips_fidelity_gate_entirely(tmp_path, monkeypatch, capsys):
     # ★ W8b-2 項目4: --copy 時は原本に一切触れないため、忠実度ゲート自体を走らせない
@@ -2052,13 +1964,18 @@ def test_cmd_run_copy_flag_skips_fidelity_gate_entirely(tmp_path, monkeypatch, c
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
     _patch_lossy_normalize(monkeypatch)
+    # ★ freeform 最終決定でここを FREEFORM 固定にはできなくなった（単発の語彙外はもう
+    #   適用まで進まない即断りに変わった）ので、DSL 語彙（SORT）に差し替える。
     monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
     def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
         wb2 = openpyxl.load_workbook(out_book)
-        wb2.active.cell(row=1, column=2, value="changed")
+        ws2 = wb2.active
+        ws2.cell(row=2, column=1, value="バナナ")
+        ws2.cell(row=2, column=2, value=200)
+        ws2.cell(row=3, column=1, value="りんご")
+        ws2.cell(row=3, column=2, value=100)
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
@@ -4318,6 +4235,43 @@ def test_cmd_run_plan_freeform_step_rate_literal_scan_fires(tmp_path, monkeypatc
     assert rc == 0
     assert "★ 率らしい数値 (1.08) が依頼に無いのに使われています — 検算してください" in captured.out
 
+def test_cmd_run_plan_freeform_step_rate_literal_scan_silent(tmp_path, monkeypatch, capsys):
+    """対照（上のテストの複合計画版）: 依頼文に率(消費税8%)の出典があれば発火しない。
+       ★ freeform 最終決定（2026-08-21）で単発版
+       （test_cmd_run_freeform_rate_literal_scan_silent_when_task_states_rate）は削除した
+       （単発の語彙外はもう生成しない）ので、この複合計画版が唯一の統合レベルの契約になる。"""
+    p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300], ["b", 200], ["c", 100]])
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "vocab.json")
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "金額", "order": "desc"}},
+                                  {"op": "OUT_OF_VOCAB", "about": "消費税8%込みの合計"}]})
+    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+    code = ("Sub Run(oDoc As Object)\n"
+            "  oDoc.Sheets.getByIndex(0).getCellByPosition(2, 0).setValue(100 * 1.08)\n"
+            "End Sub")
+    monkeypatch.setattr(ailine, "ollama_generate", lambda model, msgs, temperature=0.2: code)
+
+    def fake_apply(out_book, c, workdir, helper_files=(), timeout=None):
+        wb2 = openpyxl.load_workbook(out_book)
+        ws2 = wb2.active
+        cell = ws2.cell(row=1, column=10)   # postcondition が見ない列にダミーの変化を残す
+        cell.value = (cell.value or 0) + 1
+        wb2.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+
+    argv = run_argv(
+        book=str(p), task="金額で降順に並べ替えて消費税8%込みの合計も出して", model="qwen2.5-coder:7b",
+        refs=None, helpers=None, repair=0, temperature=0.2,
+        dry=False, copy=True, json=False, timeout=180.0, ask=False,
+        allow_freeform=True)
+    rc = ailine.main(argv)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "率らしい数値" not in captured.out
+
 def test_cmd_run_plan_all_steps_fail_grounding_gives_overall_failure(tmp_path, monkeypatch, capsys):
     p = _plan_book(tmp_path, [["商品", "金額"], ["a", 300]])
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
@@ -5905,20 +5859,28 @@ def test_b2_chain_three_runs_then_undo_three_times_matches_each_generation_sha1(
     # ★ B2① 連鎖3段→undo3段: run→run→run で原本が進化し（連続タスクの自然成立の核心）、
     #   undo を3回繰り返すと各世代の SHA1 に正確に1段ずつ戻ることを固定する。
     import hashlib
+    # ★ freeform 最終決定でここを FREEFORM 固定にはできなくなった（単発の語彙外はもう
+    #   適用まで進まない即断りに変わった）ので、DSL 語彙（SORT）に差し替える。fake_apply は
+    #   SORT の事後条件（金額列の降順）は毎回満たしつつ、事後条件の対象外の列（C列）に
+    #   世代マーカーを書いて元の意図（3世代とも中身が違う）を保つ。
     book = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(ailine, "normalize_book", lambda b, workdir, timeout=None: b)
     monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
 
     step = {"n": 0}
     def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
         step["n"] += 1
         wb2 = openpyxl.load_workbook(out_book)
-        wb2.active.cell(row=1, column=3, value=f"step{step['n']}")
+        ws2 = wb2.active
+        ws2.cell(row=2, column=1, value="b"); ws2.cell(row=2, column=2, value=200)
+        ws2.cell(row=3, column=1, value="a"); ws2.cell(row=3, column=2, value=100)
+        # ★ 世代マーカーは毎回「まだ空だった新しい列」に書く（同じ列を書き換えると
+        #   『行を動かすだけのはずが値が消えた』破壊の関所が誤発火する）。
+        ws2.cell(row=1, column=2 + step["n"], value=f"step{step['n']}")
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
@@ -5945,10 +5907,13 @@ def test_b2_replace_and_fallback_both_fail_leaves_book_untouched(tmp_path, monke
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(ailine, "normalize_book", lambda b, workdir, timeout=None: b)
+    # ★ freeform 最終決定でここを FREEFORM 固定にはできなくなった（単発の語彙外はもう
+    #   適用まで進まない即断りに変わった）ので、DSL 語彙（SORT）に差し替える。1行だけの
+    #   データは順序に意味が無い（WARN つきだが ok=True のまま・tests/golden/f9_transcripts/
+    #   dsl_warn.txt で確認済みの形）ので、そのまま流用できる。
     monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
 
     def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
         wb2 = openpyxl.load_workbook(out_book)
@@ -5980,10 +5945,11 @@ def test_b2_backup_failure_aborts_replacement_book_untouched(tmp_path, monkeypat
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(ailine, "normalize_book", lambda b, workdir, timeout=None: b)
+    # ★ freeform 最終決定でここを FREEFORM 固定にはできなくなった（単発の語彙外はもう
+    #   適用まで進まない即断りに変わった）ので、DSL 語彙（SORT）に差し替える。
     monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "SORT", "args": {"col": "金額", "order": "desc"}})
 
     def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
         wb2 = openpyxl.load_workbook(out_book)
@@ -7082,29 +7048,32 @@ def test_known_helper_names_reads_sub_declarations(tmp_path):
     assert names == {"Foo", "Bar"}
 
 
-# --- cmd_run_freeform 統合（関所） ------------------------------------------
+# --- cmd_refuse_vocab_miss 統合（★ freeform 最終決定・単発の語彙外は即座の断り） ------
+#   ★ 2026-08-21: 旧 6 本（cmd_run_freeform 統合・関所 y/N/非対話/総なめ検出）はここで
+#   書き換えた。旧検体が前提にしていた「生成→適用の関所」自体が単発経路から無くなった
+#   （y/N の分岐・sweep 検出・undo で戻すほどの適用、のどれも単発では二度と起きない ──
+#   それらは複合計画側 run_freeform_plan_step にだけ残る。下の
+#   test_cmd_run_plan_freeform_step_gate_* が複合計画側の回帰を引き続き見る）。
+#   詳しい契約検体は tests/test_freeform_out_only.py（凍結済みの3本）を参照。
 
 def _freeform_gate_scenario_book(tmp_path):
     return _book(tmp_path, [["部署", "氏名", "金額"], ["営業", "山田", 12000], ["経理", "佐藤", 9800]])
 
-def test_cmd_run_freeform_gate_blocks_noninteractive_exit8_book_untouched(tmp_path, monkeypatch, capsys):
+def test_cmd_refuse_vocab_miss_instantly_no_generate_no_apply_book_untouched(tmp_path, monkeypatch, capsys):
+    """★ 本命: 単発の語彙外は生成/適用ゼロで即座に断る（原本無傷・exit は CLARIFY 系の 3）。"""
     book = _freeform_gate_scenario_book(tmp_path)
     original_bytes = book.read_bytes()
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
-    # ★ basrun_apply を丸ごと差し替えるため、normalize_book 内部の構造読み取り呼び出しも
-    #   同じ fake に飛んでしまう。normalize_book 自体を恒等関数にして混線を避ける
-    #   （既存の忠実度ゲートテスト群と同じ作法）。
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    called = {"n": 0}
-    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
-        called["n"] += 1
-        return True, None, "ok"
-    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    def _must_not_generate(*a, **k):
+        raise AssertionError("★ 廃止後に生成が呼ばれた")
+    monkeypatch.setattr(ailine, "ollama_generate", _must_not_generate, raising=False)
+    def _must_not_apply(*a, **k):
+        raise AssertionError("★ 廃止後に適用が呼ばれた")
+    monkeypatch.setattr(ailine, "basrun_apply", _must_not_apply)
     def _raise_eof(prompt=""):
         raise EOFError()
     monkeypatch.setattr("builtins.input", _raise_eof)
@@ -7114,27 +7083,22 @@ def test_cmd_run_freeform_gate_blocks_noninteractive_exit8_book_untouched(tmp_pa
         dry=False, copy=False, json=False, timeout=180.0, ask=False)
     rc = ailine.main(argv)
     captured = capsys.readouterr()
-    assert rc == 8
-    assert "この処理を続けるには" in captured.out
-    assert "--allow-freeform" in captured.out
-    assert called["n"] == 0   # 適用そのものが一度も走っていない
+    assert rc == 3
+    assert "照合できませんでした" in captured.out
     assert book.read_bytes() == original_bytes   # 原本は無傷
 
-def test_cmd_run_freeform_gate_allow_freeform_flag_applies(tmp_path, monkeypatch, capsys):
+def test_cmd_refuse_vocab_miss_allow_freeform_flag_still_refuses_with_sunset_notice(tmp_path, monkeypatch, capsys):
+    """--allow-freeform は互換で受理するが、断りの中身は変わらない（廃止告知が足されるだけ）。"""
     book = _freeform_gate_scenario_book(tmp_path)
+    original_bytes = book.read_bytes()
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
-        wb2 = openpyxl.load_workbook(out_book)
-        wb2.active.cell(row=1, column=4, value="new")
-        wb2.save(out_book)
-        return True, None, "ok"
-    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    def _must_not_apply(*a, **k):
+        raise AssertionError("★ --allow-freeform でも適用してはいけない（自由生成そのものが廃止）")
+    monkeypatch.setattr(ailine, "basrun_apply", _must_not_apply)
     argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
@@ -7142,100 +7106,43 @@ def test_cmd_run_freeform_gate_allow_freeform_flag_applies(tmp_path, monkeypatch
         allow_freeform=True)
     rc = ailine.main(argv)
     captured = capsys.readouterr()
-    assert rc == 0
-    assert "機械検証できません" not in captured.out   # 関所自体をスキップ
-    assert "に適用しましたが、機械保証はありません（適用後に読み戻して確認: " in captured.out
+    assert rc == 3
+    assert "廃止しました" in captured.out
+    assert book.read_bytes() == original_bytes   # 原本は無傷（適用していない）
 
-def test_cmd_run_freeform_gate_interactive_yes_applies_then_undo_restores(tmp_path, monkeypatch, capsys):
-    book = _freeform_gate_scenario_book(tmp_path)
-    original_bytes = book.read_bytes()
-    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
-    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
-    monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
-    monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
-        wb2 = openpyxl.load_workbook(out_book)
-        wb2.active.cell(row=1, column=4, value="new")
-        wb2.save(out_book)
-        return True, None, "ok"
-    monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
-    argv = run_argv(
-        book=str(book), task="何かして", model="qwen2.5-coder:7b",
-        refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.main(argv)
-    assert rc == 0
-    assert book.read_bytes() != original_bytes   # 適用された
-
-    rc_undo = ailine.cmd_undo(argparse.Namespace(book=str(book), list=False))
-    assert rc_undo == 0
-    assert book.read_bytes() == original_bytes   # undo で原本に戻る
-
-def test_cmd_run_freeform_gate_interactive_no_aborts_book_untouched(tmp_path, monkeypatch, capsys):
-    book = _freeform_gate_scenario_book(tmp_path)
-    original_bytes = book.read_bytes()
-    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
-    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
-    monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
-    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
-    argv = run_argv(
-        book=str(book), task="何かして", model="qwen2.5-coder:7b",
-        refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=False, copy=False, json=False, timeout=180.0, ask=False)
-    rc = ailine.main(argv)
-    captured = capsys.readouterr()
-    assert rc == 1
-    assert "× 中止した" in captured.out
-    assert book.read_bytes() == original_bytes
-
-def test_cmd_run_freeform_gate_dry_run_never_asks(tmp_path, monkeypatch, capsys):
+def test_cmd_refuse_vocab_miss_dry_run_also_refuses_without_asking(tmp_path, monkeypatch, capsys):
+    """--dry でも同じ断り（レビューする生成物そのものが無いので --dry に意味は無いが、
+       クラッシュしたり input() を呼んだりしないことを固定する）。"""
     book = _freeform_gate_scenario_book(tmp_path)
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    monkeypatch.setattr(ailine, "ollama_generate",
-                        lambda model, msgs, temperature=0.2: "Sub Run(oDoc As Object)\nEnd Sub")
     def _boom(prompt=""):
-        raise AssertionError("dry では確認を聞いてはいけない")
+        raise AssertionError("--dry でも input() を呼んではいけない")
     monkeypatch.setattr("builtins.input", _boom)
     argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, copy=False, json=False, timeout=180.0, ask=False)
     rc = ailine.main(argv)
-    assert rc == 0
+    assert rc == 3
 
-def test_cmd_run_freeform_gate_sweep_warning_shown_in_output(tmp_path, monkeypatch, capsys):
+def test_cmd_refuse_vocab_miss_out_of_vocab_names_the_topic_in_the_reason(tmp_path, monkeypatch, capsys):
+    """OUT_OF_VOCAB（about 付き）でも同じ断りだが、理由行に対象を名指しする。"""
     book = _freeform_gate_scenario_book(tmp_path)
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "translate_task",
-                        lambda model, task, book_meta, temperature=0.1: {"op": "FREEFORM", "args": {}})
-    sweep_code = ("Sub Run(oDoc As Object)\n"
-                  "    Call AutoFitColumns(oDoc)\n"
-                  "    Call AlignCenter(oDoc, 0, 2)\n"
-                  "    Call StyleBold(oDoc, 0, 0, 2, 0)\n"
-                  "    Call DrawTableBorders(oDoc)\n"
-                  "End Sub")
-    monkeypatch.setattr(ailine, "ollama_generate", lambda model, msgs, temperature=0.2: sweep_code)
-    def _raise_eof(prompt=""):
-        raise EOFError()
-    monkeypatch.setattr("builtins.input", _raise_eof)
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"op": "OUT_OF_VOCAB", "about": "条件付き書式"})
     argv = run_argv(
-        book=str(book), task="氏名の列を書き換えて", model="qwen2.5-coder:7b",
+        book=str(book), task="条件付き書式で色を付けて", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False)
     rc = ailine.main(argv)
     captured = capsys.readouterr()
-    assert rc == 8
-    assert "疑わしい" in captured.out
-    assert "4 種類のヘルパ" in captured.out
+    assert rc == 3
+    assert "条件付き書式" in captured.out
+    assert "照合できませんでした" in captured.out
 
 
 # --- cmd_run_plan 統合（複合計画の段の自由生成の関所） -----------------------

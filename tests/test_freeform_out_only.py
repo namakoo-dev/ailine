@@ -13,9 +13,6 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 import ailine  # noqa: E402
 
-pytestmark = pytest.mark.xfail(strict=True, reason="freeform 廃止 実装前")
-
-
 def _book(tmp_path):
     p = tmp_path / "b.xlsx"
     wb = openpyxl.Workbook()
@@ -68,7 +65,10 @@ def test_allow_freeform_flag_gets_sunset_notice_not_generation(tmp_path, monkeyp
 def test_vocab_miss_is_recorded_and_listable(tmp_path, monkeypatch, capsys):
     """★ 需要センサ: vocab_miss が記録され、後から一覧できる（頻度×原始性の開発キューの土台）。"""
     _vocab_miss(monkeypatch)
-    monkeypatch.setenv("AILINE_HISTORY_DIR", str(tmp_path / "hist"))
+    # ★ 既存の history 機構は AILINE_HISTORY_DIR という環境変数を読まない（ailine.HISTORY_FILE
+    #   というモジュール定数を直接 monkeypatch する既存の作法 ── 大量の既存テストが使っている
+    #   形にそろえる。契約のアサーション行は変えていない）。
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "hist" / "history.jsonl")
     book = _book(tmp_path)
     ailine.main(["run", str(book), "取引先が同じ行を重複として削除して"])
     capsys.readouterr()

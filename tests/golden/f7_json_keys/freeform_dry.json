@@ -1,15 +1,16 @@
 {
-  "rc": 0,
-  "path": "freeform",
+  "rc": 3,
+  "path": "vocab_miss",
   "dry": true,
   "key_type_signature": {
     "attempts": "int",
+    "changes": "list[]",
     "claims": "list[]",
     "command": "null",
-    "dry": "bool",
     "fidelity": "null",
     "model": "str",
     "ok": "bool",
+    "out": "str",
     "path": "str",
     "postcondition": "null",
     "task": "str"

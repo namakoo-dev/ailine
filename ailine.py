@@ -81,7 +81,8 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_code_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
     render_ops_table,
-    freeform_notice_reason, render_freeform_notice, render_freeform_notice_compact,   # ★ K-1
+    freeform_notice_reason, render_freeform_notice_compact,   # ★ K-1（単発向けの旧 render_freeform_notice は廃止）
+    render_vocab_miss_refusal,   # ★ freeform 最終決定: 単発の語彙外の断り
     render_scan_report,   # ★ M1読み: `ailine scan`
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
@@ -5160,8 +5161,8 @@ def cmd_vocab(a: argparse.Namespace) -> int:
 
 def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: str,
                  error_detail: str | None = None) -> None:
-    """--json 出力・成功時の注意書き・履歴の記録。cmd_run_freeform / cmd_run_dsl / cmd_run_plan
-       の共通末尾。
+    """--json 出力・成功時の注意書き・履歴の記録。cmd_refuse_vocab_miss / cmd_run_dsl /
+       cmd_run_plan の共通末尾。
        ★ DSL 経路(path="dsl")・複合計画経路(path="plan")は達成/総合判定の行を既に自分で
        出しているので、success_message() の『正しいかは差分を見て判断』（自由生成向けの
        注意書き）はここでは出さない。"""
@@ -5300,7 +5301,8 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
        ② 翻訳（計画）→
        - 計画が空/1段で CLARIFY → 質問して exit 3
        - 計画が空/1段で DSL 語彙 → ③〜⑥の決定論パイプライン(cmd_run_dsl)
-       - 計画が空/1段でそれ以外(FREEFORM・翻訳失敗) → 現行の自由生成経路(cmd_run_freeform)
+       - 計画が空/1段でそれ以外(FREEFORM・翻訳失敗) → ★ freeform 最終決定: 即座の断り
+         （cmd_refuse_vocab_miss・生成には入らない）
        - 計画が2段以上(複合依頼) → 段ごとに honest な項目別実行(cmd_run_plan)（M2c）
        ★ 後方互換: translate_task が "plan" で包まない旧形式（bare {"op":...}）を返した場合
        （テストの monkeypatch を含む）も、その dict をそのまま単一段として扱う。"""
@@ -5470,7 +5472,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             return 3
         if op in OP_SCHEMA:
             return cmd_run_dsl(a, book, source_book, book_meta, op, step.get("args", {}))
-        return cmd_run_freeform(a, book, source_book, step)
+        return cmd_refuse_vocab_miss(a, book, step)
 
     return cmd_run_plan(a, book, source_book, book_meta, plan)
 
@@ -6049,150 +6051,35 @@ def detect_helper_sweep(code: str, helper_names: set) -> str | None:
             "— 依頼と無関係な操作が混じっていないか確認してください")
 
 
-def cmd_run_freeform(a: argparse.Namespace, book: Path, source_book: Path,
-                      step: dict | None = None) -> int:
-    """自由生成経路（従来の cmd_run 本体そのまま。M2a の助言つき）。
-       ① 翻訳が CLARIFY にも DSL 語彙にも決まらなかった（FREEFORM・翻訳失敗）ときに使う。
-       ★ W3: source_book は cmd_run が翻訳より前に正規化済み（--dry のときは book と同じ・
-       正規化していない）。ここでは正規化をやり直さない。
-       step は _translate_and_dispatch が振り分けに使った plan[0]（op="FREEFORM"/"OUT_OF_VOCAB"
-       と、OUT_OF_VOCAB なら about）。★ K-1: 生成に入る前の通知の理由1行目に使うだけ
-       （省略時=FREEFORM 扱い・後方互換）。"""
-    refs_dir = Path(a.refs).resolve() if a.refs else DEFAULT_REFS
-    helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
-    helper_catalog, helper_files = load_helpers(helpers_dir)
-    known_helper_names = _known_helper_names(helper_files)   # ★ W10b 項目2: 総なめ検出用
-    system = CONTRACT + load_refs(refs_dir) + helper_catalog
-    desc = describe_book(book)
-    user = f"{desc}\n\nタスク:\n{a.task}\n\n`Sub Run(oDoc As Object)` を1つだけ書け。コードのみ。"
-    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None = None) -> int:
+    """★ freeform 最終決定（DESIGN-20260821-multifile.md「freeform 最終決定」節・
+       Namakoo 2026-08-21 19:37「廃止しよう」で確定）: 単発の語彙外（翻訳が
+       FREEFORM/OUT_OF_VOCAB を返した経路）は生成に入らず即座に断る。
+       旧 cmd_run_freeform（AI 直接生成→適用ループ）はここで廃止した ── 理由は設計書
+       参照（不完全な機能が見えたままだと信頼感が失われる・警告は査定から守らない
+       （実測）・可逆性の非対称（廃止は git から復活可・悪印象は不可逆）・恩恵層が
+       実測上不在）。将来の復活は発火条件つきで設計書側に凍結（ここには実装しない）。
 
-    # ★ W8a 項目5: 「自由生成経路」→「AI が直接作成（機械保証なし）」（operator の
-    #   検品リストの語彙翻訳。内部の変数名・関数名・コメントは不変）。
-    print(render_run_header("AI が直接作成・機械保証なし", a.model, book.name))
-    print(f"■ 参照ライブラリ: {refs_dir}  ({len(list(refs_dir.glob('*.bas'))) if refs_dir.is_dir() else 0} 例)")
-    print(f"■ ヘルパ: {helpers_dir}  ({len(helper_files)} 本を同梱・Call で呼ばせる)")
-    # ★ K-1: 語彙外に落ちる瞬間の通知。生成が始まる前（★ の1行目より前）に、
-    #   理由・費用・次の手を1ブロックで言う。通知だけ・同意の門(y/N)は作らない
-    #   （関所は別に _confirm_freeform_apply が適用の直前に持つ・K-2 は意図的に保留）。
+       ★ vocab_miss の記録: history.jsonl に failure_kind="語彙外" で残す（依頼文・book・
+       ts は build_history_entry が普段どおり詰める）。生成も適用も一切していないので
+       result は ok=False・attempts=0・changes=[] のまま ―― _finish_run/build_history_entry
+       を素通しで再利用する（頻度×原始性の二軸で開発キューへ、という設計書の使い道に
+       machine-readable な形で残す）。
+
+       ★ --allow-freeform は受理する（後方互換のため flag 自体は argparse に残す）が、
+       廃止告知を1行足すだけで断り自体は変えない（自由生成そのものへは戻らない）。
+
+       ★ 複合計画の語彙外段（run_freeform_plan_step）はここを経由しない ── このブリーフの
+       対象は単発経路だけ（compound-plan 側は意図的に変えていない）。"""
     step = step or {}
-    reason = freeform_notice_reason(str(step.get("op") or "FREEFORM"), step.get("about") or "")
-    print()
-    for ln in render_freeform_notice(reason):
+    about = str(step.get("about") or "").strip()
+    for ln in render_vocab_miss_refusal(about, sunset_notice=bool(getattr(a, "allow_freeform", False))):
         print(ln)
-
-    workdir = book.parent / f".ailine_{book.stem}"
-    workdir.mkdir(exist_ok=True)
-    out_book = book.with_name(book.stem + ".out" + book.suffix)
-
-    apply_timeout = a.timeout if a.timeout else None   # 0 で無効化（旧挙動 = 無制限）
-
-    before = None if a.dry else snapshot(source_book)
-    vocab = load_vocab()   # ★ W8a 項目4: 率リテラルスキャンが「用語集に説明があるか」を見る
-
     result = {"ok": False, "attempts": 0, "task": a.task, "model": a.model,
-              "path": "freeform", "command": None, "postcondition": None}
-    failure_kind = "none"
-    for attempt in range(a.repair + 1):
-        result["attempts"] = attempt + 1
-        t0 = progress_start(f"⏳ 生成中 ({a.model})…")
-        raw = ollama_generate(a.model, msgs, temperature=a.temperature)
-        progress_end(t0)
-        code = extract_bas(raw)
-        (workdir / f"attempt{attempt}.bas").write_text(code, encoding="utf-8")
-
-        for ln in render_code_block(f"\n─ 試行 {attempt+1} ─ 生成した .bas ───────────────", code):
-            print(ln)
-
-        if not valid_signature(code):
-            print("× 署名が違う（Sub Run(oDoc As Object) が無い）。修復する。")
-            failure_kind = "bad_signature"
-            msgs += [{"role": "assistant", "content": raw},
-                     {"role": "user", "content": "署名が違う。`Sub Run(oDoc As Object)` を1つだけ。コードのみ。"}]
-            continue
-
-        # ★ M2a: bad_signature とは別の分類。署名はあるが本体が途中で切れているケース。
-        if is_truncated_code(code):
-            print("× 生成コードが不完全（途中で切断）。修復する。")
-            failure_kind = "truncated"
-            msgs += [{"role": "assistant", "content": raw},
-                     {"role": "user", "content":
-                      "コードが途中で切れている（End Sub まで書き切れていない）。"
-                      "最初から完全なコードを1つだけ書いて。コードのみ。"}]
-            continue
-
-        if a.dry:
-            print("\n（--dry: 適用しない。レビュー後に --dry を外して実行）")
-            result["ok"] = True
-            result["dry"] = True
-            failure_kind = "none"
-            break
-
-        # ★ W10b 項目1: 自由生成の関所。コードは既に表示済み（上の attempt 表示）・
-        #   適用の直前に必ず確認する（原本にはまだ何も触れていない）。
-        sweep_warning = detect_helper_sweep(code, known_helper_names)
-        gate_exit = _confirm_freeform_apply(a, sweep_warning)
-        if gate_exit is not None:
-            return gate_exit
-
-        shutil.copy2(source_book, out_book)   # 原本は触らず、正規化済みコピーに適用
-        t0 = progress_start("⏳ LibreOffice で適用中…")
-        ok, err, rawout = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
-        progress_end(t0)
-        if not ok:
-            # ★ M2a: obasync の生 Python トレースバックを端末にそのまま出さない。
-            #   端末は最終行(例外名+メッセージ)だけ。修復ループへは従来どおり err の全文
-            #   を渡す（モデルへの情報は減らさない）。全文は履歴 jsonl 側に残す。
-            print(f"× 実行時エラー: {short_error_summary(err)}（詳細は履歴に記録）。修復する。")
-            failure_kind = "runtime_error"
-            result["last_error_full"] = err
-            msgs += [{"role": "assistant", "content": raw},
-                     {"role": "user", "content": f"実行時エラー: {err}\nこれを直して。{_REPAIR_SCOPE_GUARD}コードのみ。"}]
-            continue
-
-        after = snapshot(out_book)
-        changed, lines = diff_snapshots(before, after)
-        if not changed:
-            print("× no-op（実行は成功したが文書に変化が無い）。修復する。")
-            failure_kind = "noop"
-            msgs += [{"role": "assistant", "content": raw},
-                     {"role": "user", "content":
-                      "実行は成功したが文書に一切変化が無かった（no-op）。"
-                      "設定した API が効いていない可能性がある。別の正しい方法で書き直して。"
-                      f"{_REPAIR_SCOPE_GUARD}コードのみ。"}]
-            continue
-
-        # ★ W8a 項目4: 単段の FREEFORM/OUT_OF_VOCAB は、成功しても『機械検証済み』の
-        #   ✓ ではなく複数段計画の語彙外段(format_plan_report)と同じ強度の正直な ⚠ 枠で
-        #   表示する（実測: 8% 仮定やラベル貼りが「✓できました」で素通りしていた）。
-        print("\n⚠ AI が直接作成した処理です（機械保証なし）— 確認してください。変更点:")
-        for ln in lines:
-            print(ln)
-        # ★ 止血3: FREEFORM 経路は no-op ガード/advisories も snapshot() 頼みなので、
-        #   検証自体が先頭1000行までしか見ていない（DSL経路より弱い正直さ）。
-        notice = _truncation_notice(before, after, exhaustive_postcondition=False)
-        if notice:
-            print(notice)
-        advisories = build_advisories(a.task, before, after,
-                                       sheet_conflict=getattr(a, "_sheet_conflict", None))   # ★ 誤爆#3
-        # ★ W8a 項目4: 率らしい数値リテラルの機械スキャン。★ 挙動変更#1(a): エラー値増加の網。
-        advisories = advisories + scan_rate_literals(code, a.task, vocab) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)
-        for adv in advisories:
-            print(adv)
-        result["ok"] = True
-        result["changes"] = lines
-        result["advisories"] = advisories
-        failure_kind = "none"
-        # ★ W8b-2 項目1: 自由生成(FREEFORM/OUT_OF_VOCAB)は機械保証が無いので、既定(原本
-        #   直接適用)でも trailing メッセージは ⚠「機械保証はありません」側を使う。
-        #   ★ C9: それでも最終ファイルの読み戻し（今どうなっているか）は同じように行う。
-        _finish_apply(a, book, out_book, workdir, result, machine_verified=False)
-        break
-    else:
-        print(f"\n× {a.repair+1} 回試みたが達成できなかった。")
-
-    _finish_run(a, book, result, failure_kind)
-    return 0 if result["ok"] else 1
+              "path": "vocab_miss", "command": None, "postcondition": None,
+              "changes": [], "out": str(book)}
+    _finish_run(a, book, result, failure_kind="語彙外")
+    return 3
 
 
 # ---------------------------------------------------------------------------
@@ -6280,9 +6167,11 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
                             vocab: dict | None = None, op: str = "FREEFORM",
                             about: str = "") -> tuple:
     """M2c: 複合計画の語彙外(OUT_OF_VOCAB/FREEFORM)段を FREEFORM 経路で実行する。
-       cmd_run_freeform と同じ生成→（★ W10b: 関所→）適用→署名/切断/no-op チェックのループを、
-       『その段の依頼文だけ』かつ『out_book の現在の状態』を起点に行う版。
-       ★ cmd_run_freeform 本体は変えない（既存の回帰リスクを避けるため意図的に複製する）。
+       旧・単発 cmd_run_freeform と同じ生成→（★ W10b: 関所→）適用→署名/切断/no-op
+       チェックのループを、『その段の依頼文だけ』かつ『out_book の現在の状態』を起点に
+       行う版。★ freeform 最終決定（2026-08-21）: 単発側は cmd_refuse_vocab_miss に
+       置き換わって cmd_run_freeform 自体は無くなったが、この複合計画側は意図的に
+       変えていない（このブリーフの対象は単発経路だけ）── 生成が残る唯一の経路。
        ★ W10b 項目1: 関所で人が拒否/非対話で確認できなかった場合は _FreeformGateAbort を
        投げて cmd_run_plan まで一気に抜ける（破壊の関所と同じ『計画全体を止める』扱い。
        原本(book)はこの時点でまだ一切触れていない＝out_book はコピーなので安全）。
@@ -6331,7 +6220,7 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
                       "最初から完全なコードを1つだけ書いて。コードのみ。"}]
             continue
 
-        # ★ W10b 項目1: 自由生成の関所。単発 cmd_run_freeform と違い、この経路はこれまで
+        # ★ W10b 項目1: 自由生成の関所。旧・単発 cmd_run_freeform と違い、この経路はこれまで
         #   生成コードを一切表示していなかった（黙って確認を求めても判断できない）ので、
         #   ここで初めて表示してから y/N を聞く。
         for ln in render_code_block(f"{step_prefix}─ 生成した .bas（語彙外・AI が直接作成）───────────────",
@@ -6365,7 +6254,7 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
 
         advisories = build_advisories(task_text, before, after,
                                        sheet_conflict=getattr(a, "_sheet_conflict", None))   # ★ 誤爆#3
-        # ★ W10f 項目2: 単発 cmd_run_freeform と同じ率リテラルの機械スキャン。この段の
+        # ★ W10f 項目2: 旧・単発 cmd_run_freeform と同じ率リテラルの機械スキャン。この段の
         #   依頼文(task_text)だけを出典として見る（他段の依頼文言に混ざらないよう局所判定）。
         advisories = advisories + scan_rate_literals(code, task_text, vocab) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
         # ★ 止血3: 呼び出し元(cmd_run_plan)は lines をそのまま「  {ln}」で表示するだけ
@@ -7766,8 +7655,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="破壊の関所（既存データを持つ列への上書き確認）を承知の上で"
                         "続行する（ailine undo で戻せる）")
     r.add_argument("--allow-freeform", dest="allow_freeform", action="store_true",
-                   help="自由生成の関所（AI が直接作成したコードは機械検証できないという確認）を"
-                        "承知の上で続行する（ailine undo で戻せる）")
+                   help="（廃止・後方互換のため受理のみ）自由生成は提供していません。指定しても"
+                        "語彙外の断り + 廃止告知が出るだけです（機械検証できない操作は行わない方針）")
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")
