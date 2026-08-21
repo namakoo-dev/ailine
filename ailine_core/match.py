@@ -313,24 +313,36 @@ def possible_total_row_notes(headers: list, rows: list, key_col: str, amount_col
     return notes
 
 
-def independent_key_sums(grid: dict, row_numbers: list, headers: list,
-                          key_col: str, amount_col: str) -> dict:
-    """★ review5#1 critical の直し: 事後条件が compute_match の内部値を素通りさせず、
-       原本から独立に（xml_readback の grid ── openpyxl を経由しない別実装）キーごとの
-       金額和を再集計する。compute_match と同じキー正規化規則（normalize_key: 前後空白
-       除去のみ・型が違えば別キー）を使う ── ここがズレると恒真検査になり偽陽性になる
-       （呼び出し側からの入力は xml_readback.read_grid の grid + データ行番号であること）。
-       戻り値: {normalize_key の戻り値（None はキー不明）: 金額和}。"""
+def independent_key_stats(grid: dict, row_numbers: list, headers: list,
+                           key_col: str, amount_col: str) -> dict:
+    """★ review5#1 critical の直し・M3 verify（_verify_match）と共有する単一の実装
+       （片配線の自己点検: 別実装を2つ作らない）。原本から独立に（xml_readback の grid ──
+       openpyxl を経由しない別実装）キーごとの件数+金額和を再集計する。compute_match と
+       同じキー正規化規則（normalize_key: 前後空白除去のみ・型が違えば別キー）を使う ──
+       ここがズレると恒真検査になり偽陽性になる（呼び出し側からの入力は
+       xml_readback.read_grid の grid + データ行番号であること）。
+       戻り値: {normalize_key の戻り値（None はキー不明）: {"count": int, "sum": float}}。"""
     key_idx = headers.index(key_col) + 1     # grid のキーは1起点の (行, 列)
     amount_idx = headers.index(amount_col) + 1
-    sums: dict = {}
+    stats: dict = {}
     for r in row_numbers:
         raw_key = grid.get((r, key_idx))
         amt = grid.get((r, amount_idx))
         amt = float(amt) if isinstance(amt, (int, float)) and not isinstance(amt, bool) else 0.0
         nk = normalize_key(raw_key)
-        sums[nk] = sums.get(nk, 0.0) + amt
-    return sums
+        entry = stats.setdefault(nk, {"count": 0, "sum": 0.0})
+        entry["count"] += 1
+        entry["sum"] += amt
+    return stats
+
+
+def independent_key_sums(grid: dict, row_numbers: list, headers: list,
+                          key_col: str, amount_col: str) -> dict:
+    """independent_key_stats の金額だけを取り出す薄いラッパー（cmd_run_match の
+       書き込み時事後条件が使う ── 本体のロジックは independent_key_stats に一本化）。
+       戻り値: {normalize_key の戻り値（None はキー不明）: 金額和}。"""
+    stats = independent_key_stats(grid, row_numbers, headers, key_col, amount_col)
+    return {nk: v["sum"] for nk, v in stats.items()}
 
 
 def side_totals(groups: list) -> tuple:

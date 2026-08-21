@@ -288,3 +288,30 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
                          f"列『{m['column']}』 元 {_fmt_num(m['source'])} / "
                          f"出力 {_fmt_num(m['output'])}")
     return lines
+
+
+def render_verify_match_report(out_label: str, a_label: str, b_label: str, result: dict) -> list:
+    """`ailine verify <出力> <元A> <元B>`（M3 照合出力）の人間向け報告。
+       合格: 両側の Σ を並べるだけ／不合格: キーごとに何がいくつ→いくつ、を全所見並べる
+       （一括検出・最初の1件で止めない・憲法1: 修正箇所への誘導）。"""
+    lines = [f"■ ailine verify（照合）  out={out_label}  A={a_label}  B={b_label}"]
+    sums = result.get("sums") or {}
+    if sums:
+        lines.append(f"Σ A: {_fmt_num(sums.get('A', 0))} / Σ B: {_fmt_num(sums.get('B', 0))}")
+    for m in result.get("mismatches", ()):
+        kind = m["kind"]
+        if kind == "count":
+            lines.append(f"⚠ {m['key']}: {m['side']}側件数が一致しません"
+                         f"（独立再集計 {m['expected']} / 出力 {m['written']}）")
+        elif kind == "sum":
+            lines.append(f"⚠ {m['key']}: {m['side']}側合計が一致しません"
+                         f"（独立再集計 {_fmt_num(m['expected'])} / 出力 {_fmt_num(m['written'])}）")
+        elif kind == "diff":
+            lines.append(f"⚠ {m['key']}: 差額が一致しません"
+                         f"（算出 {_fmt_num(m['expected'])} / 出力 {_fmt_num(m['written'])}）")
+        elif kind == "missing_key":
+            lines.append(f"⚠ {m['key']}: 元帳にあるキーが照合の出力に見当たりません")
+        elif kind == "extra_key":
+            lines.append(f"⚠ {m['key']}: 出力にあるキーが元帳の独立再集計に見当たりません"
+                         "（捏造の可能性）")
+    return lines

@@ -13,12 +13,17 @@
    校正していない実装が増えて独立の意味が薄れる。extract_multi は openpyxl を import
    するため間接的には読み込まれるが、**この module の読みの経路は依然 xml_readback だけ**
    （openpyxl のオブジェクトはこの module に一切現れない）。
+   ★ M3 も同じ線: match の正規化規則（normalize_key）とキー再集計（independent_key_stats）
+   は ailine_core/match.py の純関数を import して使う（match.py は openpyxl を import
+   するが、この module がその関数を呼んでも openpyxl オブジェクトはここに一切現れない ──
+   ★ 片配線の自己点検: cmd_run_match の書き込み時事後条件（ailine.py）と _verify_match
+   （この module）は independent_key_stats を共有する。別実装を2つ作らない）。
 """
 from __future__ import annotations
 
 import json
 
-from ailine_core import extract_multi, total_row, xml_readback
+from ailine_core import extract_multi, match, total_row, xml_readback
 
 TOLERANCE = total_row.TOLERANCE
 
@@ -175,16 +180,17 @@ def verify_output(out_path, src_folder) -> dict:
        （description）から**種類**を先に決め、種類ごとの検算へ振り分ける。
        ailine の印が無いブックには {"unmarked": True} を返す ── 0 件照合で合格を
        名乗らない（空虚な合格の禁止・呼び出し側が exit 4 にする）。
-       ★ M3（design v2「verify」節）: 今回は routing だけ ── match 出力の印は認識するが、
-       検算そのもの（_verify_match）はまだ無い。ここで {"unmarked": True} に混ぜて
-       黙って合格させる（空虚な合格）よりは、{"unsupported": ...} を正直に返して
-       呼び出し側が exit 4 にする方を選ぶ（_verify_match の実装は次玉）。"""
+       ★ M3（design v2「verify」節）: この経路（元 1 フォルダ形）は match 出力を検算しない
+       ── 照合は原本 2 冊のうちどちらが A/B かをフォルダから機械的に選べない（本実装
+       verify_match_output は `ailine verify <出力> <元A> <元B>` の3引数形専用）。
+       ここで黙って {"unmarked": True} に混ぜる（空虚な合格の匂わせ）よりは、
+       {"unsupported": ...} を正直に返して呼び出し側が exit 4 にする。"""
     creator, description = xml_readback.read_core_properties(out_path)
     if creator == "ailine stack" and not description:
         return _verify_stack(out_path, src_folder)
     if creator == "ailine match":
-        return {"unsupported": "ailine match（2冊の照合）の出力の検算はまだ実装されていません"
-                                "（次波で対応予定です）。"}
+        return {"unsupported": "照合出力の検算には原本2冊の指定が必要です"
+                                "（`ailine verify <出力> <元A> <元B>` の形で実行してください）。"}
     if creator in _CREATOR_MARKS and description:
         try:
             cond = json.loads(description)
@@ -411,3 +417,112 @@ def _verify_stack(out_path, src_folder) -> dict:
 
     return {"row_count": row_count, "sums": sums,
             "mismatch": mismatches[0] if mismatches else None, "mismatches": mismatches}
+
+
+# ---- M3: 照合出力の単独検算（`ailine verify <出力> <元A> <元B>`） ----
+
+
+def _display_key_for_report(nk) -> str:
+    """normalize_key の戻り値 → 報告用の表示文字列。None（キー不明）は match.py の
+       第5区分ラベルをそのまま使う。"""
+    return match.UNKNOWN_KEY_LABEL if nk is None else nk[1]
+
+
+def verify_match_output(out_path, book_a, book_b) -> dict:
+    """M3（照合）出力の単独検算の入口。出力ブックの印（creator）・焼いた条件
+       （dc:description の JSON: キー列/金額列/両冊のヘッダー）を読み、原本2冊を
+       xml_readback で独立に読み直してキー勘定（件数・Σ・差額）を再集計、照合シートの
+       全行（キー不明含む）と突き合わせる。3冊とも読むだけ。
+       ★ 印が違う・条件が焼かれていない/壊れている場合は {"unmarked"/"unsupported": ...}
+       を返す（空虚な合格の禁止・呼び出し側が exit 4 にする）。"""
+    creator, description = xml_readback.read_core_properties(out_path)
+    if creator != match.CREATOR_MARK:
+        return {"unmarked": True}
+    try:
+        cond = json.loads(description) if description else None
+    except (TypeError, ValueError):
+        cond = None
+    if not (isinstance(cond, dict) and cond.get("tool") == "ailine" and cond.get("kind") == "match"):
+        return {"unsupported": "照合出力に条件（dc:description）が焼かれていません"
+                                "（壊れているか、ailine match 以外が作った可能性があります）。"
+                                "検算できません。"}
+    key_a, key_b = cond.get("key_a"), cond.get("key_b")
+    amount_a, amount_b = cond.get("amount_a"), cond.get("amount_b")
+    headers_a, headers_b = cond.get("headers_a"), cond.get("headers_b")
+    if not (key_a and key_b and amount_a and amount_b
+            and isinstance(headers_a, list) and isinstance(headers_b, list)):
+        return {"unsupported": "照合出力の条件が不完全です（キー列/金額列/見出しの一部が"
+                                "欠けています）。検算できません。"}
+    return _verify_match(out_path, book_a, book_b, key_a, key_b, amount_a, amount_b,
+                          headers_a, headers_b)
+
+
+def _verify_match(out_path, book_a, book_b, key_a, key_b, amount_a, amount_b,
+                   headers_a, headers_b) -> dict:
+    """検算の本体。★ 片配線の自己点検: cmd_run_match（ailine.py）の書き込み時事後条件と
+       同じ independent_key_stats（ailine_core/match.py）を使う ── キー正規化（前後空白
+       除去のみ・型が違えば別キー）がここでズレると恒真検査になり偽陽性を生む。"""
+    data_a = xml_readback.read_grid(book_a)
+    header_row_a = _find_header_row(data_a, headers_a)
+    data_b = xml_readback.read_grid(book_b)
+    header_row_b = _find_header_row(data_b, headers_b)
+    if header_row_a is None or header_row_b is None:
+        which = "A" if header_row_a is None else "B"
+        return {"unsupported": f"元{which}に条件の見出しが見つかりません"
+                                "（別の元ファイルが渡された可能性があります）。検算できません。"}
+
+    a_headers_x = xml_readback.header_names(data_a, header_row=header_row_a)
+    a_rows_x = [r for r in xml_readback.data_row_numbers(data_a, header_row_a)
+                if xml_readback.row_has_any_value(data_a, r, len(a_headers_x))]
+    b_headers_x = xml_readback.header_names(data_b, header_row=header_row_b)
+    b_rows_x = [r for r in xml_readback.data_row_numbers(data_b, header_row_b)
+                if xml_readback.row_has_any_value(data_b, r, len(b_headers_x))]
+
+    a_stats = match.independent_key_stats(data_a["grid"], a_rows_x, a_headers_x, key_a, amount_a)
+    b_stats = match.independent_key_stats(data_b["grid"], b_rows_x, b_headers_x, key_b, amount_b)
+
+    out_data = xml_readback.read_grid(out_path, sheet_name=match.MATCH_SHEET_NAME)
+    out_rows = xml_readback.data_row_numbers(out_data, header_row=1)
+    grid = out_data["grid"]
+
+    mismatches = []
+    seen_keys = set()
+    for r in out_rows:
+        key_val = grid.get((r, 1))
+        a_count_v = grid.get((r, 2), 0) or 0
+        a_sum_v = grid.get((r, 3), 0) or 0
+        b_count_v = grid.get((r, 4), 0) or 0
+        b_sum_v = grid.get((r, 5), 0) or 0
+        diff_v = grid.get((r, 6), 0) or 0
+        nk = None if key_val == match.UNKNOWN_KEY_LABEL else match.normalize_key(key_val)
+        seen_keys.add(nk)
+        a_entry = a_stats.get(nk, {"count": 0, "sum": 0.0})
+        b_entry = b_stats.get(nk, {"count": 0, "sum": 0.0})
+        if a_count_v != a_entry["count"]:
+            mismatches.append({"kind": "count", "side": "A", "key": key_val,
+                               "expected": a_entry["count"], "written": a_count_v})
+        if b_count_v != b_entry["count"]:
+            mismatches.append({"kind": "count", "side": "B", "key": key_val,
+                               "expected": b_entry["count"], "written": b_count_v})
+        if abs(a_sum_v - a_entry["sum"]) > match.TOLERANCE:
+            mismatches.append({"kind": "sum", "side": "A", "key": key_val,
+                               "expected": a_entry["sum"], "written": a_sum_v})
+        if abs(b_sum_v - b_entry["sum"]) > match.TOLERANCE:
+            mismatches.append({"kind": "sum", "side": "B", "key": key_val,
+                               "expected": b_entry["sum"], "written": b_sum_v})
+        if abs(diff_v - (a_sum_v - b_sum_v)) > match.TOLERANCE:
+            mismatches.append({"kind": "diff", "key": key_val,
+                               "expected": a_sum_v - b_sum_v, "written": diff_v})
+
+    # ★ 行の過不足（キーの欠落/捏造）: 独立再集計に居るのに出力に無い／出力に居るのに
+    #   独立再集計のどちらにも居ない、を両方見る（一括検出・最初の1件で止めない）。
+    all_source_keys = set(a_stats) | set(b_stats)
+    for nk in sorted(all_source_keys - seen_keys, key=lambda k: _display_key_for_report(k)):
+        mismatches.append({"kind": "missing_key", "key": _display_key_for_report(nk)})
+    for nk in sorted(seen_keys - all_source_keys, key=lambda k: _display_key_for_report(k)):
+        mismatches.append({"kind": "extra_key", "key": _display_key_for_report(nk)})
+
+    a_total_sum = sum(v["sum"] for v in a_stats.values())
+    b_total_sum = sum(v["sum"] for v in b_stats.values())
+    return {"ok": not mismatches, "mismatches": mismatches,
+            "sums": {"A": a_total_sum, "B": b_total_sum}, "keys": len(out_rows)}

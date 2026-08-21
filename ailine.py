@@ -84,6 +84,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     freeform_notice_reason, render_freeform_notice, render_freeform_notice_compact,   # ★ K-1
     render_scan_report,   # ★ M1読み: `ailine scan`
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
+    render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
 )
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
@@ -6982,11 +6983,16 @@ def _peek_match_book(path: Path):
         wb.close()
 
 
-def _match_condition(key_a: str, key_b: str, amount_a: str, amount_b: str, book_b_name: str) -> dict:
+def _match_condition(key_a: str, key_b: str, amount_a: str, amount_b: str, book_b_name: str,
+                     headers_a: list, headers_b: list) -> dict:
     """出力ブックの docProps/description へ焼く条件（機械可読・verify の入口が読む）。
-       ★ 絶対パスを焼かない（検分ごと発注者に渡るため）── book_b はファイル名のみ。"""
+       ★ 絶対パスを焼かない（検分ごと発注者に渡るため）── book_b はファイル名のみ。
+       ★ _verify_match 用に両冊のヘッダー全部も焼く（verify.py の _find_header_row が
+       xml_readback だけで見出し行を引き当てるのに必要 ── 列名だけでは足りない・
+       openpyxl の StructDump ヒューリスティクスを verify 側に持ち込まないための代替）。"""
     return {"tool": "ailine", "kind": "match", "key_a": key_a, "key_b": key_b,
-            "amount_a": amount_a, "amount_b": amount_b, "b": book_b_name}
+            "amount_a": amount_a, "amount_b": amount_b, "b": book_b_name,
+            "headers_a": list(headers_a), "headers_b": list(headers_b)}
 
 
 def _own_match_output_status(path: Path, cond: dict) -> tuple:
@@ -7072,7 +7078,7 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
 
     # ★ 出力先（A の親 + 機械命名・sanitize+条件ハッシュ・「照合」を名前に含める）と
     #   書き込みの関所（40行読む前に判定して印字 ── stack/extract と同じ配役）。
-    cond = _match_condition(key_a, key_b, amount_a, amount_b, book_b.name)
+    cond = _match_condition(key_a, key_b, amount_a, amount_b, book_b.name, headers_a, headers_b)
     digest = hashlib.sha256(json.dumps(cond, sort_keys=True, ensure_ascii=False)
                             .encode("utf-8")).hexdigest()[:6]
     raw_stem = f"{book_a.stem}_照合_{digest}"
@@ -7420,25 +7426,60 @@ def cmd_stack(a: argparse.Namespace) -> int:
 
 
 def cmd_verify(a: argparse.Namespace) -> int:
-    """`ailine verify <out.xlsx> <srcfolder>`: 検算の単独再実行（信用の条件⑥）。
-       stack の出力ブックと元フォルダだけから、行数照合・数値列ごとの Σ 照合を独立に
-       再実行する（読みは ailine_core/xml_readback.py・openpyxl は経由しない）。
-       本体（ailine_core/verify.py）が検算そのものを持ち、この関数は配線だけ。
-       ★ M2（E13/致命3）: 検算の種類（縦積み/抽出）は出力ブックの印と焼いた条件から
-       verify_output が決める。ailine の印が無いブックは合格でも不合格でもなく
-       exit 4（「検算できません」）── 0 件照合で空虚な合格を名乗らない。"""
+    """`ailine verify <out.xlsx> <srcfolder>` または `ailine verify <out.xlsx> <元A> <元B>`:
+       検算の単独再実行（信用の条件⑥）。stack/extract は出力ブック+元フォルダから、
+       match（照合）は出力ブック+元2冊から、それぞれ独立に検算する（読みは
+       ailine_core/xml_readback.py・openpyxl は経由しない）。本体（ailine_core/verify.py）が
+       検算そのものを持ち、この関数は配線+分岐だけ。
+       ★ M3 設計 v2「verify」節: sources の個数で分岐（1個=従来の元フォルダ形 / 2個=
+       照合の元2冊形）。それ以外の個数は使い方の誤りとして名指しで止める。
+       ★ M2（E13/致命3）: 検算の種類は出力ブックの印と焼いた条件から決まる。ailine の印が
+       無い/条件が読めないブックは合格でも不合格でもなく exit 4（「検算できません」）──
+       0 件照合で空虚な合格を名乗らない。"""
     out = Path(a.out).resolve()
-    folder = Path(a.srcfolder).resolve()
-    result = multifile_verify.verify_output(out, folder)
-    if result.get("unmarked"):
-        print(f"× ailine の印がありません。検算できません: {out}")
+    sources = a.sources
+    # ★ 実弾検分（2026-08-21）: 存在しないパスを「印がありません」と誤診していた ──
+    #   誤診は次の手を間違わせる（印の問題だと思って原本を疑い始める）。無いなら無いと言う。
+    #   従来形（sources 1 個）の元はフォルダ・照合形（2 個）の元はファイル。
+    if not out.is_file():
+        print(f"× ファイルが見つかりません: {out}")
         return 4
-    if result.get("unsupported"):
-        print(f"× {result['unsupported']}")
+    if len(sources) == 2:
+        for s in sources:
+            if not Path(s).is_file():
+                print(f"× ファイルが見つかりません: {Path(s).resolve()}")
+                return 4
+    elif len(sources) == 1 and not Path(sources[0]).is_dir():
+        print(f"× フォルダが見つかりません: {Path(sources[0]).resolve()}")
         return 4
-    for ln in render_verify_report(str(out), str(folder), result):
-        print(ln)
-    return 5 if result.get("mismatch") else 0
+    if len(sources) == 1:
+        folder = Path(sources[0]).resolve()
+        result = multifile_verify.verify_output(out, folder)
+        if result.get("unmarked"):
+            print(f"× ailine の印がありません。検算できません: {out}")
+            return 4
+        if result.get("unsupported"):
+            print(f"× {result['unsupported']}")
+            return 4
+        for ln in render_verify_report(str(out), str(folder), result):
+            print(ln)
+        return 5 if result.get("mismatch") else 0
+    if len(sources) == 2:
+        book_a = Path(sources[0]).resolve()
+        book_b = Path(sources[1]).resolve()
+        result = multifile_verify.verify_match_output(out, book_a, book_b)
+        if result.get("unmarked"):
+            print(f"× ailine の印がありません。検算できません: {out}")
+            return 4
+        if result.get("unsupported"):
+            print(f"× {result['unsupported']}")
+            return 4
+        for ln in render_verify_match_report(str(out), str(book_a), str(book_b), result):
+            print(ln)
+        return 0 if result.get("ok") else 5
+    print("× verify の引数は「元フォルダ1個」または「元A 元B の2冊」のどちらかです"
+          f"（{len(sources)} 個渡されました）。")
+    return 1   # ★ f6_exit_codes.md: 2 は argparse 予約・ailine 自身は使わない（汎用失敗の1を使う）
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -7513,9 +7554,12 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     st.set_defaults(func=cmd_stack)
 
-    vf = sub.add_parser("verify", help="stack の出力を検算だけ独立に再実行する（読むだけ）")
-    vf.add_argument("out", help="ailine stack が作った出力ブック")
-    vf.add_argument("srcfolder", help="元ファイルがあるフォルダ")
+    vf = sub.add_parser("verify", help="stack/extract/match の出力を検算だけ独立に再実行する（読むだけ）")
+    vf.add_argument("out", help="ailine が作った出力ブック")
+    # ★ M3 設計 v2「verify」節: 位置引数を nargs 化し「2個=従来形(出力+元フォルダ) /
+    #   3個=照合形(出力+元A+元B)」で分岐する（既存 stack/extract の2引数形は不変）。
+    vf.add_argument("sources", nargs="+",
+                    help="元フォルダ（1個・stack/extract）または 元A 元B（2個・照合出力）")
     vf.set_defaults(func=cmd_verify)
 
     h = sub.add_parser("history", help="実行履歴を表示する")

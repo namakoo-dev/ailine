@@ -45,7 +45,9 @@ def _made(tmp_path, monkeypatch, capsys):
 
 
 def _verify(out, folder, capsys):
-    rc = ailine.cmd_verify(argparse.Namespace(out=str(out), srcfolder=str(folder)))
+    # ★ M3 で verify の位置引数が nargs 化された（sources: 1個=元フォルダ / 2個=元2冊）。
+    #   ここは argparse を経由しない直呼びなので、新しい属性名に合わせる（挙動は不変）。
+    rc = ailine.cmd_verify(argparse.Namespace(out=str(out), sources=[str(folder)]))
     return rc, capsys.readouterr().out
 
 
