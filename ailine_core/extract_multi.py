@@ -163,8 +163,8 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
             not_taken = [inspection.finding(
                 kind=inspection.KIND_NOT_TAKEN, file=path.name, sheet=ws.title,
                 cell=inspection.cell_ref(1, header_row), source_value=None, output_value=None,
-                next_step=f"見出しが基準（{base_sheet_name}）と一致しません（{detail}）。"
-                          "見出し行を確認してください。")]
+                next_step=f"見出しが基準と合いません（{detail}）。この冊は対象外です"
+                          "（抽出していません）。")]
             return FileExtractResult(name=path.name, status="取れなかった", reason=detail,
                                       sheet_fallback=sheet_fallback, findings=not_taken)
 
@@ -199,23 +199,29 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
 
         # ★ M2.5: 所見の組み立て（stack.evaluate_and_stack と同じ線 ── ws がまだ開いている
         #   この関数の内側でだけ列位置まで正確な3座標が引ける）。
-        #   優先する（値列は所見の行自体に既に両側の数字がある・冗長を避ける）。
         # ★ アンカーは「怪しい数字そのもの」（閉じなかった合計の値セル）。クリックの
         #   着地点に迷いを作らない（検分シートの本文が両側の数字を持つのは別の役割）。
+        # ★ UX 磨き③（Namakoo 実視 2026-08-21 12:01）: 断片でなく1所見1文
+        #   （stack.evaluate_and_stack と同じ文形・inspection.fmt_num で両側の数字を言う）。
         anchor_col = value_col or label_col or 1
-        findings = [inspection.finding(
-            kind=inspection.KIND_TOTAL_ROW_MISMATCH, file=path.name, sheet=ws.title,
-            cell=inspection.cell_ref(anchor_col, m.row),
-            source_value=m.excluded_value, output_value=m.adopted_sum,
-            next_step="除外行の値が明細の和と閉じません。元ファイルのこの行を確認してください"
-                      "（除外そのものは維持しています）。") for m in verdict.mismatches]
+        findings = []
+        for m in verdict.mismatches:
+            cell = inspection.cell_ref(anchor_col, m.row)
+            findings.append(inspection.finding(
+                kind=inspection.KIND_TOTAL_ROW_MISMATCH, file=path.name, sheet=ws.title,
+                cell=cell, source_value=m.excluded_value, output_value=m.adopted_sum,
+                next_step=f"合計行({cell}) の値 {inspection.fmt_num(m.excluded_value)} が"
+                          f"明細の和 {inspection.fmt_num(m.adopted_sum)} と合いません。"
+                          f"リンクをクリックして {path.name} の {cell} を確認してください"
+                          "（除外そのものは維持しています）。"))
         if sheet_fallback:
             findings.append(inspection.finding(
                 kind=inspection.KIND_SHEET_FALLBACK, file=path.name, sheet=ws.title,
                 cell=inspection.cell_ref(1, header_row),
                 source_value=sheet_fallback[0], output_value=sheet_fallback[1],
-                next_step=f"基準名のシート『{sheet_fallback[0]}』が無いため1枚目"
-                          f"『{sheet_fallback[1]}』を使いました。意図した内容か確認してください。"))
+                next_step=f"基準名のシート『{sheet_fallback[0]}』が見つからないため、"
+                          f"1枚目『{sheet_fallback[1]}』を使いました。"
+                          "意図したシートか確認してください。"))
 
         return FileExtractResult(name=path.name, status="取れた", reordered=bool(detail),
                                   rows=rows, rows_matched=len(matched_rows),

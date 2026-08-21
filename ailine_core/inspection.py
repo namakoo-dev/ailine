@@ -21,16 +21,63 @@ import os
 from dataclasses import dataclass
 
 from openpyxl.comments import Comment
-from openpyxl.styles import PatternFill
+from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.hyperlink import Hyperlink
 
 SHEET_NAME = "検分"
 COMMENT_AUTHOR = "ailine"                 # ★ 決定論: 時刻・ユーザー名を使わない固定文字列
 
-# 淡い黄系1色のみ（PatternFill・派手にしない・正常行は一切塗らない）。
-_TINT_RGB = "FFFFF2CC"
+# ★ UX 磨き①（Namakoo 実視 2026-08-21 12:01「薄くて気づかない」で淡黄を却下）:
+#   Excel の条件付き書式が『悪い値』に使う慣習色（薄赤 FFC7CE）を借りる ── 説明ゼロで
+#   意味が読める色。1色のみ・正常行は一切塗らない、という原則は変えない。
+_TINT_RGB = "FFFFC7CE"
 TINT_FILL = PatternFill(start_color=_TINT_RGB, end_color=_TINT_RGB, fill_type="solid")
+
+HEADER_FONT = Font(bold=True)             # ★ UX 磨き③: 見出し行は太字（自分のブックなので可）
+
+# ★ UX 磨き②: 列幅の機械算出（内容由来・決定論・乱数や現在時刻を使わない）。
+#   openpyxl は未設定の列でも既定 13.0 を返す（恒真の罠）── 必ず内容から明示設定する。
+_COL_WIDTH_MIN = 8
+_COL_WIDTH_MAX = 60
+_COL_WIDTH_PADDING = 2
+# 全角/CJK 相当（東アジアの文字幅=2・その他は1）とみなす大まかなコードポイント帯。
+_WIDE_RANGES = (
+    (0x1100, 0x115F), (0x2E80, 0xA4CF), (0xAC00, 0xD7A3), (0xF900, 0xFAFF),
+    (0xFF00, 0xFF60), (0xFFE0, 0xFFE6), (0x20000, 0x3FFFD),
+)
+
+
+def _char_width(ch: str) -> int:
+    cp = ord(ch)
+    return 2 if any(lo <= cp <= hi for lo, hi in _WIDE_RANGES) else 1
+
+
+def _display_width(v) -> int:
+    """CJK・全角は2幅、半角は1幅として数える表示幅。"""
+    return sum(_char_width(ch) for ch in ("" if v is None else str(v)))
+
+
+def autosize_columns(ws, min_width: int = _COL_WIDTH_MIN, max_width: int = _COL_WIDTH_MAX,
+                      padding: int = _COL_WIDTH_PADDING) -> None:
+    """列幅を内容（実際に書いたセルの値）だけから機械算出して明示設定する。
+       ★ 実害の現物（Namakoo 実視）: 日付列が ### で潰れ、検分のファイル名・所見が
+       見切れていた ── 内容の最大表示幅 + 余白で clamp（下限/上限つき）。
+       ★ 決定論: 乱数・現在時刻は使わない（同一内容なら同一幅）。"""
+    widths: dict = {}
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value is None:
+                continue
+            widths[cell.column] = max(widths.get(cell.column, 0), _display_width(cell.value))
+    for col, w in widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = max(min_width, min(max_width, w + padding))
+
+
+def bold_row(ws, row_idx: int, num_cols: int) -> None:
+    """見出し行を太字に（UX 磨き③・自分のブックなので書式適用可）。"""
+    for c in range(1, num_cols + 1):
+        ws.cell(row=row_idx, column=c).font = HEADER_FONT
 
 # 所見の種類（stack.py / extract_multi.py と共有する語彙 ── 手書きの表記ゆれを避ける）。
 KIND_NOT_TAKEN = "取れなかった"
@@ -195,6 +242,7 @@ def build_sheet(wb, *, findings: list, denominator_lines_: list, accounting_line
     row += 1
     for c, h in enumerate(_FILEMAP_HEADER, start=1):
         ws.cell(row=row, column=c, value=h)
+    bold_row(ws, row, len(_FILEMAP_HEADER))
     row += 1
     for fname, sheet_used, note in file_sheet_map:
         ws.cell(row=row, column=1, value=fname)
@@ -207,6 +255,7 @@ def build_sheet(wb, *, findings: list, denominator_lines_: list, accounting_line
     row += 1
     for c, h in enumerate(_FINDINGS_HEADER, start=1):
         ws.cell(row=row, column=c, value=h)
+    bold_row(ws, row, len(_FINDINGS_HEADER))
     row += 1
     for f in findings:
         _set_finding_row(ws, row, f, out_dir, source_dir)
@@ -216,3 +265,5 @@ def build_sheet(wb, *, findings: list, denominator_lines_: list, accounting_line
     for line in _LEGEND:
         ws.cell(row=row, column=1, value=line)
         row += 1
+
+    autosize_columns(ws)   # ★ UX 磨き②: 検分シート自身も内容から列幅を機械算出

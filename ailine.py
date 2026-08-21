@@ -6813,6 +6813,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 reason_lines = [inspection.describe(f) for f in all_findings
                                 if f.file == fname and f.kind in inspection.WARN_KINDS]
                 inspection.tint_provenance_cell(ws_out, i, prov_col_idx, reason_lines)
+        inspection.bold_row(ws_out, 1, len(out_headers))   # ★ UX 磨き③: 見出し行
+        inspection.autosize_columns(ws_out)   # ★ UX 磨き②: 列幅を内容から機械算出
         wb_out.save(tmp_out)
 
         # ⑧ 事後条件: 書いた直後の中身を**独立読み**（xml_readback）で検算する。
@@ -7025,6 +7027,8 @@ def cmd_stack(a: argparse.Namespace) -> int:
                 reason_lines = [inspection.describe(f) for f in all_findings
                                 if f.file == fname and f.kind in inspection.WARN_KINDS]
                 inspection.tint_provenance_cell(ws_out, i, prov_col_idx, reason_lines)
+        inspection.bold_row(ws_out, 1, len(out_headers))   # ★ UX 磨き③: 見出し行
+        inspection.autosize_columns(ws_out)   # ★ UX 磨き②: 列幅を内容から機械算出
         wb_out.save(tmp_out)
 
         # ★ 事後条件①②: 独立読み実装（xml_readback）で書いた直後の中身を検算する

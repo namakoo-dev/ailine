@@ -153,3 +153,44 @@ def test_accounting_line_in_inspection_sheet_includes_all_three_buckets(tmp_path
     total, a, b, c = map(int, m.groups())
     assert total == 3 and a + b + c == 3, f"会計が合わない: {m.groups()}"
     assert "不一致" in text, "不一致の勘定が名前ごと消えている"
+
+
+# ---- UX 磨き（Namakoo 指摘 2026-08-21 12:01: 色が薄い・見切れ・所見が分かりにくい）----
+
+
+def test_tint_uses_excel_conventional_bad_color(tmp_path):
+    """色は Excel の条件付き書式で見慣れた『悪い値』の薄赤（FFC7CE）── 説明ゼロで読める
+       意味色を借りる。淡黄は「薄くて気づかない」と実視で却下（Namakoo）。"""
+    folder, out = _made(tmp_path)
+    ws = openpyxl.load_workbook(out).active
+    prov_col = len(HDRS) + 1
+    fills = {row[0].value: (row[prov_col - 1].fill.fgColor.rgb or "")
+             for row in ws.iter_rows(min_row=2)}
+    assert "C7CE" in fills["J-3"], f"薄赤 FFC7CE でない: {fills['J-3']}"
+
+
+def test_column_widths_are_set_no_hash_marks(tmp_path):
+    """列幅を内容から機械算出（CJK=2幅・決定論）。データ面も検分も見切れ・### を作らない。"""
+    folder, out = _made(tmp_path)
+    wb = openpyxl.load_workbook(out)
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        dims = [ws.column_dimensions[chr(ord("A") + i)].width for i in range(ws.max_column)]
+        # ★ openpyxl は未設定でも既定 13.0 を返す（恒真の罠・実測）── 「内容由来」を要求する:
+        #   全列が一律 13.0 なら未設定と見なして不合格。
+        assert not all(w == 13.0 for w in dims), f"{sheet}: 列幅が内容から算出されていない: {dims}"
+        assert all(w and w >= 8 for w in dims), f"{sheet}: 狭すぎる列がある: {dims}"
+    insp = wb["検分"]
+    idims = [insp.column_dimensions[chr(ord("A") + i)].width for i in range(insp.max_column)]
+    assert max(idims) >= 25, f"検分の長文列（所見の文章）が広がっていない: {idims}"
+
+
+def test_findings_are_readable_sentences_with_explicit_next_step(tmp_path):
+    """所見は断片でなく 1 所見 1 文。次の手は『リンクをクリック』を含む具体文。"""
+    folder, out = _made(tmp_path)
+    text = " ".join(str(c.value) for row in openpyxl.load_workbook(out)["検分"].iter_rows()
+                    for c in row if c.value is not None)
+    assert "クリック" in text, f"次の手に操作（クリック）の言葉が無い: {text[:400]}"
+    # 閉じない合計の所見が文章として読めること（両側の数字+動詞を含む 1 文）
+    assert ("合計" in text and "合いません" in text) or ("合計" in text and "一致しません" in text), \
+        f"所見が文章になっていない: {text[:500]}"
