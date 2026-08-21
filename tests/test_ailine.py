@@ -6042,11 +6042,20 @@ def test_op_meta_op_schema_confirm_fields_share_same_op_set():
     assert set(ailine.OP_META.keys()) == set(ailine._CONFIRM_FIELDS.keys())
 
 def test_op_meta_entries_have_category_label_synonyms():
+    # ★ M2（2026-08-21）: folder（フォルダ＝複数ファイルに対応しているか）を宣言に追加した。
+    #   cmd_run_folder の断り（E11）はこの宣言だけを読む ── 対応表を別に手書きしない。
     for op, meta in ailine.OP_META.items():
-        assert set(meta.keys()) == {"category", "label", "synonyms"}
+        assert set(meta.keys()) == {"category", "label", "synonyms", "folder"}
         assert isinstance(meta["category"], str) and meta["category"]
         assert isinstance(meta["label"], str) and meta["label"]
         assert isinstance(meta["synonyms"], list) and meta["synonyms"]
+        assert isinstance(meta["folder"], bool)
+
+
+def test_op_meta_folder_support_is_extract_only_for_now():
+    """★ M2 第一波はフォルダ対応が EXTRACT 1つだけ（設計書 M2 節）。ここを増やす時は
+       cmd_run_folder が本当にその op を実行できることを検体で示してから増やす。"""
+    assert {op for op, meta in ailine.OP_META.items() if meta["folder"]} == {"EXTRACT"}
 
 def test_op_labels_is_derived_from_op_meta():
     assert ailine.OP_LABELS == {op: meta["label"] for op, meta in ailine.OP_META.items()}

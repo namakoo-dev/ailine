@@ -39,15 +39,13 @@ TRUTH = [
     ("gte", 40000, datetime.date(2026, 8, 1), False),   # 日付は数値比較に掛けない
     # --- eq ---
     ("eq", 40000, 40000, True), ("eq", 40000, 40001, False),
-    pytest.param("eq", 40000, 40000.0000001, True,
-                 marks=pytest.mark.xfail(strict=True, reason="既存 eq は完全一致 ── M2 で許容誤差 1e-6 に修正（宣言済みの挙動変更）")),
+    ("eq", 40000, 40000.0000001, True),
     ("eq", 40000, "40000", False),
     ("eq", "東京", "東京", True), ("eq", "東京", "東京都", False), ("eq", "東京", None, False),
     # --- contains ---
     ("contains", "東京", "東京都港区", True), ("contains", "東京", "京都市", False),
     ("contains", "東京", None, False),
-    pytest.param("contains", "40", 140000, False,
-                 marks=pytest.mark.xfail(strict=True, reason="既存 contains は数値を文字列化 ── M2 で文字列セル限定に修正（宣言済みの挙動変更）")),
+    ("contains", "40", 140000, False),
     ("contains", "40", "140000", True),
 ]
 

@@ -8,14 +8,14 @@
 
 | code | 意味 | 発生箇所（関数） | 裏取りテスト |
 |---|---|---|---|
-| 0 | 成功（DSL/plan/freeform いずれかの達成。「機械保証なし」の警告つき成功や、doctor/history/vocab の正常終了も含む） | `cmd_run_dsl` / `cmd_run_freeform` / `cmd_run_plan` / `cmd_doctor` / `cmd_history` / `cmd_vocab` / `cmd_stop` 他 | `test_exit_0_success` |
-| 1 | 汎用の失敗（事後条件 fail・y/N 確認で拒否・doctor の任意チェック失敗・restore/undo の対象無し・★W11 undo が履歴の端＝最も古い状態に着いた 等） | `_confirm_overwrite_or_gate`（対話 no）/ `_confirm_freeform_apply`（対話 no）/ `cmd_run_dsl` 等（事後条件未達成）/ ★挙動変更#3 `_sheet_conflict_gate`（3択の③「やめる」）・`_preview_and_run_on_alternative_sheet`（②のプレビュー後に N）/ ★W11 `cmd_undo`・`cmd_restore`（`NoOlderBackupError` を捕捉） | `test_exit_1_generic_failure` / `test_exit_1_undo_at_the_oldest_generation` / `tests/test_sheet_conflict.py::test_choice_3_stops_without_doing_anything` |
+| 0 | 成功（DSL/plan/freeform いずれかの達成。「機械保証なし」の警告つき成功や、doctor/history/vocab の正常終了も含む。★M2: `run <フォルダ>` の抽出集約は一致 0 行でも 0＝分母つきで「0 行」を明示して成功） | `cmd_run_dsl` / `cmd_run_freeform` / `cmd_run_plan` / ★`cmd_run_folder` / `cmd_doctor` / `cmd_history` / `cmd_vocab` / `cmd_stop` 他 | `test_exit_0_success` |
+| 1 | 汎用の失敗（事後条件 fail・y/N 確認で拒否・doctor の任意チェック失敗・restore/undo の対象無し・★W11 undo が履歴の端＝最も古い状態に着いた 等） | `_confirm_overwrite_or_gate`（対話 no）/ `_confirm_freeform_apply`（対話 no）/ `cmd_run_dsl` 等（事後条件未達成）/ ★挙動変更#3 `_sheet_conflict_gate`（3択の③「やめる」）・`_preview_and_run_on_alternative_sheet`（②のプレビュー後に N）/ ★W11 `cmd_undo`・`cmd_restore`（`NoOlderBackupError` を捕捉）/ ★M2 `cmd_run_folder`（書いた直後の独立読み検算が破れた＝出力は書かずに捨てる。stack の 5 は持ち込まない）・`cmd_undo`（フォルダには戻す対象が無い） | `test_exit_1_generic_failure` / `test_exit_1_undo_at_the_oldest_generation` / `tests/test_sheet_conflict.py::test_choice_3_stops_without_doing_anything` |
 | **2** | **★ 欠番。ailine.py 自身はこのコードを一度も使わない。** | （下の「なぜ2が欠番か」参照） | `test_exit_2_is_argparse_reserved_not_ailine_own` |
-| 3 | CLARIFY（見出し行推定の自信不足、または翻訳が確認質問を返した） | `_cmd_run_body`（見出し行推定）/ `cmd_run_dsl` / `cmd_run_freeform` / `cmd_run_plan`（翻訳結果が CLARIFY） | `test_exit_3_clarify` |
+| 3 | CLARIFY（見出し行推定の自信不足、または翻訳が確認質問を返した）／★M2: フォルダに未対応の依頼の名指しの断り（抽出以外の op・複数段の計画・条件が読めない） | `_cmd_run_body`（見出し行推定）/ `cmd_run_dsl` / `cmd_run_freeform` / `cmd_run_plan`（翻訳結果が CLARIFY）/ ★`cmd_run_folder`（`_run_folder_refuse`・OP_META の folder 宣言が唯一の根拠） | `test_exit_3_clarify` |
 | 4 | 往復忠実度ゲート（LibreOffice 往復で失われる飾りを検出・`--accept-loss`/`--copy` 未指定） | `_cmd_run_body` | `test_exit_4_fidelity_gate` |
 | 5 | Excel ロック検出（同フォルダの `~$` ロックファイル） | `_cmd_run_body`（`check_excel_lock`） | `test_exit_5_excel_lock` |
 | 6 | グローバル run ロック取得失敗（別プロセスが `ailine run` 実行中） | `cmd_run`（`acquire_run_lock`） | `test_exit_6_run_lock_busy` |
-| 7 | 破壊の関所・非対話で確認できない（既存データを持つ列への上書き） | `_confirm_overwrite_or_gate`（`EOFError`） | `test_exit_7_overwrite_gate_noninteractive` |
+| 7 | 破壊の関所・非対話で確認できない（既存データを持つ列への上書き）／★M2: 出力先に人のファイル（または ailine の別コマンドの出力）がある（`run` には `--overwrite` が無いので、退けるか消してもらう） | `_confirm_overwrite_or_gate`（`EOFError`）/ ★`cmd_run_folder`（書き込みの関所・移す直前にも再判定） | `test_exit_7_overwrite_gate_noninteractive` |
 | 8 | 自由生成の関所・非対話で確認できない（機械検証できないコードの適用） | `_confirm_freeform_apply`（`EOFError`） | `test_exit_8_freeform_gate_noninteractive` |
 
 ## なぜ 2 が欠番か（調査結果）

@@ -13,7 +13,6 @@ import pytest
 
 # ★ M2 実装前の凍結検体: 実装が通ったら strict xfail が XPASS で赤くなり、
 # この行を外す変更が同じ diff に必ず現れる（黙って通過できない）。
-pytestmark = pytest.mark.xfail(strict=True, reason="M2（run のフォルダ分岐）実装前")
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -103,3 +102,83 @@ def test_row_accounting_identity_is_reported(tmp_path, monkeypatch, capsys):
     f = {x["name"]: x for x in mf["files"]}["a.xlsx"]
     assert f["rows_matched"] == 1 and f["rows_unmatched"] == 1 and f["total_rows_excluded"] == 1
     assert f["rows_matched"] + f["rows_unmatched"] + f["total_rows_excluded"] == 3
+
+
+def test_e4_zero_matches_is_loud_and_never_claims_check(tmp_path, monkeypatch, capsys):
+    """★ E4: 全ファイルで一致 0 行 → 出力は書く（見出し+出所列のみ・決定論）が、
+       分母つきで「0 行」を明示し ✓ を名乗らない。黙る 0 件は「黙って失敗」の隣。"""
+    _mock_translation(monkeypatch, _EXTRACT_40000)
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100), ("J-2", "乙", 200)])
+    rc, out = _run(folder, "金額が40000以上の行を抜き出して", capsys=capsys)
+    assert rc == 0, out
+    assert "0 行" in out, f"一致 0 行の明示が無い:\n{out}"
+    assert "✓" not in out, f"0 件の出力に ✓ を名乗った:\n{out}"
+
+
+def test_multiple_defect_kinds_are_all_reported_in_one_run(tmp_path, monkeypatch, capsys):
+    """★ 一括検出（Namakoo 決裁 09:22・1 シート 1 ミスと限らない）: 欠け・合計不一致・
+       一致 0 が同居するフォルダで、1 回の実行で全部名指し。⚠ の件数は等号で数える。"""
+    _mock_translation(monkeypatch, _EXTRACT_40000)
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 50000), ("合計", None, 99999)])   # 閉じない合計
+    _book(folder / "b.xlsx", ["注文ID", "取引先"], [("J-9", "戊")])                  # 金額が欠け
+    _book(folder / "c.xlsx", HDRS, [("J-3", "丙", 45000)])                           # 正常
+    rc, out = _run(folder, "金額が40000以上の行を抜き出して", capsys=capsys)
+    assert rc == 0, out
+    assert "b.xlsx" in out and "金額" in out, "欠けの名指しが無い"
+    assert "99999" in out and "50000" in out, "合計不一致の両側の数字が無い"
+    assert out.count("⚠") == 2, f"⚠ は等号 2 のはず（欠け+閉じない合計）:\n{out}"
+
+
+def test_normal_files_are_not_named_in_human_report_only_anomalies(tmp_path, monkeypatch, capsys):
+    """★ 実弾検分の差し戻し（2026-08-21・設計 D6）: 正常ファイル（並べ替えで取れた・
+       合計行が正しく閉じて除外された・行の完全会計が成立）は人間向け報告で**名指ししない**
+       ── 名指しは異常（取れなかった／閉じる検査の不一致／シート fallback）だけ。
+       正常分は「合計行 N 行を M 冊で除外」のような 1 行の集計に畳む（内訳は --json）。
+       ⚠ は本物の異常（欠け1件・閉じない合計1件）の 2 本だけのはず。"""
+    _mock_translation(monkeypatch, _EXTRACT_40000)
+    folder = tmp_path / "src"
+    # a.xlsx: 正常 ── 合計行はあるが正しく閉じて除外される（異常ではない）。
+    _book(folder / "a.xlsx", HDRS,
+          [("J-1", "甲", 50000), ("J-2", "乙", 30000), ("合計", None, 80000)])
+    # b.xlsx: 正常 ── 列の並び替え（多重集合は一致）。
+    _book(folder / "b.xlsx", ["金額", "取引先", "注文ID"],
+          [(60000, "己", "J-6")])
+    # c.xlsx: 正常 ── 何の異常も無い。
+    _book(folder / "c.xlsx", HDRS, [("J-3", "丙", 45000)])
+    # d.xlsx: 異常 ── 金額列が欠けて取れない。
+    _book(folder / "d.xlsx", ["注文ID", "取引先"], [("J-9", "戊")])
+    # e.xlsx: 異常 ── 合計行があるが値が閉じない。
+    _book(folder / "e.xlsx", HDRS, [("J-5", "庚", 50000), ("合計", None, 99999)])
+    rc, out = _run(folder, "金額が40000以上の行を抜き出して", capsys=capsys)
+    assert rc == 0, out
+    for normal in ("a.xlsx", "b.xlsx", "c.xlsx"):
+        assert normal not in out, f"正常ファイル {normal} が人間向け報告に名指しされている:\n{out}"
+    assert "d.xlsx" in out, f"異常ファイル d.xlsx の名指しが無い:\n{out}"
+    assert "e.xlsx" in out, f"異常ファイル e.xlsx の名指しが無い:\n{out}"
+    assert out.count("⚠") == 2, f"⚠ は等号 2 のはず（欠け1件+閉じない合計1件）:\n{out}"
+    assert "99999" in out and "50000" in out, f"閉じる検査の両側の数字が無い:\n{out}"
+    assert "並べ替え" in out and "1" in out, f"並べ替えの集計が無い:\n{out}"
+    assert "合計行" in out and "冊" in out, f"合計行の除外の集計が無い:\n{out}"
+    assert "行の完全会計" in out, f"行の完全会計の集計が無い:\n{out}"
+
+
+def test_verify_extract_kind_mismatch_exits_5(tmp_path, monkeypatch, capsys):
+    """★ 実弾検分で発覚した実バグ: 抽出出力を改竄すると verify は ⚠ を出すのに exit=0。
+       終了コードだけを見る自動化経路が改竄を見逃す。stack 出力と同じく exit 5。"""
+    import subprocess, sys
+    _mock_translation(monkeypatch, _EXTRACT_40000)
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 50000), ("J-2", "乙", 45000)])
+    rc, out = _run(folder, "金額が40000以上の行を抜き出して", capsys=capsys)
+    assert rc == 0, out
+    out_book = next(tmp_path.glob("*.xlsx"))
+    wb = openpyxl.load_workbook(out_book)
+    ws = wb.active
+    ws.cell(row=2, column=3).value = 99999999
+    wb.save(out_book)
+    p = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out_book), str(folder)],
+                       capture_output=True, text=True, timeout=120, encoding="utf-8")
+    assert "⚠" in p.stdout, p.stdout
+    assert p.returncode == 5, f"⚠ を出したのに exit={p.returncode}（自動化経路が見逃す）:\n{p.stdout}"

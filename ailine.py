@@ -89,6 +89,7 @@ from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（D
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
+from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -1504,45 +1505,45 @@ def extract_quoted_literal(text: str) -> str | None:
 #   OP_LABELS は後方互換のためこの dict から導出する（既存コードの OP_LABELS.get(op, op)
 #   はそのまま・値は完全に同じ）。
 OP_META = {
-    "SORT": {"category": "並べ替える", "label": "並べ替え",
+    "SORT": {"category": "並べ替える", "label": "並べ替え", "folder": False,
               "synonyms": ["並べ替え", "ソート", "順に並べる"]},
-    "COMPUTE_COLUMN": {"category": "計算する", "label": "計算列",
+    "COMPUTE_COLUMN": {"category": "計算する", "label": "計算列", "folder": False,
                          "synonyms": ["計算", "掛け算・割り算", "列同士の演算"]},
-    "LOOKUP_FILL": {"category": "表を編集する", "label": "転記",
+    "LOOKUP_FILL": {"category": "表を編集する", "label": "転記", "folder": False,
                      "synonyms": ["引っ張ってくる", "転記", "VLOOKUP"]},
-    "AGGREGATE": {"category": "計算する", "label": "集計",
+    "AGGREGATE": {"category": "計算する", "label": "集計", "folder": False,
                    "synonyms": ["集計", "まとめる", "グループごとに小計"]},
-    "BOLD": {"category": "見た目を整える", "label": "太字",
+    "BOLD": {"category": "見た目を整える", "label": "太字", "folder": False,
               "synonyms": ["太字", "ボールド", "強調"]},
-    "FILL_COLOR": {"category": "見た目を整える", "label": "背景色",
+    "FILL_COLOR": {"category": "見た目を整える", "label": "背景色", "folder": False,
                     "synonyms": ["色を付ける", "塗りつぶす", "ハイライト"]},
-    "NUMBER_FORMAT": {"category": "見た目を整える", "label": "数値書式",
+    "NUMBER_FORMAT": {"category": "見た目を整える", "label": "数値書式", "folder": False,
                         "synonyms": ["桁区切り", "カンマ区切り", "3桁区切り"]},
-    "MERGE": {"category": "表を編集する", "label": "セル結合",
+    "MERGE": {"category": "表を編集する", "label": "セル結合", "folder": False,
                "synonyms": ["結合", "セルを繋げる", "セルをまとめる"]},
-    "CHART": {"category": "グラフを作る", "label": "グラフ",
+    "CHART": {"category": "グラフを作る", "label": "グラフ", "folder": False,
                "synonyms": ["グラフ", "棒グラフ", "チャート"]},
-    "CENTER_ALIGN": {"category": "見た目を整える", "label": "中央揃え",
+    "CENTER_ALIGN": {"category": "見た目を整える", "label": "中央揃え", "folder": False,
                        "synonyms": ["中央揃え", "センタリング", "真ん中に寄せる"]},
-    "APPEND_TOTAL": {"category": "計算する", "label": "合計追加",
+    "APPEND_TOTAL": {"category": "計算する", "label": "合計追加", "folder": False,
                        "synonyms": ["合計を出す", "税込み合計", "一番下に合計"]},
     # ★ W9: 検証済みヘルパ4種の DSL 語彙昇格。
-    "INSERT_ROWS": {"category": "表を編集する", "label": "行挿入",
+    "INSERT_ROWS": {"category": "表を編集する", "label": "行挿入", "folder": False,
                       "synonyms": ["行を挿入", "行を追加", "行を足す"]},
-    "DRAW_BORDERS": {"category": "見た目を整える", "label": "けい線",
+    "DRAW_BORDERS": {"category": "見た目を整える", "label": "けい線", "folder": False,
                        "synonyms": ["けい線を引く", "罫線を引く", "枠線を付ける"]},
-    "AUTOFIT": {"category": "見た目を整える", "label": "列幅自動調整",
+    "AUTOFIT": {"category": "見た目を整える", "label": "列幅自動調整", "folder": False,
                  "synonyms": ["幅を内容に合わせる", "列幅調整", "列を自動調整"]},
-    "PIVOT": {"category": "計算する", "label": "ピボット",
+    "PIVOT": {"category": "計算する", "label": "ピボット", "folder": False,
                "synonyms": ["ピボットテーブル", "ピボットで集計", "クロス集計"]},
     # ★ 致命3(W10e): 「列を一括で定数に書き換える」の DSL 昇格（査定所見:総務事務が
     #   最も頻繁に行う操作に信頼できる経路が無かった）。
-    "SET_COLUMN_VALUE": {"category": "表を編集する", "label": "一括書換",
+    "SET_COLUMN_VALUE": {"category": "表を編集する", "label": "一括書換", "folder": False,
                            "synonyms": ["全部同じ値にする", "一括で書き換える", "列を統一する"]},
     # ★ 生まれた時から検証つきの1例目（コミット 2edcb08「EXTRACT op」参照）: 単一条件
     #   （列×比較×値）に一致する行を新シートへ抜き出す。自由生成の実弾2件（全セル文字列化・
     #   空シートで exit 0）を事後条件(check_extract)が直接殺す形で op に昇格させる。
-    "EXTRACT": {"category": "表を編集する", "label": "抽出",
+    "EXTRACT": {"category": "表を編集する", "label": "抽出", "folder": True,
                  "synonyms": ["抜き出す", "抽出", "絞り込んでコピー"]},
 }
 
@@ -3822,13 +3823,20 @@ def check_set_column_value(path: Path, args: dict, header_row: int = 1) -> tuple
 
 def _extract_predicate(cmp: str, threshold):
     """EXTRACT の判定を Basic 側(ExtractRows/helpers/AiLineHelpers.bas)とは別実装で
-       もう一度書く（同じ勘定を2箇所が違う実装で書いて一致を見る・独立測定）。"""
+       もう一度書く（同じ勘定を2箇所が違う実装で書いて一致を見る・独立測定）。
+       ★ M2（2026-08-21・宣言済みの挙動変更）: 意味論を tests/test_predicate_truth_table.py
+       の手書きの表に合わせた。① eq は両辺が数値なら**許容誤差 1e-6**（浮動小数の完全一致は
+       表計算の実データで偽陰性になる）② contains は**文字列セルのみ**（数値 140000 を
+       黙って "140000" に文字列化して『40 を含む』としない ── 型の保存の哲学）。
+       単一ブック EXTRACT（check_extract）の挙動もこの線に揃う。"""
     def _match(cell_value) -> bool:
         if cmp == "contains":
-            return threshold is not None and str(threshold) in ("" if cell_value is None else str(cell_value))
+            return (isinstance(cell_value, str) and threshold is not None
+                    and str(threshold) in cell_value)
         if cmp == "eq":
             if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
-                return _is_number(cell_value) and float(cell_value) == float(threshold)
+                return (_is_number(cell_value)
+                        and abs(float(cell_value) - float(threshold)) <= 1e-6)
             return str(cell_value) == str(threshold)
         if not _is_number(cell_value):   # gte/lte/gt/lt は数値比較のみ
             return False
@@ -4365,8 +4373,14 @@ def cmd_undo(a: argparse.Namespace) -> int:
        （history.jsonl には依存しない＝history が壊れていても undo できる）。
        名前空間対応(item3)は list_backups/restore_backup 経由でそのまま効く。
        復元後、まだ戻せる回数（★ W11: バックアップの総数ではなく**あと何段遡れるか**）を
-       添える。端（最も古い状態）に着いたら復元せずに非零で止まる。"""
+       添える。端（最も古い状態）に着いたら復元せずに非零で止まる。
+       ★ M2: フォルダ抽出（run <フォルダ>）は原本を読むだけでバックアップも履歴も作らない
+       ── 戻す対象が構造的に存在しないので、フォルダには「無い」と正直に言って止まる。"""
     book = Path(a.book).resolve()
+    if book.is_dir():
+        print(f"× フォルダに対する undo はありません"
+              f"（原本は読んでいません。消せるのは出力ブックだけです）: {book}")
+        return 1
     if a.list:
         backups = list_backups(book)
         for ln in render_backup_list(book.name, backups, shelved=len(list_undo_shelf(book))):
@@ -5084,6 +5098,12 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
        - 計画が2段以上(複合依頼) → 段ごとに honest な項目別実行(cmd_run_plan)（M2c）
        ★ 後方互換: translate_task が "plan" で包まない旧形式（bare {"op":...}）を返した場合
        （テストの monkeypatch を含む）も、その dict をそのまま単一段として扱う。"""
+    # ★ M2（architect 致命4）: book の位置がディレクトリなら多ファイル分岐へ ── **一番最初**に
+    #   分ける。ここから下は1冊のブック前提の器官（ロック検出・正規化・バックアップ・undo）で、
+    #   フォルダを渡すと check_excel_lock の open(r+b) が PermissionError になり
+    #   「Excel で開かれています」という嘘の診断を返していた（凍結検体あり）。
+    if Path(a.book).is_dir():
+        return cmd_run_folder(a)
     maybe_show_notice_v2()   # ★ W10a 項目2: 既定変更の一度きり告知（run の一番最初）
 
     book = Path(a.book).resolve()
@@ -6552,6 +6572,270 @@ def _stack_postcondition_fail(label: str, expected, actual) -> int:
     return 5
 
 
+def _run_folder_refuse(op: str, plan_len: int) -> int:
+    """M2 の断り（E11）: フォルダに未対応の依頼を**名指し**で断り、次の手を添えて exit 3。
+       ★ 黙って1冊目に適用が最悪の形 ── 断る時は原本に一切触れない（この時点で
+       書き込みは一度も起きていない）。対応の可否は OP_META の folder 宣言が唯一の出どころ
+       （手書きの対応表を別に持たない ── ずれる表を作らない）。"""
+    label = OP_META.get(op, {}).get("label") or (op if op else "この依頼")
+    if plan_len > 1:
+        print(f"？ 複数の操作をまとめた依頼（{plan_len} 段）はフォルダに対応していません。"
+              "フォルダに頼めるのは抽出だけです（1 冊を指定すればそのまま頼めます）。")
+    else:
+        print(f"？ {label}は複数ファイル（フォルダ）に対応していません。"
+              f"フォルダに頼めるのは抽出だけです（1 冊を指定すれば『{label}』も頼めます）。")
+    print("  （頼める操作の一覧: ailine ops）")
+    return 3
+
+
+def cmd_run_folder(a: argparse.Namespace) -> int:
+    """`ailine run <フォルダ> "<依頼>"`: M2 ── フォルダの各ブックから条件に一致する行を
+       抜き出して1冊に集約する（DESIGN-20260821-multifile.md M2 節・Namakoo 決裁 A 案）。
+       配管は M1書き(stack) の再利用（出所列・書き手の印・関所 exit7・自己参照除外・
+       workdir→移動）で、この経路固有なのは「翻訳された条件で選ぶ」ことだけ。
+       ★ architect 致命4: この経路は check_excel_lock / normalize_book / バックアップ /
+       undo 履歴のどれにも触れない（原本は読むだけ・消せるのは出力ブックだけ）。
+       フォルダに `open(r+b)` を試みて『Excel で開かれています』と嘘をつく穴は、
+       分岐がこの関数へ来ることで構造的に消える。
+       ★ 一括検出（Namakoo 決裁 09:22）: ファイル単位の欠陥は最初の1件で止めず全部集めて
+       名指しする。★ 憲法2: この関数は ✓ を一切名乗らない（✓ の裏づけを機械の結果
+       オブジェクトから出す claim render guard がこの経路にまだ無い ── 迷ったら落とす）。"""
+    folder = Path(a.book).resolve()
+    as_json = bool(getattr(a, "json", False))
+    say = (lambda *args, **kw: None) if as_json else print
+
+    # ① 分母と自己参照除外（V6）── cmd_stack と同じ判定（ailine 産は種類を問わず入力から外す）。
+    candidates, _folder_excluded = multifile.classify_folder_contents(folder)
+    self_excluded, filtered = [], []
+    for p in candidates:
+        headers = _peek_headers(p)
+        if headers is not None and multifile_stack.is_own_output(p, headers):
+            self_excluded.append(p.name)
+            continue
+        filtered.append(p)
+    candidates = filtered
+    denominator = len(candidates)
+
+    base_path, base_wb = multifile.open_base_workbook(candidates)
+    if base_path is None:
+        say(f"■ ailine run（フォルダ抽出）  folder={folder}")
+        if self_excluded:
+            names = "、".join(f"『{n}』" for n in self_excluded)
+            say(f"（自分の出力 {names} を入力から除外しました）")
+        say(f"{denominator} ファイル中 0 照合 → 読める .xlsx が無いので抽出できません")
+        if as_json:
+            print(json.dumps({"out": None, "condition": None, "multifile": {
+                "denominator": denominator, "matched_files": 0, "contributing_files": 0,
+                "rows_written": 0, "files": [], "skipped": [
+                    {"name": p.name, "reason": "旧形式(.xls)または読み込み失敗"} for p in candidates],
+                "self_excluded": self_excluded, "sheet_fallbacks": [], "excluded_detail": [],
+                "mismatches": [], "rebuilt_own_output": False}}, ensure_ascii=False))
+        return 0
+
+    # ② 基準ファイル方式（A1）: 見出し行の推定は既存の器官を1回だけ使い、値として渡す。
+    base_sheet = base_wb.sheetnames[0]
+    ws = base_wb[base_sheet]
+    scan_end = min(ws.max_row or 1, MAX_ROWS, STRUCT_HEADER_SCAN_ROWS)
+    rows_stats = _row_char_stats(ws, 1, scan_end, 1, min(ws.max_column or 1, MAX_COLS))
+    row, confident = detect_header_row({"rows": rows_stats})
+    header_row = row if confident else 1
+    base_headers = multifile.read_row_headers(ws, header_row)
+    base_wb.close()
+
+    # ③ 翻訳（7B に渡すのは基準ファイルの見出しだけ ── 40 冊分で prompt を壊さない）。
+    book_meta = {"sheets": [base_sheet], "headers": {base_sheet: base_headers},
+                 "header_rows": {base_sheet: header_row}}
+    translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
+    plan = translation.get("plan") if isinstance(translation, dict) else None
+    if plan is None and isinstance(translation, dict) and translation.get("op"):
+        plan = [translation]          # ★ 後方互換: "plan" で包まない旧形式
+    if not isinstance(plan, list) or not plan:
+        plan = [{"op": "FREEFORM", "args": {}}]
+
+    step = plan[0] if isinstance(plan[0], dict) else {}
+    op = str(step.get("op") or "")
+    if len(plan) == 1 and op == "CLARIFY":
+        print(f"？ {step.get('question') or '確認が必要です'}")
+        print("  （頼める操作の一覧: ailine ops）")
+        return 3
+    if len(plan) != 1 or not OP_META.get(op, {}).get("folder"):
+        return _run_folder_refuse(op, len(plan))
+
+    # ④ 条件の確定（A': 値の数値化は機械が行う ── verify_dsl_args と同じ線）。
+    args = step.get("args") or {}
+    col = args.get("col") or args.get("column")
+    cmp = str(args.get("cmp") or "").strip().lower()
+    value = args.get("value")
+    if cmp not in _EXTRACT_CMPS:
+        print(f"？ 比較『{args.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません。"
+              "言い方を変えて（例:『金額が40000以上の行を抜き出して』）もう一度お願いします。")
+        return 3
+    if col not in base_headers:
+        print(f"？ 列『{col}』が基準ファイル『{base_path.name}』にありません。"
+              f"ある列: {', '.join(base_headers)}")
+        return 3
+    if value in (None, ""):
+        print("？ 抽出する値が依頼文から読み取れません（例:『金額が40000以上の行を抜き出して』）。")
+        return 3
+    if cmp == "contains":
+        value = str(value)
+    else:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            if cmp != "eq":
+                print(f"？ 『{value}』は数値として読めないので {_EXTRACT_CMP_LABELS[cmp]} の"
+                      "比較ができません。数値で言い直してください。")
+                return 3
+
+    # ⑤ 出力先（Q7: フォルダの親・機械命名）と書き込みの関所（40 冊読む前に判定して印字）。
+    cmp_label = _EXTRACT_CMP_LABELS.get(cmp, cmp)
+    out_stem = extract_multi.sanitize_filename(
+        f"{folder.name}_{col}{_format_extract_value(value)}{cmp_label}")
+    out = folder.parent / f"{out_stem}.xlsx"
+    rebuilt_own_output = False
+    if out.exists():
+        existing_headers = _peek_headers(out)
+        mark = (multifile_stack.own_output_mark(out, existing_headers)
+                if existing_headers is not None else None)
+        if mark == extract_multi.CREATOR_MARK:
+            rebuilt_own_output = True      # 前回の抽出出力＝黙って作り直してよい
+        else:
+            whose = (f"ailine の別のコマンドの出力です（作成: {mark}）" if mark
+                      else "ailine の印が無い人のファイルです")
+            print(f"⚠ 出力先に書けません: {out}")
+            print(f"（{out.name} は{whose}。run にはフラグでの上書き許可がありません ── "
+                  "そのファイルを別の場所へ移すか削除してから、もう一度実行してください）")
+            return 7
+    say(f"■ ailine run（フォルダ抽出）  folder={folder}")
+    say(f"出力先: {out}")
+    say(f"条件: {col} {_format_extract_value(value)} {cmp_label}")
+
+    # ⑥ ファイルごとの評価（★ 一括検出: 欠陥が出ても止めず全部集める）。
+    skipped, files_json, excluded_detail, mismatches = [], [], [], []
+    sheet_fallbacks, matched_rows_all = [], []
+    for p in candidates:
+        r = extract_multi.evaluate_and_extract(p, base_headers, base_sheet, header_row,
+                                                col, cmp, value)
+        if r.sheet_fallback:
+            sheet_fallbacks.append({"name": r.name, "wanted": r.sheet_fallback[0],
+                                    "used": r.sheet_fallback[1]})
+        if r.status == "取れなかった":
+            skipped.append({"name": r.name, "reason": r.reason})
+            continue
+        for values, src_row in r.rows:
+            matched_rows_all.append((values, r.name, src_row))
+        files_json.append({"name": r.name, "rows_matched": r.rows_matched,
+                           "rows_unmatched": r.rows_unmatched,
+                           "total_rows_excluded": len(r.excluded), "reordered": r.reordered})
+        if r.excluded:
+            excluded_detail.append({"name": r.name, "rows": [
+                {"row": e.row, "value": e.value, "reason": e.reason} for e in r.excluded]})
+        for m in r.mismatches:
+            mismatches.append({"name": r.name, "row": m.row,
+                               "excluded_value": m.excluded_value, "adopted_sum": m.adopted_sum})
+
+    total_matched = len(matched_rows_all)
+    matched_files = len(files_json)
+    contributing_files = len({name for _v, name, _r in matched_rows_all})
+
+    # ⑦ 書き出し（workdir→移動）。★ 条件は文書属性に焼く ── verify が出力単体から
+    #    条件を復元して同じ検算を再実行できる（信用の条件⑥）。
+    out_headers = base_headers + multifile_stack.own_output_headers(base_headers)
+    workdir = Path(tempfile.mkdtemp(prefix="ailine_extract_"))
+    try:
+        tmp_out = workdir / out.name
+        wb_out = openpyxl.Workbook()
+        wb_out.properties.creator = extract_multi.CREATOR_MARK
+        wb_out.properties.description = json.dumps(
+            {"tool": "ailine", "kind": "extract", "version": 1,
+             "column": col, "cmp": cmp, "value": value, "sheet": base_sheet},
+            ensure_ascii=False)
+        ws_out = wb_out.active
+        ws_out.title = _extract_output_sheet_name(col, cmp, value)
+        ws_out.append(out_headers)
+        for values, fname, src_row in matched_rows_all:
+            ws_out.append(list(values) + [fname, src_row])
+        wb_out.save(tmp_out)
+        wb_out.close()
+
+        # ⑧ 事後条件: 書いた直後の中身を**独立読み**（xml_readback）で検算する。
+        #    元側も候補ファイル全部を読み直す ── 一致0行のファイルは出所列に現れないため、
+        #    出所列だけを頼りにすると「1冊まるごと落ちた」が検算をすり抜ける。
+        post = multifile_verify.verify_extract(tmp_out, folder, col, cmp, value,
+                                                sheet_name=base_sheet, sources=candidates)
+        if post.get("mismatch"):
+            m = post["mismatch"]
+            where = f"Σ{m['column']}" if m["kind"] == "sum" else "採用行数"
+            if as_json:
+                print(json.dumps({"out": str(out), "postcondition": post,
+                                  "written": False}, ensure_ascii=False))
+            else:
+                print(f"⚠ 事後条件が破れた: {where}  元 {multifile_stack.fmt_num(m['source'])} / "
+                      f"出力(書いた直後) {multifile_stack.fmt_num(m['output'])}")
+                print(f"（{out.name} は書き込んでいません。元フォルダも変更していません）")
+            return 1
+
+        # ⑨ 関所（fail closed）: 移す直前にもう一度見る（前段の判定から時間が経っている）。
+        if out.exists():
+            existing_headers = _peek_headers(out)
+            mark = (multifile_stack.own_output_mark(out, existing_headers)
+                    if existing_headers is not None else None)
+            if mark != extract_multi.CREATOR_MARK:
+                print(f"⚠ 出力先に書けません（実行中に別のファイルが現れました）: {out}")
+                return 7
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tmp_out, out)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    # ⑩ 報告（分母つき・行の完全会計・両側の数字）。
+    mf = {"denominator": denominator, "matched_files": matched_files,
+          "contributing_files": contributing_files, "rows_written": total_matched,
+          "files": files_json, "skipped": skipped, "self_excluded": self_excluded,
+          "sheet_fallbacks": sheet_fallbacks, "excluded_detail": excluded_detail,
+          "mismatches": mismatches, "rebuilt_own_output": rebuilt_own_output}
+    if as_json:
+        print(json.dumps({"out": str(out), "written": True,
+                          "condition": {"column": col, "cmp": cmp, "value": value},
+                          "sums": post.get("sums", {}), "multifile": mf}, ensure_ascii=False))
+        return 0
+    if self_excluded:
+        names = "、".join(f"『{n}』" for n in self_excluded)
+        say(f"（自分の出力 {names} を入力から除外しました）")
+    say(f"{denominator} ファイル中 {matched_files} 照合 → "
+        f"{matched_files} 中 {contributing_files} ファイルで計 {total_matched} 行一致")
+    # ★ D6 差し戻し（実弾検分・2026-08-21）: 正常なファイルは名指ししない ── 名指しは
+    #   異常のあるファイル（取れなかった／閉じる検査の不一致／シート fallback）だけ。
+    #   正常分（並べ替え・合計行の除外・行の完全会計）は 1 行の集計に畳む。
+    #   全ファイルの内訳は --json に既にそのまま載っている（ここでは減らさない）。
+    for f in skipped:
+        say(f"  ⚠ {f['name']}: 取れなかった（{f['reason']}）── 中身の検査は未実施")
+    reordered_files = [f for f in files_json if f.get("reordered")]
+    if reordered_files:
+        say(f"  並べ替えて照合: {len(reordered_files)} 冊（内訳は --json）")
+    for f in sheet_fallbacks:
+        say(f"  {f['name']}: シート『{f['wanted']}』が無いので1枚目『{f['used']}』を使いました")
+    if excluded_detail:
+        total_excluded_rows = sum(len(entry["rows"]) for entry in excluded_detail)
+        say(f"  合計行 {total_excluded_rows} 行を {len(excluded_detail)} 冊で除外"
+            "（内訳は --json）")
+    for m in mismatches:
+        say(f"  ⚠ {m['name']}: 合計行({m['row']}行目) の値 "
+            f"{multifile_stack.fmt_num(m['excluded_value'])} ≠ 明細の和 "
+            f"{multifile_stack.fmt_num(m['adopted_sum'])}")
+    if files_json:   # ★ 憲法⑨ 行の完全会計: どの行もどれかの勘定に入っている（全冊で成立・集計）
+        say(f"  行の完全会計: {len(files_json)} 冊すべてで成立"
+            "（データ行 = 一致 + 不一致 + 合計行の除外・内訳は --json）")
+    say(f"出力データ行数: {total_matched}")
+    for col_name, both in post.get("sums", {}).items():
+        say(f"Σ{col_name}: 元 {multifile_stack.fmt_num(both['source'])} / "
+            f"出力 {multifile_stack.fmt_num(both['output'])}")
+    if rebuilt_own_output:
+        say(f"（前回の抽出出力『{out.name}』を作り直しました）")
+    return 0
+
+
 def cmd_stack(a: argparse.Namespace) -> int:
     """`ailine stack <folder> --out <path>`: M1書き ── 縦積み（UNION ALL）+ 出所列。
        DESIGN-20260821-multifile.md v2 §1(M1書き)・v2.1(単位L)。列挙・照合・合計行の識別は
@@ -6722,10 +7006,16 @@ def cmd_verify(a: argparse.Namespace) -> int:
     """`ailine verify <out.xlsx> <srcfolder>`: 検算の単独再実行（信用の条件⑥）。
        stack の出力ブックと元フォルダだけから、行数照合・数値列ごとの Σ 照合を独立に
        再実行する（読みは ailine_core/xml_readback.py・openpyxl は経由しない）。
-       本体（ailine_core/verify.py）が検算そのものを持ち、この関数は配線だけ。"""
+       本体（ailine_core/verify.py）が検算そのものを持ち、この関数は配線だけ。
+       ★ M2（E13/致命3）: 検算の種類（縦積み/抽出）は出力ブックの印と焼いた条件から
+       verify_output が決める。ailine の印が無いブックは合格でも不合格でもなく
+       exit 4（「検算できません」）── 0 件照合で空虚な合格を名乗らない。"""
     out = Path(a.out).resolve()
     folder = Path(a.srcfolder).resolve()
     result = multifile_verify.verify_output(out, folder)
+    if result.get("unmarked"):
+        print(f"× ailine の印がありません。検算できません: {out}")
+        return 4
     for ln in render_verify_report(str(out), str(folder), result):
         print(ln)
     return 5 if result.get("mismatch") else 0

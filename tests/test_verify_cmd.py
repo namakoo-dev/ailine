@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import openpyxl
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 HDRS = ["注文ID", "取引先", "金額"]
@@ -152,3 +153,13 @@ def test_verify_reads_the_same_named_sheet_as_stack(tmp_path):
     assert ws2.max_row - 1 == 2, f"明細 2 行のはず: {ws2.max_row - 1}"
     v = _run("verify", out, folder)
     assert v.returncode == 0, f"正当な出力に偽 ⚠（verify が別シートを読んでいる）:\n{v.stdout}"
+
+
+def test_verify_refuses_unmarked_book_instead_of_passing_empty(tmp_path):
+    """★ E13/致命3 の半分: ailine の印が無いブックには「検算できません」と言って
+       不合格でも合格でもない出口（exit 4）── 0 件照合で合格を名乗らない（空虚な合格の禁止）。"""
+    book = tmp_path / "someones.xlsx"
+    _book(book, HDRS + ["元ファイル", "元行"], [("X-1", "人の表", 999, "a.xlsx", 2)])
+    p = _run("verify", book, tmp_path)
+    assert p.returncode == 4, f"exit={p.returncode}\n{p.stdout}"
+    assert "検算できません" in p.stdout or "印" in p.stdout

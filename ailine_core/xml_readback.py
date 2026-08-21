@@ -246,3 +246,25 @@ def row_has_any_value(data: dict, row: int, num_cols: int) -> bool:
     """row の 1..num_cols 列のどこかに値があるか。"""
     grid = data["grid"]
     return any((row, c) in grid for c in range(1, num_cols + 1))
+
+
+def read_core_properties(path) -> tuple:
+    """docProps/core.xml の (dc:creator, dc:description) を直読みする。
+       ★ M2（verify の種類判定・architect 致命3）: 検算の入口は『このブックは誰が何として
+       書いたか』を先に読む ── creator が印（ailine stack / ailine extract）で、
+       description に条件（EXTRACT の col/cmp/value）が機械可読で焼いてある。
+       読めなければ (None, None)（壊れている/該当なし＝印なし＝他人のファイル扱い・
+       fail closed）。★ ailine 非依存の汎用読み（この module の他の関数と同じく読むだけ）。"""
+    try:
+        with zipfile.ZipFile(path) as z:
+            if "docProps/core.xml" not in z.namelist():
+                return None, None
+            root = ET.fromstring(z.read("docProps/core.xml"))
+    except Exception:
+        return None, None
+    ns = {"dc": "http://purl.org/dc/elements/1.1/"}
+    out = []
+    for tag in ("dc:creator", "dc:description"):
+        el = root.find(tag, ns)
+        out.append(el.text if el is not None else None)
+    return out[0], out[1]
