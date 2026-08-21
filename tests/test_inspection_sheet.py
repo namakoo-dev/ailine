@@ -228,3 +228,4 @@ def test_legend_explains_link_landing_is_the_marker(tmp_path):
                     for c in row if c.value is not None)
     assert "原本" in text and ("印" in text or "塗" in text), f"原本不可侵の明記が無い: {text[-400:]}"
     assert "選択" in text or "着地" in text, "リンク着地=対象セルの説明が無い"
+    assert "Ctrl" in text, "Ctrl+クリックの案内が無い（Namakoo が実際に引っかかった・2026-08-21）"
