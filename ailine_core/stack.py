@@ -173,20 +173,9 @@ def is_own_output(path) -> bool:
     return own_output_mark(path) is not None
 
 
-def numeric_column_names(ws, header_row: int, headers: list) -> list:
-    """headers（基準ファイルの列名）のうち、データ行のどこかで数値を持つ列名の一覧。
-       ★ jisaku-review#3/#6 の直し: Σ 照合・報告を『最初の数値列』1本だけでなく
-       全数値列に広げるための土台（合計行検出の keyed 列＝ multifile.numeric_value_column
-       の1本はここでは変えない・呼び出し側で従来どおり別に決める）。"""
-    max_row = ws.max_row or header_row
-    out = []
-    for i, name in enumerate(headers, start=1):
-        for row in range(header_row + 1, max_row + 1):
-            v = ws.cell(row=row, column=i).value
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                out.append(name)
-                break
-    return out
+# ★ operator 盲検7度目の直し（2026-08-21）: multifile.py へ移した
+#   （extract_multi.py とも共有するため）。呼び出し元互換のためこの名前でも参照できる。
+numeric_column_names = multifile.numeric_column_names
 
 
 @dataclass(frozen=True)
@@ -211,9 +200,13 @@ class FileStackResult:
 
 
 def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: int,
-                        value_col_name: str | None) -> FileStackResult:
+                        numeric_col_names: list) -> FileStackResult:
     """1ファイルを基準と照合し、取れていれば『積む行』を確定して値まで読む。
-       ★ どんな失敗でも例外を上げず名指し+理由で返す（multifile.evaluate_file と同じ線）。"""
+       ★ どんな失敗でも例外を上げず名指し+理由で返す（multifile.evaluate_file と同じ線）。
+       ★ operator 盲検7度目の直し（2026-08-21）: 合計行の候補判定を『指定の1本の数値列』
+       （旧 value_col_name）から『基準の数値列集合すべて』（numeric_col_names）へ広げる。
+       実務標準形（数量・単価つき請求書）は最初の数値列=数量だが、合計の数字は金額列にしか
+       無い ── 単一列版は has_number=False で全トリガが沈黙し、Σ が黙って2倍になった。"""
     if path.suffix.lower() != ".xlsx":
         return FileStackResult(name=path.name, status="積めなかった", reason="旧形式(.xls)")
     try:
@@ -240,11 +233,15 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
         all_rows = list(range(header_row + 1, max_row + 1))
 
         label_col = col_for_base.get(base_headers[0]) if base_headers else None
-        value_col = col_for_base.get(value_col_name) if value_col_name else None
-        if label_col and value_col:
-            triples = [(r, ws.cell(row=r, column=label_col).value,
-                        ws.cell(row=r, column=value_col).value) for r in all_rows]
-            verdict = total_row.split_total_rows(triples)
+        value_cols = {name: col_for_base[name] for name in numeric_col_names
+                      if col_for_base.get(name)}
+        if label_col and value_cols:
+            rows_in = []
+            for r in all_rows:
+                label_val = ws.cell(row=r, column=label_col).value
+                vals = {name: ws.cell(row=r, column=idx).value for name, idx in value_cols.items()}
+                rows_in.append((r, label_val, vals))
+            verdict = total_row.split_total_rows_multi(rows_in)
         else:
             verdict = total_row.TotalRowVerdict(excluded=[], adopted_rows=[], mismatches=[])
 
@@ -272,23 +269,21 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
         # ★ M2.5: 所見の組み立て（ws がまだ開いているこの関数の内側でだけ、列位置まで
         #   正確な3座標が引ける）。⚠ 相当（閉じる検査の不一致・分母食い違い）とシート
         #   fallback の開示（既存 CLI 報告と同じ基準・inspection.WARN_KINDS）。
-        # ★ 合計行の閉じる検査 不一致の HYPERLINK は「ラベル(ID)列」でも「値列」でもなく
-        #   基準の2列目（例: 取引先/摘要 ── ID の次に来る記述列）へ飛ばす。両側の数字は
-        #   所見の行自体（元の値/採用側の値の列）に既に載っているので、リンク先まで同じ
-        #   数値セルへ飛ばすのは冗長 ── 人が行を「誰の・何の行か」で認識できる列を選ぶ
-        #   （ID→摘要/取引先→金額、という帳票の一般的な並びに沿う）。
-        # ★ アンカーは「怪しい数字そのもの」（閉じなかった合計の値セル）。クリックの
-        #   着地点に迷いを作らない（検分シートの本文が両側の数字を持つのは別の役割）。
-        anchor_col = value_col or label_col or 1
+        # ★ アンカーは「怪しい数字そのもの」── 単一列版は基準の2列目等へ固定していたが、
+        #   複数数値列版では不一致が起きた**その列**（m.column）へ飛ばすのが最も正確
+        #   （同じ行が複数列で同時に不一致になりうるため、列ごとに違うセルへ導く）。
+        #   着地セルが引けなければ従来どおり label_col へ落ちる（fail closed）。
         # ★ UX 磨き③（Namakoo 実視 2026-08-21 12:01）: 断片（「除外行の値が...」）でなく
         #   1所見1文。状態（両側の数字+動詞）+ 次の手（『クリック』して確認）を1文に言い切る。
         findings = []
         for m in verdict.mismatches:
-            cell = inspection.cell_ref(anchor_col, m.row)
+            m_col = col_for_base.get(m.column) if hasattr(m, "column") else None
+            cell = inspection.cell_ref(m_col or label_col or 1, m.row)
+            col_label = f"『{m.column}』" if hasattr(m, "column") else ""
             findings.append(inspection.finding(
                 kind=inspection.KIND_TOTAL_ROW_MISMATCH, file=path.name, sheet=ws.title,
                 cell=cell, source_value=m.excluded_value, output_value=m.adopted_sum,
-                next_step=f"合計行({cell}) の値 {inspection.fmt_num(m.excluded_value)} が"
+                next_step=f"合計行({cell}) の{col_label}列の値 {inspection.fmt_num(m.excluded_value)} が"
                           f"明細の和 {inspection.fmt_num(m.adopted_sum)} と合いません。"
                           f"リンクをクリックして {path.name} の {cell} を確認してください"
                           "（除外そのものは維持しています）。"))

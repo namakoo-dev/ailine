@@ -252,6 +252,11 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
     for w in result.get("col_a_warnings", ()):
         lines.append(f"  ⚠ {w['name']}: A列走査 {w['col_a']} 行 / used range {w['used_range']} 行"
                      "（分母の食い違い・根1には触れない可視化）")
+    # ★ 第二の独立検出器（operator 盲検7度目 修正2）: 列解決に依存しない語のトリップワイヤ。
+    #   除外はしない（検出のみ）── 検出器1が沈黙しても黙って倍額にはならない、の開示。
+    for w in result.get("total_word_warnings", ()):
+        lines.append(f"  ⚠ {w['file']} の{w['row']}行目に合計語『{w['word']}』を含む行が"
+                     "積まれています（除外していません・確認してください）")
     lines.append(f"出力データ行数: {result['rows_written']}")
     for col, both in result.get("sums", {}).items():
         lines.append(f"Σ{col}: 元 {_fmt_num(both['source'])} / 出力 {_fmt_num(both['output'])}")
@@ -279,14 +284,26 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
     if mismatches is None:   # ★ 後方互換: 複数形を持たない呼び出し元（無いはずだが fail closed）
         mismatches = [mismatch] if mismatch else []
     for m in mismatches:
-        if m["kind"] == "sum":
+        kind = m["kind"]
+        if kind == "sum":
             lines.append(f"⚠ {m['column']} の合計が一致しません: "
                          f"元 {_fmt_num(m['source'])} / 出力 {_fmt_num(m['output'])}")
-        elif m["kind"] == "attribution":
+        elif kind == "attribution":
             # ★ review3#3: 集計は合っていても帰属（どの行がどのファイルの何行目か）が嘘。
             lines.append(f"⚠ 帰属が一致しません: {m['file']} の {m['src_row']}行目 "
                          f"列『{m['column']}』 元 {_fmt_num(m['source'])} / "
                          f"出力 {_fmt_num(m['output'])}")
+        elif kind == "total_word":
+            # ★ operator 盲検7度目 修正2（第二の独立検出器）: 再演検分の直し ── この分岐が
+            #   無いと exit 5 なのに理由が1行も出ない「黙る不合格」になっていた（憲法1違反）。
+            file_label = m.get("file") or "(ファイル不明)"
+            lines.append(f"⚠ {file_label} の{m['row']}行目に合計語『{m['word']}』を含む行が"
+                         "あります（除外していません ── 合計行なら元を確認してください）")
+        else:
+            # ★ 型で塞ぐフォールバック: 将来 kind が増えた時に、この分岐の追加漏れで
+            #   「mismatches は非空なのに ⚠ が1行も出ない」黙る不合格を起こさない
+            #   （生データを出すので、少なくとも exit 非0 の理由がゼロにはならない）。
+            lines.append(f"⚠ 不明な種類の不一致（kind={kind}）: {m}")
     return lines
 
 

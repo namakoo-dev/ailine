@@ -524,3 +524,114 @@ def test_creator_mark_sets_and_signature_table_are_in_sync():
         f"印の集合が二重管理でずれた: stack={st.CREATOR_MARKS} verify={vf._CREATOR_MARKS}"
     assert set(st.KIND_SIGNATURES.keys()) == set(st.CREATOR_MARKS), \
         f"署名テーブルに無い印がある（署名なしの印は fail closed を破る）: {st.KIND_SIGNATURES.keys()}"
+
+
+# ---- operator 盲検 7 度目・$0 の主因（2026-08-21 18:4x・発見③の凍結）----
+
+_INV_HDRS = ["日付", "品目", "数量", "単価", "金額"]
+
+
+def _invoice(path, items, total_label_col, formula=False):
+    """operator の検体の再現: 数量・単価つきの実務標準形。合計ラベルの列位置は可変・
+       合計の数字は 金額 列だけ（数量・単価は空）── これが実物の合計行の形。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "明細"
+    ws.append(_INV_HDRS)
+    total = 0
+    for d, item, qty, price in items:
+        ws.append([d, item, qty, price, qty * price])
+        total += qty * price
+    row = [None] * 5
+    row[total_label_col] = "合計"
+    row[4] = f"=SUM(E2:E{len(items) + 1})" if formula else total
+    ws.append(row)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+
+
+_ITEMS = [("2026-07-03", "事務用品", 10, 1200), ("2026-07-10", "コピー用紙", 5, 400)]
+
+
+@pytest.mark.parametrize("label_col", [0, 1, 3], ids=["日付列", "品目列", "単価列"])
+def test_qty_price_invoices_totals_are_excluded_regardless_of_label_column(tmp_path, label_col):
+    """★ operator $0 の主因: 最初の数値列（数量）に数字が無い合計行は全トリガが沈黙し、
+       Σ が黙って 2 倍になった。合計の数字がどの数値列にあっても・ラベルがどの列でも除外。"""
+    folder = tmp_path / "src"
+    _invoice(folder / "a.xlsx", _ITEMS, label_col)
+    _invoice(folder / "b.xlsx", _ITEMS, label_col)
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0, p.stdout
+    ws = openpyxl.load_workbook(out).active
+    labels = [str(r[label_col].value) for r in ws.iter_rows(min_row=2)]
+    assert "合計" not in labels, f"合計行が積まれた（ラベル列 {label_col}）: {labels}"
+    # Σ金額 は明細 4 行分 = (10*1200+5*400)*2 = 28000
+    assert "28000" in p.stdout and "56000" not in p.stdout, f"Σ が 2 倍:\n{p.stdout}"
+
+
+def test_total_word_row_stacked_anyway_trips_loud_wire(tmp_path):
+    """★ 恒真切り（第二の検出器）: 除外機構が何かの理由で沈黙しても、『合計/小計/総計』の
+       語を持つ行が出力に積まれたら、列解決に依存しない語のトリップワイヤが ⚠ で鳴る
+       （黙って倍額、を機械で不可能にする ── 検出できないなら鳴って人に渡す）。
+       検体: ラベル『 合 計 』（空白混じり・語トリガの正規化が拾えない変種を想定して
+       将来の沈黙も含めて網を張る ── まず現行の沈黙形（数量列に数字なし）で赤を確認）。"""
+    folder = tmp_path / "src"
+    _invoice(folder / "a.xlsx", _ITEMS, 1)
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0
+    ws = openpyxl.load_workbook(out).active
+    stacked_texts = " ".join(str(c.value) for row in ws.iter_rows(min_row=2) for c in row if c.value)
+    if "合計" in stacked_texts:
+        assert "⚠" in p.stdout and "合計" in p.stdout, \
+            f"合計語の行が積まれたのにトリップワイヤが黙った:\n{p.stdout}"
+
+
+def test_verify_also_trips_on_stacked_total_word_rows(tmp_path):
+    """★ verify 側の恒真切り: stack と同じ除外規則の再計算だけでは沈黙を共有する ──
+       verify にも語のトリップワイヤ（出力データ行に合計語 → ⚠・exit 5）。"""
+    folder = tmp_path / "src"
+    _invoice(folder / "a.xlsx", _ITEMS, 1)
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0
+    ws = openpyxl.load_workbook(out).active
+    stacked_texts = " ".join(str(c.value) for row in ws.iter_rows(min_row=2) for c in row if c.value)
+    v = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out), str(folder)],
+                       capture_output=True, text=True, timeout=120, encoding="utf-8")
+    if "合計" in stacked_texts:
+        assert v.returncode == 5, f"合計語の行が積まれた出力を verify が合格させた:\n{v.stdout}"
+
+
+def test_total_word_in_filename_does_not_trip_the_wire(tmp_path):
+    """★ 再演検分（2026-08-21 19:1x）: 『合計』を含むファイル名（A_合計列0.xlsx）が
+       出所列の値としてトリップワイヤに引っかかり、正当な出力が verify exit 5 になった。
+       ワイヤの走査対象はデータ列のみ ── 出所列（うちが付けた列）は対象外。"""
+    folder = tmp_path / "src"
+    _book(folder / "月次_合計表.xlsx", HDRS, [("J-1", "甲", 100)])
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0, p.stdout
+    assert "⚠" not in p.stdout.split("出力先:")[-1] or "合計語" not in p.stdout, \
+        f"ファイル名の『合計』でワイヤが誤発火:\n{p.stdout}"
+    v = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out), str(folder)],
+                       capture_output=True, text=True, timeout=120, encoding="utf-8")
+    assert v.returncode == 0, f"ファイル名の『合計』で verify が落ちた:\n{v.stdout}"
+
+
+def test_verify_never_fails_silently(tmp_path):
+    """★ 憲法 1: verify が非 0 で終わる時は、必ず理由の ⚠ が 1 行以上出る（黙る不合格の禁止）。
+       再演検分の実物: total_word の描画分岐が無く、全数字一致表示のまま exit 5 になった ──
+       total_word だけが発火する形（データセルに『合計商事』）で凍結する。
+       ★ ワイヤは発火してよい（データ列の語・誤爆でも 30 秒で確認できる ⚠）── 罪は黙ること。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "合計商事", 100)])
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0
+    v = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out), str(folder)],
+                       capture_output=True, text=True, timeout=120, encoding="utf-8")
+    if v.returncode != 0:
+        assert "⚠" in v.stdout and ("合計" in v.stdout), \
+            f"exit {v.returncode} なのに理由が 1 行も無い（黙る不合格）:\n{v.stdout}"

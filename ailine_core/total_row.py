@@ -145,3 +145,129 @@ def split_total_rows(rows) -> TotalRowVerdict:
         prev_excluded_row = row_num
 
     return TotalRowVerdict(excluded=excluded, adopted_rows=adopted_rows, mismatches=mismatches)
+
+
+# ---- 複数数値列版（operator 盲検7度目・$0 の主因の直し・2026-08-21）----
+# ★ 単一列版（split_total_rows・上記）はそのまま・触らない（凍結済み10検体）。
+# 真因: 全トリガが「指定の数値列（=基準の最初の数値列）に数字がある」を前提にしていた。
+# 実務標準形（数量・単価つき請求書）は最初の数値列=数量だが、合計行の数字は金額列にしか
+# 無い ── has_number=False で全トリガが沈黙し、Σ が黙って2倍になった（stack の読み側は
+# 取り逃がし=黙って二重計上で書き側と非対称が反転する、v2.1 冒頭の設計どおりの実害）。
+
+
+@dataclass(frozen=True)
+class MismatchColumn:
+    """閉じる検査が不一致だった1件（複数数値列版）。列名つき ── 単一行が複数の数値列で
+       同時に不一致になりうる（各列は独立に検査する）。"""
+    row: int
+    column: str
+    excluded_value: float
+    adopted_sum: float
+
+
+def split_total_rows_multi(rows) -> TotalRowVerdict:
+    """rows: (行番号, ラベルセル値, {列名: セル値, ...}) の列（上から順）。
+
+    合計行の候補判定を『対象の数値列集合のどこかに数字がある』に広げた版（単一列版は
+    『指定の1本の数値列』だけを見る）。排除トリガの種別（ラベル語/ラベル空白/直上空行）は
+    単一列版と同じ語・同じ正規化（_label_is_total_word・_normalize_label を共有）。
+
+    閉じる検査は列ごとに独立: その除外行が数字を持つ**各**数値列について、その列の
+    採用行の和（区間 OR 累積・単一列版と同じ OR ロジック）と突き合わせる。不一致は
+    列名つきで mismatches（MismatchColumn）に積む（除外自体は維持する）。
+
+    戻り値は単一列版と同じコンテナ（TotalRowVerdict）── excluded は ExcludedRow の
+    ままだが、.value は『その行で数字を持つ最初の列（列順）の値』を代表値として使う
+    （呼び出し側が特定の列の値を見たければ元セルから引き直せる ── 除外の事実と理由の
+    開示に必要な最小限）。"""
+    excluded_raw = []          # (row, label, {col: value}, reason)
+    adopted_rows = []
+    adopted_numeric: dict = {}  # {col: [(row, float value), ...]}
+    prev_row_is_blank = False
+
+    col_order: list = []
+    for _r, _l, values in rows:
+        for c in values:
+            if c not in col_order:
+                col_order.append(c)
+    for c in col_order:
+        adopted_numeric[c] = []
+
+    for row_num, label, values in rows:
+        label_blank = _is_blank_cell(label)
+        numeric_here = [(c, values[c]) for c in col_order
+                        if c in values and _is_number(values[c])]
+        has_number_any = bool(numeric_here)
+        all_values_blank = all(_is_blank_cell(values.get(c)) for c in col_order)
+        row_fully_blank = label_blank and all_values_blank   # ★ 直上空行判定: ラベルも数値も無い行
+
+        reason = None
+        if has_number_any and _label_is_total_word(label):
+            reason = "ラベル語"
+        elif has_number_any and label_blank:
+            reason = "ラベル空白"
+        elif has_number_any and prev_row_is_blank:
+            reason = "直上空行"
+
+        if reason:
+            excluded_raw.append((row_num, label, dict(numeric_here), reason))
+        elif has_number_any:
+            adopted_rows.append(row_num)
+            for c, v in numeric_here:
+                adopted_numeric[c].append((row_num, float(v)))
+        # else: 数値の無い空行・データにならない行 ── 採用にも除外にも数えない
+
+        prev_row_is_blank = row_fully_blank
+
+    mismatches = []
+    excluded = []
+    prev_excluded_row = None
+    for row_num, label, numeric_vals, reason in excluded_raw:
+        for c, v in numeric_vals.items():
+            excluded_value = float(v)
+            col_adopted = adopted_numeric.get(c, [])
+            cumulative_sum = sum(val for r, val in col_adopted if r < row_num)
+            lower_bound = prev_excluded_row if prev_excluded_row is not None else -1
+            segment_sum = sum(val for r, val in col_adopted if lower_bound < r < row_num)
+            closes_cumulative = abs(excluded_value - cumulative_sum) <= TOLERANCE
+            closes_segment = abs(excluded_value - segment_sum) <= TOLERANCE
+            if not (closes_cumulative or closes_segment):
+                mismatches.append(MismatchColumn(row=row_num, column=c,
+                                                  excluded_value=excluded_value,
+                                                  adopted_sum=cumulative_sum))
+        representative_value = next(iter(numeric_vals.values()), None)
+        excluded.append(ExcludedRow(row=row_num, label=label, value=representative_value,
+                                    reason=reason))
+        prev_excluded_row = row_num
+
+    return TotalRowVerdict(excluded=excluded, adopted_rows=adopted_rows, mismatches=mismatches)
+
+
+# ---- 第二の独立検出器（語のトリップワイヤ・恒真切り・operator 盲検7度目 修正2）----
+# ★ 意図的に検出器1（split_total_rows/split_total_rows_multi）と盲点を共有しない設計。
+# 列解決を一切使わない（『どれがラベル列か』を知らずに、行の全セル値をただ走査する）──
+# 検出器1が何らかの理由で沈黙しても、黙って倍額にはならない、が保証の中身。
+# 誤爆（摘要に『7月合計分』等）は ⚠ 1個の確認コストで受ける（疑わしきは鳴らす）。
+
+
+def row_has_total_word(values) -> str | None:
+    """values: 1行のセル値の列（列の意味・並びは問わない）。いずれかの値が合計語
+       （_label_is_total_word と同じ規則: 合計/小計/総計は部分一致・計は完全一致・
+       断片ガードで『設計部』等は誤爆しない）に一致すれば、正規化後の語を返す。
+       無ければ None。"""
+    for v in values:
+        if _label_is_total_word(v):
+            return _normalize_label(v)
+    return None
+
+
+def total_word_trip_findings(rows) -> list:
+    """rows: [(識別子（例: ファイル名）, 行番号, [セル値, ...]), ...]。
+       合計語を持つ行を名指しで集める（除外はしない・検出のみ）。
+       戻り値: [(識別子, 行番号, 見つかった語), ...]（見つかった順・一括検出）。"""
+    out = []
+    for ident, row_num, values in rows:
+        word = row_has_total_word(values)
+        if word:
+            out.append((ident, row_num, word))
+    return out

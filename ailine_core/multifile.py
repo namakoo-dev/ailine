@@ -119,6 +119,24 @@ def _column_index(headers: list, name: str) -> int | None:
         return None
 
 
+def numeric_column_names(ws, header_row: int, headers: list) -> list:
+    """headers（基準ファイルの列名）のうち、データ行のどこかで数値を持つ列名の一覧。
+       ★ jisaku-review#3/#6 の直し: Σ 照合・報告を『最初の数値列』1本だけでなく
+       全数値列に広げるための土台。★ operator 盲検7度目の直し: stack.py から
+       multifile.py へ移した（extract_multi.py とも共有するため ── 合計行検出を
+       全数値列に広げる土台が2箇所必要になった。stack.py 側は再輸出 `numeric_column_names
+       = multifile.numeric_column_names` で呼び出し元互換を保つ）。"""
+    max_row = ws.max_row or header_row
+    out = []
+    for i, name in enumerate(headers, start=1):
+        for row in range(header_row + 1, max_row + 1):
+            v = ws.cell(row=row, column=i).value
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out.append(name)
+                break
+    return out
+
+
 def total_row_candidate_count(ws, header_row: int, label_col: int, value_col: int) -> int:
     """単位L: ラベル列(label_col)・数値列(value_col) で split_total_rows を走らせ、
        除外（合計行候補）の件数を返す（--json の分布測定の口・DESIGN v2.1）。"""

@@ -74,7 +74,7 @@ def _numeric_columns(grid: dict, base_headers: list, rows: list) -> list:
     return out
 
 
-def _expected_rows_for_source(path, base_headers: list, label_col_name, value_col_name,
+def _expected_rows_for_source(path, base_headers: list, label_col_name, numeric_col_names: list,
                                sheet_name: str | None = None):
     """1元ファイルを独立に読み直し、『積まれるはずだった行』の行番号集合と、
        数値列ごとの値 {列名: {行番号: 値}} を返す。見出し行はこのファイル自身から探す
@@ -84,7 +84,11 @@ def _expected_rows_for_source(path, base_headers: list, label_col_name, value_co
        （= stack が基準のシート名を付けている）。stack は基準名のシートを find_matching_sheet
        で優先するのに、ここが常に先頭シートを読むと基準名シートが2枚目以降にあるソースで
        別のシートを照合してしまう ── sheet_name で同じシートを狙う（無ければ read_grid が
-       1枚目へ落ちる・従来どおり）。"""
+       1枚目へ落ちる・従来どおり）。
+       ★ operator 盲検7度目の直し（2026-08-21）: 合計行の除外は『指定の1本の数値列』
+       （旧 value_col_name）でなく『基準の数値列集合すべて』（numeric_col_names）を見る ──
+       stack.evaluate_and_stack（書いた側）と同じ検出でないと、片方だけが取り逃がして
+       恒真ペア（間違った数字同士が一致）になる。"""
     data = xml_readback.read_grid(path, sheet_name=sheet_name)
     header_row = _find_header_row(data, base_headers)
     if header_row is None:
@@ -96,10 +100,15 @@ def _expected_rows_for_source(path, base_headers: list, label_col_name, value_co
     grid = data["grid"]
 
     label_col = col_for_base.get(label_col_name) if label_col_name else None
-    value_col = col_for_base.get(value_col_name) if value_col_name else None
-    if label_col and value_col:
-        triples = [(r, grid.get((r, label_col)), grid.get((r, value_col))) for r in all_rows]
-        verdict = total_row.split_total_rows(triples)
+    value_cols = {name: col_for_base[name] for name in numeric_col_names
+                  if col_for_base.get(name)}
+    if label_col and value_cols:
+        rows_in = []
+        for r in all_rows:
+            label_val = grid.get((r, label_col))
+            vals = {name: grid.get((r, idx)) for name, idx in value_cols.items()}
+            rows_in.append((r, label_val, vals))
+        verdict = total_row.split_total_rows_multi(rows_in)
     else:
         verdict = total_row.TotalRowVerdict(excluded=[], adopted_rows=[], mismatches=[])
     excluded_rows = {e.row for e in verdict.excluded}
@@ -202,15 +211,19 @@ def verify_output(out_path, src_folder) -> dict:
     return {"unmarked": True}
 
 
-def _expected_rows_for_extract_source(path, base_headers: list, label_col_name, cond_col_name,
+def _expected_rows_for_extract_source(path, base_headers: list, label_col_name,
+                                       numeric_col_names: list, cond_col_name,
                                        match_fn, sheet_name: str | None = None):
     """M2: 1元ファイルを独立に読み直し、『抽出されるはずだった行』の行番号集合と、
        列ごとの値 {列名: {行番号: 値}} を返す（_expected_rows_for_source の抽出版）。
        違いは2点だけ:
-       ① 合計行の除外に使う数値列は『最初の数値列』ではなく**条件列そのもの**
-          （extract_multi.evaluate_and_extract と同じ選択 ── 書いた側と同じ列で同じ
-          除外を再現しないと、検算が別の行を数えて偽 ⚠ を出す）
-       ② 除外を引いた候補行を、さらに条件（match_fn）で絞る
+       ① 除外を引いた候補行を、さらに条件（match_fn・条件列 cond_col_name）で絞る
+       ② それ以外は _expected_rows_for_source と同じ ── 合計行の除外は基準の数値列
+          すべて（numeric_col_names）を見る。★ operator 盲検7度目の直し（2026-08-21）:
+          旧仕様は『条件列そのもの』だけを見ていた（extract_multi.evaluate_and_extract と
+          揃えるためだったが、これは stack と非対称な単一列版の穴を extract 側にも
+          持ち込んでいただけ ── 書いた側（evaluate_and_extract）も numeric_col_names を
+          見るよう直したので、検算側もここで揃える。片方だけ直すと片配線になる）。
        ★ 読めない元ファイル（.xls・壊れ）は (set(), {})＝この元ファイルは無視する
        （run 側が『取れなかった』として名指しで開示済み）。"""
     try:
@@ -227,10 +240,16 @@ def _expected_rows_for_extract_source(path, base_headers: list, label_col_name, 
     grid = data["grid"]
 
     label_col = col_for_base.get(label_col_name) if label_col_name else None
-    cond_col = col_for_base.get(cond_col_name) if cond_col_name else None
-    if label_col and cond_col:
-        triples = [(r, grid.get((r, label_col)), grid.get((r, cond_col))) for r in all_rows]
-        verdict = total_row.split_total_rows(triples)
+    cond_col = col_for_base.get(cond_col_name) if cond_col_name else None   # ★ 述語の対象列
+    value_cols = {name: col_for_base[name] for name in numeric_col_names
+                  if col_for_base.get(name)}
+    if label_col and value_cols:
+        rows_in = []
+        for r in all_rows:
+            label_val = grid.get((r, label_col))
+            vals = {name: grid.get((r, idx)) for name, idx in value_cols.items()}
+            rows_in.append((r, label_val, vals))
+        verdict = total_row.split_total_rows_multi(rows_in)
     else:
         verdict = total_row.TotalRowVerdict(excluded=[], adopted_rows=[], mismatches=[])
     excluded_rows = {e.row for e in verdict.excluded}
@@ -247,6 +266,34 @@ def _expected_rows_for_extract_source(path, base_headers: list, label_col_name, 
             continue
         values[bh] = {r: grid[(r, col)] for r in expected_rows if (r, col) in grid}
     return expected_rows, values
+
+
+def _total_word_mismatches(out_data: dict, out_headers: list, out_rows: list) -> list:
+    """★ 第二の独立検出器（operator 盲検7度目 修正2）: 検出器1（split_total_rows/
+       split_total_rows_multi）と意図的に盲点を共有しない ── 列解決を一切使わず、出力の
+       各行の全セル値を走査して合計語を持つ行を名指しする（total_row.total_word_trip_findings
+       と同じ規則）。出所列（末尾2列）があればファイル名/元行も添える。除外はしない
+       （検出のみ・mismatches に kind="total_word" として積む）。
+       ★ 再演検分の直し（2026-08-21 19:1x）: 走査対象は**データ列のみ**（out_headers の
+       末尾2列＝出所列を除く）── 出所列の値（うちが付けたファイル名・元行番号）は対象外。
+       『月次_合計表.xlsx』のように合計語を含むファイル名は実務に普通にあり、出所列まで
+       走査すると正当な出力が誤発火して verify が exit 5 になっていた（stack/extract の
+       own_output_headers は常に末尾2列＝出所列という契約に乗る・サフィックス形でも
+       列の“位置”は変わらないので、末尾2列を機械的に除くだけで十分）。"""
+    grid = out_data["grid"]
+    has_provenance = len(out_headers) >= 2
+    file_col = len(out_headers) - 1 if has_provenance else None
+    row_col = len(out_headers) if has_provenance else None
+    data_col_count = len(out_headers) - 2 if has_provenance else len(out_headers)
+    trip_rows = [(r, r, [grid.get((r, c)) for c in range(1, data_col_count + 1)])
+                 for r in out_rows]
+    out = []
+    for _ident, row_num, word in total_row.total_word_trip_findings(trip_rows):
+        fname = grid.get((row_num, file_col)) if file_col else None
+        src_row = grid.get((row_num, row_col)) if row_col else None
+        out.append({"kind": "total_word", "file": str(fname) if fname is not None else None,
+                    "row": src_row if src_row is not None else row_num, "word": word})
+    return out
 
 
 def verify_extract(out_path, src_folder, col, cmp, value, sheet_name: str | None = None,
@@ -281,7 +328,7 @@ def verify_extract(out_path, src_folder, col, cmp, value, sheet_name: str | None
         if not path.exists():
             continue
         expected_rows, values = _expected_rows_for_extract_source(
-            path, base_headers, label_col_name, col, match_fn, sheet_name=sheet_name)
+            path, base_headers, label_col_name, numeric_cols, col, match_fn, sheet_name=sheet_name)
         expected_total += len(expected_rows)
         for name in numeric_cols:
             for v in values.get(name, {}).values():
@@ -326,6 +373,12 @@ def verify_extract(out_path, src_folder, col, cmp, value, sheet_name: str | None
                            "source": attribution["source_value"], "output": attribution["output_value"],
                            "file": attribution["file"], "src_row": attribution["src_row"]})
 
+    # ★ operator 盲検7度目 修正2: 語のトリップワイヤ（第二の独立検出器）。
+    #   `mismatch`（単数）の末尾に積む ── row_count/sum/attribution が1件も無い時だけ
+    #   `mismatch` に選ばれる（呼び出し側 cmd_run_folder の書き込み時事後条件は kind で
+    #   除外し、これだけでは書き込みを止めない ── 除外はしない設計と一致させる）。
+    mismatches.extend(_total_word_mismatches(out_data, out_headers, out_rows))
+
     return {"row_count": row_count, "sums": sums,
             "mismatch": mismatches[0] if mismatches else None, "mismatches": mismatches}
 
@@ -361,7 +414,7 @@ def _verify_stack(out_path, src_folder) -> dict:
 
     numeric_cols = _numeric_columns(grid, base_headers, out_rows)
     label_col_name = base_headers[0] if base_headers else None
-    value_col_name = numeric_cols[0] if numeric_cols else None
+    # ★ operator 盲検7度目の直し: 合計行検出は数値列すべて（旧: 最初の1本だけ）。
 
     expected_total = 0
     sums_source = {name: 0.0 for name in numeric_cols}
@@ -370,7 +423,7 @@ def _verify_stack(out_path, src_folder) -> dict:
         if not path.exists():
             continue
         expected_rows, values = _expected_rows_for_source(path, base_headers,
-                                                            label_col_name, value_col_name,
+                                                            label_col_name, numeric_cols,
                                                             sheet_name=base_sheet_name)
         expected_total += len(expected_rows)
         for name in numeric_cols:
@@ -414,6 +467,12 @@ def _verify_stack(out_path, src_folder) -> dict:
         mismatches.append({"kind": "attribution", "column": attribution["column"],
                            "source": attribution["source_value"], "output": attribution["output_value"],
                            "file": attribution["file"], "src_row": attribution["src_row"]})
+
+    # ★ operator 盲検7度目 修正2: 語のトリップワイヤ（第二の独立検出器）。
+    #   cmd_stack の書き込み時事後条件は kind=="attribution" だけを見るので、これが
+    #   `mismatch`（単数）に選ばれても書き込みは止まらない（除外しない設計と一致）。
+    #   `ailine verify` 単独実行（cmd_verify）は kind を問わず exit 5 にする ── 意図どおり。
+    mismatches.extend(_total_word_mismatches(out_data, out_headers, out_rows))
 
     return {"row_count": row_count, "sums": sums,
             "mismatch": mismatches[0] if mismatches else None, "mismatches": mismatches}

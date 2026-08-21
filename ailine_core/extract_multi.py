@@ -140,15 +140,19 @@ class FileExtractResult:
 
 
 def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: int,
-                          cond_col_name: str, cmp: str, value) -> FileExtractResult:
+                          numeric_col_names: list, cond_col_name: str, cmp: str,
+                          value) -> FileExtractResult:
     """1ファイルを基準と照合し、取れていれば条件に一致する行を確定して値まで読む。
        ★ どんな失敗でも例外を上げず名指し+理由で返す（multifile.evaluate_file と同じ線）。
        ★ E3（M2 検体の筆頭）: 合計行の除外（単位L）は**条件の適用より前**に回す ──
        『金額 40000 以上』のような抽出では合計行が必ず条件を満たすため、順序を誤ると
        合計行が一致行として混ざり、そのまま二重計上になる。
-       ★ 合計行検出の数値列は multifile.numeric_value_column の『最初の数値列』ではなく
-       **条件列そのもの**を使う（M2 の選択）── 検算側（verify.verify_extract）と同じ列で
-       同じ除外を再現できないと、書いた側と検算側が食い違う。"""
+       ★ operator 盲検7度目の直し（2026-08-21）: 合計行検出の数値列は『条件列そのもの』
+       （旧仕様・偶然 条件列=金額 で助かっていただけ）から『基準の数値列集合すべて』
+       （numeric_col_names）へ広げる ── stack.evaluate_and_stack と同じ検出に揃える
+       （検算側 verify.verify_extract も同じ集合を渡す・片配線にしない）。条件列
+       （cond_col_name）は述語（predicate）の対象列としてはそのまま使う（総計行検出とは
+       別の役目）。"""
     if path.suffix.lower() != ".xlsx":
         return FileExtractResult(name=path.name, status="取れなかった", reason="旧形式(.xls)")
     try:
@@ -174,11 +178,16 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
         all_rows = list(range(header_row + 1, max_row + 1))
 
         label_col = col_for_base.get(base_headers[0]) if base_headers else None
-        value_col = col_for_base.get(cond_col_name)
-        if label_col and value_col:
-            triples = [(r, ws.cell(row=r, column=label_col).value,
-                        ws.cell(row=r, column=value_col).value) for r in all_rows]
-            verdict = total_row.split_total_rows(triples)
+        value_col = col_for_base.get(cond_col_name)   # ★ 述語（predicate）の対象列
+        value_cols = {name: col_for_base[name] for name in numeric_col_names
+                      if col_for_base.get(name)}
+        if label_col and value_cols:
+            rows_in = []
+            for r in all_rows:
+                label_val = ws.cell(row=r, column=label_col).value
+                vals = {name: ws.cell(row=r, column=idx).value for name, idx in value_cols.items()}
+                rows_in.append((r, label_val, vals))
+            verdict = total_row.split_total_rows_multi(rows_in)
         else:
             verdict = total_row.TotalRowVerdict(excluded=[], adopted_rows=[], mismatches=[])
         excluded_rows = {e.row for e in verdict.excluded}
@@ -209,14 +218,17 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
         #   着地点に迷いを作らない（検分シートの本文が両側の数字を持つのは別の役割）。
         # ★ UX 磨き③（Namakoo 実視 2026-08-21 12:01）: 断片でなく1所見1文
         #   （stack.evaluate_and_stack と同じ文形・inspection.fmt_num で両側の数字を言う）。
-        anchor_col = value_col or label_col or 1
+        # ★ operator 盲検7度目: 複数数値列版では不一致の起きた列（m.column）へ飛ばす
+        #   （stack.evaluate_and_stack と同じ線・同じ行が複数列で同時に不一致になりうる）。
         findings = []
         for m in verdict.mismatches:
-            cell = inspection.cell_ref(anchor_col, m.row)
+            m_col = col_for_base.get(m.column) if hasattr(m, "column") else None
+            cell = inspection.cell_ref(m_col or value_col or label_col or 1, m.row)
+            col_label = f"『{m.column}』" if hasattr(m, "column") else ""
             findings.append(inspection.finding(
                 kind=inspection.KIND_TOTAL_ROW_MISMATCH, file=path.name, sheet=ws.title,
                 cell=cell, source_value=m.excluded_value, output_value=m.adopted_sum,
-                next_step=f"合計行({cell}) の値 {inspection.fmt_num(m.excluded_value)} が"
+                next_step=f"合計行({cell}) の{col_label}列の値 {inspection.fmt_num(m.excluded_value)} が"
                           f"明細の和 {inspection.fmt_num(m.adopted_sum)} と合いません。"
                           f"リンクをクリックして {path.name} の {cell} を確認してください"
                           "（除外そのものは維持しています）。"))

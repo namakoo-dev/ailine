@@ -93,6 +93,7 @@ from ailine_core import xml_readback   # ★ 検算の独立読み実装（openp
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
+from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -6576,7 +6577,8 @@ def _stack_json(result: dict) -> dict:
     return {"denominator": result["denominator"], "stacked_files": result["stacked_files"],
             "rows_written": result["rows_written"], "files": result["files"],
             "sums": result["sums"], "mismatches": mismatches,
-            "sheet_fallbacks": result.get("sheet_fallbacks", [])}
+            "sheet_fallbacks": result.get("sheet_fallbacks", []),
+            "total_word_warnings": result.get("total_word_warnings", [])}
 
 
 def _stack_postcondition_fail(label: str, expected, actual) -> int:
@@ -6719,6 +6721,10 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     row, confident = detect_header_row({"rows": rows_stats})
     header_row = row if confident else 1
     base_headers = multifile.read_row_headers(ws, header_row)
+    # ★ operator 盲検7度目の直し（2026-08-21）: extract 経路も合計行検出を基準の
+    #   数値列すべてに揃える（旧仕様は条件列だけを見ていた ── 偶然 条件列=金額 で
+    #   助かっていただけ）。base_wb を閉じる前に ws から読む（stack と同じ配線）。
+    numeric_cols = multifile.numeric_column_names(ws, header_row, base_headers)
     base_wb.close()
 
     # ③ 翻訳（7B に渡すのは基準ファイルの見出しだけ ── 40 冊分で prompt を壊さない）。
@@ -6808,7 +6814,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     file_sheet_map = []   # ★ M2.5: [(ファイル名, 使ったシート, 備考), ...]
     for p in candidates:
         r = extract_multi.evaluate_and_extract(p, base_headers, base_sheet, header_row,
-                                                col, cmp, value)
+                                                numeric_cols, col, cmp, value)
         all_findings.extend(r.findings)
         sheet_used = r.sheet_fallback[1] if r.sheet_fallback else base_sheet
         if r.sheet_fallback:
@@ -6835,6 +6841,12 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     matched_files = len(files_json)
     contributing_files = len({name for _v, _fmt, name, _r in matched_rows_all})
     suspicious_files = {f.file for f in all_findings if f.kind in inspection.WARN_KINDS}
+    # ★ 第二の独立検出器（operator 盲検7度目 修正2・恒真切り）: stack と同じ線。
+    #   列解決に依存せず、抽出結果として積んだ行の全セル値を走査して合計語を名指しする
+    #   （除外はしない・書き込みは止めない ── 下の post 由来の abort ガードとは別経路）。
+    trip_rows = [(fname, src_row, values) for values, _fmt, fname, src_row in matched_rows_all]
+    total_word_warnings = [{"file": fname, "row": row_num, "word": word}
+                           for fname, row_num, word in total_row.total_word_trip_findings(trip_rows)]
 
     # ⑦ 書き出し（workdir→移動）。★ 条件は文書属性に焼く ── verify が出力単体から
     #    条件を復元して同じ検算を再実行できる（信用の条件⑥）。
@@ -6869,8 +6881,14 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         #    出所列だけを頼りにすると「1冊まるごと落ちた」が検算をすり抜ける。
         post = multifile_verify.verify_extract(tmp_out, folder, col, cmp, value,
                                                 sheet_name=base_sheet, sources=candidates)
-        if post.get("mismatch"):
-            m = post["mismatch"]
+        # ★ operator 盲検7度目 修正2: verify_extract の mismatch（単数）は語のトリップワイヤ
+        #   （kind="total_word"）も含みうるが、これは除外しない設計の検出専用 ── 書き込みを
+        #   止める理由にはしない（止めるのは row_count/sum/attribution だけ・従来どおり）。
+        blocking_mismatch = post.get("mismatch")
+        if blocking_mismatch and blocking_mismatch.get("kind") == "total_word":
+            blocking_mismatch = None
+        if blocking_mismatch:
+            m = blocking_mismatch
             where = f"Σ{m['column']}" if m["kind"] == "sum" else "採用行数"
             wb_out.close()
             if as_json:
@@ -6918,7 +6936,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
           "contributing_files": contributing_files, "rows_written": total_matched,
           "files": files_json, "skipped": skipped, "self_excluded": self_excluded,
           "sheet_fallbacks": sheet_fallbacks, "excluded_detail": excluded_detail,
-          "mismatches": mismatches, "rebuilt_own_output": rebuilt_own_output}
+          "mismatches": mismatches, "total_word_warnings": total_word_warnings,
+          "rebuilt_own_output": rebuilt_own_output}
     if as_json:
         print(json.dumps({"out": str(out), "written": True,
                           "condition": {"column": col, "cmp": cmp, "value": value},
@@ -6948,6 +6967,9 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         say(f"  ⚠ {m['name']}: 合計行({m['row']}行目) の値 "
             f"{multifile_stack.fmt_num(m['excluded_value'])} ≠ 明細の和 "
             f"{multifile_stack.fmt_num(m['adopted_sum'])}")
+    for w in total_word_warnings:
+        say(f"  ⚠ {w['file']} の{w['row']}行目に合計語『{w['word']}』を含む行が"
+            "積まれています（除外していません・確認してください）")
     if files_json:   # ★ 憲法⑨ 行の完全会計: どの行もどれかの勘定に入っている（全冊で成立・集計）
         say(f"  行の完全会計: {len(files_json)} 冊すべてで成立"
             "（データ行 = 一致 + 不一致 + 合計行の除外・内訳は --json）")
@@ -7261,9 +7283,9 @@ def cmd_stack(a: argparse.Namespace) -> int:
     row, confident = detect_header_row({"rows": rows_stats})
     header_row = row if confident else 1
     base_headers = multifile.read_row_headers(ws, header_row)
-    value_col = multifile.numeric_value_column(ws, header_row, len(base_headers) or MAX_COLS)
-    value_col_name = base_headers[value_col - 1] if value_col else None   # 合計行検出の keyed 列（変えない）
-    # ★ jisaku-review#3/#6: Σ 照合・報告は全数値列に（value_col_name は合計行検出専用のまま）。
+    # ★ operator 盲検7度目の直し（2026-08-21）: 合計行検出は基準の数値列すべてを見る
+    #   （旧 value_col_name の『最初の数値列』1本だけを keyed 列にする形は廃止 ── 実務標準形
+    #   （数量・単価つき請求書）で合計の数字が金額列にしか無く、全トリガが沈黙していた）。
     numeric_cols = multifile_stack.numeric_column_names(ws, header_row, base_headers)
     base_wb.close()
 
@@ -7275,7 +7297,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
     file_sheet_map = []   # ★ M2.5: [(ファイル名, 使ったシート, 備考), ...]（fallback 開示込み）
 
     for p in candidates:
-        r = multifile_stack.evaluate_and_stack(p, base_headers, base_sheet, header_row, value_col_name)
+        r = multifile_stack.evaluate_and_stack(p, base_headers, base_sheet, header_row, numeric_cols)
         all_findings.extend(r.findings)
         sheet_used = r.sheet_fallback[1] if r.sheet_fallback else base_sheet
         if r.sheet_fallback:
@@ -7308,6 +7330,13 @@ def cmd_stack(a: argparse.Namespace) -> int:
     stacked_files = len(files_json)
     contributing_files = sum(1 for f in files_json if f["rows_stacked"] > 0)
     suspicious_files = {f.file for f in all_findings if f.kind in inspection.WARN_KINDS}
+    # ★ 第二の独立検出器（operator 盲検7度目 修正2・恒真切り）: 列解決に一切依存せず、
+    #   積んだ行の全セル値を走査して合計語（合計/小計/総計/計）を持つ行を名指しする
+    #   （除外はしない ── 検出器1が沈黙しても黙って倍額にはならない、が保証の中身。
+    #   誤爆（摘要の『7月合計分』等）は ⚠ 1個の確認コストで受ける）。
+    trip_rows = [(fname, src_row, values) for values, _fmts, fname, src_row in stacked_rows]
+    total_word_warnings = [{"file": fname, "row": row_num, "word": word}
+                           for fname, row_num, word in total_row.total_word_trip_findings(trip_rows)]
     prov_headers = multifile_stack.own_output_headers(base_headers)
     out_headers = base_headers + prov_headers
     collision_notice = None
@@ -7415,7 +7444,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
               "rows_written": len(stacked_rows), "files": files_json, "skipped": skipped,
               "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,
               "col_a_warnings": col_a_warnings, "sheet_fallbacks": sheet_fallbacks,
-              "self_excluded": self_excluded,
+              "self_excluded": self_excluded, "total_word_warnings": total_word_warnings,
               "rebuilt_own_output": rebuilt_own_output, "collision_notice": collision_notice}
     if a.json:
         print(json.dumps(_stack_json(result), ensure_ascii=False))
