@@ -6533,13 +6533,16 @@ def _stack_json(result: dict) -> dict:
     """--json 契約（検体で凍結済み）: denominator/stacked_files/rows_written/files/sums/
        mismatches。★ jisaku-review#4: mismatches はテキストの ⚠ と同じ情報を機械可読で
        （ファイルごとの入れ子ではなく、[{file, row, excluded_value, adopted_sum}, ...] の
-       平らな形 ── 自動化経路が総なめできるように）。"""
+       平らな形 ── 自動化経路が総なめできるように）。
+       ★ P2: sheet_fallbacks（[{name, wanted, used}, ...]）も追加 ── 基準名のシートが無く
+       1枚目へ落ちたファイルの機械可読の開示（人間向けは render_stack_report）。"""
     mismatches = [{"file": entry["name"], "row": m["row"],
                    "excluded_value": m["excluded_value"], "adopted_sum": m["adopted_sum"]}
                   for entry in result.get("mismatches", ()) for m in entry["rows"]]
     return {"denominator": result["denominator"], "stacked_files": result["stacked_files"],
             "rows_written": result["rows_written"], "files": result["files"],
-            "sums": result["sums"], "mismatches": mismatches}
+            "sums": result["sums"], "mismatches": mismatches,
+            "sheet_fallbacks": result.get("sheet_fallbacks", [])}
 
 
 def _stack_postcondition_fail(label: str, expected, actual) -> int:
@@ -6559,15 +6562,16 @@ def cmd_stack(a: argparse.Namespace) -> int:
     out = Path(a.out).resolve()
     candidates, _excluded = multifile.classify_folder_contents(folder)
 
-    # ★ 自己参照除外（V6）: out が入力フォルダ内にあり、署名が自分の前回出力なら列挙から外す。
-    self_excluded = None
+    # ★ 自己参照除外（V6・architect 致命2 で拡張）: 入力フォルダ内の ailine 産の出力
+    #   （out と同じパスに限らず、種類（stack/extract 等）も問わない）は二重計上を防ぐため
+    #   入力から除外 + 開示。判定は marks 集合（is_own_output）── 印が違っても ailine 産なら除外。
+    self_excluded = []
     filtered = []
     for p in candidates:
-        if p.resolve() == out:
-            headers = _peek_headers(p)
-            if headers is not None and multifile_stack.is_own_output(p, headers):
-                self_excluded = p.name
-                continue
+        headers = _peek_headers(p)
+        if headers is not None and multifile_stack.is_own_output(p, headers):
+            self_excluded.append(p.name)
+            continue
         filtered.append(p)
     candidates = filtered
     denominator = len(candidates)
@@ -6578,7 +6582,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
                   "files": [], "skipped": [{"name": p.name, "reason": "旧形式(.xls)または読み込み失敗"}
                                             for p in candidates],
                   "sums": {}, "excluded_detail": [], "mismatches": [], "col_a_warnings": [],
-                  "self_excluded": self_excluded, "rebuilt_own_output": False}
+                  "sheet_fallbacks": [], "self_excluded": self_excluded, "rebuilt_own_output": False}
         if a.json:
             print(json.dumps(_stack_json(result), ensure_ascii=False))
         else:
@@ -6600,11 +6604,15 @@ def cmd_stack(a: argparse.Namespace) -> int:
     base_wb.close()
 
     skipped, files_json, excluded_detail, mismatches, col_a_warnings = [], [], [], [], []
+    sheet_fallbacks = []   # ★ P2 開示: 基準名のシートが無く1枚目へ落ちたファイル
     stacked_rows = []   # [(base 列順の値, 元ファイル名, 元行), ...]
     sums_source = {col: 0.0 for col in numeric_cols}
 
     for p in candidates:
         r = multifile_stack.evaluate_and_stack(p, base_headers, base_sheet, header_row, value_col_name)
+        if r.sheet_fallback:
+            sheet_fallbacks.append({"name": r.name, "wanted": r.sheet_fallback[0],
+                                    "used": r.sheet_fallback[1]})
         if r.status == "積めなかった":
             skipped.append({"name": r.name, "reason": r.reason})
             continue
@@ -6667,11 +6675,22 @@ def cmd_stack(a: argparse.Namespace) -> int:
                 return _stack_postcondition_fail(f"Σ{col}", sums_source.get(col, 0.0), total)
 
         # ★ 関所（writes=new_book）: 移す直前に判定。
+        #   ★ architect 致命2: 「作り直してよい」は creator の完全一致（CREATOR_MARK）に限定。
+        #   ailine 産だが印が違う出力（例: ailine extract）は「別のコマンドの出力」として
+        #   名指しで止める（無警告の作り直しにしない）。
         rebuilt_own_output = False
         if out.exists():
             existing_headers = _peek_headers(out)
-            if existing_headers is not None and multifile_stack.is_own_output(out, existing_headers):
+            mark = (multifile_stack.own_output_mark(out, existing_headers)
+                    if existing_headers is not None else None)
+            if mark == multifile_stack.CREATOR_MARK:
                 rebuilt_own_output = True
+            elif mark is not None:
+                if not getattr(a, "overwrite", False):
+                    print(f"⚠ 出力先は ailine の別のコマンドの出力です: {out}")
+                    print(f"（{out.name}: これは ailine の別のコマンドの出力です（作成: {mark}）。"
+                         "承知の上なら --overwrite を付けて実行してください）")
+                    return 7
             elif not getattr(a, "overwrite", False):
                 # ★ jisaku-review#5: 無言で閉まらない ── 何が邪魔か（名指し）+ 次の手を言う。
                 print(f"⚠ 出力先に人のファイルがあります: {out}")
@@ -6688,7 +6707,8 @@ def cmd_stack(a: argparse.Namespace) -> int:
     result = {"denominator": denominator, "stacked_files": stacked_files,
               "rows_written": len(stacked_rows), "files": files_json, "skipped": skipped,
               "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,
-              "col_a_warnings": col_a_warnings, "self_excluded": self_excluded,
+              "col_a_warnings": col_a_warnings, "sheet_fallbacks": sheet_fallbacks,
+              "self_excluded": self_excluded,
               "rebuilt_own_output": rebuilt_own_output, "collision_notice": collision_notice}
     if a.json:
         print(json.dumps(_stack_json(result), ensure_ascii=False))

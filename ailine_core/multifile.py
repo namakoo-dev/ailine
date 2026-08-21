@@ -66,10 +66,16 @@ def read_row_headers(ws, header_row: int) -> list:
 
 
 def find_matching_sheet(wb, base_sheet_name: str | None):
-    """他ファイルは基準と同名のシートを探し、無ければ最初のシートで照合する（DESIGN §2骨）。"""
-    if base_sheet_name and base_sheet_name in wb.sheetnames:
-        return wb[base_sheet_name]
-    return wb[wb.sheetnames[0]]
+    """他ファイルは基準と同名のシートを探し、無ければ最初のシートで照合する（DESIGN §2骨）。
+       戻り値: (worksheet, fallback: bool)。fallback=True は「基準名のシートが無く1枚目へ
+       落ちた」こと（★ architect 致命5 前段の開示: 呼び出し側がファイル単位の結果に
+       sheet_fallback として載せる）。base_sheet_name が無い（基準ブック自身など）場合は
+       比較対象が無いので fallback=False のまま。"""
+    if base_sheet_name:
+        if base_sheet_name in wb.sheetnames:
+            return wb[base_sheet_name], False
+        return wb[wb.sheetnames[0]], True
+    return wb[wb.sheetnames[0]], False
 
 
 def classify_headers(base_headers: list, other_headers: list):
@@ -137,7 +143,7 @@ def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, h
     except Exception as e:
         return {"name": path.name, "status": "取れなかった", "reason": f"読み込み失敗: {e}"}
     try:
-        ws = find_matching_sheet(wb, base_sheet_name)
+        ws, sheet_fallback = find_matching_sheet(wb, base_sheet_name)
         other_headers = read_row_headers(ws, header_row)
         status, detail = classify_headers(base_headers, other_headers)
         entry = {"name": path.name, "status": status}
@@ -145,6 +151,8 @@ def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, h
             entry["reason"] = detail
         elif detail:   # "並べ替え"
             entry["reordered"] = True
+        if sheet_fallback:
+            entry["sheet_fallback"] = {"wanted": base_sheet_name, "used": ws.title}
         if status == "取れた" and value_col_name is not None and base_headers:
             label_col = _column_index(other_headers, base_headers[0])
             value_col = _column_index(other_headers, value_col_name)

@@ -53,12 +53,18 @@ def _numeric_columns(grid: dict, base_headers: list, rows: list) -> list:
     return out
 
 
-def _expected_rows_for_source(path, base_headers: list, label_col_name, value_col_name):
+def _expected_rows_for_source(path, base_headers: list, label_col_name, value_col_name,
+                               sheet_name: str | None = None):
     """1元ファイルを独立に読み直し、『積まれるはずだった行』の行番号集合と、
        数値列ごとの値 {列名: {行番号: 値}} を返す。見出し行はこのファイル自身から探す
        （★ header_row=1 固定にしない ── multifile と同じ『名前の一致』基準）。
-       見出し行が見つからなければ (set(), {})（この元ファイルは無視する）。"""
-    data = xml_readback.read_grid(path)
+       見出し行が見つからなければ (set(), {})（この元ファイルは無視する）。
+       ★ P2（architect 致命5・出荷済みの食い違い直し）: sheet_name は出力ブックのシート名
+       （= stack が基準のシート名を付けている）。stack は基準名のシートを find_matching_sheet
+       で優先するのに、ここが常に先頭シートを読むと基準名シートが2枚目以降にあるソースで
+       別のシートを照合してしまう ── sheet_name で同じシートを狙う（無ければ read_grid が
+       1枚目へ落ちる・従来どおり）。"""
+    data = xml_readback.read_grid(path, sheet_name=sheet_name)
     header_row = _find_header_row(data, base_headers)
     if header_row is None:
         return set(), {}
@@ -99,6 +105,7 @@ def verify_output(out_path, src_folder) -> dict:
        行数の不一致を先に見る ── 行が消えていれば Σ もどうせ狂うが、名指しは行数から。
     """
     out_data = xml_readback.read_grid(out_path)
+    base_sheet_name = out_data.get("sheet_name")   # ★ P2: 各ソースをこの名前で引き当てる
     out_headers = xml_readback.header_names(out_data, header_row=1)
     base_headers = out_headers[:-2]     # ★ 出所2列は名前でなく位置（末尾2列）で判定
     file_col, row_col = len(out_headers) - 1, len(out_headers)
@@ -124,7 +131,8 @@ def verify_output(out_path, src_folder) -> dict:
         if not path.exists():
             continue
         expected_rows, values = _expected_rows_for_source(path, base_headers,
-                                                            label_col_name, value_col_name)
+                                                            label_col_name, value_col_name,
+                                                            sheet_name=base_sheet_name)
         expected_total += len(expected_rows)
         for name in numeric_cols:
             for v in values.get(name, {}).values():

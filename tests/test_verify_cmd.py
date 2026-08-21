@@ -125,3 +125,30 @@ def test_verify_agrees_with_stack_when_dates_and_reorder_present(tmp_path):
     assert v.returncode == 0, f"正当な出力で verify が落ちた:\n{v.stdout}"
     assert v.stdout.count("1400") >= 2, f"Σ金額の両側（1400）が無い:\n{v.stdout}"
     assert "Σ受注日" not in v.stdout
+
+
+def test_verify_reads_the_same_named_sheet_as_stack(tmp_path):
+    """★ P2（architect 致命5 の後段・出荷済みの食い違い）: 基準名のシートが 2 枚目にある
+       ソースでは、stack は同名シートを読むのに verify は常に 1 枚目を読んで偽 ⚠ を出す。
+       verify は出力ブックのシート名（= 基準のシート名）で各ソースを引き当てること。"""
+    folder = tmp_path / "src"
+    base = folder / "a.xlsx"
+    _book(base, HDRS, [("J-1", "甲", 100)])
+    wb = openpyxl.load_workbook(base)
+    wb.active.title = "明細"
+    wb.save(base)
+    b = folder / "b.xlsx"
+    wb = openpyxl.Workbook()
+    front = wb.active
+    front.title = "表紙"
+    front.append(["メモ"]); front.append(["これは表紙"])
+    ws = wb.create_sheet("明細")
+    ws.append(HDRS); ws.append(["J-2", "乙", 200])
+    wb.save(b)
+    out = tmp_path / "out.xlsx"
+    p = _run("stack", folder, "--out", out)
+    assert p.returncode == 0, p.stdout
+    ws2 = openpyxl.load_workbook(out).active
+    assert ws2.max_row - 1 == 2, f"明細 2 行のはず: {ws2.max_row - 1}"
+    v = _run("verify", out, folder)
+    assert v.returncode == 0, f"正当な出力に偽 ⚠（verify が別シートを読んでいる）:\n{v.stdout}"

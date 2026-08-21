@@ -173,3 +173,34 @@ def test_total_row_candidates_respect_reordered_columns(tmp_path):
     data = json.loads(p.stdout)
     counts = {f["name"]: f.get("total_row_candidates") for f in data["files"]}
     assert counts["b.xlsx"] == 1, f"並べ替えファイルの合計行を取り逃がした: {counts}"
+
+
+def test_scan_discloses_sheet_fallback_to_first_sheet(tmp_path):
+    """★ P2（architect 致命5 前段）: 基準名のシートが無いファイルは1枚目へ落ちる。
+       scan の人間向け報告・--json のどちらにもその事実を開示すること。"""
+    folder = tmp_path / "books"
+    base = folder / "a.xlsx"
+    _book(base, HDRS, rows=(("J-1", "甲", 100),))
+    wb = openpyxl.load_workbook(base)
+    wb.active.title = "明細"
+    wb.save(base)
+    b = folder / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "集計"
+    ws.append(HDRS)
+    ws.append(["J-2", "乙", 200])
+    wb.save(b)
+
+    p = _scan(folder)
+    assert p.returncode == 0, p.stdout
+    assert "明細" in p.stdout and "集計" in p.stdout and "b.xlsx" in p.stdout, \
+        f"scan にシートのフォールバック開示が無い:\n{p.stdout}"
+
+    p2 = _scan(folder, "--json")
+    assert p2.returncode == 0, p2.stdout
+    data = json.loads(p2.stdout)
+    entry = next(f for f in data["files"] if f["name"] == "b.xlsx")
+    fb = entry.get("sheet_fallback")
+    assert fb and fb["wanted"] == "明細" and fb["used"] == "集計", \
+        f"scan --json にシートのフォールバック開示が無い: {entry}"

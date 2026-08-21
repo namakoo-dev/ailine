@@ -305,3 +305,81 @@ def test_json_carries_closure_mismatches_for_automation(tmp_path):
     mm = data.get("mismatches")
     assert mm, f"mismatches が JSON に無い: {list(data)}"
     assert any(m.get("excluded_value") == 1200 and m.get("adopted_sum") == 1000 for m in mm), mm
+
+
+# ---- P1: 書き手の印の集合化（M2 前の契約改修・architect 致命2 の凍結）----
+
+
+def _mark_creator(path, mark):
+    wb = openpyxl.load_workbook(path)
+    wb.properties.creator = mark
+    wb.save(path)
+
+
+def test_other_ailine_kind_output_is_gated_with_named_reason(tmp_path):
+    """★ 致命2: 将来の ailine extract 等『別コマンドの出力』に stack --out を向けたら、
+       無警告の作り直しではなく exit 7 + 名指し（ailine の別コマンドの出力です）。
+       作り直してよいのは印が完全一致（ailine stack 自身の前回出力）の時だけ。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100)])
+    out = tmp_path / "extracted.xlsx"
+    _book(out, HDRS + ["元ファイル", "元行"], [("X-1", "抽出結果", 999, "b.xlsx", 2)])
+    _mark_creator(out, "ailine extract")
+    sha = hashlib.sha256(out.read_bytes()).hexdigest()
+    p = _stack(folder, out)
+    assert p.returncode == 7, f"別コマンドの出力を黙って作り直した (exit={p.returncode})\n{p.stdout}"
+    assert hashlib.sha256(out.read_bytes()).hexdigest() == sha
+    assert "別のコマンド" in p.stdout or "ailine extract" in p.stdout, \
+        f"別コマンドの出力である旨の名指しが無い:\n{p.stdout}"
+
+
+def test_other_ailine_kind_output_inside_folder_is_excluded_from_inputs(tmp_path):
+    """★ 致命2 の裏面: 入力フォルダ内の『ailine の別コマンドの出力』は、二重計上を防ぐため
+       入力から除外 + 開示（is_own_output の marks 集合判定が V6 除外にも効くこと）。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100)])
+    other = folder / "extracted.xlsx"
+    _book(other, HDRS + ["元ファイル", "元行"], [("X-1", "抽出結果", 999, "b.xlsx", 2)])
+    _mark_creator(other, "ailine extract")
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0, p.stdout + p.stderr[-300:]
+    ws = openpyxl.load_workbook(out).active
+    assert ws.max_row - 1 == 1, "別コマンドの出力を入力に食って二重計上した"
+    assert "除外" in p.stdout, "除外の開示が無い"
+
+
+# ---- P2: シート引き当ての整合と開示（architect 致命5 前段・stack 側の開示）----
+
+
+def test_sheet_fallback_is_disclosed_in_text_and_json(tmp_path):
+    """★ 致命5 前段: 基準名のシートが無いソースは1枚目へ落ちる（従来どおり無警告では
+       止まらない）が、その事実は人間向け報告に1行 + --json（files 配列内・sheet_fallbacks
+       両方）で開示すること。"""
+    folder = tmp_path / "src"
+    base = folder / "a.xlsx"
+    _book(base, HDRS, [("J-1", "甲", 100)])
+    wb = openpyxl.load_workbook(base)
+    wb.active.title = "明細"
+    wb.save(base)
+    # b.xlsx には『明細』シートが無い（1枚目『集計』しかない）── 落ちて照合を試みる。
+    b = folder / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "集計"
+    ws.append(HDRS)
+    ws.append(["J-2", "乙", 200])
+    wb.save(b)
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0, p.stdout
+    assert "明細" in p.stdout and "集計" in p.stdout and "b.xlsx" in p.stdout, \
+        f"シート引き当てのフォールバック開示が無い:\n{p.stdout}"
+
+    out2 = tmp_path / "out2.xlsx"
+    p2 = _stack(folder, out2, "--json")
+    assert p2.returncode == 0, p2.stdout
+    data = json.loads(p2.stdout)
+    fb = data.get("sheet_fallbacks")
+    assert fb and any(f["name"] == "b.xlsx" and f["wanted"] == "明細" and f["used"] == "集計"
+                       for f in fb), f"sheet_fallbacks が JSON に無い/不正: {fb}"

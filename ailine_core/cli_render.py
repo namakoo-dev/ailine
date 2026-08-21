@@ -203,6 +203,9 @@ def render_scan_report(folder_label: str, result: dict) -> list:
             lines.append(f"  ⚠ {f['name']}: 取れなかった（{f['reason']}）")
         elif f.get("reordered"):
             lines.append(f"  {f['name']}: 取れた（並べ替え）")
+        fb = f.get("sheet_fallback")
+        if fb:
+            lines.append(f"  {f['name']}: シート『{fb['wanted']}』が無いので1枚目『{fb['used']}』を使いました")
     return lines
 
 
@@ -224,8 +227,11 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
     """M1書き `ailine stack` の人間向け報告。分母つき + 除外の名指し + Σ の両側表示。
        ★ ⚠ は異常のあるファイルだけ（合計行の不一致・A列/used range の食い違い）。"""
     lines = [f"■ ailine stack  folder={folder_label}  out={out_label}"]
-    if result.get("self_excluded"):
-        lines.append(f"（自分の出力『{result['self_excluded']}』を入力から除外しました）")
+    self_excluded = result.get("self_excluded")
+    if self_excluded:
+        # ★ architect 致命2: 複数ファイルがありうる（V6 が out 一致に限らず広がったため）。
+        names = "、".join(f"『{n}』" for n in self_excluded)
+        lines.append(f"（自分の出力 {names} を入力から除外しました）")
     if result.get("collision_notice"):
         lines.append(f"（{result['collision_notice']}）")
     lines.append(f"{result['denominator']} ファイル中 {result['stacked_files']} 積んだ")
@@ -234,6 +240,8 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
     for f in result.get("files", ()):
         if f.get("reordered"):
             lines.append(f"  {f['name']}: 取れた（並べ替え）")
+    for f in result.get("sheet_fallbacks", ()):
+        lines.append(f"  {f['name']}: シート『{f['wanted']}』が無いので1枚目『{f['used']}』を使いました")
     for entry in result.get("excluded_detail", ()):
         rows_txt = "、".join(f"{r['row']}行目" for r in entry["rows"])
         lines.append(f"  {entry['name']}: 合計行を{len(entry['rows'])}件除外（{rows_txt}）")

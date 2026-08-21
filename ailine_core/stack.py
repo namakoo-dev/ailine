@@ -29,6 +29,10 @@ _PROVENANCE_SIGNATURE_RE = tuple(re.compile(rf"^{re.escape(name)}(_\d+)?$")
 # stack が出力を書く時に docProps/core.xml の dc:creator へこの印を残す
 # （cmd_stack が wb.properties.creator = CREATOR_MARK を設定）。
 CREATOR_MARK = "ailine stack"
+# ★ architect 致命2 の直し（M2 前置き・2026-08-21）: 「ailine の出力か」は stack 1本だけでなく
+# ailine の複数コマンドに広がる。書く側の定数（CREATOR_MARK）は互換のためそのまま残し、
+# 読む側の判定はこの集合で行う（当面 stack と、将来の extract を先取りして凍結）。
+CREATOR_MARKS = {"ailine stack", "ailine extract"}
 _CORE_NS = {"cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
            "dc": "http://purl.org/dc/elements/1.1/"}
 
@@ -82,15 +86,29 @@ def _read_creator(path) -> str | None:
     return el.text if el is not None else None
 
 
-def is_own_output(path, headers: list) -> bool:
+def own_output_mark(path, headers: list) -> str | None:
     """署名 = 列名の一致 **AND** 書き手の印（docProps/core.xml の creator）。
+       一致すれば実際の印（例 "ailine stack" / "ailine extract"）を返す。どちらか片方でも
+       欠ければ None（他人のファイル扱い ── fail closed）。
        ★★ jisaku-review#1 critical の直し（実機再現済み）: `is_own_signature`（列名だけ）は
        末尾2列がたまたま『元ファイル』『元行』という名前の人のファイルを前回出力と誤認し、
        --overwrite 無しで無警告上書きしてデータを消した。名前が合っていても印が無ければ
-       他人のファイル ── fail closed（自己参照除外 V6・書き込み関所のどちらもこの関数を使う）。"""
+       他人のファイル。
+       ★ architect 致命2 の直し: 「自分（ailine の何か）の出力か」（V6 の入力自己参照除外）と
+       「作り直してよい前回出力か」（書き込み関所）は問いが違う ── 前者はこの関数の戻り値が
+       None でないか、後者は戻り値が CREATOR_MARK と完全一致するか、で呼び出し側が分ける。"""
     if not is_own_signature(headers):
-        return False
-    return _read_creator(path) == CREATOR_MARK
+        return None
+    creator = _read_creator(path)
+    return creator if creator in CREATOR_MARKS else None
+
+
+def is_own_output(path, headers: list) -> bool:
+    """『ailine の何らかのコマンドの出力』か（印は問わない・集合のどれかに当たれば真）。
+       ★ V6（入力からの自己参照除外）が使う判定はこれ ── ailine 産は種類を問わず除外する。
+       『作り直してよい』（書き込み関所）は別問い ── `own_output_mark` の戻り値を
+       CREATOR_MARK と完全一致で見る（呼び出し側 = ailine.py cmd_stack）。"""
+    return own_output_mark(path, headers) is not None
 
 
 def numeric_column_names(ws, header_row: int, headers: list) -> list:
@@ -123,6 +141,7 @@ class FileStackResult:
     excluded: list = field(default_factory=list)
     mismatches: list = field(default_factory=list)
     col_a_mismatch: tuple | None = None
+    sheet_fallback: tuple | None = None   # (wanted, used) ── 基準名のシートが無く1枚目へ落ちた時だけ
 
 
 def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: int,
@@ -136,11 +155,13 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
     except Exception as e:
         return FileStackResult(name=path.name, status="積めなかった", reason=f"読み込み失敗: {e}")
     try:
-        ws = multifile.find_matching_sheet(wb, base_sheet_name)
+        ws, sheet_fell_back = multifile.find_matching_sheet(wb, base_sheet_name)
+        sheet_fallback = (base_sheet_name, ws.title) if sheet_fell_back else None
         other_headers = multifile.read_row_headers(ws, header_row)
         status, detail = multifile.classify_headers(base_headers, other_headers)
         if status == "取れなかった":
-            return FileStackResult(name=path.name, status="積めなかった", reason=detail)
+            return FileStackResult(name=path.name, status="積めなかった", reason=detail,
+                                    sheet_fallback=sheet_fallback)
         reordered = bool(detail)
 
         # 各 base 列 → このファイル自身の列位置（並べ替えファイルで位置がずれる対策）。
@@ -175,7 +196,7 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
 
         return FileStackResult(name=path.name, status="積んだ", reordered=reordered, rows=rows,
                                 excluded=verdict.excluded, mismatches=verdict.mismatches,
-                                col_a_mismatch=col_a_mismatch)
+                                col_a_mismatch=col_a_mismatch, sheet_fallback=sheet_fallback)
     finally:
         wb.close()
 

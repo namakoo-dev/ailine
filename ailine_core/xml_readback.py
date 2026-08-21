@@ -113,19 +113,26 @@ def _serial_to_date(serial: float):
     return dt.date() if dt.time() == datetime.time(0, 0) else dt
 
 
-def _sheet_target(z: zipfile.ZipFile, sheet_name: str | None) -> str:
+def _sheet_target(z: zipfile.ZipFile, sheet_name: str | None) -> tuple:
     """workbook.xml + _rels からシート名 → 実体の worksheet xml パスを引く。
-       sheet_name=None なら最初のシート。"""
+       sheet_name=None なら最初のシート。戻り値: (xml パス, 実際に使ったシート名, fallback)。
+       ★ P2（architect 致命5・出荷済みの食い違い）: sheet_name を指定したのに同名シートが
+       無ければ、無警告のまま1枚目へ落ちる（従来どおり例外は上げない）が、fallback=True で
+       その旨を呼び出し側（verify.py・read_grid の戻り値経由）へ返せるようにする。"""
     wb_root = ET.fromstring(z.read("xl/workbook.xml"))
     sheets = wb_root.findall(".//main:sheets/main:sheet", _NS)
     if not sheets:
         raise ValueError("workbook.xml にシート定義が無い")
     chosen = sheets[0]
+    fallback = False
     if sheet_name:
+        found = False
         for s in sheets:
             if s.get("name") == sheet_name:
                 chosen = s
+                found = True
                 break
+        fallback = not found
     rid = chosen.get(_R_ID_ATTR)
     rels_root = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
     for rel in rels_root.findall("rel:Relationship", _NS):
@@ -133,7 +140,8 @@ def _sheet_target(z: zipfile.ZipFile, sheet_name: str | None) -> str:
             target = (rel.get("Target") or "").lstrip("/")
             # ★ Target は「xl/ 相対」（例 "worksheets/sheet1.xml"）と「パッケージ絶対」
             #   （例 "/xl/worksheets/sheet1.xml"、openpyxl が書く形）の両方があり得る。
-            return target if target.startswith("xl/") else f"xl/{target}"
+            path = target if target.startswith("xl/") else f"xl/{target}"
+            return path, chosen.get("name"), fallback
     raise ValueError(f"シート {sheet_name!r} の関係(rels)が見つからない")
 
 
@@ -181,13 +189,16 @@ def _cell_value(c, shared: list, is_date: bool = False):
 
 def read_grid(path, sheet_name: str | None = None) -> dict:
     """xlsx を zipfile + ElementTree だけで読み、疎な grid を返す。
-       戻り値: {"grid": {(行,列): 値}, "max_row": int, "max_col": int}
-       （値のあるセルだけを持つ ── 空セルはキーごと存在しない）。"""
+       戻り値: {"grid": {(行,列): 値}, "max_row": int, "max_col": int,
+                "sheet_name": str（実際に読んだシート名）,
+                "sheet_fallback": bool（sheet_name を指定したのに同名シートが無く
+                1枚目へ落ちた時だけ True）}。
+       ★ P2: sheet_name を渡せば基準名のシートを狙って読める（省略時は従来どおり先頭）。"""
     with zipfile.ZipFile(path) as z:
         shared = _load_shared_strings(z)
         custom_numfmts = _load_numfmts(z)
         cell_xfs = _load_cell_xfs(z)   # xf index(=セルの s属性) → numFmtId
-        sheet_path = _sheet_target(z, sheet_name)
+        sheet_path, used_sheet_name, sheet_fallback = _sheet_target(z, sheet_name)
         root = ET.fromstring(z.read(sheet_path))
         grid: dict = {}
         max_row = max_col = 0
@@ -209,7 +220,8 @@ def read_grid(path, sheet_name: str | None = None) -> dict:
                 grid[(r, col)] = value
                 max_row = max(max_row, r)
                 max_col = max(max_col, col)
-        return {"grid": grid, "max_row": max_row, "max_col": max_col}
+        return {"grid": grid, "max_row": max_row, "max_col": max_col,
+                "sheet_name": used_sheet_name, "sheet_fallback": sheet_fallback}
 
 
 def header_names(data: dict, header_row: int = 1, max_scan_cols: int = 200) -> list:
