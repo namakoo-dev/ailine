@@ -274,8 +274,10 @@ def verify_extract(out_path, src_folder, col, cmp, value, sheet_name: str | None
     actual_total = len(out_rows)
     row_count = {"source": expected_total, "output": actual_total}
     if expected_total != actual_total:
-        return {"row_count": row_count, "sums": {}, "mismatch": {
-            "kind": "row_count", "column": None, "source": expected_total, "output": actual_total}}
+        rc_mismatch = {"kind": "row_count", "column": None,
+                       "source": expected_total, "output": actual_total}
+        return {"row_count": row_count, "sums": {}, "mismatch": rc_mismatch,
+                "mismatches": [rc_mismatch]}
 
     sums_output = {name: 0.0 for name in numeric_cols}
     for i, name in enumerate(base_headers, start=1):
@@ -287,31 +289,42 @@ def verify_extract(out_path, src_folder, col, cmp, value, sheet_name: str | None
                 sums_output[name] += v
 
     sums = {name: {"source": sums_source[name], "output": sums_output[name]} for name in numeric_cols}
+    # ★ デモ撮影のリハで発覚（2026-08-21 13:2x）: 憲法1（誘導）+ 一括検出 ── 最初の不一致
+    #   （Σ）で打ち切ると、帰属検算が名指しできるはずの「どの行がいくつ→いくつ」を
+    #   一度も計算しないまま終わっていた。Σ と帰属は独立に検査できる（帰属は出力の各行を
+    #   自分が申告する元セルと突き合わせるだけで、Σ の合否に依存しない）── 両方走らせて
+    #   全所見を集める。★ 書き込み時事後条件（run/cmd_run_folder）の挙動は変えない ──
+    #   `mismatch`（単数）は従来どおり「最初に見つかった1件」で、優先順位（Σ列の並び順→
+    #   帰属）も従来と同じにする。追加する `mismatches`（複数）だけが新しい。
+    mismatches = []
     for name in numeric_cols:
         if abs(sums_source[name] - sums_output[name]) > TOLERANCE:
-            return {"row_count": row_count, "sums": sums, "mismatch": {
-                "kind": "sum", "column": name,
-                "source": sums_source[name], "output": sums_output[name]}}
+            mismatches.append({"kind": "sum", "column": name,
+                               "source": sums_source[name], "output": sums_output[name]})
 
-    # ★ review3#3: 集計が合っても帰属（どの行がどのファイルの何行目か）が嘘かもしれない。
     attribution = _attribution_mismatch(out_data, base_headers, out_rows, src_folder,
                                          sheet_name=sheet_name)
     if attribution:
-        return {"row_count": row_count, "sums": sums, "mismatch": {
-            "kind": "attribution", "column": attribution["column"],
-            "source": attribution["source_value"], "output": attribution["output_value"],
-            "file": attribution["file"], "src_row": attribution["src_row"]}}
-    return {"row_count": row_count, "sums": sums, "mismatch": None}
+        mismatches.append({"kind": "attribution", "column": attribution["column"],
+                           "source": attribution["source_value"], "output": attribution["output_value"],
+                           "file": attribution["file"], "src_row": attribution["src_row"]})
+
+    return {"row_count": row_count, "sums": sums,
+            "mismatch": mismatches[0] if mismatches else None, "mismatches": mismatches}
 
 
 def _verify_stack(out_path, src_folder) -> dict:
     """検算だけを独立に再実行する（M1書き = 縦積みの出力）。戻り値:
        {"row_count": {"source": int, "output": int},
         "sums": {列名: {"source": float, "output": float}},
-        "mismatch": None または {"kind": "row_count"|"sum", "column": str|None,
-                                  "source": float, "output": float}}
-       ★ mismatch が立ったら、そこで比較を止める（呼び出し側が exit 5 にする）。
-       行数の不一致を先に見る ── 行が消えていれば Σ もどうせ狂うが、名指しは行数から。
+        "mismatch": None または見つかった最初の1件（呼び出し側=書き込み時事後条件が
+                     使う・従来と同じ優先順位: row_count → Σ(列順) → 帰属）,
+        "mismatches": 見つかった不一致**全部**のリスト（`ailine verify` の人間向け報告が
+                      使う・憲法1: 修正箇所への誘導は全所見を集めてから言う）}
+       ★ デモ撮影のリハ（2026-08-21）の直し: 行数が一致すれば、Σ と帰属は独立に検査できる
+       （帰属は出力の各行を自分の申告する元セルと突き合わせるだけ・Σ の合否に依存しない）
+       ── 最初の不一致で打ち切らず両方走らせる。行数だけは別（行が消えていれば Σ も帰属も
+       意味を成さないため、従来どおり単独で早期に返す）。
     """
     out_data = xml_readback.read_grid(out_path)
     base_sheet_name = out_data.get("sheet_name")   # ★ P2: 各ソースをこの名前で引き当てる
@@ -351,8 +364,10 @@ def _verify_stack(out_path, src_folder) -> dict:
     actual_total = len(out_rows)
     row_count = {"source": expected_total, "output": actual_total}
     if expected_total != actual_total:
-        return {"row_count": row_count, "sums": {}, "mismatch": {
-            "kind": "row_count", "column": None, "source": expected_total, "output": actual_total}}
+        rc_mismatch = {"kind": "row_count", "column": None,
+                       "source": expected_total, "output": actual_total}
+        return {"row_count": row_count, "sums": {}, "mismatch": rc_mismatch,
+                "mismatches": [rc_mismatch]}
 
     sums_output = {name: 0.0 for name in numeric_cols}
     for i, name in enumerate(base_headers, start=1):
@@ -364,18 +379,24 @@ def _verify_stack(out_path, src_folder) -> dict:
                 sums_output[name] += v
 
     sums = {name: {"source": sums_source[name], "output": sums_output[name]} for name in numeric_cols}
+    # ★ デモ撮影のリハで発覚（2026-08-21 13:2x）: 憲法1（誘導）+ 一括検出 ── 最初の不一致
+    #   （Σ）で打ち切ると、帰属検算が名指しできるはずの「どの行がいくつ→いくつ」を
+    #   一度も計算しないまま終わっていた。Σ と帰属は独立に検査できる ── 両方走らせて
+    #   全所見を集める。★ 書き込み時事後条件（stack/cmd_stack）の挙動は変えない ──
+    #   `mismatch`（単数）は従来どおり「最初に見つかった1件」（優先順位も従来と同じ）。
+    #   追加する `mismatches`（複数）だけが新しい。
+    mismatches = []
     for name in numeric_cols:
         if abs(sums_source[name] - sums_output[name]) > TOLERANCE:
-            return {"row_count": row_count, "sums": sums, "mismatch": {
-                "kind": "sum", "column": name,
-                "source": sums_source[name], "output": sums_output[name]}}
+            mismatches.append({"kind": "sum", "column": name,
+                               "source": sums_source[name], "output": sums_output[name]})
 
-    # ★ review3#3: 集計が合っても帰属（どの行がどのファイルの何行目か）が嘘かもしれない。
     attribution = _attribution_mismatch(out_data, base_headers, out_rows, src_folder,
                                          sheet_name=base_sheet_name)
     if attribution:
-        return {"row_count": row_count, "sums": sums, "mismatch": {
-            "kind": "attribution", "column": attribution["column"],
-            "source": attribution["source_value"], "output": attribution["output_value"],
-            "file": attribution["file"], "src_row": attribution["src_row"]}}
-    return {"row_count": row_count, "sums": sums, "mismatch": None}
+        mismatches.append({"kind": "attribution", "column": attribution["column"],
+                           "source": attribution["source_value"], "output": attribution["output_value"],
+                           "file": attribution["file"], "src_row": attribution["src_row"]})
+
+    return {"row_count": row_count, "sums": sums,
+            "mismatch": mismatches[0] if mismatches else None, "mismatches": mismatches}

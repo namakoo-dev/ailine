@@ -261,7 +261,12 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
 
 
 def render_verify_report(out_label: str, folder_label: str, result: dict) -> list:
-    """`ailine verify` の人間向け報告。合格: 両側の数字を並べる／不合格: 列名 + 両側の数字。"""
+    """`ailine verify` の人間向け報告。合格: 両側の数字を並べる／不合格: 列名 + 両側の数字。
+       ★ デモ撮影のリハで発覚（2026-08-21）: 最初の不一致（Σ）で打ち切ると、帰属検算が
+       名指しできるはずの「どの行（元どのファイルの何行目）がいくつ→いくつ」を報告し
+       損なう ── 憲法1（誘導）+ 一括検出。`result["mismatches"]`（複数・verify.py が
+       行数を除く全種を集めて返す）を全部並べる。行数不一致だけは別（それ単独で致命
+       なので従来どおり単独の1行で止める・`mismatch`（単数）で後方互換）。"""
     lines = [f"■ ailine verify  out={out_label}  folder={folder_label}"]
     mismatch = result.get("mismatch")
     if mismatch and mismatch["kind"] == "row_count":
@@ -270,12 +275,16 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
     lines.append(f"行数: 元 {result['row_count']['source']} / 出力 {result['row_count']['output']}")
     for col, both in result.get("sums", {}).items():
         lines.append(f"Σ{col}: 元 {_fmt_num(both['source'])} / 出力 {_fmt_num(both['output'])}")
-    if mismatch and mismatch["kind"] == "sum":
-        lines.append(f"⚠ {mismatch['column']} の合計が一致しません: "
-                     f"元 {_fmt_num(mismatch['source'])} / 出力 {_fmt_num(mismatch['output'])}")
-    elif mismatch and mismatch["kind"] == "attribution":
-        # ★ review3#3: 集計は合っていても帰属（どの行がどのファイルの何行目か）が嘘。
-        lines.append(f"⚠ 帰属が一致しません: {mismatch['file']} の {mismatch['src_row']}行目 "
-                     f"列『{mismatch['column']}』 元 {_fmt_num(mismatch['source'])} / "
-                     f"出力 {_fmt_num(mismatch['output'])}")
+    mismatches = result.get("mismatches")
+    if mismatches is None:   # ★ 後方互換: 複数形を持たない呼び出し元（無いはずだが fail closed）
+        mismatches = [mismatch] if mismatch else []
+    for m in mismatches:
+        if m["kind"] == "sum":
+            lines.append(f"⚠ {m['column']} の合計が一致しません: "
+                         f"元 {_fmt_num(m['source'])} / 出力 {_fmt_num(m['output'])}")
+        elif m["kind"] == "attribution":
+            # ★ review3#3: 集計は合っていても帰属（どの行がどのファイルの何行目か）が嘘。
+            lines.append(f"⚠ 帰属が一致しません: {m['file']} の {m['src_row']}行目 "
+                         f"列『{m['column']}』 元 {_fmt_num(m['source'])} / "
+                         f"出力 {_fmt_num(m['output'])}")
     return lines

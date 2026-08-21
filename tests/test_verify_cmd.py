@@ -212,3 +212,25 @@ def test_verify_catches_attribution_swap_in_extract_output_even_when_sums_match(
     p = _run("verify", out, folder)
     assert p.returncode == 5, f"Σ が同じ帰属の嘘を見逃した (exit={p.returncode}):\n{p.stdout}"
     assert "a.xlsx" in p.stdout or "元行" in p.stdout or "2" in p.stdout, "どの行かの名指しが無い"
+
+
+def test_verify_names_the_edited_row_not_just_aggregate_sums(tmp_path):
+    """★ デモ撮影のリハで発覚（2026-08-21 13:2x）: あとから 1 セル編集された出力への verify が
+       『Σ が一致しません（元 4701000 / 出力 4624000）』の集計 ⚠ だけで止まり、
+       帰属検算が名指しできるはずの「どの行（元どのファイルの何行目）がいくつ→いくつ」を
+       出さなかった ── 憲法1（修正箇所への誘導）+ 一括検出（全所見を集めて報告）。
+       契約: 集計 Σ と行の名指しの両方が出る・exit 5。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100)])
+    _book(folder / "b.xlsx", HDRS, [("J-2", "乙", 200)])
+    out = tmp_path / "out.xlsx"
+    assert _run("stack", folder, "--out", out).returncode == 0
+    wb = openpyxl.load_workbook(out)
+    ws = wb.active
+    ws.cell(row=3, column=3).value = 999   # b.xlsx 由来の行の金額を後から編集
+    wb.save(out)
+    p = _run("verify", out, folder)
+    assert p.returncode == 5
+    assert "300" in p.stdout and "1099" in p.stdout, f"集計 Σ の両側が無い:\n{p.stdout}"
+    assert "b.xlsx" in p.stdout, f"どのファイル由来の行かの名指しが無い:\n{p.stdout}"
+    assert "200" in p.stdout and "999" in p.stdout, f"行水準の両側の数字が無い:\n{p.stdout}"
