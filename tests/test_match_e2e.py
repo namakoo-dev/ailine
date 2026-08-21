@@ -260,3 +260,85 @@ def test_detail_sheet_dates_keep_date_format(tmp_path, capsys):
     bad = [c.number_format for c in date_cells if "h" in c.number_format or ":" in c.number_format
            or c.number_format == "General"]
     assert not bad, f"時刻の尻尾つき書式が残る: {bad[:3]}"
+
+
+# ---- jisaku-review 5 戦目 確定 4 件の凍結（2026-08-21 16:0x）----
+
+
+def test_postcondition_recomputes_sums_from_source_books(tmp_path, monkeypatch, capsys):
+    """★ review5#1 critical（凍結予測③的中）: 事後条件が a_sum/b_sum を原本から独立に
+       再集計しておらず、内部整合（diff = a−b）さえ保てば虚偽の金額が exit 0 で出荷された。
+       『差額だけ機械で保証』の芯そのもの。契約: compute_match の金額改竄（diff 整合込み）は
+       事後条件が両側の数字つきで捕まえ exit 1・出力を本置き場に残さない。"""
+    from ailine_core import match as mm
+    a, b = _five_forms(tmp_path)
+    real = mm.compute_match
+
+    def tampered(*args, **kw):
+        groups, extras = real(*args, **kw) if isinstance(real(*args, **kw), tuple) else (real(*args, **kw), None)
+        # 甲社の A 側金額を膨らませ、diff も式どおり再計算して内部整合は保つ
+        for g in (groups if extras is None else groups):
+            if getattr(g, "key", None) == "甲社":
+                object.__setattr__(g, "a_sum", 999999) if hasattr(g, "__dataclass_fields__") else None
+                try:
+                    g.a_sum = 999999
+                    g.diff = g.a_sum - g.b_sum
+                except Exception:
+                    pass
+        return (groups, extras) if extras is not None else groups
+
+    monkeypatch.setattr(mm, "compute_match", tampered)
+    rc, out = _run(a, b, TASK, capsys=capsys)
+    assert rc != 0, f"虚偽の金額 999999 が事後条件を素通りした:\n{out}"
+    assert "999999" in out or "事後条件" in out, f"両側の数字つきの破れ報告が無い:\n{out}"
+
+
+def test_xlsm_typo_second_path_is_asked_not_swallowed(tmp_path, capsys):
+    """★ review5#2: 拡張子リストに .xlsm が無く、裸のファイル名の打ち間違いが黙って
+       依頼文として単一ブック経路に落ちた。表計算らしい拡張子は広く『2 冊目のパスらしい』
+       と見て、実在しなければ名指しで聞く（exit 3）。"""
+    a, b = _five_forms(tmp_path)
+    rc, out = _run(a, "請求_7月.xlsm", TASK, capsys=capsys)
+    assert rc == 3, f".xlsm の打ち間違いが黙って流れた (rc={rc}):\n{out}"
+    assert "請求_7月.xlsm" in out, f"名指しが無い:\n{out}"
+
+
+def test_existing_extensionless_file_does_not_hijack_single_book_task(tmp_path, monkeypatch, capsys):
+    """★ review5#3: 依頼文の先頭語がたまたま実在ファイル名と一致すると、単一ブックの依頼が
+       黙って 2 冊照合に誤読された。2 冊分岐は『実在 かつ 表計算らしい形（拡張子/区切り）』の
+       両方を要求 ── 拡張子なしの偶然の一致では発火しない。"""
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "CLARIFY", "question": "確認"}]})
+    a, _ = _five_forms(tmp_path)
+    trap = tmp_path / "金額データ"
+    trap.write_text("罠", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    rc = ailine.main(["run", str(a), "金額データ", "を集計して"])
+    out = capsys.readouterr().out
+    # ★ 誤読の顔は 2 つある: 「2冊の照合」バナー / 罠ファイルをブックとして読もうとする
+    #   「読めませんでした」。どちらも出ず、単一ブック経路（モックの CLARIFY）に到達すること。
+    assert "2冊の照合" not in out and "読めませんでした" not in out, \
+        f"単一ブックの依頼が 2 冊照合に誤読された:\n{out}"
+    assert rc == 3 and "確認" in out, f"単一ブック経路（CLARIFY モック）に到達していない (rc={rc}):\n{out}"
+
+
+def test_longest_named_header_wins_over_its_fragment(tmp_path, capsys):
+    """★ review5#4（凍結予測①的中・断片問題の再演）: 『金額』⊂『税込金額』の両列があるとき、
+       依頼文が『税込金額』だけを名指ししても部分文字列包含で両方が名指し扱いになり
+       exit 3 に落ちた。飲み込まれ判定（単位B の轍）: 長い名指しに包含される短い列名は
+       名指しと数えない ── 税込金額 に一意解決すること。"""
+    a = tmp_path / "in" / "入金.xlsx"
+    b = tmp_path / "in" / "請求.xlsx"
+    _nyukin(a, [(datetime.date(2026, 7, 1), "甲社", 110000, "")])
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "請求一覧"
+    ws.append(["請求日", "取引先名", "金額", "税込金額"])
+    ws.append([datetime.date(2026, 7, 1), "甲社", 100000, 110000])
+    b.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(b)
+    rc, out = _run(a, b, "振込人名義と取引先名をキーに、お預り金額と税込金額を突き合わせて",
+                   capsys=capsys)
+    assert rc == 0, f"断片の飲み込まれで曖昧扱いになった (rc={rc}):\n{out}"
+    assert "税込金額" in out, f"解決された列名の開示が無い:\n{out}"

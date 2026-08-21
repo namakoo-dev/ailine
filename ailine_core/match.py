@@ -66,16 +66,44 @@ def numeric_columns(headers: list, rows: list) -> set:
     return out
 
 
-def resolve_role(task: str, headers: list, numeric: set, role: str) -> tuple:
+def _is_swallowed_fragment(h: str, task: str, vocabulary: list) -> bool:
+    """★ review5#4 の直し（単位B の轍・W3 断片ガードと同じ型）: h の task 中の出現が、
+       すべて『h を含む・h より長い、vocabulary 内の別の語』の出現に完全に包含されるか。
+       1つでも呑まれない出現があれば False（＝ h 自身が独立した名指しとして生きている）。
+       例:『税込金額』を名指ししただけで、部分文字列の『金額』（お預り金額/税込金額の中に
+       埋もれているだけ）まで名指し扱いにしない。vocabulary は両冊の全ヘッダー（呑み込む側の
+       語が相手側のヘッダーであってもよい ── 呼び出し側が resolve_columns で両側をまとめて渡す）。"""
+    positions = [m.start() for m in re.finditer(re.escape(h), task)]
+    if not positions:
+        return False
+    longer = [lh for lh in vocabulary if lh and lh != h and len(lh) > len(h)
+              and h in lh and lh in task]
+    if not longer:
+        return False
+    longer_spans = [(m.start(), m.start() + len(lh)) for lh in longer
+                     for m in re.finditer(re.escape(lh), task)]
+    for p in positions:
+        end = p + len(h)
+        if not any(span_start <= p and end <= span_end for span_start, span_end in longer_spans):
+            return False
+    return True
+
+
+def resolve_role(task: str, headers: list, numeric: set, role: str,
+                  vocabulary: list | None = None) -> tuple:
     """機械3段（LLM ゼロ）: ①依頼文に名指しされ、かつ役割に合う型の列がちょうど1本なら採用
        ②それが決まらなければ、役割に合う型の列（依頼文の名指しは問わない）がちょうど1本なら採用
        ③それでも決まらなければ (None, 候補列) を返す（呼び出し側が exit 3 で列挙する）。
        role="key" は非数値列、role="amount" は数値列。★ 金額列に既定を持たせない ──
-       候補が2本以上でも1本も無くても None のまま返す（ここで折衷しない）。"""
+       候補が2本以上でも1本も無くても None のまま返す（ここで折衷しない）。
+       ★ review5#4: ①の名指し判定は部分文字列包含だが、より長い別ヘッダーに完全に呑まれる
+       出現は名指しと数えない（_is_swallowed_fragment）。vocabulary 省略時は headers 自身
+       （後方互換・単独呼び出しの検体向け）。"""
     def type_ok(h):
         return (h not in numeric) if role == "key" else (h in numeric)
 
-    named = [h for h in headers if h and h in task]
+    vocab = vocabulary if vocabulary is not None else headers
+    named = [h for h in headers if h and h in task and not _is_swallowed_fragment(h, task, vocab)]
     named_typed = [h for h in named if type_ok(h)]
     if len(named_typed) == 1:
         return named_typed[0], []
@@ -101,13 +129,17 @@ class ColumnResolution:
 
 def resolve_columns(task: str, headers_a: list, rows_a: list,
                      headers_b: list, rows_b: list) -> ColumnResolution:
-    """両冊・両役割ぶん resolve_role をまとめて呼ぶ入口。"""
+    """両冊・両役割ぶん resolve_role をまとめて呼ぶ入口。
+       ★ review5#4: 断片ガードの vocabulary は両冊のヘッダー全部の和（順序保持・重複排除）──
+       飲み込む側の長い語が相手側の冊のヘッダーであるケース（お預り金額 が 金額 を呑む、等）
+       まで正しく拾うため。"""
+    vocabulary = list(dict.fromkeys(list(headers_a) + list(headers_b)))
     num_a = numeric_columns(headers_a, rows_a)
     num_b = numeric_columns(headers_b, rows_b)
-    key_a, cand_ka = resolve_role(task, headers_a, num_a, "key")
-    key_b, cand_kb = resolve_role(task, headers_b, num_b, "key")
-    amount_a, cand_aa = resolve_role(task, headers_a, num_a, "amount")
-    amount_b, cand_ab = resolve_role(task, headers_b, num_b, "amount")
+    key_a, cand_ka = resolve_role(task, headers_a, num_a, "key", vocabulary)
+    key_b, cand_kb = resolve_role(task, headers_b, num_b, "key", vocabulary)
+    amount_a, cand_aa = resolve_role(task, headers_a, num_a, "amount", vocabulary)
+    amount_b, cand_ab = resolve_role(task, headers_b, num_b, "amount", vocabulary)
     unresolved = []
     if key_a is None:
         unresolved.append(("A", "key", cand_ka))
@@ -180,6 +212,13 @@ class KeyGroup:
     state: str
     a_rows: list    # [(元行番号, [その側の全列の値], [number_format...]), ...]
     b_rows: list
+
+    @property
+    def key(self):
+        """key_display の別名。呼び出し側の素朴な `g.key` という想定に応える（読み取り専用・
+           frozen dataclass なので通常代入では書き換わらない）。正式なフィールドは
+           key_display（キー不明の集約行では UNKNOWN_KEY_LABEL になる）。"""
+        return self.key_display
 
 
 def compute_match(headers_a: list, rows_a: list, key_col_a: str, amount_col_a: str,
@@ -272,6 +311,26 @@ def possible_total_row_notes(headers: list, rows: list, key_col: str, amount_col
         if abs(amt - other_sum) <= TOLERANCE:
             notes.append(TotalRowNote(side=side, row_num=row_num, amount=amt, other_sum=other_sum))
     return notes
+
+
+def independent_key_sums(grid: dict, row_numbers: list, headers: list,
+                          key_col: str, amount_col: str) -> dict:
+    """★ review5#1 critical の直し: 事後条件が compute_match の内部値を素通りさせず、
+       原本から独立に（xml_readback の grid ── openpyxl を経由しない別実装）キーごとの
+       金額和を再集計する。compute_match と同じキー正規化規則（normalize_key: 前後空白
+       除去のみ・型が違えば別キー）を使う ── ここがズレると恒真検査になり偽陽性になる
+       （呼び出し側からの入力は xml_readback.read_grid の grid + データ行番号であること）。
+       戻り値: {normalize_key の戻り値（None はキー不明）: 金額和}。"""
+    key_idx = headers.index(key_col) + 1     # grid のキーは1起点の (行, 列)
+    amount_idx = headers.index(amount_col) + 1
+    sums: dict = {}
+    for r in row_numbers:
+        raw_key = grid.get((r, key_idx))
+        amt = grid.get((r, amount_idx))
+        amt = float(amt) if isinstance(amt, (int, float)) and not isinstance(amt, bool) else 0.0
+        nk = normalize_key(raw_key)
+        sums[nk] = sums.get(nk, 0.0) + amt
+    return sums
 
 
 def side_totals(groups: list) -> tuple:

@@ -5111,10 +5111,15 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
     if not book1.is_dir() and book1.is_file() and len(task_tokens) >= 2:
         second_arg = task_tokens[0]
         second_path = Path(second_arg)
-        if second_path.is_file():
+        # ★ review5#3 の直し（実機再現: 依頼文の1語目が拡張子なしの実在ファイル名と
+        #   偶然一致し、単一ブックの依頼が2冊照合に誤読された）: 2冊目分岐の発火は
+        #   「実在」だけでなく「表計算らしい形（拡張子 or パス区切り）」も要る AND 条件。
+        #   拡張子なしの偶然一致は表計算らしくない＝発火しない＝従来どおり依頼文として扱う。
+        looks_like_path = _looks_like_second_book_path(second_arg)
+        if second_path.is_file() and looks_like_path:
             return cmd_run_match(a, book1.resolve(), second_path.resolve(),
                                   " ".join(task_tokens[1:]).strip())
-        if _looks_like_second_book_path(second_arg):
+        if looks_like_path and not second_path.is_file():
             print(f"？ 2冊目として指定した『{second_arg}』が見つかりません。"
                   "パスを確認してから、もう一度実行してください"
                   "（1冊だけの依頼なら、依頼文だけを1つの引数として渡してください）。")
@@ -6592,16 +6597,26 @@ def _stack_attribution_fail(mismatch: dict) -> int:
     return 5
 
 
-_BOOKLIKE_SUFFIXES = {".xlsx", ".xls", ".ods", ".csv"}
+_BOOKLIKE_SUFFIXES = {".xlsx", ".xls", ".xlsm", ".xlsb", ".xltx", ".xltm", ".xlt",
+                      ".ods", ".ots", ".csv", ".tsv"}
+# ★ review5#2 の直し（実機再現: .xlsm の打ち間違いが黙って依頼文に落ちた）: 個別拡張子の
+#   列挙だけでは次の未知の拡張子（.numbers 等）でまた同じ穴になる。一般則を併用する ──
+#   末尾が「. + 英数字2〜5文字」ならファイル名の拡張子らしいと見る（依頼文の1語目が
+#   たまたまこの形になることはまず無い ── 自然文の単語はピリオドで終わらない）。
+_GENERIC_EXT_RE = re.compile(r"\.[A-Za-z0-9]{2,5}$")
 
 
 def _looks_like_second_book_path(token: str) -> bool:
     """依頼文の一部でなく『2冊目のつもりのパス』らしいか（M3 arity 判定の後半）。
        ★ 実在確認は呼び出し側が既にやっている（この関数は『実在しないが2冊目らしい』を
-       見分けるためだけ）── 表計算らしい拡張子、またはパス区切りを含む場合に真とする。
+       見分けるためだけ）── 表計算らしい拡張子・拡張子らしい語尾・パス区切りのいずれかで真。
        依頼文の1トークン目がたまたまこれに当てはまることはまず無い（自然文はこの形にならない）。"""
     p = Path(token)
-    return p.suffix.lower() in _BOOKLIKE_SUFFIXES or "/" in token or "\\" in token
+    if p.suffix.lower() in _BOOKLIKE_SUFFIXES:
+        return True
+    if "/" in token or "\\" in token:
+        return True
+    return bool(_GENERIC_EXT_RE.search(token))
 
 
 def _run_folder_refuse(op: str, plan_len: int) -> int:
@@ -7137,10 +7152,28 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
         if b_count_out != len(b_rows_x):
             wb_out.close()
             return _match_postcondition_fail("完全会計(B)", len(b_rows_x), b_count_out)
+        # ★ review5#1 critical の直し: 件数だけでなく金額（a_sum/b_sum）も原本から独立に
+        #   （xml_readback の grid ── openpyxl を経由しない別実装で）再集計し、書いた
+        #   セルと全キーで突き合わせる。内部整合（diff=a-b）だけでは compute_match の
+        #   金額そのものの改竄を見逃す（片配線だった箇所）。
+        a_sums_x = multifile_match.independent_key_sums(data_a["grid"], a_rows_x, a_headers_x,
+                                                          key_a, amount_a)
+        b_sums_x = multifile_match.independent_key_sums(data_b["grid"], b_rows_x, b_headers_x,
+                                                          key_b, amount_b)
         for r in out_rows:
+            key_val = grid.get((r, 1))
             a_sum_v = grid.get((r, col_a_sum), 0) or 0
             b_sum_v = grid.get((r, col_b_sum), 0) or 0
             diff_v = grid.get((r, col_diff), 0) or 0
+            nk = None if key_val == multifile_match.UNKNOWN_KEY_LABEL                 else multifile_match.normalize_key(key_val)
+            expect_a = a_sums_x.get(nk, 0.0)
+            expect_b = b_sums_x.get(nk, 0.0)
+            if abs(a_sum_v - expect_a) > multifile_match.TOLERANCE:
+                wb_out.close()
+                return _match_postcondition_fail(f"A側合計の独立再集計({key_val})", expect_a, a_sum_v)
+            if abs(b_sum_v - expect_b) > multifile_match.TOLERANCE:
+                wb_out.close()
+                return _match_postcondition_fail(f"B側合計の独立再集計({key_val})", expect_b, b_sum_v)
             if abs(diff_v - (a_sum_v - b_sum_v)) > multifile_match.TOLERANCE:
                 wb_out.close()
                 return _match_postcondition_fail(f"差額の算術({r}行目)", a_sum_v - b_sum_v, diff_v)
