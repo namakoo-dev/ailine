@@ -522,6 +522,31 @@ _EXTRACT_ARGS = {"col": "金額", "cmp": "gte", "value": 40000.0,
 _add("extract_pass", "EXTRACT", _EXTRACT_ARGS, _b_extract_pass)
 _add("extract_fail_missing_sheet", "EXTRACT", _EXTRACT_ARGS, _b_extract_fail_missing_sheet)
 
+# --- DEDUP（EXTRACT の兄弟）--------------------------------------------------
+def _b_dedup_pass(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    for row in [["取引先", "金額"], ["甲社", 100], ["甲社", 250], ["乙社", 200]]:
+        ws.append(row)
+    out = wb.create_sheet("取引先の重複除去")
+    out.append(["取引先", "金額"])
+    out.append(["甲社", 100])
+    out.append(["乙社", 200])
+    wb.save(p)
+    return p, None
+
+
+def _b_dedup_fail_missing_sheet(tmp_path):
+    return _book(tmp_path, "b.xlsx",
+                 [["取引先", "金額"], ["甲社", 100], ["甲社", 250], ["乙社", 200]]), None
+
+
+_DEDUP_ARGS = {"keys": ["取引先"], "_target_sheet": "Sheet", "_new_sheet": "取引先の重複除去"}
+_add("dedup_pass", "DEDUP", _DEDUP_ARGS, _b_dedup_pass)
+_add("dedup_fail_missing_sheet", "DEDUP", _DEDUP_ARGS, _b_dedup_fail_missing_sheet)
+
 # --- error 状態（事後条件チェッカー自身の例外をキャッチして "error" に変換する境界） -----
 _add("error_missing_required_arg_key", "SORT", {}, _b_sort_pass)   # args["col"] で KeyError
 

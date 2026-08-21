@@ -200,6 +200,13 @@ _add("extract_numeric_cmp_needs_number", "EXTRACT", {"col": "金額", "cmp": "gt
 _add("extract_eq_falls_back_to_string", "EXTRACT", {"col": "商品", "cmp": "eq", "value": "ノートPC"})
 _add("extract_missing_value", "EXTRACT", {"col": "金額", "cmp": "gte", "value": ""})
 
+# --- DEDUP（EXTRACT の兄弟）--------------------------------------------------
+_add("dedup_ok_single_key", "DEDUP", {"keys": ["商品"]})
+_add("dedup_ok_multi_key", "DEDUP", {"keys": ["商品", "単価"]})
+_add("dedup_unknown_key_column", "DEDUP", {"keys": ["不明"]})
+_add("dedup_missing_keys_empty_list", "DEDUP", {"keys": []})
+_add("dedup_missing_keys_absent", "DEDUP", {})
+
 # --- 境界: verify_dsl_args 自体の全体ガード ----------------------------------
 _add("no_sheets_in_book", "SORT", {"col": "金額", "order": "asc"}, book_meta=BM_NO_SHEETS)
 _add("unsupported_op", "FOOBAR", {})

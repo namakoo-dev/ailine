@@ -54,6 +54,8 @@ _add("pivot", "PIVOT", {"group_col": "商品", "value_col": "金額"})
 _add("set_column_value_with_source", "SET_COLUMN_VALUE",
      {"col": "商品", "value": "確認済み", "_sources": {"value": "依頼文: 「確認済み」"}})
 _add("extract", "EXTRACT", {"col": "金額", "cmp": "gte", "value": 40000.0})
+_add("dedup", "DEDUP", {"keys": ["商品"]})
+_add("dedup_multi_key", "DEDUP", {"keys": ["商品", "金額"]})
 
 
 def _case_ids():

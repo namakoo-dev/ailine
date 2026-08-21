@@ -1187,5 +1187,44 @@
         }
       ]
     }
+  ],
+  "items_v8": [
+    {
+      "id": 801,
+      "book": "sales",
+      "kind": "dedup",
+      "text": "部門が同じ行を重複として除いて",
+      "expect": {
+        "op": "DEDUP",
+        "keys": [
+          "部門"
+        ]
+      }
+    },
+    {
+      "id": 802,
+      "book": "staff",
+      "kind": "dedup",
+      "text": "氏名が同じ行を重複としてはじいて",
+      "expect": {
+        "op": "DEDUP",
+        "keys": [
+          "氏名"
+        ]
+      }
+    },
+    {
+      "id": 803,
+      "book": "staff",
+      "kind": "dedup",
+      "text": "氏名と部署の両方が同じ行を重複として除いて",
+      "expect": {
+        "op": "DEDUP",
+        "keys": [
+          "氏名",
+          "部署"
+        ]
+      }
+    }
   ]
 }

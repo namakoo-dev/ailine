@@ -66,7 +66,10 @@ def score_slots(expect, got):
             base = k[:-7]
             gv = norm(args.get(base, got.get(base, "")))
             hits += any(norm(c) in gv or gv == norm(c) for c in v)
-        elif k == "operands":
+        elif k in ("operands", "keys"):
+            # ★ freeform 廃止バンドル前段(DEDUP): keys も operands と同じ「列名の集合」型の
+            #   slot ── 順序に意味が無いので、各期待列名が args の JSON 表現のどこかに
+            #   現れるかだけを見る（厳密な文字列一致だと LLM が順序を変えただけで0点になる）。
             gv = norm(json.dumps(args, ensure_ascii=False))
             hits += all(norm(o) in gv for o in v)
         else:

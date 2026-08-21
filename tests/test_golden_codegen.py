@@ -159,6 +159,15 @@ _add("extract_string_contains_hr1", "EXTRACT",
 _add("extract_numeric_lt_hr3", "EXTRACT",
      {"col": "金額", "cmp": "lt", "value": 20, "_new_sheet": "金額20未満"}, book_meta=BM_HR3)
 
+# --- DEDUP（EXTRACT の兄弟）--------------------------------------------------
+# ★ _new_sheet は verify_dsl_args が積む値（_dedup_output_sheet_name）だが、EXTRACT と
+#   同じ理由で素の resolved args として明示的に渡す。
+_add("dedup_single_key_hr1", "DEDUP", {"keys": ["商品"], "_new_sheet": "商品の重複除去"})
+_add("dedup_multi_key_hr1", "DEDUP",
+     {"keys": ["商品", "単価"], "_new_sheet": "商品・単価の重複除去"})
+_add("dedup_single_key_hr3", "DEDUP", {"keys": ["商品"], "_new_sheet": "商品の重複除去"},
+     book_meta=BM_HR3)
+
 # --- 後方互換: header_rows キーが book_meta に無い旧テスト値 ------------------
 _add("sort_legacy_no_header_rows_key", "SORT", {"col": "金額", "order": "asc"},
      book_meta=BM_LEGACY_NO_HEADER_ROWS)

@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "resolved": {
+    "keys": [
+      "不明"
+    ],
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "列『不明』がありません。ある列: 商品, 数量, 単価, 金額"
+}

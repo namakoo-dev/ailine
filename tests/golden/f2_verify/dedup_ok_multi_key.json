@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "resolved": {
+    "keys": [
+      "商品",
+      "単価"
+    ],
+    "_target_sheet": "Sheet",
+    "_source_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_new_sheet": "商品・単価の重複除去"
+  },
+  "inferred": [],
+  "err": null
+}

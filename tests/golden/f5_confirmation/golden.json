@@ -8,6 +8,8 @@
   "chart": "解釈: 操作:グラフ 値列:金額",
   "compute_column_with_target_inferred": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:* 対象列:金額(推定)",
   "compute_column_without_target_omits_field": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:*",
+  "dedup": "解釈: 操作:重複除去 判定キー:商品",
+  "dedup_multi_key": "解釈: 操作:重複除去 判定キー:商品・金額",
   "draw_borders_no_fields": "解釈: 操作:けい線",
   "extract": "解釈: 操作:抽出 対象列:金額 条件:以上 値:40000",
   "fill_color_row": "解釈: 操作:背景色 対象:row:1 色:red",

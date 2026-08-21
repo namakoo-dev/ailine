@@ -19,9 +19,14 @@ sys.path.insert(0, str(REPO))
 import ailine  # noqa: E402
 
 _FROZEN = {
-    "OPS_DOC": "1ad4870e37799d84",
+    # ★ 2026-08-21: DEDUP op の語彙昇格（freeform 廃止バンドル前段）で OPS_DOC/
+    #   TRANSLATION_FEWSHOT を更新。bench/translation_dsl_battery_run.py 実 7B
+    #   （qwen2.5-coder:7b）で凍結バーを確認済み: op 96.2%→98.1%（合格線90%）・
+    #   slot 98.6%→98.6%（合格線80%）・曖昧誤断定 0%→0%（合格線20%以下、変化なし）。
+    #   DEDUP 専用 battery（items_v8・3件）は op/slot とも100%。
+    "OPS_DOC": "2a87a1945bc6e29c",
     "TRANSLATION_SYSTEM": "8dd5cd3a43d833fe",
-    "TRANSLATION_FEWSHOT": "d29158d01f236c2f",
+    "TRANSLATION_FEWSHOT": "c10a9b45e6cada35",
 }
 
 

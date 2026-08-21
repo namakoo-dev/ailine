@@ -541,3 +541,102 @@ Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode
         End If
     Next i
 End Sub
+
+
+' ★ freeform 廃止バンドル前段: DEDUP op（重複行の除去・非破壊形）。ExtractRows と同族
+'   （型保存コピー・NumberFormat 運搬・見出し行コピーは単位H の署名として同じ形）。
+'   違いは「条件で選ぶ」でなく「キー列の組が既出かどうかで選ぶ」こと。
+' keyIdxCsv: 判定キー列（0起点の列インデックス）をカンマ区切りにした文字列（例 "0" や "0,2"）。
+'   Call の引数に配列リテラルを直接書けないため、Python 側(codegen_dsl)がここで文字列に
+'   組み、このヘルパが Split で戻す。
+' キーの正規化: 前後空白除去のみ・型が違えば別キー（テキストセルと数値セルは常に別キー。
+'   ailine_core/match.py の normalize_key・check_dedup の _dedup_normalize_key_part と
+'   同じ規則 ── 3箇所が同じ規則を独立に書く点は sum_identity/total_row と同じ作法）。
+' ★ 実弾の教訓（2026-08-21）: 既出キー判定を最初 Collection.Add の重複キーエラー
+'   （On Error Resume Next / Err 判定）で書いたところ、実機 LO で無限ループして
+'   basrun ごと固まった（60秒で戻らず PID kill で回収）。LO では**エラー頼みの制御フロー
+'   が固まる**── ここではエラーを一切発生させない文字列所属検査（InStr）に置き換えている。
+'   On Error / Err / Collection は今後もこの Sub に持ち込まない。
+Sub DedupRows(oDoc As Object, headerRow As Integer, keyIdxCsv As String, dstName As String)
+    Dim oSheet As Object, oOut As Object
+    Dim lastRow As Long, lastCol As Integer, i As Long, j As Integer, k As Integer
+    Dim oCell As Object, oSrc As Object, oDst As Object
+    Dim outRow As Long
+    Dim keyIdxStrs() As String
+    Dim nKeys As Integer
+    Dim compositeKey As String, part As String
+    Dim seen As String   ' 番兵(Chr(1))区切りの既出キー連結。O(n^2) だが第一波の行数では問題にしない。
+    Dim isDup As Boolean
+
+    oSheet = oDoc.Sheets.getByIndex(0)
+    keyIdxStrs = Split(keyIdxCsv, ",")
+    nKeys = UBound(keyIdxStrs) - LBound(keyIdxStrs) + 1
+
+    ' 最終データ行（A 列を見出しの直下から走査）
+    lastRow = headerRow + 1
+    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
+        lastRow = lastRow + 1
+    Loop
+    lastRow = lastRow - 1
+    ' 最終列（見出し行を走査）
+    lastCol = 0
+    Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
+        lastCol = lastCol + 1
+    Loop
+    lastCol = lastCol - 1
+    If lastRow < headerRow + 1 Or lastCol < 0 Then Exit Sub
+
+    If oDoc.Sheets.hasByName(dstName) Then oDoc.Sheets.removeByName(dstName)
+    oDoc.Sheets.insertNewByName(dstName, oDoc.Sheets.Count)
+    oOut = oDoc.Sheets.getByName(dstName)
+
+    ' 見出し行のコピー（単位H の署名: 出力の1行目 = 元シートの見出し行そのもの）
+    For j = 0 To lastCol
+        oOut.getCellByPosition(j, 0).setString(oSheet.getCellByPosition(j, headerRow).getString())
+    Next j
+
+    outRow = 1
+    seen = ""
+    For i = headerRow + 1 To lastRow
+        ' キー列の組から複合キー文字列を作る（型ごとに接頭辞を変え、型違いを別キーにする）。
+        compositeKey = ""
+        For k = 0 To nKeys - 1
+            oCell = oSheet.getCellByPosition(CInt(keyIdxStrs(k)), i)
+            If oCell.getType() = com.sun.star.table.CellContentType.TEXT Then
+                part = "S:" & Trim(oCell.getString())
+            ElseIf oCell.getType() = com.sun.star.table.CellContentType.EMPTY Then
+                part = "E:"
+            Else
+                part = "V:" & CStr(oCell.getValue())
+            End If
+            compositeKey = compositeKey & Chr(9) & part
+        Next k
+
+        ' 既出キーの判定はエラーに一切依存しない文字列所属検査（InStr）で行う。
+        ' 番兵は Chr(1)（compositeKey 内部の区切り Chr(9) とは衝突しない）。
+        If InStr(seen, Chr(1) & compositeKey & Chr(1)) > 0 Then
+            isDup = True
+        Else
+            isDup = False
+            seen = seen & Chr(1) & compositeKey & Chr(1)
+        End If
+
+        If Not isDup Then
+            For j = 0 To lastCol
+                oSrc = oSheet.getCellByPosition(j, i)
+                oDst = oOut.getCellByPosition(j, outRow)
+                If oSrc.getType() = com.sun.star.table.CellContentType.TEXT Then
+                    oDst.setString(oSrc.getString())
+                ElseIf oSrc.getType() = com.sun.star.table.CellContentType.EMPTY Then
+                    ' 何もしない（空欄のまま。0 で埋めない＝型を保つコピーの一部）
+                Else
+                    oDst.setValue(oSrc.getValue())
+                    ' ★ ExtractRows と同じ理由: 日付セルは getValue() がシリアル値を返すため、
+                    '   書式を運ばないと日付がただの整数に化ける。
+                    oDst.NumberFormat = oSrc.NumberFormat
+                End If
+            Next j
+            outRow = outRow + 1
+        End If
+    Next i
+End Sub

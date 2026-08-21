@@ -1549,6 +1549,11 @@ OP_META = {
     #   空シートで exit 0）を事後条件(check_extract)が直接殺す形で op に昇格させる。
     "EXTRACT": {"category": "表を編集する", "label": "抽出", "folder": True,
                  "synonyms": ["抜き出す", "抽出", "絞り込んでコピー"]},
+    # ★ freeform 廃止バンドル前段: DEDUP（EXTRACT の兄弟・非破壊形）。判定キー列の値の
+    #   組が同じ行のうち最初の1行だけを新シートへ残す（元シートの行は消さない）。
+    #   ★ folder は False（M2 のフォルダ抽出対応は EXTRACT だけ・DEDUP の folder 版は未実装）。
+    "DEDUP": {"category": "表を編集する", "label": "重複除去", "folder": False,
+               "synonyms": ["重複を除く", "重複除去", "重複行を消す", "ユニークにする"]},
 }
 
 OP_LABELS = {op: meta["label"] for op, meta in OP_META.items()}
@@ -1580,6 +1585,9 @@ OP_SCHEMA = {
     # ★ EXTRACT: col(対象列)・cmp(比較。gte/lte/gt/lt/eq/contains)・value(比較する値)。
     #   出力シート名は verify_dsl_args が機械で決め打ちする（LLM に決めさせない・A' 原則）。
     "EXTRACT": ("col", "cmp", "value"),
+    # ★ DEDUP: keys(判定キー列名のリスト)。無ければ CLARIFY（全列一致を既定にしない）。
+    #   出力シート名は verify_dsl_args が機械で決め打ちする（EXTRACT と同じ A' 原則）。
+    "DEDUP": ("keys",),
 }
 
 # ★ W10c 致命1: 「破壊の関所」（既存列への上書き検知・下の _maybe_warn_target_overwrite）が
@@ -1661,6 +1669,8 @@ OP_WRITE_TARGET = {
     #   出力シート名は動的（col/cmp/value から機械決定）なので OP_DECLARED_SHEET_NAME の
     #   固定表には乗らない ── 単位H(_own_output_headers)側で動的な名前を扱う。
     "EXTRACT": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
+    # ★ DEDUP: EXTRACT と同じ形（新規シートを作るだけ・入力シートは読むだけ）。
+    "DEDUP": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
 }
 
 
@@ -1717,6 +1727,10 @@ OP_SUBJECT_SLOTS = {
     # ★ EXTRACT: cmp/value は SET_COLUMN_VALUE の value と同じ理由で対象に含めない
     #   （依頼文が名指しうる「対象」は列だけ・比較の種類や閾値は列名と同種の実在物ではない）。
     "EXTRACT": (("col", SUBJ_COLUMN),),
+    # ★ DEDUP: keys は列名のリスト（_subject_slots が list を1件ずつ Slot に展開する・
+    #   COMPUTE_COLUMN の operands と同じ仕組み）。SUBJ_COLUMN にする理由: keys は
+    #   「計算の入力」ではなく依頼文が直接名指す対象そのもの（EXTRACT の col と同じ扱い）。
+    "DEDUP": (("keys", SUBJ_COLUMN),),
 }
 
 
@@ -1816,7 +1830,13 @@ EXTRACT: 単一条件（列×比較×値）に一致する行だけを新しい�
   args: col(列名), cmp(比較。gte=以上, lte=以下, gt=超, lt=未満, eq=等しい, contains=を含む),
   value(比較する値。数値または文字列。ここでは数値化しなくてよい・機械が確定する)
   ★ 出力シート名は機械が決める（LLM は考えなくてよい）。一部の列だけを残す絞り込みや
-  複数条件(AND/OR)、グループごとに分けての抽出は語彙に無い（OUT_OF_VOCAB にする）"""
+  複数条件(AND/OR)、グループごとに分けての抽出は語彙に無い（OUT_OF_VOCAB にする）
+DEDUP: 判定キー列（1つ以上）の値の組が同じ行のうち、最初の1行だけを新しいシートへ残す
+  （重複除去。元シートの行は消さない・非破壊）。args: keys(判定キー列名のリスト。
+  依頼文で名指しされた列だけを入れる)
+  ★ keys は依頼文に無い列を推測で入れない。どの列が同じなら重複とみなすか依頼文に
+  無ければ CLARIFY で確認する（「全列が一致したら重複」を黙った既定にしない）。
+  出力シート名は機械が決める（LLM は考えなくてよい）"""
 
 # ★ M2c: battery(v1) が実測で取り違えた基本パターンに加え、複合依頼(battery v2)を few-shot で
 #   教える。同じ混同/構造を別の言い回しで示す（battery の項目文そのままは使わない＝暗記でなく
@@ -1923,6 +1943,16 @@ TRANSLATION_FEWSHOT = [
     ('対象ブックの構成: {"Sheet": ["氏名", "部署", "金額"]}\n'
      '依頼: 「氏名の列を全部『退職済み』に書き換えて」',
      '{"plan": [{"op": "SET_COLUMN_VALUE", "args": {"col": "氏名", "value": "退職済み"}}]}'),
+    # ★ freeform 廃止バンドル前段: DEDUP の語彙昇格。①判定キー列が依頼文で名指しされて
+    #   いれば DEDUP ②名指しが無ければ CLARIFY（全列一致を黙った既定にしない）、の2例で
+    #   両方を教える（W9 の教訓＝足しすぎは別 op の誤断定回帰を招くため最小限の2例）。
+    ('対象ブックの構成: {"Sheet": ["取引先", "金額"]}\n'
+     '依頼: 「取引先が同じ行を重複として除いて」',
+     '{"plan": [{"op": "DEDUP", "args": {"keys": ["取引先"]}}]}'),
+    ('対象ブックの構成: {"Sheet": ["部門", "金額"]}\n'
+     '依頼: 「重複を消して」',
+     '{"plan": [{"op": "CLARIFY", "question": '
+     '"どの列が同じなら重複とみなしますか（例: 取引先が同じなら重複）"}]}'),
 ]
 
 TRANSLATION_SYSTEM = """あなたは表計算操作の翻訳係。日本語の依頼を、下の操作語彙を使った「計画」の JSON に翻訳する。
@@ -2543,6 +2573,29 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
         resolved["_new_sheet"] = _extract_output_sheet_name(resolved["col"], cmp, resolved["value"])
 
+    # ★ DEDUP（EXTRACT の兄弟）: 判定キー列（1つ以上）の値の組が同じ行のうち最初の1行だけを
+    #   新シートへ残す。★ keys が無い/空なら CLARIFY ── 全列一致を黙って既定にしない
+    #   （「取引先が同じなら重複」は人の意図であって機械が推測してよい既定ではない）。
+    elif op == "DEDUP":
+        raw_keys = resolved.get("keys")
+        if not isinstance(raw_keys, list) or not raw_keys:
+            return False, resolved, inferred, (
+                "重複を判定する列が依頼文から読み取れません。どの列が同じなら重複とみなすか、"
+                "依頼文に列名を書いてください（例:「取引先が同じ行を重複として除いて」）"
+            )
+        resolved_keys = []
+        for raw_key in raw_keys:
+            v, was_inferred, err = resolve_col_ref(raw_key, headers.get(first_sheet, []))
+            if err:
+                return False, resolved, inferred, err
+            resolved_keys.append(v)
+            if was_inferred:
+                inferred.add("keys")
+        resolved["keys"] = resolved_keys
+        # ★ 単位H: EXTRACT と同じ作法（出力シートの見出し署名の材料を resolved に積む）。
+        resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
+        resolved["_new_sheet"] = _dedup_output_sheet_name(resolved_keys)
+
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
 
@@ -2575,6 +2628,7 @@ _CONFIRM_FIELDS = {
     "SET_COLUMN_VALUE": (("対象列", "col", None), ("値", "value", None)),
     "EXTRACT": (("対象列", "col", None), ("条件", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
                  ("値", "value", lambda v: _format_extract_value(v))),
+    "DEDUP": (("判定キー", "keys", lambda v: "・".join(v)),),
 }
 
 # ★ EXTRACT: 比較の語彙（設計書どおり6種）。gte/lte/gt/lt は数値比較・eq は値の型に応じて
@@ -2602,6 +2656,21 @@ def _extract_output_sheet_name(col: str, cmp: str, value) -> str:
     label = _EXTRACT_CMP_LABELS.get(cmp, cmp)
     name = f"{col}{_format_extract_value(value)}{label}"
     return _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub("_", name)[:31]
+
+
+def _dedup_output_sheet_name(keys: list) -> str:
+    """★ A'（EXTRACT の兄弟）: 出力シート名は機械が決め打ちで組む（LLM に名前を決めさせない）。
+       例: keys=["取引先"] → 『取引先の重複除去』。禁止文字の置換・31文字上限は
+       _extract_output_sheet_name と同じ規則（_EXTRACT_SHEET_NAME_FORBIDDEN_RE を共有）。"""
+    label = "・".join(keys)
+    name = f"{label}の重複除去"
+    return _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub("_", name)[:31]
+
+
+def _dedup_key_display(key_tuple) -> str:
+    """check_dedup の名指し用: 正規化キー（(型名, 値) のタプルの列）を人が読める文字列に。"""
+    parts = [str(v) for _typ, v in key_tuple]
+    return "・".join(parts) if parts else "(空)"
 
 
 # ★ W9 項目4: PIVOT(DataPilot) の既知の癖（README 記載・再描画で書式が撥ねる）を
@@ -2941,6 +3010,15 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
             value_lit = f"{float(value):g}"
         dst_name = str(resolved_args["_new_sheet"]).replace('"', '""')
         return wrap(f'    Call ExtractRows(oDoc, {hr0}, {col_idx}, {cmp_code}, {value_lit}, "{dst_name}")\n')
+
+    if op == "DEDUP":
+        # ★ ヘルパへの Call 1行だけ（helpers/AiLineHelpers.bas:DedupRows・EXTRACT と同じ作法）。
+        #   キー列は複数ありうるため、0起点の列インデックスをカンマ区切りの文字列で渡す
+        #   （Basic の Call 引数に配列リテラルを直接書けないため・ヘルパ側で Split する）。
+        key_idxs = [headers[first_sheet].index(k) for k in resolved_args["keys"]]
+        key_idx_csv = ",".join(str(i) for i in key_idxs)
+        dst_name = str(resolved_args["_new_sheet"]).replace('"', '""')
+        return wrap(f'    Call DedupRows(oDoc, {hr0}, "{key_idx_csv}", "{dst_name}")\n')
 
     raise ValueError(f"未対応の op: {op}")
 
@@ -3936,6 +4014,129 @@ def check_extract(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{denom} → {len(expected_rows)}行を抽出（値・型とも保存。元シートとの突き合わせ無し）"
 
 
+def _dedup_normalize_key_part(v):
+    """DEDUP のキー正規化: 前後空白除去のみ・型が違えば別キー（match.normalize_key と
+       同じ規則・ailine_core/match.py には触れず、ここに独立で書く ── 単一ブックの
+       check_dedup が ailine_core を追加 import しない、という既存の作法を保つ）。"""
+    if isinstance(v, str):
+        return ("str", v.strip())
+    return (type(v).__name__, v)
+
+
+def check_dedup(path: Path, args: dict, header_row: int = 1,
+                 source_book: Path | None = None) -> tuple:
+    """DEDUP の事後条件（EXTRACT の兄弟・非破壊形）。
+       キー列の値の組（前後空白除去のみ・型が違えば別キー）が同じ行のうち、元シートで
+       最初に現れた行だけを残す、という定義を独立に再現し（expected_rows）、出力と
+       位置対応で完全一致するか見る。①行数一致（元データ行数−重複数、独立に数える）
+       ②両側の検査（出力に同キー重複ゼロ＋落とした行は残した行と同キー＋残した行は
+       すべて元に実在＝値・型とも保存＋落とし過ぎ・捏造の検出）を1つの比較で同時に見る
+       （check_extract と同じ設計 ── 位置対応比較なら行数不一致・値不一致のどちらも拾う）。
+       ③ 元シートが無変更（source_book が渡された時だけ突き合わせる・読むだけの op）。"""
+    dst_name = args.get("_new_sheet")
+    keys = args.get("keys") or []
+    if not dst_name:
+        return "fail", "出力シート名が決まっていません（verify_dsl_args を経由していない可能性）"
+    if not keys:
+        return "fail", "判定キー列が決まっていません（verify_dsl_args を経由していない可能性）"
+
+    with BookView(path) as bv:
+        src = bv.sheet(args.get("_target_sheet"))
+        src_name = src.title
+        if dst_name not in bv.sheetnames:
+            return "fail", f"出力シート『{dst_name}』が作られていません"
+        key_idxs = []
+        for k in keys:
+            idx = _col_index_by_header(src, k, header_row=header_row)
+            if idx is None:
+                return "fail", f"判定キー列『{k}』が元シート『{src_name}』に見つかりません"
+            key_idxs.append(idx)
+        last_col = _scan_last_col(src, header_row=header_row)
+        if last_col < 1:
+            return "fail", _ZERO_TARGET_REASON
+
+        total = 0
+        expected_rows = []     # 残すべき行の値（位置対応・名指しは keep_row_nums で）
+        dropped = []            # [(元行番号, 正規化キー), ...]
+        keep_row_nums = []
+        seen: dict = {}          # 正規化キー → 最初に見た元行番号
+        r = header_row + 1
+        while src.cell(row=r, column=1).value not in (None, ""):
+            total += 1
+            key_tuple = tuple(_dedup_normalize_key_part(src.cell(row=r, column=idx).value)
+                              for idx in key_idxs)
+            if key_tuple in seen:
+                dropped.append((r, key_tuple))
+            else:
+                seen[key_tuple] = r
+                keep_row_nums.append(r)
+                expected_rows.append([src.cell(row=r, column=c).value for c in range(1, last_col + 1)])
+            r += 1
+        if total == 0:
+            return "fail", _ZERO_TARGET_REASON
+
+        out = bv.sheet(dst_name)
+        out_rows = []
+        r = 2   # 出力は DedupRows の仕様どおり常に物理1行目が見出し
+        while out.cell(row=r, column=1).value not in (None, ""):
+            out_rows.append([out.cell(row=r, column=c).value for c in range(1, last_col + 1)])
+            r += 1
+
+    key_label = "・".join(keys)
+    dropped_label = "、".join(f"{rn}行目" for rn, _kt in dropped) or "(無し)"
+    denom = f"{total}行中{len(expected_rows)}行を残しました（除外{len(dropped)}行: {dropped_label}／判定キー: {key_label}）"
+
+    if len(out_rows) != len(expected_rows):
+        # ★ 両側の検査: 出力の方が多い→重複が残っている（そのキーを名指し）／
+        #   出力の方が少ない→残すべき行を落とし過ぎ（そのキーを名指し）。
+        key_positions = [i - 1 for i in key_idxs]
+        if len(out_rows) > len(expected_rows):
+            out_seen: dict = {}
+            dup_keys = []
+            for row_vals in out_rows:
+                kt = tuple(_dedup_normalize_key_part(row_vals[p]) for p in key_positions)
+                if kt in out_seen:
+                    dup_keys.append(kt)
+                else:
+                    out_seen[kt] = True
+            dup_display = "、".join(_dedup_key_display(kt) for kt in dup_keys) or "(不明)"
+            return "fail", (f"{denom} → 出力は{len(out_rows)}行で、キーが重複したまま"
+                            f"残っています（キー: {dup_display}）")
+        else:
+            out_keys = {tuple(_dedup_normalize_key_part(row_vals[p]) for p in key_positions)
+                        for row_vals in out_rows}
+            missing_keys = [kt for kt in seen if kt not in out_keys]
+            missing_display = "、".join(_dedup_key_display(kt) for kt in missing_keys) or "(不明)"
+            return "fail", (f"{denom} → 出力は{len(out_rows)}行で、残すべき行が"
+                            f"足りません（キー: {missing_display}）")
+
+    for i, (want, got) in enumerate(zip(expected_rows, out_rows), start=1):
+        if want == got:
+            continue
+        for c, (wv, gv) in enumerate(zip(want, got), start=1):
+            if wv != gv:
+                letter = get_column_letter(c)
+                return "fail", (
+                    f"{denom} → 出力{i}行目 {letter}列が元と不一致（元 {wv!r}（{type(wv).__name__}） "
+                    f"出力 {gv!r}（{type(gv).__name__}）＝捏造/取り違えの可能性）"
+                )
+
+    if source_book is not None and Path(source_book).exists():
+        with BookView(source_book) as bv_before, BookView(path) as bv_after:
+            src_before = bv_before.sheet(args.get("_target_sheet"))
+            src_after = bv_after.sheet(args.get("_target_sheet"))
+            last_row_before = _scan_last_row(src_before, header_row=header_row)
+            mismatches = sum(
+                1 for r in range(header_row, last_row_before + 1) for c in range(1, last_col + 1)
+                if src_before.cell(row=r, column=c).value != src_after.cell(row=r, column=c).value)
+        if mismatches:
+            return "fail", (f"{denom} でしたが、元シート『{src_name}』が {mismatches} セル"
+                             "変更されています（読むだけのはず）")
+        return "pass", f"{denom}（値・型とも保存・元シート無変更）"
+
+    return "pass", f"{denom}（値・型とも保存。元シートとの突き合わせ無し）"
+
+
 POSTCONDITIONS = {
     "SORT": check_sort, "COMPUTE_COLUMN": check_compute_column,
     "LOOKUP_FILL": check_lookup_fill, "AGGREGATE": check_aggregate,
@@ -3948,6 +4149,7 @@ POSTCONDITIONS = {
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
     "EXTRACT": check_extract,
+    "DEDUP": check_dedup,
 }
 
 
@@ -3983,7 +4185,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
                        source_book=source_book)
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
-        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT"):
+        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -5357,6 +5559,14 @@ def _own_output_headers(op: str, resolved: dict | None):
             return None
         return {sheet: (group, f"合計 - {value}")}
     if op == "EXTRACT":
+        sheet = resolved.get("_new_sheet")
+        source_headers = resolved.get("_source_headers")
+        if not (sheet and source_headers):
+            return None
+        return {sheet: tuple(source_headers)}
+    # ★ DEDUP（単位H の3例目）: DedupRows も出力の1行目に元シートの見出し行をそのまま
+    #   コピーする（helpers/AiLineHelpers.bas 参照）── EXTRACT と全く同じ署名の作り方。
+    if op == "DEDUP":
         sheet = resolved.get("_new_sheet")
         source_headers = resolved.get("_source_headers")
         if not (sheet and source_headers):
