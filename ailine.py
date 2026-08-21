@@ -88,6 +88,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
 )
+from ailine_core.filetypes import BOOKLIKE_SUFFIXES   # ★ 拡張子判定の登録簿（単発の定数のみ import）
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
@@ -6742,8 +6743,6 @@ def _stack_attribution_fail(mismatch: dict) -> int:
     return 5
 
 
-_BOOKLIKE_SUFFIXES = {".xlsx", ".xls", ".xlsm", ".xlsb", ".xltx", ".xltm", ".xlt",
-                      ".ods", ".ots", ".csv", ".tsv"}
 # ★ review5#2 の直し（実機再現: .xlsm の打ち間違いが黙って依頼文に落ちた）: 個別拡張子の
 #   列挙だけでは次の未知の拡張子（.numbers 等）でまた同じ穴になる。一般則を併用する ──
 #   末尾が「. + 英数字2〜5文字」ならファイル名の拡張子らしいと見る（依頼文の1語目が
@@ -6757,7 +6756,7 @@ def _looks_like_second_book_path(token: str) -> bool:
        見分けるためだけ）── 表計算らしい拡張子・拡張子らしい語尾・パス区切りのいずれかで真。
        依頼文の1トークン目がたまたまこれに当てはまることはまず無い（自然文はこの形にならない）。"""
     p = Path(token)
-    if p.suffix.lower() in _BOOKLIKE_SUFFIXES:
+    if p.suffix.lower() in BOOKLIKE_SUFFIXES:
         return True
     if "/" in token or "\\" in token:
         return True

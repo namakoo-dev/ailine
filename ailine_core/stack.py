@@ -18,6 +18,7 @@ from xml.etree import ElementTree as ET
 import openpyxl
 
 from ailine_core import inspection, multifile, total_row
+from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 
 PROVENANCE_HEADERS = ("元ファイル", "元行")
 # ★ 赤2 の直し（2026-08-21 実機敵対検分）: 署名判定はサフィックス形（元ファイル_2 等）も
@@ -207,7 +208,7 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
        （旧 value_col_name）から『基準の数値列集合すべて』（numeric_col_names）へ広げる。
        実務標準形（数量・単価つき請求書）は最初の数値列=数量だが、合計の数字は金額列にしか
        無い ── 単一列版は has_number=False で全トリガが沈黙し、Σ が黙って2倍になった。"""
-    if path.suffix.lower() != ".xlsx":
+    if path.suffix.lower() != OPENPYXL_READABLE_SUFFIX:
         return FileStackResult(name=path.name, status="積めなかった", reason="旧形式(.xls)")
     try:
         wb = openpyxl.load_workbook(path, data_only=True)

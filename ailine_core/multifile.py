@@ -12,8 +12,9 @@ from pathlib import Path
 
 import openpyxl
 
+from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX, SCAN_CANDIDATE_SUFFIXES
+
 _TEMP_PREFIX = "~$"                      # Excel の一時ファイル（開いている間だけ現れる隣接ファイル）
-_EXCEL_EXTS = {".xlsx", ".xls"}
 _MAX_HEADER_COLS = 200                   # 見出し行を読む安全上限（ailine.py の MAX_COLS とは独立）
 
 
@@ -33,7 +34,7 @@ def classify_folder_contents(folder: Path):
         if item.name.startswith(_TEMP_PREFIX):
             excluded["temp"] += 1
             continue
-        if item.suffix.lower() in _EXCEL_EXTS:
+        if item.suffix.lower() in SCAN_CANDIDATE_SUFFIXES:
             candidates.append(item)
     return candidates, excluded
 
@@ -43,7 +44,7 @@ def open_base_workbook(candidates):
        基準にする。戻り値: (path, workbook) または、読める .xlsx が1つも無ければ (None, None)。
        ★ .xls は openpyxl で開けないため基準になれない（読めたものだけが資格を持つ）。"""
     for path in candidates:
-        if path.suffix.lower() != ".xlsx":
+        if path.suffix.lower() != OPENPYXL_READABLE_SUFFIX:
             continue
         try:
             wb = openpyxl.load_workbook(path, data_only=True)
@@ -154,7 +155,7 @@ def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, h
        ★ どんな失敗でも例外を上げず名指し+理由にして返す
        （$0 条件「黙って失敗する」の裏返し ── 報告が成果物）。
        ★ ラベル列・数値列は基準の**列名**で引き当てる（並べ替えファイルでは位置が違う）。"""
-    if path.suffix.lower() != ".xlsx":
+    if path.suffix.lower() != OPENPYXL_READABLE_SUFFIX:
         return {"name": path.name, "status": "取れなかった", "reason": "旧形式(.xls)"}
     try:
         wb = openpyxl.load_workbook(path, data_only=True)

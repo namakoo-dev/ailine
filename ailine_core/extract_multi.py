@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 import openpyxl
 
 from ailine_core import inspection, multifile, total_row
+from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 
 # ★ 書き手の印。stack.py の CREATOR_MARKS が「将来の extract を先取りして凍結」した
 #   文字列と完全一致させる（own_output_mark / is_own_output が M2 の出力を
@@ -153,7 +154,7 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
        （検算側 verify.verify_extract も同じ集合を渡す・片配線にしない）。条件列
        （cond_col_name）は述語（predicate）の対象列としてはそのまま使う（総計行検出とは
        別の役目）。"""
-    if path.suffix.lower() != ".xlsx":
+    if path.suffix.lower() != OPENPYXL_READABLE_SUFFIX:
         return FileExtractResult(name=path.name, status="取れなかった", reason="旧形式(.xls)")
     try:
         wb = openpyxl.load_workbook(path, data_only=True)
