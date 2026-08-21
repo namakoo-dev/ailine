@@ -72,6 +72,7 @@ from ailine_core.claim import (   # ★ C5/C9: Claim 型と『✓』の一元レ
     Claim, format_plan_report, format_plan_preview, overall_verdict,
     render_applied_claim, render_applied_unverified, render_applied_unobservable,
     render_scope_notes,   # ★ 単位E: 常時注記を廃止し、その run 固有の②の1文に置き換えた
+    count_suspicious_advisories, render_applied_claim_demoted,   # ★ 決裁③: ⚠ による ✓ の降格
 )
 from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 段が共有する実行エンジン
     DslStepDeps, resolve_dsl_step_args, print_dsl_confirmation, apply_dsl_step, compose_dsl_step_advisories,
@@ -5219,13 +5220,20 @@ def observe_book_state(path: Path) -> tuple:
 #   読み戻し、その結果だけを Claim にして描く。段別 ✓・--dry の ✓・反映前の ✓ は廃止。
 def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Path,
                    result: dict, machine_verified: bool, scope: str = "",
-                   scope_note: str = "") -> bool:
+                   scope_note: str = "", warning_count: int = 0) -> bool:
     """--copy（a.inplace が False）なら .out のまま（原本は無変更）。既定(a.inplace)なら
        backup+原子的置換(atomic_replace_inplace)で原本へ反映する。そのうえで**最終ファイルを
-       読み戻し**、machine_verified=True なら ✓ の1行を、False（自由生成・検証対象不足の段を
-       含む計画）なら ⚠ の1行を出す。読み戻せなかったら ✓ は出さない。
+       読み戻し**、machine_verified=True なら ✓（★ 決裁③: warning_count>0 なら△に降格）の
+       1行を、False（自由生成・検証対象不足の段を含む計画）なら ⚠ の1行を出す。
+       読み戻せなかったら ✓/△ どちらも出さない。
        scope は照合した宣言（Claim.scope・machine_verified=True のとき必須）、
        scope_note は経路別の範囲注記（単発/複合計画）。
+       ★ 決裁③(2026-08-22): warning_count は呼び出し側が数えた「疑わしい系の ⚠」の総数
+       （count_suspicious_advisories・単一 op/複合計画それぞれの advisories + 単位F/G の
+       前提破れメッセージから求める。呼び出し側が数えるのは、この関数自身は advisories の
+       出所（単発 build_advisories 系 / 複合計画の段別集計）を知らないため ── 判定基準
+       （★ 付きだけ数える）は claim.py 側に1箇所で持つ）。1件でもあれば ✓ を出さず△にする
+       （machine_verified=False の ⚠ 経路には影響しない ── そちらは元から ✓ を名乗らない）。
        戻り値: 置換が成功した(または --copy で置換不要だった)か。"""
     if a.inplace:
         ok_ip, err_ip = atomic_replace_inplace(
@@ -5248,7 +5256,10 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
     elif machine_verified:
         claim = Claim(verified=True, basis="declaration", scope=scope, evidence=evidence,
                        observation_complete=True, observed_on=str(final), observed_after_apply=True)
-        for ln in render_applied_claim(claim, final.name):
+        # ★ 決裁③(2026-08-22): 疑わしい ⚠ が1件でも出た run は ✓ を名乗らない（△ に降格）。
+        render_fn = render_applied_claim_demoted if warning_count > 0 else render_applied_claim
+        lines = render_fn(claim, final.name, warning_count) if warning_count > 0 else render_fn(claim, final.name)
+        for ln in lines:
             print(ln)
         if scope_note:
             print(scope_note)
@@ -5889,9 +5900,17 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     #   「解釈: 」を除いた宣言テキスト（＝計画が宣言した対象）。
     # ★★ 単位E: ③（依頼文の語と矛盾する対象がある）なら、事後条件が通っていても ✓ は出さない
     #   ―― 検証したのは「計画どおり」であって、その計画は依頼文の語と食い違っている。
+    # ★ 決裁③(2026-08-22): 疑わしい ⚠ の総数 = advisories 中の ★/⚠ 付き件数 + 単位F/G の
+    #   前提破れ（あれば必ず ★ 付きの1件）+ 確認段で「⚠ 」前置で印字済みの
+    #   resolved["_warnings"]（LLM 由来の値と機械抽出の食い違い ── 片配線の追補 2026-08-22:
+    #   advisories にも前提破れにも入らないため、ここで明示的に数える。素の文字列は印を
+    #   持たないので len で数える）。0 なら従来どおり ✓。
+    warning_count = (count_suspicious_advisories(advisories) + (1 if warn_precondition else 0)
+                      + len(resolved.get("_warnings", [])))
     _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
-                   scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))))
+                   scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
+                   warning_count=warning_count)
 
     _finish_run(a, book, result, "none")
     return 0
@@ -6313,13 +6332,21 @@ def _dedup_step_advisories(entries: list) -> list:
 def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_meta: dict, original_headers: dict,
                         first_sheet: str | None, out_book: Path, workdir: Path, helper_files, apply_timeout,
                         use_formula: bool, header_rows: dict, before_charts: int, a: argparse.Namespace, vocab: dict,
-                        book_name: str, subject_sink: dict | None = None) -> tuple:
+                        book_name: str, subject_sink: dict | None = None,
+                        suspicion_sink: list | None = None) -> tuple:
     """★ C7: cmd_run_plan の DSL 語彙段の1段分。cmd_run_dsl と同じ ailine_core.dsl_step の共有エンジンを通る
        （非対称は dsl_step.py 参照）。この分離で stage_organs の dsl_plan_step 代表関数はここになる（DoD7）。
        戻り値: (gate_exit, item, plan_json_entry, step_advisories, provenance_entry, mention_exclude_sheets, current_meta)。
        ★ 単位E: subject_sink（呼び出し側が用意する dict）に、この段の対象スロットの出所を積む
        ―― ③ の有無は計画全体の ✓ を左右し、② は ✓ の直後の1文になるので、段の外へ運ぶ必要がある
-       （戻り値のタプルはこれ以上広げない ―― 既存の unpack を壊さないための選択）。"""
+       （戻り値のタプルはこれ以上広げない ―― 既存の unpack を壊さないための選択）。
+       ★ 決裁③(2026-08-22): suspicion_sink（呼び出し側が用意する list）に、この段で
+       「印字済みだが advisories に入らない疑わしい ⚠」を積む ── subject_sink と同じ
+       side-channel の作法（戻り値のタプルは広げない）。advisories に混ぜると「助言:」の
+       集約表示で二重表示になるため、こちらの棚で運ぶ。積むのは 2 家系（片配線の追補
+       2026-08-22 で 1 → 2）: ①単位F/G の前提破れメッセージ（★ 付き・関所の直前で印字済み）
+       ②resolved["_warnings"]（LLM 由来の値と機械抽出の食い違い・確認段で「⚠ 」前置で
+       印字済み）。✓→△ 降格の判定材料としてだけ、呼び出し側 cmd_run_plan が集計する。"""
     step_prefix = f"  {i}段目: "
     deps = _make_dsl_step_deps()
     # 依存つき連鎖: 直前までの段の適用後の実列構成(current_meta)で接地する（新規列フォールバック込み）
@@ -6342,6 +6369,10 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
         for phrase in confirm.unspoken:
             if phrase not in subject_sink.setdefault("unspoken", []):
                 subject_sink["unspoken"].append(phrase)
+    if suspicion_sink is not None:   # ★ 決裁③ 片配線の追補: 確認段で「⚠ 」前置印字済みの
+        #   LLM/機械抽出の食い違い（print_dsl_confirmation 内で印字・advisories に入らない）
+        #   を ✓→△ 降格の判定材料へ運ぶ（印字と同じ「⚠ 」前置の形で積む）
+        suspicion_sink.extend(f"⚠ {w}" for w in resolved.get("_warnings", []))
     step_advisories = [confirm.mismatch_warning] if confirm.mismatch_warning else []
     # ★ 段1: interpretation/provenance は1箇所（build_interpretation）で組む（cmd_run_dsl と同じ）。
     #   provenance_entry の中身（キー・値）は今までと完全に同じ（resolved["_sources"] のまま）。
@@ -6415,6 +6446,8 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     warn_precondition = _precondition[1] if _precondition else None   # ★ 単位G: 上で 1 度だけ検査済み
     if warn_precondition:
         print(f"{step_prefix}{warn_precondition}")
+        if suspicion_sink is not None:   # ★ 決裁③: ✓→△ 降格の判定材料へ運ぶ
+            suspicion_sink.append(warn_precondition)
         gate_exit = _confirm_overwrite_or_gate(a, warn_precondition, step_prefix=step_prefix)
         if gate_exit is not None:
             return (gate_exit, None, None, [], None, None, current_meta)
@@ -6515,6 +6548,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     step_advisory_entries: list = []   # ★ W10d: [(段番号 or None, 助言文言), ...]
     mention_exclude_sheets: set = set()   # ★ W10d/単位C: 参照専用シート（reads_only 宣言・全段分の合算）
     subject_sink: dict = {"warnings": [], "unspoken": []}   # ★ 単位E: 対象スロットの出所（全段分）
+    suspicion_sink: list = []   # ★ 決裁③: 印字済みだが advisories に入らない疑わしい ⚠
+    #   （単位F/G の前提破れ + LLM/機械抽出の食い違い・全段分・✓→△ 降格の材料）
 
     for i, step in enumerate(plan, 1):
         op = step.get("op")
@@ -6553,7 +6588,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 original_headers=original_headers, first_sheet=first_sheet, out_book=out_book,
                 workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
                 use_formula=use_formula, header_rows=header_rows, before_charts=before_charts, a=a, vocab=vocab,
-                book_name=book.name, subject_sink=subject_sink)
+                book_name=book.name, subject_sink=subject_sink, suspicion_sink=suspicion_sink)
         if gate_exit is not None:
             return gate_exit
         if item is not None:
@@ -6617,10 +6652,18 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     #   （自由生成の段が混じっている以上、全体としても機械保証済みとは名乗れない）。
     # ★★ 単位E: ③（依頼文の語と矛盾する対象）を含む段が1つでもあれば ✓ は出さない
     #   ―― 各段の事後条件が「計画どおり」に通っていても、その計画は依頼文と食い違っている。
+    # ★ 決裁③(2026-08-22): 疑わしい ⚠ の総数 = 全段の advisories 中の ★ 付き件数
+    #   （step_advisory_entries・重複畳み前の生数を数える ── dedup_advisories は表示用に
+    #   畳んだ後の行数で、同じ ⚠ が複数段に跨って1行に畳まれることがあるため件数がずれる）
+    #   + suspicion_sink（単位F/G 前提破れ + LLM/機械抽出の食い違い ── 印字済みだが
+    #   advisories に含めていない別集計・_run_dsl_plan_step の docstring 参照）。
+    warning_count = (count_suspicious_advisories(text for _idx, text in step_advisory_entries)
+                      + len(suspicion_sink))
     _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(verdict == "ok" and not subject_sink["warnings"]),
                    scope="; ".join(label for _idx, label, _st, _det in items),
-                   scope_note="\n".join(render_scope_notes(subject_sink["unspoken"])))
+                   scope_note="\n".join(render_scope_notes(subject_sink["unspoken"])),
+                   warning_count=warning_count)
 
     _finish_run(a, book, result, "none")
     return 0

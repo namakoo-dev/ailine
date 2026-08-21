@@ -114,6 +114,45 @@ def render_scope_notes(unspoken_subjects: list) -> list:
             f"（ブックの実体・既定から機械決定しました） — 「解釈:」行を確認してください。"]
 
 
+def count_suspicious_advisories(lines) -> int:
+    """★ 決裁③(2026-08-22): 「疑わしい系の ⚠」の件数を、advisory の**結果オブジェクト**
+       （render 済みの最終出力ではなく、build_advisories/check_write_preconditions_detail が
+       返す文字列そのもの）から機械的に数える。
+       ★ 判別規則: ★ または ⚠ で始まる行を数える。中立表示（「（新規列の追加は意図どおり
+       です）」「（表示は先頭 N 行の変化のみ…）」等・parens のみで印を持たない）や
+       count_reconciliation の素の件数報告（「列 C: データ 3 行のうち…」）は疑わしい系では
+       ないので数えない ―― advisory 生成関数群（ailine.py の _structural_advisories 系・
+       write_precondition.py の _check_* 系・_maybe_warn_header_col_mismatch）は、疑わしいと
+       言いたい行にだけ既に ★/⚠ を付けている（この関数はその既存の合図を読むだけで、
+       新しい判定基準を作らない）。⚠ を含めるのは片配線の追補(2026-08-22 検分):
+       複合計画の見出し警告（⚠ 前置で step_advisories に入る）が ★ だけの規則から漏れて
+       ⚠ と ✓ が同居できた。
+       lines: 文字列のイテラブル（None・空文字は無視）。"""
+    return sum(1 for ln in lines
+               if isinstance(ln, str) and ln.lstrip().startswith(("★", "⚠")))
+
+
+def render_applied_claim_demoted(claim: Claim, display_name: str, warning_count: int) -> list:
+    """★ 決裁③(2026-08-22): 疑わしい ⚠ が1件でも出た run は「✓ 機械検証済み」を名乗らない
+       ―― ✓ の絶対性の適用（✓ が出た run では買い手は差分を読まなくなる、という実測を
+       踏まえ、⚠ と ✓ の同居そのものを無くす）。
+       ★ verified=True の Claim をそのまま受け取る（宣言どおりの照合自体は成立している ──
+       嘘ではない。文字だけ変える）: 「△ 宣言どおりの変化は確認しました」で検証が通った
+       事実と、「⚠ N 件を先に確認してください」で ⚠ の存在を分けて言う。
+       ★ warning_count は呼び出し側が数えた「疑わしい ⚠」の総数（0 で呼んではいけない ──
+       0 件なら render_applied_claim を使う。呼び出し側の choke point は ailine.py
+       の _finish_apply 1箇所）。"""
+    assert claim.verified and claim.observed_after_apply, (
+        "render_applied_claim_demoted も反映後に読み戻した verified=True の Claim だけを受け取る")
+    assert warning_count > 0, "render_applied_claim_demoted は warning_count > 0 の時だけ呼ぶ"
+    line = (f"\n△ {display_name} は宣言どおりの変化を確認しました"
+            f"（適用後に読み戻して確認: {claim.evidence}）"
+            f" ── ただし ⚠ {warning_count} 件を先に確認してください")
+    if not claim.observation_complete:
+        return [line, "★ ただし読み戻しは最終ファイルの一部しか見ていません（全体は未確認）。"]
+    return [line]
+
+
 def render_applied_claim(claim: Claim, display_name: str) -> list:
     """★ 『✓』を出せる唯一の関数。原本（--copy なら .out）が確定した後、その最終ファイルを
        読み戻して確かめた結果だけを述べる。

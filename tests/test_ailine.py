@@ -7626,9 +7626,11 @@ def _genka_book(tmp_path) -> Path:
 def test_set_column_value_nonnumeric_write_triggers_both_advisories(tmp_path, monkeypatch, capsys):
     """★ DoD1: 査定の再現そのものを回帰テストにする。数値列に文字列『0円』を書く →
        依存する数式が壊れる（#VALUE!）→ (a)(b) 両方の助言が出る。★ 事後条件チェッカー
-       自体は変えていないので ✓ は今回も出る（★ C9 でその ✓ は「原本(--copy なら .out)を
-       読み戻して確かめた」1行に移った・claim の主張範囲は変えない設計判断）── その上で
-       波及被害の警告が別チャンネルで出ることを見る。"""
+       自体は変えていないので、宣言どおりの照合そのものは今回も通る。
+       ★★ 決裁③(2026-08-22)で ✓→△ に更新: 疑わしい系の ⚠（この波及被害の警告も
+       その1つ）が1件でも出た run は「✓ 機械検証済み」を名乗らない ── 旧版はここで
+       ✓ と ⚠ が同居していた（この検体がまさにその実例だった）。今は「△ 宣言どおりの
+       変化は確認しました…ただし ⚠ N 件を先に確認してください」の顔になる。"""
     book = _genka_book(tmp_path)
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
@@ -7655,8 +7657,11 @@ def test_set_column_value_nonnumeric_write_triggers_both_advisories(tmp_path, mo
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
-    # ★ C9: 単発の ✓ バナーも「原本(.out)を読み戻して確かめた」1行に統合された。
-    assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
+    # ★ 決裁③(2026-08-22): 疑わしい ⚠ が出た run は ✓ でなく △（宣言どおりの照合は
+    # 通ったが先に ⚠ を確認してほしい、という降格後の顔）。
+    assert "は宣言どおりの変化を確認しました（適用後に読み戻して確認: " in captured.out
+    assert "先に確認してください" in captured.out
+    assert "✓" not in captured.out
     assert "★ 疑わしい: 適用後にエラー値のセルが増えました" in captured.out
     assert "Sheet!D2=#VALUE!" in captured.out
     assert "（確認）列『原価』は元は数値でしたが" in captured.out

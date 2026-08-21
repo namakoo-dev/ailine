@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ailine_core.claim import (
     Claim, format_plan_preview, format_plan_report, overall_verdict,
+    count_suspicious_advisories, render_applied_claim_demoted,
     render_applied_claim, render_applied_unobservable, render_applied_unverified,
 )
 
@@ -121,6 +122,44 @@ def test_render_applied_unobservable_never_says_verified():
     assert "✓" not in line and "読み戻して確認できませんでした" in line
 
 
+# --- ★ 決裁③(2026-08-22): ⚠ による ✓ の降格 -------------------------------------
+
+def test_count_suspicious_advisories_counts_only_star_prefixed_lines():
+    lines = [
+        "★ 疑わしい: 変更が元データの範囲外です（Z2:Z6）",
+        "（新規列の追加は意図どおりです）",   # 中立表示（★ 無し）は数えない
+        "列 C: データ 3 行のうち 2 行を変更（1 行は未変更）",   # count_reconciliation の素の報告
+        "★ 依頼で言及された『列Z』は存在しません/変更されていません",
+        None,
+        "",
+    ]
+    assert count_suspicious_advisories(lines) == 2
+
+def test_count_suspicious_advisories_empty_is_zero():
+    assert count_suspicious_advisories([]) == 0
+
+def test_render_applied_claim_demoted_says_triangle_not_checkmark():
+    lines = render_applied_claim_demoted(_observed(), "b.xlsx", 2)
+    assert "✓" not in "".join(lines)
+    assert lines[0].startswith("\n△ b.xlsx は宣言どおりの変化を確認しました")
+    assert "⚠ 2 件を先に確認してください" in lines[0]
+
+def test_render_applied_claim_demoted_rejects_unverified_claim():
+    c = Claim(verified=False, basis="declaration", scope="対象:金額", evidence="",
+               observation_complete=True)
+    with pytest.raises(AssertionError):
+        render_applied_claim_demoted(c, "b.xlsx", 1)
+
+def test_render_applied_claim_demoted_rejects_zero_warning_count():
+    """warning_count=0 で呼ぶのは呼び出し側の誤り（0件なら render_applied_claim を使う）。"""
+    with pytest.raises(AssertionError):
+        render_applied_claim_demoted(_observed(), "b.xlsx", 0)
+
+def test_render_applied_claim_demoted_adds_caveat_when_observation_incomplete():
+    lines = render_applied_claim_demoted(_observed(observation_complete=False), "b.xlsx", 1)
+    assert len(lines) == 2 and "一部しか見ていません" in lines[1]
+
+
 # --- 段別報告 / プレビュー: ✓ はもうどこにも出ない --------------------------------
 
 def test_format_plan_report_ok_step_states_evidence_without_a_check_mark():
@@ -156,3 +195,13 @@ def test_overall_verdict_fail_dominates_over_warn():
     line, v = overall_verdict(
         [(1, "x", "ok", "r"), (2, "y", "warn", None), (3, "z", "fail", "reason")])
     assert v == "fail"
+
+
+def test_count_suspicious_advisories_counts_warn_prefixed_lines():
+    """★ 片配線の追補(2026-08-22): 複合計画の見出し警告は「⚠ 」前置で step_advisories に
+       入る ── ★ だけを数える初版の規則から漏れて ⚠ と ✓ が同居できた。印は ★/⚠ の両方。"""
+    lines = ["⚠ 対象の列『税込』は直前の段で新規作成された列です。"
+             "依頼に「見出し」とあるため、見出し行（行全体）を意図していないか確認してください",
+             "（新規列の追加は意図どおりです）",
+             "★ 疑わしい: 適用後にエラー値のセルが増えました（計1件）: A1"]
+    assert count_suspicious_advisories(lines) == 2
