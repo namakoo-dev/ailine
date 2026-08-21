@@ -157,3 +157,18 @@ def test_contains_on_numeric_column_agrees_between_basic_and_checker(tmp_path, m
                           "--copy"], capsys)
     assert rc == 0, f"書き手と検算が分裂している（事後条件 fail か？）:\n{out}"
     assert "0行" in out or "0 行" in out, f"数値列 contains は 0 行一致のはず:\n{out}"
+
+
+@pytest.mark.local
+def test_eq_on_numeric_column_agrees_between_basic_and_checker(tmp_path, monkeypatch, capsys):
+    """★ jisaku-review 4戦目 F4（minor）: eq の許容誤差（TOLERANCE）の実機（LO・basrun）
+       検体が無かった ── 上の contains 検体と同型の欠けを埋める回帰番人。単一ブック eq
+       （金額が30000の行）で Basic 書き手と検算（事後条件）が一致し、1行抽出で exit 0
+       となること。★ 実機（LO・basrun）検体 ── モックしない。"""
+    _isolate(monkeypatch, tmp_path)
+    book = _book(tmp_path, [["注文ID", "金額"], ["J-1", 30000], ["J-2", 40000]])
+    _translate_extract(monkeypatch, col="金額", cmp="eq", value=30000)
+    rc, out = _run_main(["run", str(book), "金額が30000の行を別シートに抜き出して",
+                          "--copy"], capsys)
+    assert rc == 0, f"書き手と検算が分裂している（事後条件 fail か？）:\n{out}"
+    assert "1行" in out or "1 行" in out, f"eq 一致は1行のはず:\n{out}"

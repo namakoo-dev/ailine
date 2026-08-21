@@ -184,3 +184,31 @@ def test_verify_catches_attribution_swap_even_when_sums_match(tmp_path):
     p = _run("verify", out, folder)
     assert p.returncode == 5, f"Σ が同じ帰属の嘘を見逃した (exit={p.returncode}):\n{p.stdout}"
     assert "a.xlsx" in p.stdout or "元行" in p.stdout or "2" in p.stdout, "どの行かの名指しが無い"
+
+
+def test_verify_catches_attribution_swap_in_extract_output_even_when_sums_match(
+        tmp_path, monkeypatch):
+    """★ jisaku-review 4戦目 F3（minor）: 上の stack 版の抽出（kind=extract）版。
+       verify_extract 側にも同型の検体が無かった ── フォルダ抽出（`ailine run`）の
+       出力でも、Σ 不変の値入れ替えを帰属検算が拾うこと（exit 5）。
+       ★ run の翻訳は 7B を使わず monkeypatch（他の run 検体と同じ作法・
+       test_run_folder.py の _mock_translation と同じ線）。"""
+    import ailine  # ★ conftest.py が sys.path を通す（他の subprocess ベースの検体と混在可）
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "EXTRACT",
+                                   "args": {"column": "金額", "cmp": "gte", "value": 100}}]})
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100), ("J-2", "乙", 200)])
+    rc = ailine.main(["run", str(folder), "金額が100以上の行を抜き出して"])
+    assert rc == 0
+    out = next(tmp_path.glob("*.xlsx"))
+    wb = openpyxl.load_workbook(out)
+    ws = wb.active
+    v1, v2 = ws.cell(row=2, column=3).value, ws.cell(row=3, column=3).value
+    ws.cell(row=2, column=3).value = v2   # 金額だけ入れ替え（Σ 不変・帰属が嘘になる）
+    ws.cell(row=3, column=3).value = v1
+    wb.save(out)
+    p = _run("verify", out, folder)
+    assert p.returncode == 5, f"Σ が同じ帰属の嘘を見逃した (exit={p.returncode}):\n{p.stdout}"
+    assert "a.xlsx" in p.stdout or "元行" in p.stdout or "2" in p.stdout, "どの行かの名指しが無い"

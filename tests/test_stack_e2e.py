@@ -407,3 +407,61 @@ def test_date_cells_keep_date_number_format(tmp_path):
         f"日付セルの書式が運ばれていない: {cell.number_format!r}"
     assert "h" not in cell.number_format and ":" not in cell.number_format, \
         f"時刻の尻尾が残る書式: {cell.number_format!r}"
+
+
+def test_postcondition_catches_attribution_swap_via_evaluate_and_stack_mutation(
+        tmp_path, monkeypatch, capsys):
+    """★ jisaku-review 4戦目 F1（major）の変異試験。cmd_run_folder は verify_extract
+       経由で帰属検算（review3#3）を無償継承していたが、cmd_stack の書き込み時経路は
+       自前の行数+Σ だけで帰属を見ていなかった ── レビューの実機再現: evaluate_and_stack
+       の戻りを Σ 保存的に細工すると cmd_stack が exit 0 で素通りした。
+       ここでは行の値を丸ごと2行分入れ替える（行数・Σ とも保存されたまま帰属だけ壊れる）
+       変異を注入し、cmd_stack が非0で止まり、出力が本置き場（out）に現れないことを見る。"""
+    import dataclasses
+
+    import ailine
+    from ailine_core import stack as multifile_stack
+
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100), ("J-2", "乙", 200)])
+    out = tmp_path / "out.xlsx"
+
+    real = multifile_stack.evaluate_and_stack
+
+    def mutant(*args, **kwargs):
+        r = real(*args, **kwargs)
+        if r.status != "積んだ" or len(r.rows) < 2:
+            return r
+        (v0, f0, row0), (v1, f1, row1) = r.rows[0], r.rows[1]
+        swapped = [(v1, f0, row0), (v0, f1, row1)] + r.rows[2:]   # ★ Σ 保存・帰属だけ壊す
+        return dataclasses.replace(r, rows=swapped)
+
+    monkeypatch.setattr(multifile_stack, "evaluate_and_stack", mutant)
+    rc = ailine.main(["stack", str(folder), "--out", str(out)])
+    captured = capsys.readouterr()
+    assert rc != 0, f"帰属を入れ替えたのに合格した:\n{captured.out}"
+    assert "事後条件が破れた" in captured.out and "元" in captured.out and "出力" in captured.out, \
+        captured.out
+    assert not out.exists(), "事後条件が破れたのに出力を本置き場に書いた"
+
+
+def test_date_column_width_is_not_inflated_by_time_tail(tmp_path):
+    """★ jisaku-review 4戦目 F2（minor）の直し検体。autosize が number_format を無視して
+       str(datetime) の生の長さ（時刻付きなら20文字超）を数えると、日付列だけ過大な幅
+       （実測: 幅21）になる。日付セルは表示相当の固定幅で数え、常識的な範囲(8〜14)に
+       収まること。"""
+    import datetime
+    folder = tmp_path / "src"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["注文ID", "受注日", "金額"])
+    ws.append(["J-1", datetime.date(2026, 7, 9), 100])
+    ws["B2"].number_format = "yyyy/m/d"
+    folder.mkdir()
+    wb.save(folder / "a.xlsx")
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0, p.stdout
+    ws2 = openpyxl.load_workbook(out).active
+    width = ws2.column_dimensions["B"].width
+    assert width is not None and 8 <= width <= 14, f"日付列の幅が過大/未設定: {width!r}"

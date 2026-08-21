@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import datetime
 import os
 from dataclasses import dataclass
 
@@ -46,6 +47,11 @@ _WIDE_RANGES = (
     (0x1100, 0x115F), (0x2E80, 0xA4CF), (0xAC00, 0xD7A3), (0xF900, 0xFAFF),
     (0xFF00, 0xFF60), (0xFFE0, 0xFFE6), (0x20000, 0x3FFFD),
 )
+# ★ jisaku-review4戦目 F2（minor）の直し: date/datetime の表示相当の固定幅。
+#   str(datetime.datetime(...)) は number_format が時刻を隠していても
+#   『2026-07-09 00:00:00』のように時刻の尾まで数え、列が過大（実測: 幅21）になっていた。
+#   セルの実際の見た目（number_format 適用後）は測らず、代表的な日付表示相当の固定幅で数える。
+_DATE_DISPLAY_WIDTH = 10
 
 
 def _char_width(ch: str) -> int:
@@ -54,7 +60,10 @@ def _char_width(ch: str) -> int:
 
 
 def _display_width(v) -> int:
-    """CJK・全角は2幅、半角は1幅として数える表示幅。"""
+    """CJK・全角は2幅、半角は1幅として数える表示幅。
+       ★ date/datetime は str() の生の長さでなく固定幅（_DATE_DISPLAY_WIDTH）で数える。"""
+    if isinstance(v, datetime.date):   # datetime.datetime は date のサブクラス・両方拾う
+        return _DATE_DISPLAY_WIDTH
     return sum(_char_width(ch) for ch in ("" if v is None else str(v)))
 
 

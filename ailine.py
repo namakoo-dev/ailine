@@ -6573,6 +6573,18 @@ def _stack_postcondition_fail(label: str, expected, actual) -> int:
     return 5
 
 
+def _stack_attribution_fail(mismatch: dict) -> int:
+    """★ jisaku-review4戦目 F1 major の直し: cmd_run_folder は verify_extract を再利用して
+       帰属検算（review3#3）を無償継承していたが、cmd_stack の書き込み時経路は自前の
+       行数+Σ だけで帰属を見ていなかった ── Σ 保存のまま値だけ入れ替える変異が exit 0 で
+       素通りする実機再現が根拠。行数/Σ と同じ『移す前の tmp_out』段で
+       verify.verify_output（帰属検算まで含む独立読み）を呼び、ここで拾う。"""
+    print(f"⚠ 事後条件が破れた: 帰属  {mismatch['file']} の {mismatch['src_row']}行目 "
+          f"列『{mismatch['column']}』 元(採用時) {multifile_stack.fmt_num(mismatch['source'])} / "
+          f"出力(書いた直後) {multifile_stack.fmt_num(mismatch['output'])}")
+    return 5
+
+
 def _run_folder_refuse(op: str, plan_len: int) -> int:
     """M2 の断り（E11）: フォルダに未対応の依頼を**名指し**で断り、次の手を添えて exit 3。
        ★ 黙って1冊目に適用が最悪の形 ── 断る時は原本に一切触れない（この時点で
@@ -7055,6 +7067,16 @@ def cmd_stack(a: argparse.Namespace) -> int:
             if abs(total - sums_source.get(col, 0.0)) > 1e-6:
                 wb_out.close()
                 return _stack_postcondition_fail(f"Σ{col}", sums_source.get(col, 0.0), total)
+
+        # ★ jisaku-review4戦目 F1 major: 行数/Σ が合っても帰属（どの行がどのファイルの
+        #   何行目か）が嘘かもしれない（review3#3 と同型・cmd_run_folder は verify_extract
+        #   経由で既に持っていたが cmd_stack は非対称に持っていなかった）。verify.py の
+        #   独立読み（openpyxl を経由しない別実装）で移す前の tmp_out を検算する。
+        attribution_check = multifile_verify.verify_output(tmp_out, folder)
+        attribution_mismatch = attribution_check.get("mismatch")
+        if attribution_mismatch and attribution_mismatch.get("kind") == "attribution":
+            wb_out.close()
+            return _stack_attribution_fail(attribution_mismatch)
 
         # ★ M2.5①: 検分シート（出力2枚目）── 事後条件が通った直後の数字だけを並べる
         #   （✓ の絶対性の適用拡張・手書きの ✓ を作らない）。1枚目（データ）はもう独立読みで
