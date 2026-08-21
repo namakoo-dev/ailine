@@ -90,6 +90,7 @@ from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本�
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
+from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -6758,15 +6759,21 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     # ⑥ ファイルごとの評価（★ 一括検出: 欠陥が出ても止めず全部集める）。
     skipped, files_json, excluded_detail, mismatches = [], [], [], []
     sheet_fallbacks, matched_rows_all = [], []
+    all_findings = []   # ★ M2.5: 検分シートの所見（inspection.Finding）
+    file_sheet_map = []   # ★ M2.5: [(ファイル名, 使ったシート, 備考), ...]
     for p in candidates:
         r = extract_multi.evaluate_and_extract(p, base_headers, base_sheet, header_row,
                                                 col, cmp, value)
+        all_findings.extend(r.findings)
+        sheet_used = r.sheet_fallback[1] if r.sheet_fallback else base_sheet
         if r.sheet_fallback:
             sheet_fallbacks.append({"name": r.name, "wanted": r.sheet_fallback[0],
                                     "used": r.sheet_fallback[1]})
         if r.status == "取れなかった":
             skipped.append({"name": r.name, "reason": r.reason})
+            file_sheet_map.append((r.name, sheet_used, f"取れなかった（{r.reason}）"))
             continue
+        file_sheet_map.append((r.name, sheet_used, "並べ替えて照合" if r.reordered else ""))
         for values, src_row in r.rows:
             matched_rows_all.append((values, r.name, src_row))
         files_json.append({"name": r.name, "rows_matched": r.rows_matched,
@@ -6782,6 +6789,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     total_matched = len(matched_rows_all)
     matched_files = len(files_json)
     contributing_files = len({name for _v, name, _r in matched_rows_all})
+    suspicious_files = {f.file for f in all_findings if f.kind in inspection.WARN_KINDS}
 
     # ⑦ 書き出し（workdir→移動）。★ 条件は文書属性に焼く ── verify が出力単体から
     #    条件を復元して同じ検算を再実行できる（信用の条件⑥）。
@@ -6798,10 +6806,14 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         ws_out = wb_out.active
         ws_out.title = _extract_output_sheet_name(col, cmp, value)
         ws_out.append(out_headers)
-        for values, fname, src_row in matched_rows_all:
+        prov_col_idx = len(base_headers) + 1   # ★ M2.5: 「元ファイル」列（出所列の1本目）
+        for i, (values, fname, src_row) in enumerate(matched_rows_all, start=2):
             ws_out.append(list(values) + [fname, src_row])
+            if fname in suspicious_files:
+                reason_lines = [inspection.describe(f) for f in all_findings
+                                if f.file == fname and f.kind in inspection.WARN_KINDS]
+                inspection.tint_provenance_cell(ws_out, i, prov_col_idx, reason_lines)
         wb_out.save(tmp_out)
-        wb_out.close()
 
         # ⑧ 事後条件: 書いた直後の中身を**独立読み**（xml_readback）で検算する。
         #    元側も候補ファイル全部を読み直す ── 一致0行のファイルは出所列に現れないため、
@@ -6811,6 +6823,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         if post.get("mismatch"):
             m = post["mismatch"]
             where = f"Σ{m['column']}" if m["kind"] == "sum" else "採用行数"
+            wb_out.close()
             if as_json:
                 print(json.dumps({"out": str(out), "postcondition": post,
                                   "written": False}, ensure_ascii=False))
@@ -6819,6 +6832,25 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                       f"出力(書いた直後) {multifile_stack.fmt_num(m['output'])}")
                 print(f"（{out.name} は書き込んでいません。元フォルダも変更していません）")
             return 1
+
+        # ★ M2.5①: 検分シート（出力2枚目）── 事後条件(post)が通った直後の数字だけを並べる
+        #   （✓ の絶対性の適用拡張・手書きの ✓ を作らない・Σ両側は post['sums'] をそのまま使う）。
+        inspection.build_sheet(
+            wb_out, findings=all_findings,
+            denominator_lines_=inspection.denominator_lines(
+                denominator, matched_files, contributing_files, "照合"),
+            accounting_lines=inspection.row_accounting_lines(
+                adopted=total_matched,
+                excluded=sum(len(entry["rows"]) for entry in excluded_detail),
+                not_taken_files=len(skipped),
+                # ★ 実弾検分の直し: 不一致（条件に合わなかった行）を3勘定目に足す。
+                #   files_json の rows_unmatched は --json と同じ結果オブジェクト由来
+                #   （手で再計算しない）。
+                unmatched=sum(f["rows_unmatched"] for f in files_json)),
+            sums=post.get("sums", {}), file_sheet_map=file_sheet_map,
+            out_dir=out.parent, source_dir=folder)
+        wb_out.save(tmp_out)
+        wb_out.close()
 
         # ⑨ 関所（fail closed）: 移す直前にもう一度見る（前段の判定から時間が経っている）。
         #    ★ review3#1: ここも印だけでなく条件一致まで見る（preflight と同じ判定）。
@@ -6934,15 +6966,21 @@ def cmd_stack(a: argparse.Namespace) -> int:
     sheet_fallbacks = []   # ★ P2 開示: 基準名のシートが無く1枚目へ落ちたファイル
     stacked_rows = []   # [(base 列順の値, 元ファイル名, 元行), ...]
     sums_source = {col: 0.0 for col in numeric_cols}
+    all_findings = []   # ★ M2.5: 検分シートの所見（inspection.Finding・ファイルごとに ws 側で組立済み）
+    file_sheet_map = []   # ★ M2.5: [(ファイル名, 使ったシート, 備考), ...]（fallback 開示込み）
 
     for p in candidates:
         r = multifile_stack.evaluate_and_stack(p, base_headers, base_sheet, header_row, value_col_name)
+        all_findings.extend(r.findings)
+        sheet_used = r.sheet_fallback[1] if r.sheet_fallback else base_sheet
         if r.sheet_fallback:
             sheet_fallbacks.append({"name": r.name, "wanted": r.sheet_fallback[0],
                                     "used": r.sheet_fallback[1]})
         if r.status == "積めなかった":
             skipped.append({"name": r.name, "reason": r.reason})
+            file_sheet_map.append((r.name, sheet_used, f"取れなかった（{r.reason}）"))
             continue
+        file_sheet_map.append((r.name, sheet_used, "並べ替えて照合" if r.reordered else ""))
         for values, src_row in r.rows:
             stacked_rows.append((values, r.name, src_row))
             for col in numeric_cols:
@@ -6963,6 +7001,8 @@ def cmd_stack(a: argparse.Namespace) -> int:
                                    "used_range": r.col_a_mismatch[1]})
 
     stacked_files = len(files_json)
+    contributing_files = sum(1 for f in files_json if f["rows_stacked"] > 0)
+    suspicious_files = {f.file for f in all_findings if f.kind in inspection.WARN_KINDS}
     prov_headers = multifile_stack.own_output_headers(base_headers)
     out_headers = base_headers + prov_headers
     collision_notice = None
@@ -6977,16 +7017,22 @@ def cmd_stack(a: argparse.Namespace) -> int:
         ws_out = wb_out.active
         ws_out.title = base_sheet
         ws_out.append(out_headers)
-        for values, fname, src_row in stacked_rows:
+        prov_col_idx = len(base_headers) + 1   # ★ M2.5: 「元ファイル」列（出所列の1本目）
+        for i, (values, fname, src_row) in enumerate(stacked_rows, start=2):
             ws_out.append(list(values) + [fname, src_row])
+            if fname in suspicious_files:
+                # ★ M2.5②: ⚠ 付きファイル由来のデータ行だけ淡色 + コメント（正常行は塗らない）。
+                reason_lines = [inspection.describe(f) for f in all_findings
+                                if f.file == fname and f.kind in inspection.WARN_KINDS]
+                inspection.tint_provenance_cell(ws_out, i, prov_col_idx, reason_lines)
         wb_out.save(tmp_out)
-        wb_out.close()
 
         # ★ 事後条件①②: 独立読み実装（xml_readback）で書いた直後の中身を検算する
         #   （openpyxl で書いて openpyxl で読み返すだけでは、同じ道具の同じ盲点を通る）。
         readback = xml_readback.read_grid(tmp_out)
         out_row_nums = xml_readback.data_row_numbers(readback, header_row=1)
         if len(out_row_nums) != len(stacked_rows):
+            wb_out.close()
             return _stack_postcondition_fail("採用行数", len(stacked_rows), len(out_row_nums))
         # ★ jisaku-review#3/#6: 事後条件②も全数値列に（最初の不一致で止める）。
         sums_output = {}
@@ -6999,7 +7045,26 @@ def cmd_stack(a: argparse.Namespace) -> int:
                     total += v
             sums_output[col] = total
             if abs(total - sums_source.get(col, 0.0)) > 1e-6:
+                wb_out.close()
                 return _stack_postcondition_fail(f"Σ{col}", sums_source.get(col, 0.0), total)
+
+        # ★ M2.5①: 検分シート（出力2枚目）── 事後条件が通った直後の数字だけを並べる
+        #   （✓ の絶対性の適用拡張・手書きの ✓ を作らない）。1枚目（データ）はもう独立読みで
+        #   検算済みなので、ここで検分シートを足して再保存しても事後条件の対象はぶれない
+        #   （xml_readback は1枚目のシート順しか見ない ── verify も同じ前提）。
+        sums = {col: {"source": sums_source[col], "output": sums_output.get(col, sums_source[col])}
+                for col in sums_source}
+        inspection.build_sheet(
+            wb_out, findings=all_findings,
+            denominator_lines_=inspection.denominator_lines(
+                denominator, stacked_files, contributing_files, "積んだ"),
+            accounting_lines=inspection.row_accounting_lines(
+                adopted=len(stacked_rows),
+                excluded=sum(len(entry["rows"]) for entry in excluded_detail),
+                not_taken_files=len(skipped)),
+            sums=sums, file_sheet_map=file_sheet_map, out_dir=out.parent, source_dir=folder)
+        wb_out.save(tmp_out)
+        wb_out.close()
 
         # ★ 関所（writes=new_book）: 移す直前に判定。
         #   ★ architect 致命2: 「作り直してよい」は creator の完全一致（CREATOR_MARK）に限定。
@@ -7029,8 +7094,6 @@ def cmd_stack(a: argparse.Namespace) -> int:
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
-    sums = {col: {"source": sums_source[col], "output": sums_output.get(col, sums_source[col])}
-            for col in sums_source}
     result = {"denominator": denominator, "stacked_files": stacked_files,
               "rows_written": len(stacked_rows), "files": files_json, "skipped": skipped,
               "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,

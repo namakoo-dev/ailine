@@ -17,7 +17,7 @@ from xml.etree import ElementTree as ET
 
 import openpyxl
 
-from ailine_core import multifile, total_row
+from ailine_core import inspection, multifile, total_row
 
 PROVENANCE_HEADERS = ("元ファイル", "元行")
 # ★ 赤2 の直し（2026-08-21 実機敵対検分）: 署名判定はサフィックス形（元ファイル_2 等）も
@@ -132,7 +132,9 @@ class FileStackResult:
     """1ファイルを積んだ（または積めなかった）結果。
        rows: [(base_headers 順の値リスト, 元行番号), ...]（積めた時のみ）。
        excluded/mismatches: total_row.split_total_rows の戻り値そのまま。
-       col_a_mismatch: (col_a_count, used_range_count) 食い違い時のみ（③・可視化専用）。"""
+       col_a_mismatch: (col_a_count, used_range_count) 食い違い時のみ（③・可視化専用）。
+       findings: M2.5（検分シート）用の inspection.Finding のリスト ── ws を持つこの関数の
+       内側で組み立てる（ファイル+シート+セルの3座標が、ここでなら列位置まで正確に引ける）。"""
     name: str
     status: str                      # "積んだ" / "積めなかった"
     reason: str | None = None
@@ -142,6 +144,7 @@ class FileStackResult:
     mismatches: list = field(default_factory=list)
     col_a_mismatch: tuple | None = None
     sheet_fallback: tuple | None = None   # (wanted, used) ── 基準名のシートが無く1枚目へ落ちた時だけ
+    findings: list = field(default_factory=list)   # list[inspection.Finding]（M2.5）
 
 
 def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: int,
@@ -160,8 +163,13 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
         other_headers = multifile.read_row_headers(ws, header_row)
         status, detail = multifile.classify_headers(base_headers, other_headers)
         if status == "取れなかった":
+            not_taken = [inspection.finding(
+                kind=inspection.KIND_NOT_TAKEN, file=path.name, sheet=ws.title,
+                cell=inspection.cell_ref(1, header_row), source_value=None, output_value=None,
+                next_step=f"見出しが基準（{base_sheet_name}）と一致しません（{detail}）。"
+                          "見出し行を確認してください。")]
             return FileStackResult(name=path.name, status="積めなかった", reason=detail,
-                                    sheet_fallback=sheet_fallback)
+                                    sheet_fallback=sheet_fallback, findings=not_taken)
         reordered = bool(detail)
 
         # 各 base 列 → このファイル自身の列位置（並べ替えファイルで位置がずれる対策）。
@@ -194,9 +202,42 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
         if col_a_count != used_range_count:
             col_a_mismatch = (col_a_count, used_range_count)
 
+        # ★ M2.5: 所見の組み立て（ws がまだ開いているこの関数の内側でだけ、列位置まで
+        #   正確な3座標が引ける）。⚠ 相当（閉じる検査の不一致・分母食い違い）とシート
+        #   fallback の開示（既存 CLI 報告と同じ基準・inspection.WARN_KINDS）。
+        # ★ 合計行の閉じる検査 不一致の HYPERLINK は「ラベル(ID)列」でも「値列」でもなく
+        #   基準の2列目（例: 取引先/摘要 ── ID の次に来る記述列）へ飛ばす。両側の数字は
+        #   所見の行自体（元の値/採用側の値の列）に既に載っているので、リンク先まで同じ
+        #   数値セルへ飛ばすのは冗長 ── 人が行を「誰の・何の行か」で認識できる列を選ぶ
+        #   （ID→摘要/取引先→金額、という帳票の一般的な並びに沿う）。
+        # ★ アンカーは「怪しい数字そのもの」（閉じなかった合計の値セル）。クリックの
+        #   着地点に迷いを作らない（検分シートの本文が両側の数字を持つのは別の役割）。
+        anchor_col = value_col or label_col or 1
+        findings = [inspection.finding(
+            kind=inspection.KIND_TOTAL_ROW_MISMATCH, file=path.name, sheet=ws.title,
+            cell=inspection.cell_ref(anchor_col, m.row),
+            source_value=m.excluded_value, output_value=m.adopted_sum,
+            next_step="除外行の値が明細の和と閉じません。元ファイルのこの行を確認してください"
+                      "（除外そのものは維持しています）。") for m in verdict.mismatches]
+        if sheet_fallback:
+            findings.append(inspection.finding(
+                kind=inspection.KIND_SHEET_FALLBACK, file=path.name, sheet=ws.title,
+                cell=inspection.cell_ref(1, header_row),
+                source_value=sheet_fallback[0], output_value=sheet_fallback[1],
+                next_step=f"基準名のシート『{sheet_fallback[0]}』が無いため1枚目"
+                          f"『{sheet_fallback[1]}』を使いました。意図した内容か確認してください。"))
+        if col_a_mismatch:
+            findings.append(inspection.finding(
+                kind=inspection.KIND_COL_A_MISMATCH, file=path.name, sheet=ws.title,
+                cell=inspection.cell_ref(1, header_row + 1),
+                source_value=col_a_mismatch[0], output_value=col_a_mismatch[1],
+                next_step="A列走査と used range の行数が食い違います。"
+                          "空の書式だけが残った行が無いか確認してください。"))
+
         return FileStackResult(name=path.name, status="積んだ", reordered=reordered, rows=rows,
                                 excluded=verdict.excluded, mismatches=verdict.mismatches,
-                                col_a_mismatch=col_a_mismatch, sheet_fallback=sheet_fallback)
+                                col_a_mismatch=col_a_mismatch, sheet_fallback=sheet_fallback,
+                                findings=findings)
     finally:
         wb.close()
 

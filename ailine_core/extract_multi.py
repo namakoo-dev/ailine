@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import openpyxl
 
-from ailine_core import multifile, total_row
+from ailine_core import inspection, multifile, total_row
 
 # ★ 書き手の印。stack.py の CREATOR_MARKS が「将来の extract を先取りして凍結」した
 #   文字列と完全一致させる（own_output_mark / is_own_output が M2 の出力を
@@ -135,6 +135,7 @@ class FileExtractResult:
     excluded: list = field(default_factory=list)
     mismatches: list = field(default_factory=list)
     sheet_fallback: tuple | None = None   # (wanted, used) ── 基準名のシートが無く1枚目へ落ちた時だけ
+    findings: list = field(default_factory=list)   # list[inspection.Finding]（M2.5・stack と同じ線）
 
 
 def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: int,
@@ -159,8 +160,13 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
         other_headers = multifile.read_row_headers(ws, header_row)
         status, detail = multifile.classify_headers(base_headers, other_headers)
         if status == "取れなかった":
+            not_taken = [inspection.finding(
+                kind=inspection.KIND_NOT_TAKEN, file=path.name, sheet=ws.title,
+                cell=inspection.cell_ref(1, header_row), source_value=None, output_value=None,
+                next_step=f"見出しが基準（{base_sheet_name}）と一致しません（{detail}）。"
+                          "見出し行を確認してください。")]
             return FileExtractResult(name=path.name, status="取れなかった", reason=detail,
-                                      sheet_fallback=sheet_fallback)
+                                      sheet_fallback=sheet_fallback, findings=not_taken)
 
         col_for_base = {bh: multifile._column_index(other_headers, bh) for bh in base_headers}
         max_row = ws.max_row or header_row
@@ -191,10 +197,30 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
             values = [ws.cell(row=r, column=col_for_base[bh]).value for bh in base_headers]
             rows.append((values, r))
 
+        # ★ M2.5: 所見の組み立て（stack.evaluate_and_stack と同じ線 ── ws がまだ開いている
+        #   この関数の内側でだけ列位置まで正確な3座標が引ける）。
+        #   優先する（値列は所見の行自体に既に両側の数字がある・冗長を避ける）。
+        # ★ アンカーは「怪しい数字そのもの」（閉じなかった合計の値セル）。クリックの
+        #   着地点に迷いを作らない（検分シートの本文が両側の数字を持つのは別の役割）。
+        anchor_col = value_col or label_col or 1
+        findings = [inspection.finding(
+            kind=inspection.KIND_TOTAL_ROW_MISMATCH, file=path.name, sheet=ws.title,
+            cell=inspection.cell_ref(anchor_col, m.row),
+            source_value=m.excluded_value, output_value=m.adopted_sum,
+            next_step="除外行の値が明細の和と閉じません。元ファイルのこの行を確認してください"
+                      "（除外そのものは維持しています）。") for m in verdict.mismatches]
+        if sheet_fallback:
+            findings.append(inspection.finding(
+                kind=inspection.KIND_SHEET_FALLBACK, file=path.name, sheet=ws.title,
+                cell=inspection.cell_ref(1, header_row),
+                source_value=sheet_fallback[0], output_value=sheet_fallback[1],
+                next_step=f"基準名のシート『{sheet_fallback[0]}』が無いため1枚目"
+                          f"『{sheet_fallback[1]}』を使いました。意図した内容か確認してください。"))
+
         return FileExtractResult(name=path.name, status="取れた", reordered=bool(detail),
                                   rows=rows, rows_matched=len(matched_rows),
                                   rows_unmatched=len(unmatched_rows),
                                   excluded=verdict.excluded, mismatches=verdict.mismatches,
-                                  sheet_fallback=sheet_fallback)
+                                  sheet_fallback=sheet_fallback, findings=findings)
     finally:
         wb.close()
