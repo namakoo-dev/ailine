@@ -383,3 +383,27 @@ def test_sheet_fallback_is_disclosed_in_text_and_json(tmp_path):
     fb = data.get("sheet_fallbacks")
     assert fb and any(f["name"] == "b.xlsx" and f["wanted"] == "明細" and f["used"] == "集計"
                        for f in fb), f"sheet_fallbacks が JSON に無い/不正: {fb}"
+
+
+def test_date_cells_keep_date_number_format(tmp_path):
+    """★ 実視の磨き残し（2026-08-21）: 受注日が『2026-07-09 0:00:00』と時刻付きで出る ──
+       元セルの表示書式（number_format）を運んでいないため。日付セルは元の書式を
+       引き継ぎ、時刻の尻尾を見せないこと。"""
+    import datetime
+    folder = tmp_path / "src"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["注文ID", "受注日", "金額"])
+    ws.append(["J-1", datetime.date(2026, 7, 9), 100])
+    ws["B2"].number_format = "yyyy/m/d"
+    folder.mkdir()
+    wb.save(folder / "a.xlsx")
+    out = tmp_path / "out.xlsx"
+    p = _stack(folder, out)
+    assert p.returncode == 0, p.stdout
+    ws2 = openpyxl.load_workbook(out).active
+    cell = [c for c in ws2[2]][1]
+    assert cell.number_format not in ("General", None), \
+        f"日付セルの書式が運ばれていない: {cell.number_format!r}"
+    assert "h" not in cell.number_format and ":" not in cell.number_format, \
+        f"時刻の尻尾が残る書式: {cell.number_format!r}"

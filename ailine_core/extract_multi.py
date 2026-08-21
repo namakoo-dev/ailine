@@ -121,7 +121,8 @@ def _row_has_any_value(ws, row: int, num_cols: int) -> bool:
 @dataclass(frozen=True)
 class FileExtractResult:
     """1ファイルから抽出した（または抽出できなかった）結果。
-       rows: [(base_headers 順の値リスト, 元行番号), ...]（★ 一致した行だけ）。
+       rows: [(base_headers 順の値リスト, 同順の number_format リスト, 元行番号), ...]（★ 一致した
+       行だけ・number_format は日付セルの時刻の尻尾を消すため元セルから運ぶ）。
        rows_matched / rows_unmatched: 合計行の除外を引いた後の候補行の内訳
        （★ 憲法⑨ 行の完全会計: データ行数 = 一致 + 不一致 + 除外）。
        excluded/mismatches: total_row.split_total_rows の戻り値そのまま。"""
@@ -194,8 +195,13 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
 
         rows = []
         for r in matched_rows:
-            values = [ws.cell(row=r, column=col_for_base[bh]).value for bh in base_headers]
-            rows.append((values, r))
+            cells = [ws.cell(row=r, column=col_for_base[bh]) for bh in base_headers]
+            values = [c.value for c in cells]
+            # ★ 実視の磨き（2026-08-21）: 元セルの number_format をデータセルへ運ぶ
+            #   （日付が『2026-07-09 0:00:00』と時刻付きで出ないように）。決定論
+            #   ── 元の書式文字列をそのまま運ぶだけ（乱数・時刻は使わない）。
+            formats = [c.number_format for c in cells]
+            rows.append((values, formats, r))
 
         # ★ M2.5: 所見の組み立て（stack.evaluate_and_stack と同じ線 ── ws がまだ開いている
         #   この関数の内側でだけ列位置まで正確な3座標が引ける）。

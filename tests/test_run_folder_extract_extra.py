@@ -134,10 +134,12 @@ def test_postcondition_actually_fires_when_the_write_side_is_mutated(tmp_path, m
         if r.status != "取れた" or not r.rows:
             return r
         if kind == "行を捏造":
-            return dataclasses.replace(r, rows=r.rows + [(["X-9", "偽", 1], 99)],
-                                       rows_matched=r.rows_matched + 1)
-        vals, src_row = r.rows[0]
-        return dataclasses.replace(r, rows=[([vals[0], vals[1], 12345], src_row)] + r.rows[1:])
+            return dataclasses.replace(
+                r, rows=r.rows + [(["X-9", "偽", 1], ["General", "General", "General"], 99)],
+                rows_matched=r.rows_matched + 1)
+        vals, formats, src_row = r.rows[0]
+        return dataclasses.replace(
+            r, rows=[([vals[0], vals[1], 12345], formats, src_row)] + r.rows[1:])
 
     monkeypatch.setattr(extract_multi, "evaluate_and_extract", mutant)
     rc, out = _run(folder, TASK, capsys=capsys)

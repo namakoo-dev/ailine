@@ -6774,8 +6774,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             file_sheet_map.append((r.name, sheet_used, f"取れなかった（{r.reason}）"))
             continue
         file_sheet_map.append((r.name, sheet_used, "並べ替えて照合" if r.reordered else ""))
-        for values, src_row in r.rows:
-            matched_rows_all.append((values, r.name, src_row))
+        for values, formats, src_row in r.rows:
+            matched_rows_all.append((values, formats, r.name, src_row))
         files_json.append({"name": r.name, "rows_matched": r.rows_matched,
                            "rows_unmatched": r.rows_unmatched,
                            "total_rows_excluded": len(r.excluded), "reordered": r.reordered})
@@ -6788,7 +6788,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
 
     total_matched = len(matched_rows_all)
     matched_files = len(files_json)
-    contributing_files = len({name for _v, name, _r in matched_rows_all})
+    contributing_files = len({name for _v, _fmt, name, _r in matched_rows_all})
     suspicious_files = {f.file for f in all_findings if f.kind in inspection.WARN_KINDS}
 
     # ⑦ 書き出し（workdir→移動）。★ 条件は文書属性に焼く ── verify が出力単体から
@@ -6807,8 +6807,10 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         ws_out.title = _extract_output_sheet_name(col, cmp, value)
         ws_out.append(out_headers)
         prov_col_idx = len(base_headers) + 1   # ★ M2.5: 「元ファイル」列（出所列の1本目）
-        for i, (values, fname, src_row) in enumerate(matched_rows_all, start=2):
+        for i, (values, formats, fname, src_row) in enumerate(matched_rows_all, start=2):
             ws_out.append(list(values) + [fname, src_row])
+            for c, fmt in enumerate(formats, start=1):   # ★ 実視の磨き: 元の number_format を運ぶ
+                ws_out.cell(row=i, column=c).number_format = fmt
             if fname in suspicious_files:
                 reason_lines = [inspection.describe(f) for f in all_findings
                                 if f.file == fname and f.kind in inspection.WARN_KINDS]
@@ -6983,8 +6985,8 @@ def cmd_stack(a: argparse.Namespace) -> int:
             file_sheet_map.append((r.name, sheet_used, f"取れなかった（{r.reason}）"))
             continue
         file_sheet_map.append((r.name, sheet_used, "並べ替えて照合" if r.reordered else ""))
-        for values, src_row in r.rows:
-            stacked_rows.append((values, r.name, src_row))
+        for values, formats, src_row in r.rows:
+            stacked_rows.append((values, formats, r.name, src_row))
             for col in numeric_cols:
                 v = values[base_headers.index(col)]
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -7020,8 +7022,10 @@ def cmd_stack(a: argparse.Namespace) -> int:
         ws_out.title = base_sheet
         ws_out.append(out_headers)
         prov_col_idx = len(base_headers) + 1   # ★ M2.5: 「元ファイル」列（出所列の1本目）
-        for i, (values, fname, src_row) in enumerate(stacked_rows, start=2):
+        for i, (values, formats, fname, src_row) in enumerate(stacked_rows, start=2):
             ws_out.append(list(values) + [fname, src_row])
+            for c, fmt in enumerate(formats, start=1):   # ★ 実視の磨き: 元の number_format を運ぶ
+                ws_out.cell(row=i, column=c).number_format = fmt
             if fname in suspicious_files:
                 # ★ M2.5②: ⚠ 付きファイル由来のデータ行だけ淡色 + コメント（正常行は塗らない）。
                 reason_lines = [inspection.describe(f) for f in all_findings

@@ -130,7 +130,8 @@ def numeric_column_names(ws, header_row: int, headers: list) -> list:
 @dataclass(frozen=True)
 class FileStackResult:
     """1ファイルを積んだ（または積めなかった）結果。
-       rows: [(base_headers 順の値リスト, 元行番号), ...]（積めた時のみ）。
+       rows: [(base_headers 順の値リスト, 同順の number_format リスト, 元行番号), ...]（積めた時のみ・
+       ★ 実視の磨き: number_format は日付セルの時刻の尻尾を消すため元セルから運ぶ）。
        excluded/mismatches: total_row.split_total_rows の戻り値そのまま。
        col_a_mismatch: (col_a_count, used_range_count) 食い違い時のみ（③・可視化専用）。
        findings: M2.5（検分シート）用の inspection.Finding のリスト ── ws を持つこの関数の
@@ -192,8 +193,13 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
 
         rows = []
         for r in stack_rows:
-            values = [ws.cell(row=r, column=col_for_base[bh]).value for bh in base_headers]
-            rows.append((values, r))
+            cells = [ws.cell(row=r, column=col_for_base[bh]) for bh in base_headers]
+            values = [c.value for c in cells]
+            # ★ 実視の磨き（2026-08-21）: 元セルの number_format をデータセルへ運ぶ
+            #   （日付が『2026-07-09 0:00:00』と時刻付きで出ないように）。決定論
+            #   ── 元の書式文字列をそのまま運ぶだけ（乱数・時刻は使わない）。
+            formats = [c.number_format for c in cells]
+            rows.append((values, formats, r))
 
         col_a_count = sum(1 for r in all_rows if not _is_blank(ws.cell(row=r, column=1).value))
         used_range_count = len(all_rows)
