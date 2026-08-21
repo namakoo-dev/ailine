@@ -163,3 +163,24 @@ def test_verify_refuses_unmarked_book_instead_of_passing_empty(tmp_path):
     p = _run("verify", book, tmp_path)
     assert p.returncode == 4, f"exit={p.returncode}\n{p.stdout}"
     assert "検算できません" in p.stdout or "印" in p.stdout
+
+
+def test_verify_catches_attribution_swap_even_when_sums_match(tmp_path):
+    """★ review3#3 major: verify は集計（行数・Σ）しか照合せず、出所の帰属（どの行が
+       どのファイルの何行目か）を検算しない ── 値を入れ替えても Σ が同じなら合格していた。
+       契約: 各出力行の値は 元ファイル/元行 が指す原本の行と一致すること（exit 5）。"""
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 100)])
+    _book(folder / "b.xlsx", HDRS, [("J-2", "乙", 200)])
+    out = tmp_path / "out.xlsx"
+    p = _run("stack", folder, "--out", out)
+    assert p.returncode == 0
+    wb = openpyxl.load_workbook(out)
+    ws = wb.active
+    v1, v2 = ws.cell(row=2, column=3).value, ws.cell(row=3, column=3).value
+    ws.cell(row=2, column=3).value = v2   # 金額だけ入れ替え（Σ 不変・帰属が嘘になる）
+    ws.cell(row=3, column=3).value = v1
+    wb.save(out)
+    p = _run("verify", out, folder)
+    assert p.returncode == 5, f"Σ が同じ帰属の嘘を見逃した (exit={p.returncode}):\n{p.stdout}"
+    assert "a.xlsx" in p.stdout or "元行" in p.stdout or "2" in p.stdout, "どの行かの名指しが無い"

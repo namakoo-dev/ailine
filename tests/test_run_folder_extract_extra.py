@@ -168,14 +168,16 @@ def test_e9_trailing_dots_and_spaces_are_stripped():
 
 
 def test_e9_truncation_collision_is_separated_by_a_hash():
-    """★ 切り詰めで別名が同じ幹に潰れたら、元の（切り詰め前の）名前の sha256 で分ける。
-       分けないと、違う条件の抽出が同じファイルを踏み合う。"""
+    """★ review3#1/#5 の直し: 切り詰めが起きたら**常に**元の（切り詰め前の）名前 全体 の
+       sha256 で分ける ── taken の受け渡しに頼らない（配線されない対策コードを持たない）。
+       切り詰め前なら同じ幹に潰れていた2つの長い名前が、別のファイル名になること。"""
     long_a = "あ" * 150 + "_甲"
     long_b = "あ" * 150 + "_乙"
-    first = extract_multi.sanitize_filename(long_a)
-    assert extract_multi.sanitize_filename(long_b) == first, "前提: 切り詰めで衝突する材料"
-    second = extract_multi.sanitize_filename(long_b, taken={first})
-    assert second != first
-    suffix = second.rsplit("_", 1)[-1]
-    assert len(suffix) == 6 and all(c in "0123456789abcdef" for c in suffix), second
-    assert extract_multi.sanitize_filename(long_a, taken=set()) == first, "衝突が無ければ素のまま"
+    a = extract_multi.sanitize_filename(long_a)
+    b = extract_multi.sanitize_filename(long_b)
+    assert a != b, f"切り詰めで別名が同じ幹に潰れた: {a} == {b}"
+    for got in (a, b):
+        suffix = got.rsplit("_", 1)[-1]
+        assert len(suffix) == 6 and all(c in "0123456789abcdef" for c in suffix), got
+    short = extract_multi.sanitize_filename("短い名前")
+    assert short == "短い名前", "切り詰めが起きていないのにハッシュを付けた"

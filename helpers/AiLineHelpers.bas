@@ -499,14 +499,24 @@ Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode
                 matched = (oCell.getValue() > CDbl(cmpValue))
             Case 3   ' 未満
                 matched = (oCell.getValue() < CDbl(cmpValue))
-            Case 4   ' 等しい（数値セルは数値比較・それ以外は文字列比較）
+            Case 4   ' 等しい（数値セルは許容誤差 1e-6 の数値比較・それ以外は文字列比較）
+                ' ★ review3#2/#4 の直し: Python 側 _extract_predicate/extract_multi.predicate
+                '   （tests/test_predicate_truth_table.py の凍結した表）と同じ許容誤差に揃える。
+                '   完全一致だと同じ値でも浮動小数の丸めで書き手と検算が分裂しうる。
                 If isNumericCell Then
-                    matched = (oCell.getValue() = CDbl(cmpValue))
+                    matched = (Abs(oCell.getValue() - CDbl(cmpValue)) <= 0.000001)
                 Else
                     matched = (oCell.getString() = CStr(cmpValue))
                 End If
-            Case 5   ' を含む（常に文字列の部分一致）
-                matched = (InStr(oCell.getString(), CStr(cmpValue)) > 0)
+            Case 5   ' を含む（文字列セルのみ ── 数値/空欄は対象外）
+                ' ★ review3#2/#4 の直し: 旧仕様は getString() の部分一致で数値セルも
+                '   マッチしていた（140000 が "40" を含む、のように）。Python 側を
+                '   contains=文字列限定に直した（型を黙って文字列化しない）ため、
+                '   書き手（この Sub）が古い意味論のままだと数値列への contains が
+                '   必ず事後条件 fail になる（実機で再現・凍結: test_extract_e2e.py::
+                '   test_contains_on_numeric_column_agrees_between_basic_and_checker）。
+                matched = (oCell.getType() = com.sun.star.table.CellContentType.TEXT) _
+                          And (InStr(oCell.getString(), CStr(cmpValue)) > 0)
             Case Else
                 matched = False
         End Select

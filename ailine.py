@@ -6588,6 +6588,39 @@ def _run_folder_refuse(op: str, plan_len: int) -> int:
     return 3
 
 
+def _own_extract_output_status(path: Path, col: str, cmp: str, value) -> tuple:
+    """path が①ailine 産か（mark）②M2 抽出の自分の前回出力で、かつ焼いた条件が
+       今回と完全一致するか（same_condition）を返す。
+       ★ review3#1 critical の直し: 『黙って作り直してよい』の根拠を**印だけ**にしない ──
+       印は同じでも条件（列/比較/値）が違う前回出力を、条件を見ずに上書きして消していた
+       （実機再現: 長いフォルダ名で切り詰めが起きると別条件が同名に潰れる）。
+       同じ判定をここ1箇所に集約し、preflight（40冊読む前）と移す直前の再判定の両方が使う。"""
+    headers = _peek_headers(path)
+    mark = (multifile_stack.own_output_mark(path, headers) if headers is not None else None)
+    if mark != extract_multi.CREATOR_MARK:
+        return mark, False
+    _creator, description = xml_readback.read_core_properties(path)
+    try:
+        cond = json.loads(description) if description else None
+    except (TypeError, ValueError):
+        cond = None
+    same_condition = (isinstance(cond, dict) and cond.get("tool") == "ailine"
+                       and cond.get("kind") == "extract" and cond.get("column") == col
+                       and cond.get("cmp") == cmp and cond.get("value") == value)
+    return mark, same_condition
+
+
+def _refuse_output_conflict(out: Path, mark: str | None) -> int:
+    """M2 出力先の関所（exit 7）: 人のファイル、または ailine の別コマンド/別条件の
+       出力があって、黙って上書きしてよい根拠が無い時の唯一の出口。"""
+    whose = (f"ailine の別のコマンドの出力です（作成: {mark}）" if mark
+              else "ailine の印が無い人のファイルです")
+    print(f"⚠ 出力先に書けません: {out}")
+    print(f"（{out.name} は{whose}。run にはフラグでの上書き許可がありません ── "
+          "そのファイルを別の場所へ移すか削除してから、もう一度実行してください）")
+    return 7
+
+
 def cmd_run_folder(a: argparse.Namespace) -> int:
     """`ailine run <フォルダ> "<依頼>"`: M2 ── フォルダの各ブックから条件に一致する行を
        抜き出して1冊に集約する（DESIGN-20260821-multifile.md M2 節・Namakoo 決裁 A 案）。
@@ -6689,24 +6722,35 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 return 3
 
     # ⑤ 出力先（Q7: フォルダの親・機械命名）と書き込みの関所（40 冊読む前に判定して印字）。
+    #    ★ review3#1/#5: 黙って作り直してよいのは「印」だけでなく「条件も一致」する時だけ。
+    #    条件が違う自分の出力と名前が衝突したら、条件のハッシュで別名へ決定論で逃がす
+    #    （切り詰めが起きていなくても、表示形式が同じ文字列に丸まる衝突はありうるため
+    #    sanitize_filename 単体の直し（③）とは別にここでも見る）。
     cmp_label = _EXTRACT_CMP_LABELS.get(cmp, cmp)
-    out_stem = extract_multi.sanitize_filename(
-        f"{folder.name}_{col}{_format_extract_value(value)}{cmp_label}")
-    out = folder.parent / f"{out_stem}.xlsx"
+    raw_stem = f"{folder.name}_{col}{_format_extract_value(value)}{cmp_label}"
+    out = folder.parent / f"{extract_multi.sanitize_filename(raw_stem)}.xlsx"
     rebuilt_own_output = False
     if out.exists():
-        existing_headers = _peek_headers(out)
-        mark = (multifile_stack.own_output_mark(out, existing_headers)
-                if existing_headers is not None else None)
-        if mark == extract_multi.CREATOR_MARK:
-            rebuilt_own_output = True      # 前回の抽出出力＝黙って作り直してよい
+        mark, same_condition = _own_extract_output_status(out, col, cmp, value)
+        if mark == extract_multi.CREATOR_MARK and same_condition:
+            rebuilt_own_output = True      # 同じ条件の前回出力＝黙って作り直してよい
+        elif mark == extract_multi.CREATOR_MARK:
+            # ★ review3#1②: 条件が違う自分の出力と衝突 ── ハッシュで別名に決定論で逃がす。
+            digest = hashlib.sha256(json.dumps(
+                {"column": col, "cmp": cmp, "value": value}, sort_keys=True,
+                ensure_ascii=False).encode("utf-8")).hexdigest()[:6]
+            collided_name = out.name
+            out = folder.parent / f"{extract_multi.sanitize_filename(f'{raw_stem}_{digest}')}.xlsx"
+            say(f"（同名の前回出力『{collided_name}』は別条件のため、この結果は"
+                f"『{out.name}』に保存します）")
+            if out.exists():
+                mark, same_condition = _own_extract_output_status(out, col, cmp, value)
+                if mark == extract_multi.CREATOR_MARK and same_condition:
+                    rebuilt_own_output = True
+                else:
+                    return _refuse_output_conflict(out, mark)
         else:
-            whose = (f"ailine の別のコマンドの出力です（作成: {mark}）" if mark
-                      else "ailine の印が無い人のファイルです")
-            print(f"⚠ 出力先に書けません: {out}")
-            print(f"（{out.name} は{whose}。run にはフラグでの上書き許可がありません ── "
-                  "そのファイルを別の場所へ移すか削除してから、もう一度実行してください）")
-            return 7
+            return _refuse_output_conflict(out, mark)
     say(f"■ ailine run（フォルダ抽出）  folder={folder}")
     say(f"出力先: {out}")
     say(f"条件: {col} {_format_extract_value(value)} {cmp_label}")
@@ -6777,11 +6821,10 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             return 1
 
         # ⑨ 関所（fail closed）: 移す直前にもう一度見る（前段の判定から時間が経っている）。
+        #    ★ review3#1: ここも印だけでなく条件一致まで見る（preflight と同じ判定）。
         if out.exists():
-            existing_headers = _peek_headers(out)
-            mark = (multifile_stack.own_output_mark(out, existing_headers)
-                    if existing_headers is not None else None)
-            if mark != extract_multi.CREATOR_MARK:
+            mark, same_condition = _own_extract_output_status(out, col, cmp, value)
+            if not (mark == extract_multi.CREATOR_MARK and same_condition):
                 print(f"⚠ 出力先に書けません（実行中に別のファイルが現れました）: {out}")
                 return 7
         out.parent.mkdir(parents=True, exist_ok=True)

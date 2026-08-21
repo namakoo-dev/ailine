@@ -83,15 +83,20 @@ def predicate(cmp: str, threshold):
     return _match
 
 
-def sanitize_filename(stem: str, taken=None) -> str:
+def sanitize_filename(stem: str) -> str:
     """出力ファイル名の幹（拡張子なし）を Windows で作れる形に直す。
        - 禁止文字（< > : " / \\ | ? * と制御文字）は '_' に置換
        - 末尾の '.' と空白を剥がす（エクスプローラが作れない形）
        - 予約デバイス名（CON/PRN/AUX/NUL/COM1-9/LPT1-9・大小問わず）は '_' を足して回避
        - 長すぎる名前は _MAX_STEM で切り詰める
-       ★ taken（既に使った名前の集合）を渡すと、切り詰めで潰れた別名との衝突を
-       元の（切り詰め前の）名前の sha256 先頭 6 桁で分ける ── 違う条件の出力が
-       同じファイルを踏み合う事故を機械で消す。"""
+
+       ★ review3#1/#5 の直し（実機再現: 長いフォルダ名で別条件の出力が同名に潰れ、
+       1回目の結果が無警告消去された）: 切り詰めが起きた時は**常に**元の（切り詰め前の）
+       名前 全体 の sha256 先頭 6 桁を付ける ── 呼び出し側が taken（既に使った名前）の
+       集合を渡してくれることに頼らない（配線されない対策コードを持たない）。フォルダ名が
+       枠を使い切る形（切り詰め前の共通部分が _MAX_STEM を超える）でも、条件の違いは
+       ハッシュの違いとして必ず残るので構造的に潰れない。
+       ★ 切り詰めが起きなければ従来どおり素の名前（既存呼び出し元の期待を変えない）。"""
     original = str(stem)
     s = _FILENAME_FORBIDDEN_RE.sub("_", original)
     s = s.rstrip(". 　")
@@ -100,10 +105,8 @@ def sanitize_filename(stem: str, taken=None) -> str:
     if s.upper() in _RESERVED_NAMES or s.upper().split(".")[0] in _RESERVED_NAMES:
         s = f"{s}_"
     if len(s) > _MAX_STEM:
-        s = s[:_MAX_STEM].rstrip(". 　") or "ailine_extract"
-    if taken and s in taken:
         digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:_HASH_LEN]
-        head = s[:max(1, _MAX_STEM - _HASH_LEN - 1)].rstrip(". 　")
+        head = s[:max(1, _MAX_STEM - _HASH_LEN - 1)].rstrip(". 　") or "ailine_extract"
         s = f"{head}_{digest}"
     return s
 

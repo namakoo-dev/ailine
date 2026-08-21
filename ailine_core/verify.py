@@ -107,6 +107,65 @@ def _expected_rows_for_source(path, base_headers: list, label_col_name, value_co
     return expected_rows, values
 
 
+def _values_agree(a, b) -> bool:
+    """帰属検算の1セル比較。両方が数値なら許容誤差 TOLERANCE、それ以外は完全一致
+       （_extract_predicate/extract_multi.predicate の型の保存の哲学と同じ線）。"""
+    a_num = isinstance(a, (int, float)) and not isinstance(a, bool)
+    b_num = isinstance(b, (int, float)) and not isinstance(b, bool)
+    if a_num and b_num:
+        return abs(float(a) - float(b)) <= TOLERANCE
+    return a == b
+
+
+def _attribution_mismatch(out_data: dict, base_headers: list, out_rows: list, src_folder,
+                           sheet_name: str | None = None):
+    """★ review3#3 major の直し: 集計（行数・Σ）だけでは、Σ 不変の値入れ替え（帰属の嘘 ──
+       どの行がどのファイルの何行目かの主張と実物が食い違う）を見逃す（実機再現済み）。
+       出力の各行を、出所列（末尾2列＝元ファイル/元行）が指す原本の行と列名解決で
+       突き合わせる。最初に見つかった不一致を
+       {"file","src_row","column","output_value","source_value"} で返す（無ければ None）。
+       ★ ファイルごとに1回だけ読み直してキャッシュする（xml_readback のみ・読むだけ）。
+       ★ 読めない/見出しが見つからない元ファイルはここでは無視する（行数/Σ 側の検査が
+       既に名指し済みのはず ── ここは『読めた行の値』だけを見る）。"""
+    grid = out_data["grid"]
+    out_headers = xml_readback.header_names(out_data, header_row=1)
+    file_col, row_col = len(out_headers) - 1, len(out_headers)
+    cache: dict = {}   # fname -> (col_for_base, src_grid) または None（無視）
+
+    for r in out_rows:
+        fname_v, src_row_v = grid.get((r, file_col)), grid.get((r, row_col))
+        if fname_v is None or src_row_v is None:
+            continue
+        fname, src_row = str(fname_v), int(src_row_v)
+        if fname not in cache:
+            path = src_folder / fname
+            entry = None
+            if path.exists():
+                try:
+                    data = xml_readback.read_grid(path, sheet_name=sheet_name)
+                except Exception:
+                    data = None
+                if data is not None:
+                    header_row = _find_header_row(data, base_headers)
+                    if header_row is not None:
+                        src_headers = xml_readback.header_names(data, header_row=header_row)
+                        col_for_base = {bh: _column_index(src_headers, bh) for bh in base_headers}
+                        entry = (col_for_base, data["grid"])
+            cache[fname] = entry
+        entry = cache[fname]
+        if entry is None:
+            continue
+        col_for_base, src_grid = entry
+        for i, bh in enumerate(base_headers, start=1):
+            src_col = col_for_base.get(bh)
+            source_value = src_grid.get((src_row, src_col)) if src_col else None
+            output_value = grid.get((r, i))
+            if not _values_agree(source_value, output_value):
+                return {"file": fname, "src_row": src_row, "column": bh,
+                        "output_value": output_value, "source_value": source_value}
+    return None
+
+
 def verify_output(out_path, src_folder) -> dict:
     """★ M2（architect 致命3）: 検算の入口。出力ブックの印（creator）と焼いた条件
        （description）から**種類**を先に決め、種類ごとの検算へ振り分ける。
@@ -233,6 +292,15 @@ def verify_extract(out_path, src_folder, col, cmp, value, sheet_name: str | None
             return {"row_count": row_count, "sums": sums, "mismatch": {
                 "kind": "sum", "column": name,
                 "source": sums_source[name], "output": sums_output[name]}}
+
+    # ★ review3#3: 集計が合っても帰属（どの行がどのファイルの何行目か）が嘘かもしれない。
+    attribution = _attribution_mismatch(out_data, base_headers, out_rows, src_folder,
+                                         sheet_name=sheet_name)
+    if attribution:
+        return {"row_count": row_count, "sums": sums, "mismatch": {
+            "kind": "attribution", "column": attribution["column"],
+            "source": attribution["source_value"], "output": attribution["output_value"],
+            "file": attribution["file"], "src_row": attribution["src_row"]}}
     return {"row_count": row_count, "sums": sums, "mismatch": None}
 
 
@@ -302,4 +370,12 @@ def _verify_stack(out_path, src_folder) -> dict:
                 "kind": "sum", "column": name,
                 "source": sums_source[name], "output": sums_output[name]}}
 
+    # ★ review3#3: 集計が合っても帰属（どの行がどのファイルの何行目か）が嘘かもしれない。
+    attribution = _attribution_mismatch(out_data, base_headers, out_rows, src_folder,
+                                         sheet_name=base_sheet_name)
+    if attribution:
+        return {"row_count": row_count, "sums": sums, "mismatch": {
+            "kind": "attribution", "column": attribution["column"],
+            "source": attribution["source_value"], "output": attribution["output_value"],
+            "file": attribution["file"], "src_row": attribution["src_row"]}}
     return {"row_count": row_count, "sums": sums, "mismatch": None}

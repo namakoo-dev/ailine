@@ -273,4 +273,9 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
     if mismatch and mismatch["kind"] == "sum":
         lines.append(f"⚠ {mismatch['column']} の合計が一致しません: "
                      f"元 {_fmt_num(mismatch['source'])} / 出力 {_fmt_num(mismatch['output'])}")
+    elif mismatch and mismatch["kind"] == "attribution":
+        # ★ review3#3: 集計は合っていても帰属（どの行がどのファイルの何行目か）が嘘。
+        lines.append(f"⚠ 帰属が一致しません: {mismatch['file']} の {mismatch['src_row']}行目 "
+                     f"列『{mismatch['column']}』 元 {_fmt_num(mismatch['source'])} / "
+                     f"出力 {_fmt_num(mismatch['output'])}")
     return lines

@@ -182,3 +182,53 @@ def test_verify_extract_kind_mismatch_exits_5(tmp_path, monkeypatch, capsys):
                        capture_output=True, text=True, timeout=120, encoding="utf-8")
     assert "⚠" in p.stdout, p.stdout
     assert p.returncode == 5, f"⚠ を出したのに exit={p.returncode}（自動化経路が見逃す）:\n{p.stdout}"
+
+
+def test_long_folder_name_different_conditions_do_not_collide(tmp_path, monkeypatch, capsys):
+    """★ review3#1/#5 critical: フォルダ名が長いと切り詰めで別条件の出力が同名に潰れ、
+       2 回目が 1 回目を「作り直しました」の顔で無警告消去した（実機再現済み）。
+       契約: 作り直してよいのは 印+条件 が両方一致する時だけ。条件が違えば別ファイル
+       （切り詰め時は条件のハッシュで分ける）── 両方の結果が生き残ること。"""
+    _mock_translation(monkeypatch, _EXTRACT_40000)
+    folder = tmp_path / ("あ" * 100)
+    _book(folder / "a.xlsx", HDRS,
+          [("J-1", "甲", 50000), ("J-2", "乙", 100)])
+    rc1, out1 = _run(folder, "金額が40000以上の行を抜き出して", capsys=capsys)
+    assert rc1 == 0, out1
+    _mock_translation(monkeypatch, [{"op": "EXTRACT", "args": {"column": "金額", "cmp": "lt", "value": 200}}])
+    rc2, out2 = _run(folder, "金額が200未満の行を抜き出して", capsys=capsys)
+    assert rc2 == 0, out2
+    assert "作り直しました" not in out2, "別条件なのに前回出力の作り直しを名乗った"
+    outs = sorted(tmp_path.glob("*.xlsx"))
+    assert len(outs) == 2, f"別条件の出力が同名に潰れた: {[o.name for o in outs]}"
+    all_rows = []
+    for o in outs:
+        ws = openpyxl.load_workbook(o).active
+        all_rows += [r[0].value for r in ws.iter_rows(min_row=2)]
+    assert "J-1" in all_rows and "J-2" in all_rows, f"片方の結果が消えた: {all_rows}"
+
+
+@pytest.mark.parametrize("plan,expect_snippet", [
+    ([{"op": "CLARIFY", "question": "対象の列が分かりません"}], "対象の列が分かりません"),
+    ([{"op": "EXTRACT", "args": {"column": "金額", "cmp": "between", "value": 100}},
+      {"op": "EXTRACT", "args": {"column": "金額", "cmp": "gte", "value": 100}}],
+     "複数の操作をまとめた依頼"),
+    ([{"op": "EXTRACT", "args": {"column": "金額", "cmp": "between", "value": 100}}], "比較"),
+    ([{"op": "EXTRACT", "args": {"column": "存在しない列", "cmp": "gte", "value": 100}}],
+     "列『存在しない列』"),
+    ([{"op": "EXTRACT", "args": {"column": "金額", "cmp": "gte", "value": ""}}], "抽出する値"),
+    ([{"op": "EXTRACT", "args": {"column": "金額", "cmp": "gte", "value": "たくさん"}}],
+     "数値として読めない"),
+])
+def test_folder_condition_validation_paths_exit_3(tmp_path, monkeypatch, capsys,
+                                                    plan, expect_snippet):
+    """★ review3#4 の裏取り: tests/golden/f6_exit_codes.md の exit=3 行が
+       『cmd_run_folder の断りはすべて _run_folder_refuse』と言い過ぎていた ──
+       CLARIFY・複数段計画・cmp/col/value の読み取り不能は _run_folder_refuse を
+       経由しない直接の return 3（合わせて6経路、この検体で全部を裏取りする）。"""
+    _mock_translation(monkeypatch, plan)
+    folder = tmp_path / "src"
+    _book(folder / "a.xlsx", HDRS, [("J-1", "甲", 50000)])
+    rc, out = _run(folder, "何かを抜き出して", capsys=capsys)
+    assert rc == 3, out
+    assert expect_snippet in out, out

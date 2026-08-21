@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import openpyxl
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ailine  # noqa: E402
@@ -140,3 +141,19 @@ def test_extract_second_run_does_not_gate(tmp_path, monkeypatch, capsys):
     #   （出力シートの行数が前回より増える＝EXTRACTの正常な作り直しでは毎回起きうる）。
     #   ここでは「exit 7 で止まらない」ことだけを主張する。
     assert "事後条件を確認" in out, out
+
+
+@pytest.mark.local
+def test_contains_on_numeric_column_agrees_between_basic_and_checker(tmp_path, monkeypatch, capsys):
+    """★ review3#2/#4 critical: contains の意味論を検算側だけ文字列限定に変えたため、
+       Basic 書き手（getString の部分一致・数値 140000 も『40』にマッチ）と分裂 ──
+       数値列への contains が必ず事後条件 fail になる。契約: 両実装とも
+       『contains は文字列セルのみ』で一致し、数値列 contains は 0 行一致で
+       事後条件が破れずに通ること。★ 実機（LO・basrun）検体 ── モックしない。"""
+    _isolate(monkeypatch, tmp_path)
+    book = _book(tmp_path, [["注文ID", "金額"], ["J-1", 140000], ["J-2", 30000]])
+    _translate_extract(monkeypatch, col="金額", cmp="contains", value="40")
+    rc, out = _run_main(["run", str(book), "金額に40を含む行を別シートに抜き出して",
+                          "--copy"], capsys)
+    assert rc == 0, f"書き手と検算が分裂している（事後条件 fail か？）:\n{out}"
+    assert "0行" in out or "0 行" in out, f"数値列 contains は 0 行一致のはず:\n{out}"
