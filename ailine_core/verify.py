@@ -174,10 +174,17 @@ def verify_output(out_path, src_folder) -> dict:
     """★ M2（architect 致命3）: 検算の入口。出力ブックの印（creator）と焼いた条件
        （description）から**種類**を先に決め、種類ごとの検算へ振り分ける。
        ailine の印が無いブックには {"unmarked": True} を返す ── 0 件照合で合格を
-       名乗らない（空虚な合格の禁止・呼び出し側が exit 4 にする）。"""
+       名乗らない（空虚な合格の禁止・呼び出し側が exit 4 にする）。
+       ★ M3（design v2「verify」節）: 今回は routing だけ ── match 出力の印は認識するが、
+       検算そのもの（_verify_match）はまだ無い。ここで {"unmarked": True} に混ぜて
+       黙って合格させる（空虚な合格）よりは、{"unsupported": ...} を正直に返して
+       呼び出し側が exit 4 にする方を選ぶ（_verify_match の実装は次玉）。"""
     creator, description = xml_readback.read_core_properties(out_path)
     if creator == "ailine stack" and not description:
         return _verify_stack(out_path, src_folder)
+    if creator == "ailine match":
+        return {"unsupported": "ailine match（2冊の照合）の出力の検算はまだ実装されていません"
+                                "（次波で対応予定です）。"}
     if creator in _CREATOR_MARKS and description:
         try:
             cond = json.loads(description)

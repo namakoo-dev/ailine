@@ -4,11 +4,11 @@ usage: ailine run [-h] [--model MODEL] [--refs REFS] [--helpers HELPERS]
                   [--keep-backups KEEP_BACKUPS] [--values]
                   [--header-row HEADER_ROW] [--sheet SHEET] [--accept-loss]
                   [--copy] [--overwrite] [--allow-freeform]
-                  book task
+                  book task [task ...]
 
 positional arguments:
-  book                  対象の文書 (.xlsx / .ods)
-  task                  やりたいことを自然言語で
+  book                  対象の文書 (.xlsx / .ods) またはフォルダ
+  task                  やりたいことを自然言語で（2冊照合は 2冊目のパスに続けて）
 
 options:
   -h, --help            show this help message and exit

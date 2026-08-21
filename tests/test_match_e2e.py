@@ -15,8 +15,6 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 import ailine  # noqa: E402
 
-pytestmark = pytest.mark.xfail(strict=True, reason="M3（2 冊の照合）実装前")
-
 NYUKIN_HDRS = ["取引日", "振込人名義", "お預り金額", "摘要"]
 SEIKYU_HDRS = ["請求日", "取引先名", "請求金額", "請求番号"]
 TASK = "振込人名義と取引先名をキーに、お預り金額と請求金額を突き合わせて"
@@ -188,3 +186,77 @@ def test_detail_sheet_lists_all_rows_with_provenance_and_bands(tmp_path, capsys)
     tinted = [c for row in ws.iter_rows(min_row=2) for c in row
               if c.fill is not None and "C7CE" in (c.fill.fgColor.rgb or "")]
     assert tinted, "差額ありキーの帯が無い"
+
+
+# ---- 実弾検分の差し戻し（2026-08-21 15:3x・実物寄り検体で確認した実害）----
+
+
+def _with_bank_total(tmp_path):
+    """銀行明細の実物形: 合計行（1 列目に『合計』・キー列は空・金額 = 他行の和）入り。"""
+    a = tmp_path / "in" / "入金.xlsx"
+    b = tmp_path / "in" / "請求.xlsx"
+    _nyukin(a, [
+        (datetime.date(2026, 7, 31), "甲社", 220000, ""),
+        (datetime.date(2026, 8, 2), None, 5000, "名義読めず"),
+        ("合計", None, 225000, ""),
+    ])
+    _seikyu(b, [(datetime.date(2026, 7, 10), "甲社", 220000, "INV-101")])
+    return a, b
+
+
+def test_bank_total_row_gets_note_not_silent_pollution(tmp_path, capsys):
+    """★ 実害: 合計行がキー不明の袋に混ざり、本物の名義不明 5,000 が 225,000 の中に沈む。
+       設計どおり除外はしないが、『金額が他の行の和と一致 ── 合計行かもしれません』の注記を
+       両側の数字つきで出す（報告と検分の両方）。"""
+    a, b = _with_bank_total(tmp_path)
+    rc, out = _run(a, b, TASK, capsys=capsys)
+    assert rc == 0, out
+    assert "合計行かもしれません" in out, f"注記が端末に無い:\n{out}"
+    assert "225000" in out.replace(",", ""), "注記に当の金額が無い"
+    outp = max((tmp_path / "in").glob("*照合*.xlsx"), key=lambda p: p.stat().st_mtime)
+    text = " ".join(str(c.value) for row in openpyxl.load_workbook(outp)["検分"].iter_rows()
+                    for c in row if c.value is not None)
+    assert "合計行かもしれません" in text, "注記が検分に無い"
+
+
+def test_terminal_unknown_key_line_reads_naturally(tmp_path, capsys):
+    """文言: 『⚠ キー不明: キー不明（…）』の重複をやめ、行数つきで読める形に。"""
+    a, b = _with_bank_total(tmp_path)
+    rc, out = _run(a, b, TASK, capsys=capsys)
+    assert rc == 0
+    assert "キー不明: キー不明" not in out, f"重複文言:\n{out}"
+
+
+def test_inspection_findings_link_to_detail_sheet(tmp_path, capsys):
+    """★ gap#1（誘導の憲法）: 差額あり・片側のみ・キー不明の各所見が検分の所見表に載り、
+       ブック内リンク（#'明細'!…）で明細シートの該当キーの行へ飛べる。
+       ブック内リンクなら 2 冊が別フォルダでも切れない。"""
+    a, b = _five_forms(tmp_path)
+    rc, out = _run(a, b, TASK, capsys=capsys)
+    assert rc == 0
+    outp = max((tmp_path / "in").glob("*照合*.xlsx"), key=lambda p: p.stat().st_mtime)
+    ws = openpyxl.load_workbook(outp)["検分"]
+    links = [(c.hyperlink.target or "", c.hyperlink.location or "")
+             for row in ws.iter_rows() for c in row if c.hyperlink is not None]
+    assert links, "所見にリンクが 1 本も無い"
+    assert any("明細" in loc for t, loc in links if not t), \
+        f"明細シートへのブック内リンクが無い: {links}"
+    text = " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
+    assert "乙社" in text and "660" in text, "差額ありの所見が検分の表に無い"
+
+
+def test_detail_sheet_dates_keep_date_format(tmp_path, capsys):
+    """明細シートの日付セルが 00:00:00 の尻尾つきで出る再発 ── 元の number_format を運ぶ
+       （M2.5 の日付書式引き継ぎと同じ線・照合の明細にも適用）。"""
+    a, b = _five_forms(tmp_path)
+    rc, out = _run(a, b, TASK, capsys=capsys)
+    assert rc == 0
+    outp = max((tmp_path / "in").glob("*照合*.xlsx"), key=lambda p: p.stat().st_mtime)
+    ws = openpyxl.load_workbook(outp)["明細"]
+    import datetime as _dt
+    date_cells = [c for row in ws.iter_rows(min_row=2) for c in row
+                  if isinstance(c.value, (_dt.date, _dt.datetime))]
+    assert date_cells, "明細に日付セルが無い（検体の前提崩れ）"
+    bad = [c.number_format for c in date_cells if "h" in c.number_format or ":" in c.number_format
+           or c.number_format == "General"]
+    assert not bad, f"時刻の尻尾つき書式が残る: {bad[:3]}"

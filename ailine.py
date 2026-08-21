@@ -91,6 +91,7 @@ from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine ver
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
+from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -5099,6 +5100,27 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
        - 計画が2段以上(複合依頼) → 段ごとに honest な項目別実行(cmd_run_plan)（M2c）
        ★ 後方互換: translate_task が "plan" で包まない旧形式（bare {"op":...}）を返した場合
        （テストの monkeypatch を含む）も、その dict をそのまま単一段として扱う。"""
+    # ★ M3 P: run の位置引数の arity 判定を一番最初に一度だけ（フォルダ分岐の隣・
+    #   翻訳より前）。task は nargs="+" で受けている ── 先頭が実在ファイルなら2冊目の
+    #   パス、残りが依頼文。★ LLM には一切渡さない判定（M8: prompt 3 ハッシュ不変の根拠）
+    #   ── 実在ファイルかどうかの機械の事実だけで分岐する。2冊目のつもりの引数が
+    #   実在しなければ、黙って依頼文の一部として単一ブック経路へ流さず名指しで聞く
+    #   （凍結検体 test_nonexistent_second_path_is_asked_not_swallowed_as_task）。
+    task_tokens = a.task if isinstance(a.task, list) else [a.task]
+    book1 = Path(a.book)
+    if not book1.is_dir() and book1.is_file() and len(task_tokens) >= 2:
+        second_arg = task_tokens[0]
+        second_path = Path(second_arg)
+        if second_path.is_file():
+            return cmd_run_match(a, book1.resolve(), second_path.resolve(),
+                                  " ".join(task_tokens[1:]).strip())
+        if _looks_like_second_book_path(second_arg):
+            print(f"？ 2冊目として指定した『{second_arg}』が見つかりません。"
+                  "パスを確認してから、もう一度実行してください"
+                  "（1冊だけの依頼なら、依頼文だけを1つの引数として渡してください）。")
+            return 3
+    a.task = " ".join(task_tokens)   # ★ 以降の全経路は従来どおり a.task を str として読む
+
     # ★ M2（architect 致命4）: book の位置がディレクトリなら多ファイル分岐へ ── **一番最初**に
     #   分ける。ここから下は1冊のブック前提の器官（ロック検出・正規化・バックアップ・undo）で、
     #   フォルダを渡すと check_excel_lock の open(r+b) が PermissionError になり
@@ -6570,6 +6592,18 @@ def _stack_attribution_fail(mismatch: dict) -> int:
     return 5
 
 
+_BOOKLIKE_SUFFIXES = {".xlsx", ".xls", ".ods", ".csv"}
+
+
+def _looks_like_second_book_path(token: str) -> bool:
+    """依頼文の一部でなく『2冊目のつもりのパス』らしいか（M3 arity 判定の後半）。
+       ★ 実在確認は呼び出し側が既にやっている（この関数は『実在しないが2冊目らしい』を
+       見分けるためだけ）── 表計算らしい拡張子、またはパス区切りを含む場合に真とする。
+       依頼文の1トークン目がたまたまこれに当てはまることはまず無い（自然文はこの形にならない）。"""
+    p = Path(token)
+    return p.suffix.lower() in _BOOKLIKE_SUFFIXES or "/" in token or "\\" in token
+
+
 def _run_folder_refuse(op: str, plan_len: int) -> int:
     """M2 の断り（E11）: フォルダに未対応の依頼を**名指し**で断り、次の手を添えて exit 3。
        ★ 黙って1冊目に適用が最悪の形 ── 断る時は原本に一切触れない（この時点で
@@ -6910,6 +6944,240 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     return 0
 
 
+def _peek_match_book(path: Path):
+    """M3 専用の軽い読み: 見出し行推定（既存の StructDump ヒューリスティクスを1回だけ）+
+       全データ行の読み取り。戻り値 (header_row, headers, rows) ── 読めなければ
+       (None, None, None)（呼び出し側が名指しで exit 3 にする）。"""
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return None, None, None
+    try:
+        ws = wb.worksheets[0]
+        scan_end = min(ws.max_row or 1, MAX_ROWS, STRUCT_HEADER_SCAN_ROWS)
+        rows_stats = _row_char_stats(ws, 1, scan_end, 1, min(ws.max_column or 1, MAX_COLS))
+        row, confident = detect_header_row({"rows": rows_stats})
+        header_row = row if confident else 1
+        headers = multifile.read_row_headers(ws, header_row)
+        rows = multifile_match.read_data_rows(ws, header_row, headers)
+        return header_row, headers, rows
+    except Exception:
+        return None, None, None
+    finally:
+        wb.close()
+
+
+def _match_condition(key_a: str, key_b: str, amount_a: str, amount_b: str, book_b_name: str) -> dict:
+    """出力ブックの docProps/description へ焼く条件（機械可読・verify の入口が読む）。
+       ★ 絶対パスを焼かない（検分ごと発注者に渡るため）── book_b はファイル名のみ。"""
+    return {"tool": "ailine", "kind": "match", "key_a": key_a, "key_b": key_b,
+            "amount_a": amount_a, "amount_b": amount_b, "b": book_b_name}
+
+
+def _own_match_output_status(path: Path, cond: dict) -> tuple:
+    """path が①ailine 産か（mark）②M3 照合の自分の前回出力で、かつ焼いた条件が
+       今回と完全一致するか（same_condition）を返す（_own_extract_output_status と同じ線）。"""
+    mark = multifile_stack.own_output_mark(path)
+    if mark != multifile_match.CREATOR_MARK:
+        return mark, False
+    _creator, description = xml_readback.read_core_properties(path)
+    try:
+        existing = json.loads(description) if description else None
+    except (TypeError, ValueError):
+        existing = None
+    same_condition = existing == cond
+    return mark, same_condition
+
+
+def _match_postcondition_fail(label: str, source, output) -> int:
+    """M3 事後条件の破れ（両側の数字つき・design v2: 破れは exit 1）。"""
+    print(f"⚠ 事後条件が破れた: {label}  元(算出) {inspection.fmt_num(source)} / "
+          f"出力(書いた直後) {inspection.fmt_num(output)}")
+    return 1
+
+
+def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) -> int:
+    """`ailine run <A.xlsx> <B.xlsx> "<依頼>"`: M3 ── 2冊の照合（突き合わせ）。
+       DESIGN-20260821-multifile.md M3 設計 v2（凍結）。芯: 候補を並べて差額だけ機械で保証、
+       決めるのは人 ── この経路は判断しない（消し込み・照合完了は名乗らない・憲法2）。
+       ★ 翻訳（translate_task）はこの経路で呼ばない（M8: LLM には1語も足さない）── 列対応は
+       機械3段（依頼文の名指し→型→曖昧なら exit 3）で決める。原本2冊は読むだけ。"""
+    as_json = bool(getattr(a, "json", False))
+    say = (lambda *args, **kw: None) if as_json else print
+
+    lock_a = check_excel_lock(book_a)
+    if lock_a:
+        print(f"× Excel で開かれています。閉じてから実行してください。（{lock_a}）")
+        return 5
+    lock_b = check_excel_lock(book_b)
+    if lock_b:
+        print(f"× Excel で開かれています。閉じてから実行してください。（{lock_b}）")
+        return 5
+
+    sha_a = hashlib.sha256(book_a.read_bytes()).hexdigest()
+    sha_b = hashlib.sha256(book_b.read_bytes()).hexdigest()
+    if sha_a == sha_b:
+        say(f"（{book_a.name} と {book_b.name} は同一の内容です（sha256 一致）。"
+            "同じデータとして続行します）")
+
+    header_row_a, headers_a, rows_a = _peek_match_book(book_a)
+    if headers_a is None:
+        print(f"？ {book_a.name} を読めませんでした。壊れていないか、.xlsx 形式か確認してください。")
+        return 3
+    header_row_b, headers_b, rows_b = _peek_match_book(book_b)
+    if headers_b is None:
+        print(f"？ {book_b.name} を読めませんでした。壊れていないか、.xlsx 形式か確認してください。")
+        return 3
+
+    # ★ 列対応（機械3段・LLM ゼロ）: 依頼文の名指し → 型で絞る → 曖昧なら exit 3（候補つき）。
+    #   ★ 一括検出: 決まらなかった役割を全部集めてから報告する（1件目で止めない）。
+    resolution = multifile_match.resolve_columns(task, headers_a, rows_a, headers_b, rows_b)
+    if not resolution.ok:
+        say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
+        for side, role, candidates in resolution.unresolved:
+            label = "キー" if role == "key" else "金額"
+            book_label = book_a.name if side == "A" else book_b.name
+            if candidates:
+                cand_txt = "、".join(str(c) for c in candidates)
+                say(f"？ {book_label} の{label}列が依頼文から決まりません。候補: {cand_txt}。"
+                    f"依頼文に列名を含めて（例:『{candidates[0]}を{label}に』）もう一度実行してください。")
+            else:
+                say(f"？ {book_label} に{label}に使える列が見つかりません。")
+        return 3
+    key_a, key_b, amount_a, amount_b = (resolution.key_a, resolution.key_b,
+                                         resolution.amount_a, resolution.amount_b)
+
+    groups = multifile_match.compute_match(headers_a, rows_a, key_a, amount_a,
+                                            headers_b, rows_b, key_b, amount_b)
+    a_total_keyed, b_total_keyed = multifile_match.side_totals(groups)
+    # ★ 実弾検分の差し戻し#1: 合計行対策（design v2「単位L」節）。キーが空 かつ 金額 =
+    #   同じ冊の他のデータ行の和、を注記として集める（除外はしない・算術のみ）。
+    total_notes = (multifile_match.possible_total_row_notes(headers_a, rows_a, key_a, amount_a, "A")
+                   + multifile_match.possible_total_row_notes(headers_b, rows_b, key_b, amount_b, "B"))
+
+    # ★ 出力先（A の親 + 機械命名・sanitize+条件ハッシュ・「照合」を名前に含める）と
+    #   書き込みの関所（40行読む前に判定して印字 ── stack/extract と同じ配役）。
+    cond = _match_condition(key_a, key_b, amount_a, amount_b, book_b.name)
+    digest = hashlib.sha256(json.dumps(cond, sort_keys=True, ensure_ascii=False)
+                            .encode("utf-8")).hexdigest()[:6]
+    raw_stem = f"{book_a.stem}_照合_{digest}"
+    out = book_a.parent / f"{extract_multi.sanitize_filename(raw_stem)}.xlsx"
+    rebuilt_own_output = False
+    if out.exists():
+        mark, same_condition = _own_match_output_status(out, cond)
+        if mark == multifile_match.CREATOR_MARK and same_condition:
+            rebuilt_own_output = True
+        else:
+            return _refuse_output_conflict(out, mark)
+
+    say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
+    say(f"出力先: {out}")
+    say(f"キー: {key_a}(A) / {key_b}(B)　金額: {amount_a}(A) / {amount_b}(B)")
+
+    workdir = Path(tempfile.mkdtemp(prefix="ailine_match_"))
+    try:
+        tmp_out = workdir / out.name
+        wb_out, key_to_detail_row = multifile_match.build_workbook(
+            groups, headers_a, headers_b, book_a.name, book_b.name)
+        # ★ 実弾検分の差し戻し#3（gap#1 の解消）: 差額あり・A/Bのみ・キー不明・合計行の可能性を
+        #   検分の所見表に載せ、ブック内リンク（明細シートの該当キーの先頭行）で誘導する。
+        findings = multifile_match.build_findings(groups, key_to_detail_row, total_notes,
+                                                   book_a.name, book_b.name)
+        wb_out.properties.creator = multifile_match.CREATOR_MARK
+        wb_out.properties.description = json.dumps(cond, ensure_ascii=False)
+        denom_lines = [f"A: {len(rows_a)} 行 / B: {len(rows_b)} 行 → {len(groups)} キーに整理"
+                       "（キー不明を含む）"]
+        acct_lines = [f"行の完全会計 A: {len(rows_a)} = キー行 {a_total_keyed}",
+                      f"行の完全会計 B: {len(rows_b)} = キー行 {b_total_keyed}"]
+        inspection.build_sheet(
+            wb_out, findings=findings, denominator_lines_=denom_lines, accounting_lines=acct_lines,
+            sums={}, file_sheet_map=[(book_a.name, "1枚目", ""), (book_b.name, "1枚目", "")],
+            out_dir=out.parent, source_dir=book_a.parent)
+        kb_ws = wb_out[inspection.SHEET_NAME]
+        extra_lines = ["", "差額分布（Counter・キー不明を除く）:"]
+        dist = multifile_match.diff_distribution(groups)
+        if dist:
+            extra_lines += [f"・差額 {inspection.fmt_num(v)} が {n} 件" for v, n in dist]
+        else:
+            extra_lines.append("（無し）")
+        fuzzy = multifile_match.fuzzy_candidates(groups)
+        extra_lines += ["", "表記ゆれ候補（空白除去後の部分文字列一致・並べるだけ・自動採用しない）:"]
+        extra_lines += fuzzy if fuzzy else ["（無し）"]
+        extra_lines += ["", "未実施: どの行がどの行に対応するかは検査していません（キー単位の集計のみ）。"]
+        r = kb_ws.max_row + 1
+        for line in extra_lines:
+            kb_ws.cell(row=r, column=1, value=line)
+            r += 1
+        inspection.autosize_columns(kb_ws)
+        wb_out.save(tmp_out)
+
+        # ★ 事後条件（design v2「事後条件」節）: xml_readback の独立読みで書いた直後の
+        #   中身を検算する。破れは両側の数字つき exit 1（stack/extract は exit 5 ── M3 は
+        #   design 側の指示どおり exit 1 を使う）。
+        readback = xml_readback.read_grid(tmp_out, sheet_name=multifile_match.MATCH_SHEET_NAME)
+        out_rows = xml_readback.data_row_numbers(readback, header_row=1)
+        if len(out_rows) != len(groups):
+            wb_out.close()
+            return _match_postcondition_fail("行数(照合表)", len(groups), len(out_rows))
+        grid = readback["grid"]
+        col_a_count, col_b_count, col_diff, col_a_sum, col_b_sum = 2, 4, 6, 3, 5
+        a_count_out = sum(grid.get((r, col_a_count), 0) or 0 for r in out_rows)
+        b_count_out = sum(grid.get((r, col_b_count), 0) or 0 for r in out_rows)
+        data_a = xml_readback.read_grid(book_a)
+        a_headers_x = xml_readback.header_names(data_a, header_row=header_row_a)
+        a_rows_x = [r for r in xml_readback.data_row_numbers(data_a, header_row_a)
+                    if xml_readback.row_has_any_value(data_a, r, len(a_headers_x))]
+        data_b = xml_readback.read_grid(book_b)
+        b_headers_x = xml_readback.header_names(data_b, header_row=header_row_b)
+        b_rows_x = [r for r in xml_readback.data_row_numbers(data_b, header_row_b)
+                    if xml_readback.row_has_any_value(data_b, r, len(b_headers_x))]
+        if a_count_out != len(a_rows_x):
+            wb_out.close()
+            return _match_postcondition_fail("完全会計(A)", len(a_rows_x), a_count_out)
+        if b_count_out != len(b_rows_x):
+            wb_out.close()
+            return _match_postcondition_fail("完全会計(B)", len(b_rows_x), b_count_out)
+        for r in out_rows:
+            a_sum_v = grid.get((r, col_a_sum), 0) or 0
+            b_sum_v = grid.get((r, col_b_sum), 0) or 0
+            diff_v = grid.get((r, col_diff), 0) or 0
+            if abs(diff_v - (a_sum_v - b_sum_v)) > multifile_match.TOLERANCE:
+                wb_out.close()
+                return _match_postcondition_fail(f"差額の算術({r}行目)", a_sum_v - b_sum_v, diff_v)
+        wb_out.close()
+
+        # ★ 原本2冊 sha 無変更（読むだけの経路だが、書き込み経路のどこかで誤って開いて
+        #   保存していないかの最終防衛）。
+        if hashlib.sha256(book_a.read_bytes()).hexdigest() != sha_a:
+            return _match_postcondition_fail("原本無変更(A)", sha_a, "変化あり")
+        if hashlib.sha256(book_b.read_bytes()).hexdigest() != sha_b:
+            return _match_postcondition_fail("原本無変更(B)", sha_b, "変化あり")
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tmp_out, out)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    # ★ D6: 正常キーの洪水を作らない ── 差額ありキーだけ名指し、正常分は1行に畳む。
+    # ★ 実弾検分の差し戻し#1/#2/#3: 端末の1行は所見（findings）の next_step をそのまま
+    #   使う ── 検分シートと文言が二重管理にならない。キー不明の重複文言（『キー不明: キー不明』）
+    #   は next_step 側の書式変更（build_findings）で解消済み。
+    mismatched = [g for g in groups if abs(g.diff) > multifile_match.TOLERANCE]
+    ok_count = len(groups) - len(mismatched)
+    say(f"{len(groups)} キー中 {ok_count} キーが差額 0")
+    for f in findings:
+        say(f"  ⚠ {f.next_step}")
+    if rebuilt_own_output:
+        say(f"（前回の照合出力『{out.name}』を作り直しました）")
+    if as_json:
+        print(json.dumps({
+            "out": str(out), "key_a": key_a, "key_b": key_b, "amount_a": amount_a,
+            "amount_b": amount_b, "a_rows": len(rows_a), "b_rows": len(rows_b),
+            "keys": len(groups), "mismatched": len(mismatched),
+        }, ensure_ascii=False))
+    return 0
+
+
 def cmd_stack(a: argparse.Namespace) -> int:
     """`ailine stack <folder> --out <path>`: M1書き ── 縦積み（UNION ALL）+ 出所列。
        DESIGN-20260821-multifile.md v2 §1(M1書き)・v2.1(単位L)。列挙・照合・合計行の識別は
@@ -7132,6 +7400,9 @@ def cmd_verify(a: argparse.Namespace) -> int:
     if result.get("unmarked"):
         print(f"× ailine の印がありません。検算できません: {out}")
         return 4
+    if result.get("unsupported"):
+        print(f"× {result['unsupported']}")
+        return 4
     for ln in render_verify_report(str(out), str(folder), result):
         print(ln)
     return 5 if result.get("mismatch") else 0
@@ -7142,8 +7413,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="タスクを生成・適用・検証する")
-    r.add_argument("book", help="対象の文書 (.xlsx / .ods)")
-    r.add_argument("task", help="やりたいことを自然言語で")
+    r.add_argument("book", help="対象の文書 (.xlsx / .ods) またはフォルダ")
+    # ★ M3 P: task は nargs="+" で受ける（2冊照合 `ailine run A.xlsx B.xlsx "依頼"` の
+    #   2冊目パス+依頼文を同じ位置引数列で拾うため）。1冊経路では従来どおり要素数1の
+    #   リストになり、_cmd_run_body の冒頭で通常の文字列へ畳み戻す（下流は全部 str のまま）。
+    r.add_argument("task", nargs="+", help="やりたいことを自然言語で（2冊照合は 2冊目のパスに続けて）")
     r.add_argument("--model", default=DEFAULT_MODEL, help=f"ollama モデル (既定 {DEFAULT_MODEL})")
     r.add_argument("--refs", default=None, help="参照ライブラリのディレクトリ (既定 ./refs)")
     r.add_argument("--helpers", default=None, help="検証済みヘルパのディレクトリ (既定 ./helpers)")

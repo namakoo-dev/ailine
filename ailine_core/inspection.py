@@ -128,7 +128,12 @@ def cell_ref(col: int, row: int) -> str:
 @dataclass(frozen=True)
 class Finding:
     """1件の所見。★ sheet は必須（デフォルト無し）── M2.5 追補「住所の3座標」を
-       型で強制する（file だけ・row だけの所見を組み立てられない）。"""
+       型で強制する（file だけ・row だけの所見を組み立てられない）。
+       link: ★ M3 gap#1 の直し（2026-08-21）。None（既定）なら従来どおり file/sheet から
+       『元ファイルへの外部相対パス』を組み立てる（stack.py/extract_multi.py はこちら・
+       挙動は一切変えない）。(target, location) を渡すとそれを**そのまま**使う ──
+       target=None ならブック内リンク（例: 明細シートの該当行）になる。M3 は2冊が別
+       フォルダでも切れないブック内リンクを使うためにこれを渡す。"""
     kind: str
     file: str
     sheet: str
@@ -136,14 +141,17 @@ class Finding:
     source_value: object
     output_value: object
     next_step: str
+    link: tuple | None = None
 
 
 def finding(kind: str, file: str, sheet: str, cell: str, source_value, output_value,
-            next_step: str) -> Finding:
+            next_step: str, link: tuple | None = None) -> Finding:
     """Finding を作る唯一の入口。sheet を渡さないと Finding() 自体が TypeError になる
-       （キーワード省略も不可 ── デフォルト値を持たない dataclass フィールドの性質）。"""
+       （キーワード省略も不可 ── デフォルト値を持たない dataclass フィールドの性質）。
+       link は省略可（既定 None・従来どおりの外部相対パスリンク）。"""
     return Finding(kind=kind, file=file, sheet=sheet, cell=cell,
-                    source_value=source_value, output_value=output_value, next_step=next_step)
+                    source_value=source_value, output_value=output_value, next_step=next_step,
+                    link=link)
 
 
 def describe(f: Finding) -> str:
@@ -223,9 +231,14 @@ def _set_finding_row(ws, row_idx: int, f: Finding, out_dir, source_dir) -> None:
     ws.cell(row=row_idx, column=5, value=f.source_value)
     ws.cell(row=row_idx, column=6, value=f.output_value)
     ws.cell(row=row_idx, column=7, value=f.next_step)
-    target = hyperlink_target_path(out_dir, source_dir / f.file)
-    location = hyperlink_location(f.sheet, f.cell)
-    link_cell = ws.cell(row=row_idx, column=8, value=f"{target} > {location}")
+    if f.link is not None:
+        # ★ M3 gap#1: 上書き経路。target=None ならブック内リンク（例: 明細!A5）。
+        target, location = f.link
+    else:
+        target = hyperlink_target_path(out_dir, source_dir / f.file)
+        location = hyperlink_location(f.sheet, f.cell)
+    link_text = f"{target} > {location}" if target else location
+    link_cell = ws.cell(row=row_idx, column=8, value=link_text)
     link_cell.hyperlink = Hyperlink(ref=link_cell.coordinate, target=target, location=location)
     for c in range(1, len(_FINDINGS_HEADER) + 1):
         ws.cell(row=row_idx, column=c).fill = TINT_FILL
