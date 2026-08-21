@@ -6812,7 +6812,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             if fname in suspicious_files:
                 reason_lines = [inspection.describe(f) for f in all_findings
                                 if f.file == fname and f.kind in inspection.WARN_KINDS]
-                inspection.tint_provenance_cell(ws_out, i, prov_col_idx, reason_lines)
+                inspection.tint_row(ws_out, i, len(out_headers), prov_col_idx, reason_lines)
         inspection.bold_row(ws_out, 1, len(out_headers))   # ★ UX 磨き③: 見出し行
         inspection.autosize_columns(ws_out)   # ★ UX 磨き②: 列幅を内容から機械算出
         wb_out.save(tmp_out)
@@ -7026,7 +7026,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
                 # ★ M2.5②: ⚠ 付きファイル由来のデータ行だけ淡色 + コメント（正常行は塗らない）。
                 reason_lines = [inspection.describe(f) for f in all_findings
                                 if f.file == fname and f.kind in inspection.WARN_KINDS]
-                inspection.tint_provenance_cell(ws_out, i, prov_col_idx, reason_lines)
+                inspection.tint_row(ws_out, i, len(out_headers), prov_col_idx, reason_lines)
         inspection.bold_row(ws_out, 1, len(out_headers))   # ★ UX 磨き③: 見出し行
         inspection.autosize_columns(ws_out)   # ★ UX 磨き②: 列幅を内容から機械算出
         wb_out.save(tmp_out)

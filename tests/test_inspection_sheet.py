@@ -194,3 +194,37 @@ def test_findings_are_readable_sentences_with_explicit_next_step(tmp_path):
     # 閉じない合計の所見が文章として読めること（両側の数字+動詞を含む 1 文）
     assert ("合計" in text and "合いません" in text) or ("合計" in text and "一致しません" in text), \
         f"所見が文章になっていない: {text[:500]}"
+
+
+def test_whole_row_is_tinted_not_just_provenance_cell(tmp_path):
+    """★ Namakoo 実視 2 巡目（12:14）: 出所セル 1 個の印は目が拾わない ──
+       疑わしいファイル由来の行は データセル全部 を薄赤に（行の帯）。正常行は不変。"""
+    folder, out = _made(tmp_path)
+    ws = openpyxl.load_workbook(out).active
+    def tinted(cell):
+        return cell.fill is not None and "C7CE" in (cell.fill.fgColor.rgb or "")
+    rows = {row[0].value: [tinted(c) for c in row[:len(HDRS) + 2]]
+            for row in ws.iter_rows(min_row=2)}
+    assert all(rows["J-3"]), f"疑わしい行の帯が欠けている: {rows['J-3']}"
+    assert not any(rows["J-1"]) and not any(rows["J-2"]), f"正常行が塗られた: {rows}"
+
+
+def test_finding_rows_in_inspection_sheet_are_tinted(tmp_path):
+    """検分シートの所見行そのものも薄赤 ── 開いた瞬間に目が行く。"""
+    folder, out = _made(tmp_path)
+    ws = openpyxl.load_workbook(out)["検分"]
+    tinted_texts = []
+    for row in ws.iter_rows():
+        if any(c.fill is not None and "C7CE" in (c.fill.fgColor.rgb or "") for c in row):
+            tinted_texts.append(" ".join(str(c.value) for c in row if c.value is not None))
+    assert any("合いません" in t or "取れなかった" in t or "合いま" in t for t in tinted_texts), \
+        f"所見行が塗られていない: {tinted_texts}"
+
+
+def test_legend_explains_link_landing_is_the_marker(tmp_path):
+    """凡例: 原本には印を付けない・リンクの着地セル（選択状態）が対象、を仕様として明記。"""
+    folder, out = _made(tmp_path)
+    text = " ".join(str(c.value) for row in openpyxl.load_workbook(out)["検分"].iter_rows()
+                    for c in row if c.value is not None)
+    assert "原本" in text and ("印" in text or "塗" in text), f"原本不可侵の明記が無い: {text[-400:]}"
+    assert "選択" in text or "着地" in text, "リンク着地=対象セルの説明が無い"

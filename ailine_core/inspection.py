@@ -96,6 +96,8 @@ _LEGEND = [
     "凡例:",
     "・色は「怪しい」の印であって検証の主張ではありません（検証は Σ・行数などの数字が言います）。",
     "・リンクは相対パスです。フォルダごと一緒に移動すれば生きています。ファイル単体だけを移動すると切れます。",
+    "・原本には一切印を付けません（塗り・コメントとも出力ブック側だけです）。"
+    "リンクの着地セル（クリックすると選択された状態で開きます）が対象のセルです。",
 ]
 
 
@@ -159,12 +161,14 @@ def hyperlink_location(sheet: str, cell: str) -> str:
     return f"'{sheet}'!{cell}"
 
 
-def tint_provenance_cell(ws, row_idx: int, col_idx: int, reason_lines: list) -> None:
-    """⚠ 付きファイル由来のデータ行の出所列セルに淡色 + 理由コメント。
+def tint_row(ws, row_idx: int, num_cols: int, comment_col: int, reason_lines: list) -> None:
+    """⚠ 付きファイル由来のデータ行を『帯』で塗る（Namakoo 実視2巡目 12:14: 出所セル1個は
+       目が拾わない）── 1〜num_cols 列（見出しは含まない・出所列2本も含む）を全部薄赤に。
+       理由コメントは従来どおり出所セル1個だけに付ける（重複コメントは作らない）。
        正常行はこの関数を一度も呼ばない（呼び出し側が suspicious なファイルの行だけ選ぶ）。"""
-    cell = ws.cell(row=row_idx, column=col_idx)
-    cell.fill = TINT_FILL
-    cell.comment = Comment("\n".join(reason_lines), COMMENT_AUTHOR)
+    for c in range(1, num_cols + 1):
+        ws.cell(row=row_idx, column=c).fill = TINT_FILL
+    ws.cell(row=row_idx, column=comment_col).comment = Comment("\n".join(reason_lines), COMMENT_AUTHOR)
 
 
 def denominator_lines(denominator: int, processed: int, contributing: int, verb: str) -> list:
@@ -197,6 +201,11 @@ def row_accounting_lines(adopted: int, excluded: int, not_taken_files: int,
 
 
 def _set_finding_row(ws, row_idx: int, f: Finding, out_dir, source_dir) -> None:
+    """所見1行を書く。★ Namakoo 実視2巡目（12:14）: 所見の行そのものも薄赤で塗る
+       （種類〜リンクの実セル範囲・_FINDINGS_HEADER の列数ぶん）── 開いた瞬間に目が行く。
+       検分シートの所見は定義上すべて「見るべきもの」なので、見出し・要約・凡例の行は
+       塗らない一方、所見テーブルの行はどの種類でも塗る（データ面の『正常行は塗らない』
+       という原則とは対象が違う ── ここは最初から異常だけが並ぶ表）。"""
     ws.cell(row=row_idx, column=1, value=f.kind)
     ws.cell(row=row_idx, column=2, value=f.file)
     ws.cell(row=row_idx, column=3, value=f.sheet)
@@ -208,6 +217,8 @@ def _set_finding_row(ws, row_idx: int, f: Finding, out_dir, source_dir) -> None:
     location = hyperlink_location(f.sheet, f.cell)
     link_cell = ws.cell(row=row_idx, column=8, value=f"{target} > {location}")
     link_cell.hyperlink = Hyperlink(ref=link_cell.coordinate, target=target, location=location)
+    for c in range(1, len(_FINDINGS_HEADER) + 1):
+        ws.cell(row=row_idx, column=c).fill = TINT_FILL
 
 
 def build_sheet(wb, *, findings: list, denominator_lines_: list, accounting_lines: list,
