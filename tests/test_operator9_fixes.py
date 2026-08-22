@@ -131,7 +131,7 @@ def test_legitimate_steps_pool_word_and_args_grounding_not_flagged(tmp_path, mon
         {"plan": [{"op": "SORT", "args": {"col": "単価", "order": "desc"}},
                    {"op": "COMPUTE_COLUMN",
                     "args": {"operands": ["数量", "単価"], "operator": "*",
-                              "new_col": "金額"}}]})
+                              "target": "金額"}}]})
     calls = {"n": 0}
 
     def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
@@ -148,8 +148,12 @@ def test_legitimate_steps_pool_word_and_args_grounding_not_flagged(tmp_path, mon
         wb.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
+    # ★ 治具の訂正: task に target の列名（金額）を含め（W3: 依頼文の語の指名で新規列可）、
+    #   --values で値モードに（既定の式モードは mock が live formula を書けない ── APPEND_TOTAL
+    #   検体と同じ治具の限界）。assert は不変。
     rc, out = _run_main(
-        ["run", str(book), "単価で並べ替えして、数量と単価を掛けた列を足して", "--copy"], capsys)
+        ["run", str(book), "単価で並べ替えして、数量と単価を掛けた金額の列を足して",
+         "--copy", "--values"], capsys)
     assert rc == 0, out
     assert "根拠が見つかりません" not in out, f"正当な段に誤爆: {out}"
     assert "✓" in out, f"誤爆で ✓ が消えた: {out}"

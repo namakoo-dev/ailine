@@ -1852,6 +1852,49 @@ def _op_match_pool(op: str) -> list:
     return [meta.get("label", op), *meta.get("synonyms", ()), *meta.get("match_phrases", ())]
 
 
+# ★ operator9 ②: 複合計画の1段について「段の存在自体」に依頼文の根拠があるかを機械照合する。
+#   単位E は対象スロットの食い違いしか見ておらず、依頼文に一度も出てこない op の段（捏造段）が
+#   湧いても ✓ が出ていた ── ここは cmd_run_plan の DSL 段だけが呼ぶ（単発 cmd_run_dsl は
+#   確認段が近いので対象外・自由生成の段は元から ⚠ 経路なので対象外）。
+def _phrase_matches_task_allowing_conjugation(phrase: str, task: str) -> bool:
+    """alias_store.phrase_is_standalone_in_task と同じ断片ガードに、活用ゆれを1段だけ許す
+       ―― pool のフレーズは辞書形（例:「整える」）で書かれているが、依頼文は活用した形
+       （「整えて」「整えた」等）で来ることが普通にある。ichidan 動詞（〜える/〜いる）は
+       語幹（「る」を落とした形）が活用のあいだ共通なので、辞書形一致が失敗したら語幹
+       一致も試す（例:「整える」→「整え」は「整えて」に語として現れる）。
+       ★ 既存の suggest_ops/alias_store は厳格一致のまま変えない（誤提示 5/12 の教訓で
+       意図的に緩めていない・ここは新設のこの検査専用の緩和）。緩めるのは「一致しにくく
+       なる」方向のみで、既存の一致を狭めることは無い（誤爆防止が命の方向と一致）。"""
+    if alias_store.phrase_is_standalone_in_task(phrase, task):
+        return True
+    if len(phrase) > 2 and phrase.endswith("る"):
+        return alias_store.phrase_is_standalone_in_task(phrase[:-1], task)
+    return False
+
+
+def _op_has_task_grounding(op: str, resolved: dict, task: str) -> bool:
+    """根拠 = (a) その op の照合プール句（_op_match_pool）が依頼文に語として在る
+       （_phrase_matches_task_allowing_conjugation・活用ゆれを1段だけ許す）∨
+       (b) 解決済み args の値のいずれかが依頼文の語に接地している（断片ガードを流用）。
+       ★ 誤爆防止が命（検体の二本立て根拠が凍結形）: 迷ったら「根拠あり」に倒す ──
+       task が空/内部キー(_ 始まり)は見ない・1文字の値は偶然一致しすぎるので証拠にしない
+       （単位B の _MIN_FRAGMENT=2 と同じ理由）。"""
+    if not task:
+        return True   # 判定材料が無い ── 誤って★を出さない
+    for phrase in _op_match_pool(op):
+        if phrase and _phrase_matches_task_allowing_conjugation(phrase, task):
+            return True
+    for key, value in resolved.items():
+        if key.startswith("_"):
+            continue
+        values = value if isinstance(value, (list, tuple)) else (value,)
+        for v in values:
+            s = str(v).strip()
+            if len(s) >= 2 and alias_store.phrase_is_standalone_in_task(s, task):
+                return True
+    return False
+
+
 def suggest_ops(task: str, about: str | None = None, exclude_ops=None) -> list:
     """★ W10 便C2: もしかして提案の候補生成。OP_META の label/synonyms/match_phrases を
        照合プールに組み、ailine_core/suggest.py の純ロジック（語としての厳格一致・
@@ -3024,7 +3067,18 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     elif op == "EXTRACT":
         if (err := resolve_in("col", first_sheet)):
             return False, resolved, inferred, err
-        cmp = str(resolved.get("cmp", "")).strip().lower()
+        llm_cmp_raw = str(resolved.get("cmp", "")).strip().lower()
+        # ★ operator9 ①: cmp も A' 原則の中へ。依頼文からの機械抽出が非 None かつ LLM の cmp と
+        #   食い違えば機械が勝つ（factor/value と同じ作法）。一致 or 機械 None なら現状どおり。
+        mechanical_cmp = extract_cmp_from_task(task)
+        if mechanical_cmp is not None and mechanical_cmp != llm_cmp_raw:
+            cmp = mechanical_cmp
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"LLM が返した比較({llm_cmp_raw or '(空)'})と依頼文の機械抽出({mechanical_cmp})が"
+                f"食い違うため機械抽出({mechanical_cmp})を採用しました"
+            ]
+        else:
+            cmp = llm_cmp_raw
         if cmp not in _EXTRACT_CMPS:
             return False, resolved, inferred, (
                 f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません"
@@ -3114,6 +3168,48 @@ _EXTRACT_CMP_LABELS = {"gte": "以上", "lte": "以下", "gt": "超", "lt": "未
                         "eq": "等しい", "contains": "を含む"}
 _EXTRACT_CMP_CODE = {"gte": 0, "lte": 1, "gt": 2, "lt": 3, "eq": 4, "contains": 5}
 _EXTRACT_SHEET_NAME_FORBIDDEN_RE = re.compile(r'[:\\/?*\[\]]')
+
+# ★ operator9 ①: 比較語(cmp)も A' 原則の中に入れる ── value は機械が数値化するのに、cmp の
+#   種別(gte/lte/gt/lt/eq/contains)だけは LLM の言い分をそのまま検証していた（「より大きい」→
+#   gte・「未満」→lte と写し間違えても素通し・境界値の行が黙って混入する実害）。
+#   語の列挙は意味から広め（検体に無い自然な同義語も拾う）。
+_EXTRACT_CMP_WORDS = (
+    ("gt", ("より大きい", "より大きく", "を超える", "を超えて", "より多い", "より多く",
+             "より高い", "より高く")),
+    ("lt", ("未満", "より小さい", "より小さく", "より少ない", "より少なく",
+             "より安い", "より安く")),
+    ("gte", ("以上",)),
+    ("lte", ("以下",)),
+    ("contains", ("を含む", "を含んで", "が含まれる", "を含める")),
+    ("eq", ("と等しい", "に等しい", "と同じ")),
+)
+# ★ 断片ガード: 「以上」「以下」は文末の定型（「以上です」等）の断片として現れやすいので、
+#   直前 _EXTRACT_CMP_NUM_WINDOW 文字以内に数字が無ければ比較語として採用しない
+#   （対象を値の近傍の比較語に絞る）。gt/lt/contains/eq の語は文末定型と衝突しないので対象外。
+_EXTRACT_CMP_NEEDS_NUM_NEARBY = frozenset({"gte", "lte"})
+_EXTRACT_CMP_NUM_RE = re.compile(r'[0-9０-９]')
+_EXTRACT_CMP_NUM_WINDOW = 10
+
+
+def extract_cmp_from_task(task: str) -> str | None:
+    """依頼文から比較語を機械抽出する。一致が無ければ None（機械は断定しない）。
+       複数の比較語が現れても、依頼文中で最初に出現した(かつ断片ガードを通った)ものを採る。"""
+    if not task:
+        return None
+    best = None   # (出現位置, cmp名)
+    for cmp_name, words in _EXTRACT_CMP_WORDS:
+        for w in words:
+            idx = task.find(w)
+            while idx >= 0:
+                if cmp_name in _EXTRACT_CMP_NEEDS_NUM_NEARBY:
+                    window = task[max(0, idx - _EXTRACT_CMP_NUM_WINDOW):idx]
+                    if "。" in window or not _EXTRACT_CMP_NUM_RE.search(window):
+                        idx = task.find(w, idx + 1)
+                        continue
+                if best is None or idx < best[0]:
+                    best = (idx, cmp_name)
+                break
+    return best[1] if best else None
 
 
 def _format_extract_value(value) -> str:
@@ -7129,6 +7225,13 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
         #   を ✓→△ 降格の判定材料へ運ぶ（印字と同じ「⚠ 」前置の形で積む）
         suspicion_sink.extend(f"⚠ {w}" for w in resolved.get("_warnings", []))
     step_advisories = [confirm.mismatch_warning] if confirm.mismatch_warning else []
+    # ★ operator9 ②: 段の存在自体に依頼文の根拠が無ければ名指しする（count_suspicious_advisories
+    #   が ★ 付きを拾い、決裁③の ✓→△ 降格に自動で乗る）。"N段目:" の付与は呼び出し側
+    #   （cmd_run_plan・_dedup_step_advisories）に任せる ── 他の ★ 付き助言と同じ作法。
+    if not _op_has_task_grounding(op, resolved, task):
+        step_advisories.append(
+            f"★ （{OP_LABELS.get(op, op)}）は依頼文に根拠が見つかりません "
+            "── 意図しない操作の可能性があります")
     # ★ 段1: interpretation/provenance は1箇所（build_interpretation）で組む（cmd_run_dsl と同じ）。
     #   provenance_entry の中身（キー・値）は今までと完全に同じ（resolved["_sources"] のまま）。
     interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book_name])
@@ -7645,7 +7748,19 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     # ④ 条件の確定（A': 値の数値化は機械が行う ── verify_dsl_args と同じ線）。
     args = step.get("args") or {}
     col = args.get("col") or args.get("column")
-    cmp = str(args.get("cmp") or "").strip().lower()
+    llm_cmp_raw = str(args.get("cmp") or "").strip().lower()
+    # ★ operator9 ①（片配線の追補）: このフォルダ抽出経路は verify_dsl_args を通らず cmp を
+    #   独自に確定するため、同じ機械抽出+開示を個別に配線する（verify_dsl_args の EXTRACT 分岐
+    #   参照・同じ食い違いが起きうる別経路）。
+    mechanical_cmp = extract_cmp_from_task(a.task)
+    cmp_mismatch_warning = None
+    if mechanical_cmp is not None and mechanical_cmp != llm_cmp_raw:
+        cmp = mechanical_cmp
+        cmp_mismatch_warning = (
+            f"LLM が返した比較({llm_cmp_raw or '(空)'})と依頼文の機械抽出({mechanical_cmp})が"
+            f"食い違うため機械抽出({mechanical_cmp})を採用しました")
+    else:
+        cmp = llm_cmp_raw
     value = args.get("value")
     if cmp not in _EXTRACT_CMPS:
         print(f"？ 比較『{args.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません。"
@@ -7702,6 +7817,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     say(f"■ ailine run（フォルダ抽出）  folder={folder}")
     say(f"出力先: {out}")
     say(f"条件: {col} {_format_extract_value(value)} {cmp_label}")
+    if cmp_mismatch_warning:
+        say(f"⚠ {cmp_mismatch_warning}")
 
     # ⑥ ファイルごとの評価（★ 一括検出: 欠陥が出ても止めず全部集める）。
     skipped, files_json, excluded_detail, mismatches = [], [], [], []
