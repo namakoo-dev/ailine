@@ -1,0 +1,8 @@
+usage: ailine alias add [-h] phrase op
+
+positional arguments:
+  phrase      言い回し（例: 大きい順にして）
+  op          op 名（例: SORT。実在する操作名のみ・一覧: ailine ops）
+
+options:
+  -h, --help  show this help message and exit

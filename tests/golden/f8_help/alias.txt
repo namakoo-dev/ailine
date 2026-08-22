@@ -1,0 +1,11 @@
+usage: ailine alias [-h] {add,list,remove,undo} ...
+
+positional arguments:
+  {add,list,remove,undo}
+    add                 言い回しを登録する（例: ailine alias add 大きい順にして SORT）
+    list                登録済みの別名を一覧表示する
+    remove              言い回しを削除する
+    undo                直近の登録を取り消す
+
+options:
+  -h, --help            show this help message and exit

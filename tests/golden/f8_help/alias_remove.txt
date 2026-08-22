@@ -1,0 +1,7 @@
+usage: ailine alias remove [-h] phrase
+
+positional arguments:
+  phrase      削除する言い回し
+
+options:
+  -h, --help  show this help message and exit

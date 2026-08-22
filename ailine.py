@@ -82,6 +82,7 @@ from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 
 from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手書きしていた表示の純関数化
     render_code_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
+    render_alias_listing,   # ★ W10 便A: `ailine alias list`
     render_ops_table,
     freeform_notice_reason, render_freeform_notice_compact,   # ★ K-1（単発向けの旧 render_freeform_notice は廃止）
     render_vocab_miss_refusal,   # ★ freeform 最終決定: 単発の語彙外の断り
@@ -118,6 +119,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
     name_matches_task,   # ★ W3 改定(2026-08-20): 実在しない target が「依頼文の名指し」か
                           #   「翻訳の捏造」かの照合に、単位B の部分文字列規律を再利用する
 )
+from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/照合/保存形式（純関数）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
@@ -152,6 +154,11 @@ NOTICE_V2_TEXT = (
 VOCAB_FILE = HISTORY_DIR / "vocab.json"
 DEFAULT_VOCAB_MAX_ENTRIES = 200     # 個人利用の上限。無制限にしない
 DEFAULT_VOCAB_MAX_TERM_LEN = 40     # 語（キー）の最大長
+
+# ★ W10 便A: 別名ストア（言い回し → op 名）。vocab.json とは別ファイル
+#   （load_vocab は float 以外を黙って捨てる設計のため、op 名の文字列は同居できない
+#   ── これは vocab 側の設計を歪めない正しい判断・REVIEW-20260822-w10-architect.md 3-2）。
+ALIASES_FILE = HISTORY_DIR / "aliases.json"
 
 # ★ 誤分類の実例台帳センサ: vocab_miss と同じ需要センサ方式（記録するだけ・分析/提案/表示は
 #   作らない）。破壊の関所で N・undo の2点だけを容疑として拾う（成功 run は何も書かない）。
@@ -1467,6 +1474,119 @@ def vocab_add(term: str, value, path: Path | None = None) -> tuple:
     vocab[clean_term] = fval
     save_vocab(vocab, path)
     return True, f"登録: {clean_term} = {fval:g}"
+
+
+# ---------------------------------------------------------------------------
+# ★ W10 便A: 別名ストア（言い回し → op 名）── REVIEW-20260822-w10-architect.md 3-2/3-3/6-4・
+#   Namakoo 決裁（二段目翻訳・文字マッチ開始）に基づく前提工事。ここでは登録/照合だけを作る
+#   （翻訳経路への接続は便C。lookup_alias は作るが、どこからも呼ばない）。
+#
+#   形式: ~/.ailine/aliases.json に {"aliases": {言い回し: op名}, "order": [登録順]} の
+#   平文 JSON（vocab.json とは別ファイル・上記 ALIASES_FILE 参照）。order は undo
+#   （直近の登録の取り消し）専用 ── 機械が書く層には取り消しが要る、という6-4の決定。
+#
+#   検疫は vocab の写経（_sanitize_vocab_term を言い回しにもそのまま使う）+ op 名が
+#   OP_META に実在するかの追加チェック + 件数上限は vocab と同じ DEFAULT_VOCAB_MAX_ENTRIES
+#   を共有する（★ 別名は「事務の言葉の言い換え」で、税率のような別カテゴリの値ではない
+#   ため、上限だけ揃えて枠は分けない判断）。
+#
+#   照合（lookup_alias）は「語として含む」── 断片ガードは単位B の
+#   `_raw_target_not_embedded_in_task` と同じ判定を ailine_core/alias_store.py に写経した
+#   ものを使う（3度目の断片問題を踏まないため独立に持つ・設計ノート③）。
+# ---------------------------------------------------------------------------
+
+def load_aliases(path: Path | None = None) -> tuple:
+    """~/.ailine/aliases.json を読む。無い/壊れている/形が違う場合は空を返す
+       （★ クラッシュしない・load_vocab と同じ流儀）。(aliases dict, order list)。"""
+    p = path or ALIASES_FILE
+    if not p.is_file():
+        return {}, []
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, []
+    return alias_store.parse_aliases_json(
+        raw, lambda op: op in OP_META, DEFAULT_VOCAB_MAX_ENTRIES, DEFAULT_VOCAB_MAX_TERM_LEN)
+
+
+def save_aliases(aliases: dict, order: list, path: Path | None = None) -> None:
+    """aliases/order を ~/.ailine/aliases.json に上書き保存する。"""
+    p = path or ALIASES_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = alias_store.build_aliases_payload(aliases, order)
+    p.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def alias_add(phrase: str, op: str, path: Path | None = None) -> tuple:
+    """(ok, message)。②検疫: 言い回しの検疫（_sanitize_vocab_term 同等）・op が OP_META に
+       実在するか・件数上限（vocab と同じ DEFAULT_VOCAB_MAX_ENTRIES）。
+       既存の言い回しへの再登録（op の張り替え）は上限に関係なく可（vocab_add と同じ扱い）。"""
+    clean_phrase = _sanitize_vocab_term(phrase)
+    if clean_phrase is None:
+        return False, f"言い回し『{phrase}』は登録できません（空/制御文字/{DEFAULT_VOCAB_MAX_TERM_LEN}文字超）"
+    if op not in OP_META:
+        return False, f"op『{op}』は存在しません（実在する操作名のみ登録可。一覧: ailine ops）"
+    aliases, order = load_aliases(path)
+    if clean_phrase not in aliases and len(aliases) >= DEFAULT_VOCAB_MAX_ENTRIES:
+        return False, f"別名ストアが上限（{DEFAULT_VOCAB_MAX_ENTRIES}件）に達しています"
+    if clean_phrase in order:
+        order.remove(clean_phrase)
+    order.append(clean_phrase)   # ★ undo は order の末尾（＝最後に登録/更新された言い回し）を取り消す
+    aliases[clean_phrase] = op
+    save_aliases(aliases, order, path)
+    return True, f"登録: {clean_phrase} → {op}"
+
+
+def save_alias(phrase: str, op: str, path: Path | None = None) -> bool:
+    """★ 凍結済み検体（tests/test_alias_store.py）の契約: 戻り値は bool のみ。
+       alias_add の薄いラッパー（CLI 表示用のメッセージを捨てるだけ）。"""
+    ok, _msg = alias_add(phrase, op, path)
+    return ok
+
+
+def alias_remove(phrase: str, path: Path | None = None) -> tuple:
+    """(ok, message)。④: 登録済みの言い回しを削除する（vocab.json 側は remove を作らない
+       という5307の決定はそのまま・機械が書く別名側だけが前提が反転するので remove を持つ）。"""
+    aliases, order = load_aliases(path)
+    clean_phrase = _sanitize_vocab_term(phrase)
+    if clean_phrase is None or clean_phrase not in aliases:
+        return False, f"言い回し『{phrase}』は登録されていません"
+    del aliases[clean_phrase]
+    if clean_phrase in order:
+        order.remove(clean_phrase)
+    save_aliases(aliases, order, path)
+    return True, f"削除: {clean_phrase}"
+
+
+def alias_undo(path: Path | None = None) -> tuple:
+    """(ok, message)。④: 直近の登録（order の末尾）だけを取り消す。"""
+    aliases, order = load_aliases(path)
+    if not order:
+        return False, "取り消せる登録がありません"
+    last = order.pop()
+    aliases.pop(last, None)
+    save_aliases(aliases, order, path)
+    return True, f"取り消し: {last}"
+
+
+def lookup_alias(task: str, path: Path | None = None) -> str | None:
+    """⑤: 依頼文 task に登録済みの言い回しが「語として」含まれていれば op 名を返す
+       （slot は運ばない・戻り値は op 名の str か None だけ）。
+       断片ガード: alias_store.phrase_is_standalone_in_task（単位B と同型の判定）で、
+       他の語の断片としてしか出現しない言い回しは当てない。
+       複数の言い回しが同時に標準出現でヒットした場合は、最長のものを勝たせる
+       （短い言い回しが長い言い回しの一部になっている時、より具体的な方を優先する
+       ── ★ このタスクで足した境界検体 tests/test_alias_lookup_boundary.py 参照）。
+       ★ このタスクでは翻訳経路からは呼ばれない（接続は便C）。"""
+    if not task:
+        return None
+    aliases, _order = load_aliases(path)
+    best_phrase = None
+    for phrase in aliases:
+        if alias_store.phrase_is_standalone_in_task(phrase, task):
+            if best_phrase is None or len(phrase) > len(best_phrase):
+                best_phrase = phrase
+    return aliases[best_phrase] if best_phrase else None
 
 
 # --- ★ A': APPEND_TOTAL の倍率(factor)を LLM から切り離し、機械が確定する ------------
@@ -5330,6 +5450,32 @@ def cmd_vocab(a: argparse.Namespace) -> int:
     return 0
 
 
+# --- ★ W10 便A: 別名ストア(alias) コマンド ------------------------------------
+
+def cmd_alias(a: argparse.Namespace) -> int:
+    """`ailine alias add <言い回し> <OP>` / `alias list` / `alias remove <言い回し>` /
+       `alias undo`。cmd_vocab の様式の写経 ── ただし vocab.json 側の remove 不在の決定
+       （5307行付近のコメント）はここでは触らない: 別名は機械が書く層なので、こちらだけ
+       remove/undo（直近の登録の取り消し）を持つ（設計ノート④）。"""
+    if a.alias_cmd == "add":
+        ok, msg = alias_add(a.phrase, a.op)
+        print(render_vocab_add_result(ok, msg))
+        return 0 if ok else 1
+    if a.alias_cmd == "remove":
+        ok, msg = alias_remove(a.phrase)
+        print(render_vocab_add_result(ok, msg))
+        return 0 if ok else 1
+    if a.alias_cmd == "undo":
+        ok, msg = alias_undo()
+        print(render_vocab_add_result(ok, msg))
+        return 0 if ok else 1
+    # list
+    aliases, order = load_aliases()
+    for ln in render_alias_listing(aliases, order, ALIASES_FILE):
+        print(ln)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # run コマンド本体
 # ---------------------------------------------------------------------------
@@ -8341,6 +8487,17 @@ def build_parser() -> argparse.ArgumentParser:
     va.add_argument("value", help="値（倍率。例: 1.1）")
     vl = vsub.add_parser("list", help="登録済みの語を一覧表示する")
     v.set_defaults(func=cmd_vocab)
+
+    al = sub.add_parser("alias", help="別名（言い回し → 操作名）を編集・表示する")
+    alsub = al.add_subparsers(dest="alias_cmd", required=True)
+    ala = alsub.add_parser("add", help="言い回しを登録する（例: ailine alias add 大きい順にして SORT）")
+    ala.add_argument("phrase", help="言い回し（例: 大きい順にして）")
+    ala.add_argument("op", help="op 名（例: SORT。実在する操作名のみ・一覧: ailine ops）")
+    alsub.add_parser("list", help="登録済みの別名を一覧表示する")
+    alr = alsub.add_parser("remove", help="言い回しを削除する")
+    alr.add_argument("phrase", help="削除する言い回し")
+    alsub.add_parser("undo", help="直近の登録を取り消す")
+    al.set_defaults(func=cmd_alias)
     return ap
 
 

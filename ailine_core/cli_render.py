@@ -158,6 +158,20 @@ def render_vocab_listing(vocab: dict, vocab_file: Path) -> list:
     return lines
 
 
+# --- W10 便A: 別名ストア（言い回し → op 名）の一覧表示 --------------------------------
+
+def render_alias_listing(aliases: dict, order: list, aliases_file: Path) -> list:
+    """`ailine alias list`。空なら登録方法の案内1行だけ返す。★ vocab の一覧はキーの
+       アルファベット順（値の更新しかない=順序に意味が無い）だが、こちらは登録順
+       （undo が「直近の登録」を取り消す対象を人が確認できるように、末尾が最新）。"""
+    if not aliases:
+        return [f"（別名ストアは空。{aliases_file} に登録するか"
+                f" `ailine alias add <言い回し> <OP>` で追加）"]
+    lines = [f"別名ストア（{aliases_file}・{len(aliases)}件・登録順）:"]
+    lines.extend(f"  {phrase} → {aliases[phrase]}" for phrase in order if phrase in aliases)
+    return lines
+
+
 # --- 対応操作の一覧（★ 査定 2 本が独立に「無い」と指摘した唯一のもの） ------------------
 
 def render_ops_table(op_meta: dict, op_schema: dict, confirm_fields: dict) -> list:
