@@ -8379,7 +8379,7 @@ def _evaluate_csv(csv_path: Path) -> _CsvEvaluation:
         for col_idx, length in csv_quarantine.overlong_cells(rec.cells):
             warnings.append(f"{_csv_record_label(parsed, raw_idx, header_offset)} "
                             f"{col_idx + 1}列目: {length} 文字（Excel 上限 32,767 超）")
-    warnings.extend(csv_quarantine.detect_excel_damage(columns, classifications))
+    warnings.extend(csv_quarantine.detect_excel_damage(columns, classifications, header=parsed.header))
 
     return _CsvEvaluation(error=None, sha256=sha, encoding=enc, parsed=parsed,
                            classifications=classifications, warnings=warnings)

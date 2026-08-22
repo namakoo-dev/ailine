@@ -629,18 +629,32 @@ def compare_against_quarantine(declared: dict, out_path, *, sheet_name: str = No
 # 削らない・止めない ── 見つけたら名指しするだけ。
 # =====================================================================
 
-def detect_excel_damage(columns: list, classifications: list) -> list:
+# ★ operator9 CONFUSING（2026-08-23）: 桁数警告は「桁固定の期待を持つ列」だけに絞る。
+#   数量/単価/金額のような普通の数値列は桁数の混在が自然で、旧実装は毎回鳴っていた
+#   （オオカミ少年化 ── W10c/W10e と同じ防止思想をここにも）。桁固定を期待してよいのは
+#   見出しがコード様の語を含む列だけ。語彙は日本の帳票の見出し慣行から（凍結セットの
+#   写しではない）。手掛かりの無いコード列は沈黙する（advisory の鳴らし損ね）側に倒す。
+_CODE_HEADER_RE = re.compile(
+    r"番号|コード|ｺｰﾄﾞ|品番|型番|郵便|電話|TEL|ＴＥＬ|No\b|NO\b|Ｎｏ|ID\b|ＩＤ|CD\b|ＣＤ",
+    re.IGNORECASE)
+
+
+def detect_excel_damage(columns: list, classifications: list, header: list | None = None) -> list:
     """列（build_columns の並び）と classifications（同じ並び）から、Excel 由来の
     破壊が疑われる列を名指しする。戻り値は開示文字列のリスト（列 0 起点の番号を含む）。
-    検体: 桁数不揃いの番号列（先頭ゼロが既に失われた痕跡）・1900 年前後の日付
-    （シリアル値 0/1 起点バグの典型的な着地点）・カンマ列の裸数字（一部だけ桁区切りが
-    外れた痕跡 ── classify_column が comma_inconsistent として undecidable に落とした列）。"""
+    検体: 桁数不揃いの番号列（先頭ゼロが既に失われた痕跡・コード様の見出しの列のみ）・
+    1900 年前後の日付（シリアル値 0/1 起点バグの典型的な着地点）・カンマ列の裸数字
+    （一部だけ桁区切りが外れた痕跡 ── comma_inconsistent で undecidable に落ちた列）。
+    header: 見出し行（列と同じ並び・None なら桁数検査は全列沈黙 ── 誤爆側に倒さない）。"""
     findings = []
+    header = header or []
     for idx, (col, cls) in enumerate(zip(columns, classifications)):
         non_empty = [c for c in col if c != ""]
         if not non_empty:
             continue
-        if cls.kind == "number" and all(re.fullmatch(r"\d+", c) for c in non_empty):
+        head = header[idx] if idx < len(header) else ""
+        code_like = bool(head) and bool(_CODE_HEADER_RE.search(str(head)))
+        if code_like and cls.kind == "number" and all(re.fullmatch(r"\d+", c) for c in non_empty):
             lengths = sorted({len(c) for c in non_empty})
             if len(lengths) > 1:
                 findings.append(

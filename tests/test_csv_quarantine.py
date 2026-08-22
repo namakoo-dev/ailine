@@ -273,3 +273,24 @@ def test_undecodable_bytes_raise_explicit_error():
     raw = b"\x80\x81"
     with pytest.raises(cq.UndecidableEncodingError):
         cq.detect_encoding(raw)
+
+
+# --- operator9 CONFUSING の修正（2026-08-23）: 桁数警告のオオカミ少年化 -------------
+# 実測: 数量 5/12/3/100・単価 1000/850/15000/50 のような普通の数値列で毎回鳴っていた。
+# 絞り: 桁固定の期待を持つのは「コード様の見出し」（番号/コード/品番/No/ID/郵便/TEL 等）
+# の列だけ。見出しにその手掛かりが無い数値列では桁数の混在は自然 ── 鳴らさない。
+
+def test_digit_variance_silent_on_ordinary_numeric_columns():
+    from ailine_core import csv_quarantine as cq
+    cols = [["5", "12", "3", "100"], ["1000", "850", "15000", "50"], ["5000", "10200", "45000", "5000"]]
+    cls = [cq.classify_column(c) for c in cols]
+    findings = cq.detect_excel_damage(cols, cls, header=["数量", "単価", "金額"])
+    assert [f for f in findings if "桁数" in f] == [], f"普通の数値列で鳴った: {findings}"
+
+
+def test_digit_variance_fires_on_code_like_header_with_varying_lengths():
+    from ailine_core import csv_quarantine as cq
+    cols = [["1234567", "234567", "1234567"]]   # 郵便 7 桁のうち 1 件だけ 6 桁 = 0 落ちの痕跡
+    cls = [cq.classify_column(c) for c in cols]
+    findings = cq.detect_excel_damage(cols, cls, header=["郵便番号"])
+    assert any("桁数" in f for f in findings), f"コード様の列で鳴らない: {findings}"
