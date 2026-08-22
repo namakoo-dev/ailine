@@ -8193,12 +8193,12 @@ def build_parser() -> argparse.ArgumentParser:
     cv.set_defaults(func=cmd_run_csv)
 
     sc = sub.add_parser("scan", help="フォルダ内の複数ブックを棚卸しする（書き込みゼロ）")
-    sc.add_argument("folder", help="対象フォルダ（直下の .xlsx / .xls のみ・サブフォルダは見ない）")
+    sc.add_argument("folder", help="対象フォルダ（直下の .xlsx を処理・.xls/.csv は数えて名指しで断る・サブフォルダは見ない）")
     sc.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     sc.set_defaults(func=cmd_scan)
 
     st = sub.add_parser("stack", help="フォルダ内の複数ブックを縦積みする（新ブック + 出所列）")
-    st.add_argument("folder", help="対象フォルダ（直下の .xlsx / .xls のみ・サブフォルダは見ない）")
+    st.add_argument("folder", help="対象フォルダ（直下の .xlsx を処理・.xls/.csv は数えて名指しで断る・サブフォルダは見ない）")
     st.add_argument("--out", required=True, help="出力ブックのパス")
     st.add_argument("--overwrite", action="store_true",
                     help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
