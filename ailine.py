@@ -88,7 +88,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
 )
-from ailine_core.filetypes import BOOKLIKE_SUFFIXES   # ★ 拡張子判定の登録簿（単発の定数のみ import）
+from ailine_core.filetypes import BOOKLIKE_SUFFIXES, CSV_SUFFIX   # ★ 拡張子判定の登録簿（単発の定数のみ import）
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
@@ -97,6 +97,7 @@ from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
+from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -5350,6 +5351,11 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
     #   「Excel で開かれています」という嘘の診断を返していた（凍結検体あり）。
     if Path(a.book).is_dir():
         return cmd_run_folder(a)
+    # ★ CSV 検疫接続（DESIGN-20260821-multifile.md「CSV 検疫 設計 v2」B・暗黙前段）:
+    #   .csv は既存の1冊機械（正規化・LO 適用・normalize_book/basrun_apply）に絶対に
+    #   渡さない ── フォルダ分岐と同格の、ここが一番最初の分かれ目。
+    if Path(a.book).is_file() and Path(a.book).suffix.lower() == CSV_SUFFIX:
+        return _cmd_run_csv_prestage(a)
     maybe_show_notice_v2()   # ★ W10a 項目2: 既定変更の一度きり告知（run の一番最初）
 
     book = Path(a.book).resolve()
@@ -7123,6 +7129,18 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     return 0
 
 
+def _unreadable_book_for_match_message(path: Path) -> str:
+    """M3 で1冊が読めなかった時の断り文言。★ 検体④の直し（2026-08-22）: .csv は
+       openpyxl で読めないので必ずここに来るが、旧文言「.xlsx 形式か確認してください」は
+       .csv に対する誤誘導（.csv は形式が壊れているのではなく、そもそも別の入口が要る）。
+       csv の扱い（`ailine csv`）へ名指しで誘導する。"""
+    if path.suffix.lower() == CSV_SUFFIX:
+        return (f"？ {path.name} は csv 形式なので、このままでは照合できません。"
+                f"先に `ailine csv {path.name}` で xlsx に変換してから、"
+                "その xlsx 同士（または xlsx と csv 変換後のファイル）で照合してください。")
+    return f"？ {path.name} を読めませんでした。壊れていないか、.xlsx 形式か確認してください。"
+
+
 def _peek_match_book(path: Path):
     """M3 専用の軽い読み: 見出し行推定（既存の StructDump ヒューリスティクスを1回だけ）+
        全データ行の読み取り。戻り値 (header_row, headers, rows) ── 読めなければ
@@ -7206,11 +7224,11 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
 
     header_row_a, headers_a, rows_a = _peek_match_book(book_a)
     if headers_a is None:
-        print(f"？ {book_a.name} を読めませんでした。壊れていないか、.xlsx 形式か確認してください。")
+        print(_unreadable_book_for_match_message(book_a))
         return 3
     header_row_b, headers_b, rows_b = _peek_match_book(book_b)
     if headers_b is None:
-        print(f"？ {book_b.name} を読めませんでした。壊れていないか、.xlsx 形式か確認してください。")
+        print(_unreadable_book_for_match_message(book_b))
         return 3
 
     # ★ 列対応（機械3段・LLM ゼロ）: 依頼文の名指し → 型で絞る → 曖昧なら exit 3（候補つき）。
@@ -7380,6 +7398,275 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
     return 0
 
 
+def _own_csv_output_status(path: Path, source_sha256: str) -> tuple:
+    """path が①ailine 産か（mark）②CSV 検疫の自分の前回出力で、かつ元 CSV の sha256 が
+       今回と完全一致するか（same_source）を返す（_own_extract_output_status と同じ線・
+       CSV は「条件」の代わりに「どの原本から作ったか」を同一性の根拠にする）。"""
+    mark = multifile_stack.own_output_mark(path)
+    if mark != csv_quarantine.CREATOR_MARK:
+        return mark, False
+    _creator, description = xml_readback.read_core_properties(path)
+    try:
+        cond = json.loads(description) if description else None
+    except (TypeError, ValueError):
+        cond = None
+    same_source = (isinstance(cond, dict) and cond.get("tool") == "ailine"
+                   and cond.get("kind") == "csv" and cond.get("source_sha256") == source_sha256)
+    return mark, same_source
+
+
+@dataclass
+class _CsvEvaluation:
+    """CSV 検疫の評価結果（書き込みより前・出力パスに依存しない）。
+       error が None でなければ硬い拒否（行数上限超過・文字コード判定不能）── 呼び出し側は
+       書き込みに進まず名指しで断る。"""
+    error: str = None
+    sha256: str = None
+    encoding: object = None
+    parsed: object = None
+    classifications: list = None
+    warnings: list = None
+
+
+def _csv_record_label(parsed, raw_idx: int, header_offset: int) -> str:
+    """レコード番号 + 物理行範囲の名指し（検分の名指し用）。raw_idx はヘッダを含む
+       物理レコード列全体に対する0起点（csv_quarantine.ParseResult の契約どおり）。"""
+    if header_offset and raw_idx == 0:
+        return "見出し行"
+    data_idx = raw_idx - header_offset
+    if parsed.records and 0 <= data_idx < len(parsed.records):
+        rec = parsed.records[data_idx]
+        return f"レコード{raw_idx + 1}（物理 {rec.first_line}〜{rec.last_line} 行）"
+    return f"レコード{raw_idx + 1}"
+
+
+def _format_offending_records(parsed, header_offset: int, rec_indices: list, col_idx: int) -> str:
+    """検分の差し戻し（2026-08-22）: undecidable 列の ⚠ を列名だけで終わらせず、
+       原因セルのレコード（物理行）と値まで名指しする（憲法①「最悪でも修正箇所に
+       誘導」）。rec_indices は csv_quarantine.undecidable_offending_indices が返す
+       列内 0 起点 index（= parsed.records の index と同じ空間）。
+       先頭3件+『ほかN件』で列挙を打ち切る（rec_indices が空なら空文字を返す）。"""
+    if not rec_indices:
+        return ""
+    shown = rec_indices[:3]
+    parts = []
+    for rec_idx in shown:
+        raw_idx = rec_idx + header_offset
+        label = _csv_record_label(parsed, raw_idx, header_offset)
+        rec = parsed.records[rec_idx]
+        value = rec.cells[col_idx] if col_idx < len(rec.cells) else ""
+        parts.append(f"{label}: {value}")
+    text = "、".join(parts)
+    remaining = len(rec_indices) - len(shown)
+    if remaining > 0:
+        text += f"、ほか{remaining}件"
+    return f"（該当: {text}）"
+
+
+def _evaluate_csv(csv_path: Path) -> _CsvEvaluation:
+    """`ailine csv` / run 暗黙前段が共有する検疫パイプライン（書き込みより前の段）。
+       ★ 行数上限は decode より前に数える（csv_quarantine.MAX_ROWS・設計 v2 バー）。
+       ★ ここは ailine_core/csv_quarantine.py の決定論の関数を呼ぶだけ ── LLM は
+       一切呼ばない（憲法: LLM はデータに1バイトも触らない）。"""
+    raw = csv_path.read_bytes()
+    line_count = raw.count(b"\n") + 1
+    if line_count > csv_quarantine.MAX_ROWS:
+        return _CsvEvaluation(
+            error=f"行数が多すぎます（目安 {line_count} 行 > 上限 {csv_quarantine.MAX_ROWS} 行）。"
+                  "ファイルを分割してから実行してください。")
+    sha = csv_quarantine.sha256_bytes(raw)
+    try:
+        enc = csv_quarantine.detect_encoding(raw)
+    except csv_quarantine.UndecidableEncodingError as e:
+        return _CsvEvaluation(error=str(e), sha256=sha)
+    text = raw.decode(enc.encoding)
+    parsed = csv_quarantine.parse_csv(text, has_header=True, source_sha256=sha)
+    columns = csv_quarantine.build_columns(parsed.header, parsed.records)
+    classifications = [csv_quarantine.classify_column(col) for col in columns]
+
+    warnings = []
+    if enc.ambiguous:
+        warnings.append("文字コード: utf-8 でも cp932 でも読めました（両方成立・utf-8 で続行）")
+    for rename in parsed.header_renames:
+        warnings.append(f"見出し『{rename.original}』が重複していたため"
+                        f"『{rename.renamed}』に機械リネームしました")
+    header_offset = 1 if parsed.header else 0
+    for raw_idx, expected, actual in parsed.column_count_mismatches:
+        warnings.append(f"{_csv_record_label(parsed, raw_idx, header_offset)}: "
+                        f"列数が {actual} 列（期待 {expected} 列）")
+    for raw_idx in parsed.unterminated_quote_records:
+        warnings.append(f"{_csv_record_label(parsed, raw_idx, header_offset)}: "
+                        "引用符が閉じていない疑いがあります")
+    for i, cls in enumerate(classifications):
+        if cls.warn:
+            name = parsed.header[i] if i < len(parsed.header) else f"列{i + 1}"
+            reason_txt = "・".join(_CSV_REASON_LABELS.get(r, r) for r in cls.reasons)
+            offending = csv_quarantine.undecidable_offending_indices(columns[i], cls.reasons)
+            detail = _format_offending_records(parsed, header_offset, offending, i)
+            warnings.append(f"列『{name}』: 判定不能（{reason_txt}）── "
+                            f"文字列として保持し、この列に判定を出しません{detail}")
+    for rec_idx, rec in enumerate(parsed.records):
+        raw_idx = rec_idx + header_offset
+        for col_idx, code in csv_quarantine.control_char_cells(rec.cells):
+            warnings.append(f"{_csv_record_label(parsed, raw_idx, header_offset)} "
+                            f"{col_idx + 1}列目: 制御文字 {code} を含むため除去しました")
+        for col_idx, length in csv_quarantine.overlong_cells(rec.cells):
+            warnings.append(f"{_csv_record_label(parsed, raw_idx, header_offset)} "
+                            f"{col_idx + 1}列目: {length} 文字（Excel 上限 32,767 超）")
+    warnings.extend(csv_quarantine.detect_excel_damage(columns, classifications))
+
+    return _CsvEvaluation(error=None, sha256=sha, encoding=enc, parsed=parsed,
+                           classifications=classifications, warnings=warnings)
+
+
+def _write_csv_output(evaluation: _CsvEvaluation, out_path: Path) -> tuple:
+    """検疫結果を xlsx へ書き、事後条件（compare_against_quarantine）を検算する。
+       own 印（csv_quarantine.CREATOR_MARK）と機械可読の条件（kind:"csv"・
+       source_sha256）を docProps へ焼く（own_output_mark 経路が使う・stack/extract と
+       同じ配線）。"""
+    description = json.dumps({"tool": "ailine", "kind": "csv", "version": 1,
+                              "source_sha256": evaluation.sha256}, ensure_ascii=False)
+    write_result = csv_quarantine.write_quarantined_xlsx(
+        evaluation.parsed, evaluation.classifications, out_path,
+        has_header=True, creator=csv_quarantine.CREATOR_MARK, description=description)
+    compare_result = csv_quarantine.compare_against_quarantine(write_result.declared, out_path)
+    return write_result, compare_result
+
+
+# ★ 列判定の開示語彙（tests/test_csv_truth_table.py の reason コード → 人の言葉）。
+#   凍結対象ではない（人間向けの言い回しであって規則そのものではない）── 語彙を増やす時は
+#   ここへ足すだけでよい（未知のコードはそのままの文字列を出す・fail-open で開示は続ける）。
+_CSV_REASON_LABELS = {
+    "leading_zero": "先頭ゼロ",
+    "formula_head": "先頭が = か @（数式のような書式）",
+    "digit_overflow": "16桁以上（Excel の精度限界を超える）",
+    "surrounding_space": "前後に空白",
+    "fullwidth_digit": "全角数字を含む",
+    "accounting_negative": "会計負数の書式（△ か括弧）の可能性",
+    "empty_column": "全セル空欄",
+    "excel_error_token": "Excel エラー値のような文字列",
+    "wareki_out_of_scope": "和暦（対象外）",
+    "comma_grouped": "カンマ区切りの桁区切り",
+    "eight_digit_maybe_date": "8桁の数字（日付の可能性あり・数値のまま保持）",
+    "mixed_confident": "日付と数値が同居",
+    "calendar_invalid": "暦として成立しない日付形式",
+    "comma_inconsistent": "カンマ区切りの有無が列内で不揃い",
+}
+
+
+def _csv_kind_label(cls) -> str:
+    reason_txt = "・".join(_CSV_REASON_LABELS.get(r, r) for r in cls.reasons)
+    if cls.kind == "number":
+        return "数値として読み取り" + (f"（{reason_txt}）" if reason_txt else "")
+    if cls.kind == "date":
+        return "日付として読み取り"
+    if cls.kind == "string":
+        return "文字列として保持" + (f"（{reason_txt}）" if reason_txt else "")
+    return f"判定不能・文字列として保持（{reason_txt}）"
+
+
+def _render_csv_report(csv_path: Path, out_path: Path, evaluation: _CsvEvaluation,
+                       write_result, compare_result) -> list:
+    """`ailine csv` の人間向け報告（REVIEW-20260822-csv-architect.md §『✓ 文例』の凍結形）。
+       ★ 決裁③(2026-08-22): ⚠ が1件でもあれば ✓ でなく △ を名乗る。csv の主張は Claim
+       機構と別物なので、Claim を無理に通さず文言だけ △ 系に揃える。
+       ★「正しく読み込みました」とは言わない ── 言えるのは転送段の宣言（欠落/不一致/余剰の
+       3計数）+ 列ごとの判定開示 + 文字列保持列は Σ 検算していない開示 + 原本 sha 一致だけ。"""
+    lines = [f"■ ailine csv  file={csv_path}"]
+    enc = evaluation.encoding
+    enc_note = "（utf-8/cp932 どちらでも読めたため utf-8 で続行）" if enc.ambiguous else ""
+    lines.append(f"文字コード: {enc.encoding} で読みました{enc_note}")
+    lines.append(f"出力先: {out_path}")
+    warn_count = len(evaluation.warnings) + len(write_result.removed_control_chars)
+    claim = (f"読み取った {write_result.rows_written} 行×{write_result.cols_written} 列を"
+             f" 1 セルも変えずに書いた（欠落{len(compare_result.missing)}・"
+             f"不一致{len(compare_result.mismatched)}・余剰{len(compare_result.surplus)}）")
+    if warn_count:
+        lines.append(f"△ {claim} ── ただし ⚠ {warn_count} 件を先に確認してください")
+    else:
+        lines.append(f"✓ {claim}")
+    header = evaluation.parsed.header
+    string_kept = []
+    for i, cls in enumerate(evaluation.classifications):
+        name = header[i] if i < len(header) else f"列{i + 1}"
+        lines.append(f"  {name}: {_csv_kind_label(cls)}")
+        if cls.kind in ("string", "undecidable"):
+            string_kept.append(name)
+    if string_kept:
+        lines.append(f"（{'、'.join(string_kept)} は文字列として保持したため、"
+                     "Σ で検算していません）")
+    for w in evaluation.warnings:
+        lines.append(f"  ⚠ {w}")
+    for row, col, code in write_result.removed_control_chars:
+        lines.append(f"  ⚠ {row}行目{col}列目: 制御文字 {code} を除去して書きました")
+    lines.append(f"原本 CSV: 変更なし（sha256 {evaluation.sha256} 一致）")
+    return lines
+
+
+def cmd_run_csv(a: argparse.Namespace) -> int:
+    """`ailine csv <file>`: CSV 検疫の明示入口（設計 v2「入口2つ」の②・7B ゼロ・0秒）。
+       DESIGN-20260821-multifile.md「CSV 検疫 設計 v2」・REVIEW-20260822-csv-architect.md。
+       ★ normalize_book/basrun_apply のどちらも呼ばない（LO の CSV インポートが 0 落ちの
+       発生源・実測 0123→123 ── この経路は LO に一切触れない・構造の番人）。"""
+    csv_path = Path(a.file).resolve()
+    if not csv_path.exists():
+        print(f"文書が無い: {csv_path}")
+        return 1
+    evaluation = _evaluate_csv(csv_path)
+    if evaluation.error:
+        print(f"× {evaluation.error}")
+        return 3
+    out = csv_path.with_suffix(".xlsx")
+    if out.exists():
+        mark, same_source = _own_csv_output_status(out, evaluation.sha256)
+        if not (mark == csv_quarantine.CREATOR_MARK and same_source):
+            return _refuse_output_conflict(out, mark)
+    write_result, compare_result = _write_csv_output(evaluation, out)
+    for ln in _render_csv_report(csv_path, out, evaluation, write_result, compare_result):
+        print(ln)
+    return 0
+
+
+def _cmd_run_csv_prestage(a: argparse.Namespace) -> int:
+    """`ailine run <file.csv> "タスク"`: 設計 v2「入口2つ」の①（暗黙前段）── 検疫して
+       <csv_stem>.xlsx を作り、以後は既存の xlsx 機械（_cmd_run_body）へ a.book を
+       差し替えて渡す。
+       ★ .csv がこの先（normalize_book/basrun_apply）へ絶対に渡らない構造的保証: ここで
+       作るのは実在する普通の .xlsx ファイルであり、以後の経路はもともと .xlsx しか
+       受け取らない ── 「.csv」という概念自体がここで完全に消える。
+       ★ 決裁: ⚠ が1件でも出たら続行しない（undecidable を含むデータに op を適用するのは
+       第一波の外・--force 系の逃げ道は作らない）。"""
+    csv_path = Path(a.book).resolve()
+    evaluation = _evaluate_csv(csv_path)
+    if evaluation.error:
+        print(f"× {evaluation.error}")
+        return 3
+    out = csv_path.with_suffix(".xlsx")
+    if out.exists():
+        mark, same_source = _own_csv_output_status(out, evaluation.sha256)
+        if not (mark == csv_quarantine.CREATOR_MARK and same_source):
+            return _refuse_output_conflict(out, mark)
+    write_result, compare_result = _write_csv_output(evaluation, out)
+    warn_count = len(evaluation.warnings) + len(write_result.removed_control_chars)
+    if warn_count or not compare_result.ok:
+        print(f"■ ailine run（CSV 検疫）  file={csv_path}")
+        print(f"⚠ {csv_path.name} の読み取りに確認事項があるため、続行しません"
+              f"（原本は無変更・検疫結果は {out.name} として書きました）。")
+        for w in evaluation.warnings:
+            print(f"  ⚠ {w}")
+        for row, col, code in write_result.removed_control_chars:
+            print(f"  ⚠ {row}行目{col}列目: 制御文字 {code} を除去して書きました")
+        if not compare_result.ok:
+            print(f"  ⚠ 転送の検算で 欠落{len(compare_result.missing)}・"
+                  f"不一致{len(compare_result.mismatched)}・余剰{len(compare_result.surplus)} を検出しました")
+        print(f"（内容を確認し、『ailine run {out.name} <依頼>』のように"
+              "xlsx を直接指定してやり直してください）")
+        return 3
+    print(f"（{csv_path.name} を検疫し、{out.name} として書きました。以後はこのファイルに対して実行します）")
+    a.book = str(out)
+    return _cmd_run_body(a)
+
+
 def cmd_stack(a: argparse.Namespace) -> int:
     """`ailine stack <folder> --out <path>`: M1書き ── 縦積み（UNION ALL）+ 出所列。
        DESIGN-20260821-multifile.md v2 §1(M1書き)・v2.1(単位L)。列挙・照合・合計行の識別は
@@ -7388,7 +7675,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
        ailine_core/stack.py）。★ workdir は tempfile に作り、最後に out へ移す。"""
     folder = Path(a.folder).resolve()
     out = Path(a.out).resolve()
-    candidates, _excluded = multifile.classify_folder_contents(folder)
+    candidates, excluded = multifile.classify_folder_contents(folder)
 
     # ★ 自己参照除外（V6・architect 致命2 で拡張）: 入力フォルダ内の ailine 産の出力
     #   （out と同じパスに限らず、種類（stack/extract 等）も問わない）は二重計上を防ぐため
@@ -7409,7 +7696,8 @@ def cmd_stack(a: argparse.Namespace) -> int:
                   "files": [], "skipped": [{"name": p.name, "reason": "旧形式(.xls)または読み込み失敗"}
                                             for p in candidates],
                   "sums": {}, "excluded_detail": [], "mismatches": [], "col_a_warnings": [],
-                  "sheet_fallbacks": [], "self_excluded": self_excluded, "rebuilt_own_output": False}
+                  "sheet_fallbacks": [], "self_excluded": self_excluded, "rebuilt_own_output": False,
+                  "excluded": excluded}
         if a.json:
             print(json.dumps(_stack_json(result), ensure_ascii=False))
         else:
@@ -7586,7 +7874,8 @@ def cmd_stack(a: argparse.Namespace) -> int:
               "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,
               "col_a_warnings": col_a_warnings, "sheet_fallbacks": sheet_fallbacks,
               "self_excluded": self_excluded, "total_word_warnings": total_word_warnings,
-              "rebuilt_own_output": rebuilt_own_output, "collision_notice": collision_notice}
+              "rebuilt_own_output": rebuilt_own_output, "collision_notice": collision_notice,
+              "excluded": excluded}
     if a.json:
         print(json.dumps(_stack_json(result), ensure_ascii=False))
         return 0
@@ -7710,6 +7999,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     o = sub.add_parser("ops", help="頼める操作の一覧を表示する（何ができるか）")
     o.set_defaults(func=cmd_ops)
+
+    cv = sub.add_parser("csv", help="CSV を検疫して隣に xlsx を作る（0落ち等を守って壊さず開ける形に）")
+    cv.add_argument("file", help="対象の .csv ファイル")
+    cv.set_defaults(func=cmd_run_csv)
 
     sc = sub.add_parser("scan", help="フォルダ内の複数ブックを棚卸しする（書き込みゼロ）")
     sc.add_argument("folder", help="対象フォルダ（直下の .xlsx / .xls のみ・サブフォルダは見ない）")

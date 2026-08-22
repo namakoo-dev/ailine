@@ -212,6 +212,8 @@ def render_scan_report(folder_label: str, result: dict) -> list:
         lines.append(f"対象外: 一時ファイル {excluded['temp']} 件（~$ で除外）")
     if excluded.get("subdirs"):
         lines.append(f"対象外: サブフォルダ {excluded['subdirs']} 件（中は見ていません）")
+    if excluded.get("csv"):
+        lines.append(f"対象外: .csv {excluded['csv']} 件（1本ずつなら `ailine csv` で扱ってください）")
     for f in files:
         if f["status"] == "取れなかった":
             lines.append(f"  ⚠ {f['name']}: 取れなかった（{f['reason']}）")
@@ -248,6 +250,9 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
         lines.append(f"（自分の出力 {names} を入力から除外しました）")
     if result.get("collision_notice"):
         lines.append(f"（{result['collision_notice']}）")
+    csv_excluded = (result.get("excluded") or {}).get("csv")
+    if csv_excluded:
+        lines.append(f"対象外: .csv {csv_excluded} 件（1本ずつなら `ailine csv` で扱ってください）")
     lines.append(f"{result['denominator']} ファイル中 {result['stacked_files']} 積んだ")
     for f in result.get("skipped", ()):
         lines.append(f"  ⚠ {f['name']}: 積めなかった（{f['reason']}）")

@@ -34,7 +34,11 @@ TOLERANCE = total_row.TOLERANCE
 #   足す（片配線を作らない）。match 用の検算（_verify_match）はまだ無く、この集合に
 #   入れても description ガード（下の verify_output）が無ければ {"unmarked": True} のまま
 #   ── 配線は次波（M3 本体）。
-_CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match"}
+#   ★ CSV 検疫接続（2026-08-22）: 同じ理由で "ailine csv" も足す（stack.CREATOR_MARKS と
+#   同期・tests/test_stack_e2e.py の番人）。独立検算（csv kind 専用の verify）はまだ無い
+#   ── 下の verify_output は creator=="ailine csv" を {"unsupported": ...} で正直に返すだけ
+#   （{"unmarked": True} に混ぜて「他人のファイル」と誤判定しない、が今回配線する範囲）。
+_CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv"}
 
 
 def fmt_num(v) -> str:
@@ -200,6 +204,12 @@ def verify_output(out_path, src_folder) -> dict:
     if creator == "ailine match":
         return {"unsupported": "照合出力の検算には原本2冊の指定が必要です"
                                 "（`ailine verify <出力> <元A> <元B>` の形で実行してください）。"}
+    if creator == "ailine csv":
+        # ★ CSV 検疫接続（2026-08-22・次便）: 独立の検算はまだ無い。{"unmarked": True} に
+        #   混ぜると「ailine の印が無い人のファイル」と誤って言うことになる（own 印は
+        #   ある）ので、{"unsupported": ...} で正直に区別する。
+        return {"unsupported": "CSV 検疫の出力は `ailine csv <元のcsv>` を再実行して"
+                                "確認してください（独立の検算はまだ実装していません）。"}
     if creator in _CREATOR_MARKS and description:
         try:
             cond = json.loads(description)

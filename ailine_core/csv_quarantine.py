@@ -43,6 +43,20 @@ import openpyxl
 
 from ailine_core import xml_readback
 
+# ★ 書き手の印。ailine_core/stack.py の CREATOR_MARKS/KIND_SIGNATURES と
+#   ailine_core/verify.py の _CREATOR_MARKS に同期して足す（tests/test_stack_e2e.py の
+#   同期番人）。CSV 由来の列見出しは任意のため、stack/extract のような末尾2列の
+#   出所列署名は構造的に持てない ── 署名判定は docProps の description（kind:"csv"）で行う
+#   （ailine.py 側の own_output_mark 経路が使う）。
+CREATOR_MARK = "ailine csv"
+
+# ★ 行数上限（検疫パイプラインの受理上限・ingestion cap）。ailine.py の MAX_ROWS(1000) とは
+#   別物 ── あちらは単一ブック run の op 適用時の表示/検証の切り詰め上限で、こちらは
+#   CSV を読む/書く/読み戻す/比較する一連の処理全体の受理上限。実測（設計 v2 バー）:
+#   50,000 行×20 列で 書き6.6s+LO 5.6s(この経路は無関係)+readback 12.8s+比較 0.3s ≈ 30s
+#   （LO を経由しない ailine csv 経路はさらに速い）。安全側に 50,000 行を上限とする。
+MAX_ROWS = 50_000
+
 # =====================================================================
 # 文字コード検出（BOM 最優先 → UTF-8 → cp932 の順・実測根拠は真理値表 ENC_TRUTH）
 # =====================================================================
@@ -261,6 +275,44 @@ def classify_column(cells) -> ColumnClassification:
     return ColumnClassification(kind="string", reasons=sorted(disclose), warn=False)
 
 
+def undecidable_offending_indices(cells: list, reasons: list) -> list:
+    """kind=="undecidable" の列について、⚠ が名指しすべき「原因セル」の位置
+    （0 起点・cells 全体に対する index）を reasons 別に特定する（憲法①「最悪でも
+    修正箇所に誘導」── 列全体でなくセルまで絞る）。一意に決まらない場合は
+    「疑わしい方」を返す:
+      calendar_invalid    日付の形はしているが暦として成立しないセル
+      comma_inconsistent  列の多数派の形（カンマ区切り or 素の桁数<=3）に合わないセル
+      mixed_confident     少数派クラス（数値/日付のうち件数が少ない方）のセル
+    reasons に該当が無ければ空リスト（呼び出し側は開示を省略する）。"""
+    non_empty_idx = [i for i, c in enumerate(cells) if c != ""]
+    if "calendar_invalid" in reasons:
+        out = []
+        for i in non_empty_idx:
+            m = _date_shape_match(cells[i])
+            if m is not None and not _valid_date_from_match(m):
+                out.append(i)
+        return out
+    if "comma_inconsistent" in reasons:
+        out = []
+        for i in non_empty_idx:
+            c = cells[i]
+            if "," in c:
+                if not _COMMA_GROUP_RE.match(c):
+                    out.append(i)
+            else:
+                n = _digit_run_length(c) or 0
+                if n > 3:
+                    out.append(i)
+        return out
+    if "mixed_confident" in reasons:
+        num_idx = [i for i in non_empty_idx if _NUMBER_RE.match(cells[i])]
+        date_idx = [i for i in non_empty_idx
+                   if _date_shape_match(cells[i]) is not None
+                   and _valid_date_from_match(_date_shape_match(cells[i]))]
+        return num_idx if len(num_idx) <= len(date_idx) else date_idx
+    return []
+
+
 # =====================================================================
 # CSV パース（csv.reader ベース・物理行範囲つき・重複ヘッダ機械リネーム）
 # =====================================================================
@@ -433,7 +485,8 @@ class WriteResult:
 
 
 def write_quarantined_xlsx(parsed: ParseResult, classifications: list, out_path,
-                            *, has_header: bool = True) -> WriteResult:
+                            *, has_header: bool = True, creator: str = None,
+                            description: str = None) -> WriteResult:
     """parsed（parse_csv の結果）と classifications（列 0 起点対応の
     ColumnClassification の並び）に従って openpyxl で xlsx を書く。
 
@@ -444,8 +497,16 @@ def write_quarantined_xlsx(parsed: ParseResult, classifications: list, out_path,
       save が落ちる）。除去した事実は removed_control_chars に名指しで残す。
     ★ undecidable 分類の列も string と同じく文字列保持で書く（⚠ は列の判定に
       付くのであって、セルの書き方を変える理由ではない ── 「壊さず持つ」）。
+    ★ creator/description は省略可（既定 None＝従来どおり openpyxl 既定値のまま）。
+      呼び出し側（ailine.py cmd_run_csv）が own 印（CREATOR_MARK）と機械可読の条件
+      （kind:"csv"・source_sha256）を焼く時だけ渡す ── own_output_mark 経路が
+      「自分の前回出力か」を判定する材料になる（stack/extract と同じ配線）。
     """
     wb = openpyxl.Workbook()
+    if creator is not None:
+        wb.properties.creator = creator
+    if description is not None:
+        wb.properties.description = description
     ws = wb.active
     declared: dict = {}
     removed: list = []
@@ -559,3 +620,45 @@ def compare_against_quarantine(declared: dict, out_path, *, sheet_name: str = No
     surplus = [(r, c, v) for (r, c), v in grid.items() if (r, c) not in declared]
 
     return CompareResult(missing=missing, mismatched=mismatched, surplus=surplus)
+
+
+# =====================================================================
+# Excel 破壊済み検出（設計 v2「壊れた後にも言える唯一の機能」── この CSV 自体が
+# 既に Excel の 0 落ち等を経由して壊れた痕跡を、値の形から**疑いとして**告知する。
+# ★ この module の他の判定と違い確信は持てない（見えているのは壊れた後の残骸だけ）。
+# 削らない・止めない ── 見つけたら名指しするだけ。
+# =====================================================================
+
+def detect_excel_damage(columns: list, classifications: list) -> list:
+    """列（build_columns の並び）と classifications（同じ並び）から、Excel 由来の
+    破壊が疑われる列を名指しする。戻り値は開示文字列のリスト（列 0 起点の番号を含む）。
+    検体: 桁数不揃いの番号列（先頭ゼロが既に失われた痕跡）・1900 年前後の日付
+    （シリアル値 0/1 起点バグの典型的な着地点）・カンマ列の裸数字（一部だけ桁区切りが
+    外れた痕跡 ── classify_column が comma_inconsistent として undecidable に落とした列）。"""
+    findings = []
+    for idx, (col, cls) in enumerate(zip(columns, classifications)):
+        non_empty = [c for c in col if c != ""]
+        if not non_empty:
+            continue
+        if cls.kind == "number" and all(re.fullmatch(r"\d+", c) for c in non_empty):
+            lengths = sorted({len(c) for c in non_empty})
+            if len(lengths) > 1:
+                findings.append(
+                    f"列{idx + 1}: 桁数がバラバラな番号（{lengths} 桁混在）── "
+                    "既に先頭ゼロが失われている可能性があります"
+                )
+        if cls.kind == "date":
+            for c in non_empty:
+                m = _date_shape_match(c)
+                if m and m.group(1) in ("1899", "1900"):
+                    findings.append(
+                        f"列{idx + 1}: {c} が 1900 年前後の日付です ── "
+                        "Excel のシリアル値 0/1 起点バグで生じた日付の可能性があります"
+                    )
+                    break
+        if cls.kind == "undecidable" and "comma_inconsistent" in cls.reasons:
+            findings.append(
+                f"列{idx + 1}: 桁区切りカンマが一部のセルにしか無い"
+                "（Excel で一部だけ書式が外れた可能性があります）"
+            )
+    return findings

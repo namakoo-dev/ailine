@@ -28,3 +28,7 @@ SCAN_CANDIDATE_SUFFIXES = {".xlsx", ".xls"}
 # 照合のいずれも「開ける形式か」の判定はこの1値との一致で行う（.xls はここで弾かれ
 # 「旧形式(.xls)」として報告される）。
 OPENPYXL_READABLE_SUFFIX = ".xlsx"
+
+# ailine.py の `_cmd_run_body`（run の暗黙前段への早期分岐）・`_unreadable_book_for_match_message`
+# （M3 の誤誘導修正）が使う、CSV 検疫（ailine_core/csv_quarantine.py）の対象拡張子。
+CSV_SUFFIX = ".csv"

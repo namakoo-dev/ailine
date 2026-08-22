@@ -12,7 +12,7 @@ from pathlib import Path
 
 import openpyxl
 
-from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX, SCAN_CANDIDATE_SUFFIXES
+from ailine_core.filetypes import CSV_SUFFIX, OPENPYXL_READABLE_SUFFIX, SCAN_CANDIDATE_SUFFIXES
 
 _TEMP_PREFIX = "~$"                      # Excel の一時ファイル（開いている間だけ現れる隣接ファイル）
 _MAX_HEADER_COLS = 200                   # 見出し行を読む安全上限（ailine.py の MAX_COLS とは独立）
@@ -20,11 +20,16 @@ _MAX_HEADER_COLS = 200                   # 見出し行を読む安全上限（a
 
 def classify_folder_contents(folder: Path):
     """folder 直下（サブフォルダの中は見ない）を分類する。
-       戻り値: (candidates: 名前順の Path リスト, excluded: {"temp": n, "subdirs": n})。
+       戻り値: (candidates: 名前順の Path リスト, excluded: {"temp": n, "subdirs": n, "csv": n})。
        ★ 分母そのものが検証対象（V7）── ~$ 一時ファイルとサブフォルダは対象外として数える
-       （1件以上あれば呼び出し側が1行ずつ開示する）。その他の拡張子は黙って無視してよい。"""
+       （1件以上あれば呼び出し側が1行ずつ開示する）。
+       ★ CSV 検疫接続（2026-08-22・設計 v2「フォルダ実行」節）: .csv は候補にしない点は
+       変わらない（1本ずつ `ailine csv` で扱う対象）が、以前は「その他の拡張子は黙って
+       無視してよい」に紛れて数えてすらいなかった ── 名指しで断れるよう分母だけ数える
+       （挙動の本体は変えない・報告の材料が増えるだけ）。それ以外の拡張子は引き続き
+       黙って無視してよい。"""
     candidates = []
-    excluded = {"temp": 0, "subdirs": 0}
+    excluded = {"temp": 0, "subdirs": 0, "csv": 0}
     for item in sorted(folder.iterdir(), key=lambda p: p.name):
         if item.is_dir():
             excluded["subdirs"] += 1
@@ -34,8 +39,11 @@ def classify_folder_contents(folder: Path):
         if item.name.startswith(_TEMP_PREFIX):
             excluded["temp"] += 1
             continue
-        if item.suffix.lower() in SCAN_CANDIDATE_SUFFIXES:
+        suffix = item.suffix.lower()
+        if suffix in SCAN_CANDIDATE_SUFFIXES:
             candidates.append(item)
+        elif suffix == CSV_SUFFIX:
+            excluded["csv"] += 1
     return candidates, excluded
 
 

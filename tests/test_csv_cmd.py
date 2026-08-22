@@ -95,3 +95,34 @@ def test_match_entrance_redirects_csv_instead_of_misleading(tmp_path, monkeypatc
     assert rc != 0
     assert "csv" in out.lower(), f"csv への言及が無い: {out}"
     assert "xlsx 形式か確認してください" not in out, f"誤誘導が残っている: {out}"
+
+
+# ★ 検分の差し戻し（2026-08-22 09:4x・実装後の生プローブで発見・赤のまま差し戻す）:
+#   ⚠ が「列」までしか名指しせず、内部 reason コード（calendar_invalid）が生のまま
+#   ユーザーに漏れていた。憲法①「最悪でも修正箇所に誘導」── パーサに物理行範囲を
+#   持たせたのは名指しのためであり、⚠ は容疑セルのレコード/物理行/値まで言う。
+
+def test_undecidable_warning_names_the_offending_record(tmp_path, monkeypatch, capsys):
+    """⚠ は列名だけでなく、原因セルのレコード（物理行）と値を名指しする。"""
+    _isolate(monkeypatch, tmp_path)
+    p = tmp_path / "破損気味.csv"
+    p.write_bytes("日付,数量\n2026/1/2,1\n2026/13/45,3\n2026/1/4,2\n".encode("utf-8"))
+    rc, out = _run_main(["csv", str(p)], capsys)
+    assert rc == 0, out
+    assert "⚠" in out and "日付" in out, out
+    # 原因の値と、その居場所（2026/13/45 はデータ 2 行目=物理 3 行目）を名指し
+    assert "2026/13/45" in out, f"原因の値が名指しされていない: {out}"
+    assert "3 行" in out or "3行" in out, f"物理行が名指しされていない: {out}"
+
+
+def test_no_raw_reason_codes_leak_to_user(tmp_path, monkeypatch, capsys):
+    """内部 reason コード（calendar_invalid 等の英語スラッグ）を生で出さない。"""
+    _isolate(monkeypatch, tmp_path)
+    p = tmp_path / "破損気味.csv"
+    p.write_bytes("日付\n2026/13/45\n".encode("utf-8"))
+    rc, out = _run_main(["csv", str(p)], capsys)
+    import re
+    leaked = re.findall(r"[a-z]+_[a-z_]+", out)
+    # ファイル名・パス由来を除き、snake_case の内部語が本文に出ていないこと
+    leaked = [w for w in leaked if w not in str(p).lower()]
+    assert not leaked, f"内部コードが漏れている: {leaked}\n{out}"

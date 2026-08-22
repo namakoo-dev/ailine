@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import zipfile
 from dataclasses import dataclass, field
@@ -17,7 +18,7 @@ from xml.etree import ElementTree as ET
 
 import openpyxl
 
-from ailine_core import inspection, multifile, total_row
+from ailine_core import inspection, multifile, total_row, xml_readback
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 
 PROVENANCE_HEADERS = ("元ファイル", "元行")
@@ -33,7 +34,9 @@ CREATOR_MARK = "ailine stack"
 # ★ architect 致命2 の直し（M2 前置き・2026-08-21）: 「ailine の出力か」は stack 1本だけでなく
 # ailine の複数コマンドに広がる。書く側の定数（CREATOR_MARK）は互換のためそのまま残し、
 # 読む側の判定はこの集合で行う（stack・extract・そして P 先行 commit で match を追加）。
-CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match"}
+# ★ CSV 検疫接続（2026-08-22）: `ailine csv` の出力を足す。ailine_core/verify.py の
+# _CREATOR_MARKS にも同時に足す（tests/test_stack_e2e.py の同期番人が二重管理のずれを見る）。
+CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv"}
 # ★ M3 P 先行 commit（DESIGN-20260821-multifile.md M3 設計 v2）: match の集約出力
 # （1行=1キー）は末尾2列の出所列署名を構造的に持てない。1枚目シート名+固定見出しで判定する。
 MATCH_SHEET_NAME = "照合"
@@ -135,12 +138,28 @@ def _match_signature(path) -> bool:
         wb.close()
 
 
+def _csv_signature(path) -> bool:
+    """csv kind の列署名判定: CSV 由来の列名は利用者の原本そのまま（任意）のため、
+       stack/extract のような末尾2列の出所列署名も、match のような固定シート名/見出しも
+       構造的に持てない ── docProps の description が ailine csv の機械可読契約
+       （kind:"csv"）と一致するかだけで判定する（署名の代わりに条件を見る）。"""
+    _creator, description = xml_readback.read_core_properties(path)
+    if not description:
+        return False
+    try:
+        cond = json.loads(description)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(cond, dict) and cond.get("tool") == "ailine" and cond.get("kind") == "csv"
+
+
 # ★ P 先行 commit（M3 設計 v2）: 署名を「末尾2列」1本槍から kind 別テーブルへ拡張。
 # 印（creator）ごとに列署名の判定関数を引く ── 未知の印は握っていない = 他人扱い（fail closed）。
 KIND_SIGNATURES = {
     "ailine stack": _stack_extract_signature,
     "ailine extract": _stack_extract_signature,
     "ailine match": _match_signature,
+    "ailine csv": _csv_signature,
 }
 
 
