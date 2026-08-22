@@ -153,6 +153,10 @@ VOCAB_FILE = HISTORY_DIR / "vocab.json"
 DEFAULT_VOCAB_MAX_ENTRIES = 200     # 個人利用の上限。無制限にしない
 DEFAULT_VOCAB_MAX_TERM_LEN = 40     # 語（キー）の最大長
 
+# ★ 誤分類の実例台帳センサ: vocab_miss と同じ需要センサ方式（記録するだけ・分析/提案/表示は
+#   作らない）。破壊の関所で N・undo の2点だけを容疑として拾う（成功 run は何も書かない）。
+MISCLASS_FILE = HISTORY_DIR / "misclass.jsonl"
+
 
 def _find_basrun_path() -> Path | None:
     """basrun.py の場所。環境変数 BASRUN > ailine と並びの checkout の順で探す。
@@ -4721,6 +4725,9 @@ def cmd_undo(a: argparse.Namespace) -> int:
         print(f"× {e}")
         return 1
     print(render_restore_done(book.name, used.name, remaining=undo_steps_left(book)))
+    # ★ 誤分類の実例台帳センサ②: undo が成功した＝その run の判断を人がひっくり返した
+    #   容疑。task は history の該当ブックの直近エントリから引く（無ければ落とさず空文字）。
+    _record_misclass_suspect("undo", _last_task_for_book(book), None, book)
     return 0
 
 
@@ -5226,6 +5233,39 @@ def read_history(path: Path | None = None, max_n: int = 10) -> list:
         except json.JSONDecodeError:
             continue
     return list(reversed(entries))[:max_n]
+
+
+def append_misclass(entry: dict, path: Path | None = None) -> None:
+    """misclass.jsonl に 1 行 append する（誤分類の実例台帳センサ本体）。★ history と
+       同じ流儀 ── 失敗したら例外を投げる（run を壊さないための try は呼び出し側が持つ）。"""
+    p = path or MISCLASS_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _record_misclass_suspect(signal: str, task: str, plan, book) -> None:
+    """誤分類容疑を1行記録する。①②の記録点が共通で呼ぶ薄い配線。書き込み失敗は run を
+       壊さない（history の WARN と同じ作法・失敗しても標準エラーに1行出すだけ）。"""
+    try:
+        append_misclass({
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "signal": signal,
+            "task": task,
+            "plan": plan,
+            "book": str(book) if book is not None else None,
+        })
+    except Exception as e:
+        print(f"WARN: 誤分類容疑の記録に失敗した: {e}", file=sys.stderr)
+
+
+def _last_task_for_book(book: Path) -> str:
+    """②undo が使う: book に一致する history.jsonl の直近エントリの task。
+       無ければ空文字列（記録を落とさないための穏やかなフォールバック）。"""
+    for e in read_history(max_n=1000):
+        if e.get("book") == str(book):
+            return str(e.get("task", ""))
+    return ""
 
 
 def format_history_table(entries: list) -> str:
@@ -5857,6 +5897,13 @@ def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None
         return 7
     if ans not in ("y", "yes"):
         print(render_aborted(step_prefix))
+        # ★ 誤分類の実例台帳センサ①: 「上書きしますか？」（=破壊の関所そのもの）で N を
+        #   選んだときだけ拾う。シート衝突3択や freeform 関所（subject_mismatch のみの
+        #   reason）は対象外 ── 第一波は overwrite 関所のみ（広げるときは検体から）。
+        if warn_overwrite:
+            _record_misclass_suspect("gate_decline", getattr(a, "task", ""),
+                                      getattr(a, "_last_translation", None) or {},
+                                      getattr(a, "book", None))
         return 1
     return None
 
