@@ -77,6 +77,7 @@ from ailine_core.claim import (   # ★ C5/C9: Claim 型と『✓』の一元レ
 from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 段が共有する実行エンジン
     DslStepDeps, resolve_dsl_step_args, print_dsl_confirmation, apply_dsl_step, compose_dsl_step_advisories,
     NEW_COLUMN_ORIGIN,   # ★ 単位B: 「直前の段が作った列」の文言の唯一の出どころ
+    is_transient_lo_error, TRANSIENT_LO_RETRY_NOTICE,   # ★ 摩擦⑥: LO 一時不調の凍結マーカーと開示文言の唯一の出どころ
 )
 from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手書きしていた表示の純関数化
     render_code_block, render_retry_options, render_aborted, render_run_header,
@@ -5929,7 +5930,8 @@ def _make_dsl_step_deps() -> DslStepDeps:
         maybe_warn_header_col_mismatch=_maybe_warn_header_col_mismatch,
         maybe_warn_target_overwrite=_maybe_warn_target_overwrite,
         interpretation_summary_line=_interpretation_summary_line, confirm_overwrite_or_gate=_confirm_overwrite_or_gate,
-        basrun_apply=basrun_apply, snapshot=snapshot, diff_snapshots=diff_snapshots,
+        basrun_apply=basrun_apply, stop_office=_stop_office,   # ★ 摩擦⑥: LO 一時不調の再試行が使う
+        snapshot=snapshot, diff_snapshots=diff_snapshots,
         run_postcondition=run_postcondition, progress_start=progress_start, progress_end=progress_end,
         pivot_caveat=PIVOT_CAVEAT, verify_dsl_args=verify_dsl_args,
         apply_new_column_fallback=_apply_new_column_fallback, build_advisories=build_advisories,
@@ -6449,6 +6451,16 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
         t0 = progress_start("⏳ LibreOffice で適用中…")
         ok, err, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
         progress_end(t0)
+        if not ok and is_transient_lo_error(err):
+            # ★ 摩擦⑥: LO の一時不調 ── コード自体の問題ではないので、LLM への「直して」
+            #   依頼(msgs)は消費しない。stop → 無垢の stepsource から作り直し → 1回だけ
+            #   再試行する（dsl_step.apply_dsl_step と同型・normalize_book/M2c 由来）。
+            _stop_office()
+            shutil.copy2(stepsource, out_book)
+            print(f"{step_prefix}{TRANSIENT_LO_RETRY_NOTICE}")
+            t0 = progress_start("⏳ LibreOffice で適用中…")
+            ok, err, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
+            progress_end(t0)
         if not ok:
             failure_kind = "runtime_error"
             msgs += [{"role": "assistant", "content": raw},
@@ -6591,7 +6603,8 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
         op, resolved, code, apply_target=out_book, before=step_before, before_charts=before_charts,
         workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
         header_row=step_header_row, use_formula=use_formula, source_book=stepsource, deps=deps,
-        apply_progress_label=f"⏳ {i}段目 LibreOffice で適用中…", print_changes=False)
+        apply_progress_label=f"⏳ {i}段目 LibreOffice で適用中…", print_changes=False,
+        step_prefix=step_prefix)   # ★ 摩擦⑥: 再試行の開示行も段番号つきで揃える
 
     if apply_result.runtime_error is not None:
         detail = f"実行時エラー: {short_error_summary(apply_result.runtime_error)}"

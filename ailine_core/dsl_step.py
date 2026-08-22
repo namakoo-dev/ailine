@@ -36,6 +36,7 @@ docs/behavior-corpus/nodes/dsl-pipeline.md 参照）。
 """
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -47,6 +48,24 @@ from ailine_core.subject import CONTRADICTED, contradiction_lines, unspoken_subj
 #   注記の**両方がここを読む** ―― 同じ事実を2箇所に書くと、文面が黙って食い違うため。
 NEW_COLUMN_ORIGIN = "この計画の直前の段で新規作成された列"
 
+# ★ 摩擦⑥: LO の一時的な不調の凍結マーカー。normalize_book(M2c) が監査2回で2回再現した
+#   既知の摩擦（RuntimeException: Could not create system bitmap!・ailine.py 参照）に、
+#   operator8③の真因だった DisposedException を加えた2種。この1箇所だけに置き、適用側の
+#   2経路（apply_dsl_step・ailine.py の run_freeform_plan_step）と、正規化側の由来コメントが
+#   ここを指す ── 表を2箇所に書くと片方だけ更新されて食い違うため。それ以外のエラーは
+#   普通の実行時エラーとして即時失敗させる（盲目リトライをしない・検体③）。
+TRANSIENT_LO_MARKERS = ("DisposedException", "Could not create system bitmap")
+
+# ★ 摩擦⑥: 再試行した事実の開示（1行）。「再試行」の3文字を含む（検体が機械検査）。
+TRANSIENT_LO_RETRY_NOTICE = "LibreOffice の一時的な不調のため、再起動して再試行しました。"
+
+
+def is_transient_lo_error(err: str | None) -> bool:
+    """err が TRANSIENT_LO_MARKERS のいずれかに部分一致すれば True。"""
+    if not err:
+        return False
+    return any(marker in err for marker in TRANSIENT_LO_MARKERS)
+
 
 @dataclass
 class DslStepDeps:
@@ -57,6 +76,8 @@ class DslStepDeps:
     interpretation_summary_line: Callable
     confirm_overwrite_or_gate: Callable
     basrun_apply: Callable
+    # ★ 摩擦⑥: LO の一時不調から復元する再試行が使う（ailine.py の _stop_office）。
+    stop_office: Callable
     snapshot: Callable
     diff_snapshots: Callable
     run_postcondition: Callable
@@ -260,7 +281,7 @@ def apply_dsl_step(op: str, resolved: dict, code: str, *, apply_target: Path, be
                     before_charts: int, workdir: Path, helper_files, apply_timeout,
                     header_row: int, use_formula: bool, source_book: Path | None,
                     deps: DslStepDeps, apply_progress_label: str,
-                    print_changes: bool) -> DslApplyResult:
+                    print_changes: bool, step_prefix: str = "") -> DslApplyResult:
     """④codegen 済みの code を⑤適用し⑥事後条件を見る。
        ★ print_changes: 単発(cmd_run_dsl)は True（「変更点:」+差分行を常に印字）・
        複合計画は False（段ごとの差分行は印字せず、after を助言計算にだけ使う ── 既存の
@@ -274,11 +295,25 @@ def apply_dsl_step(op: str, resolved: dict, code: str, *, apply_target: Path, be
        （同モジュールの docstring 参照）なので、それでは単発/複合計画のどちらが
        呼んでいるかを機械で見分けられなくなる。呼び出し側に残すことで、「単発は直接呼ぶ・
        複合計画は呼ばない」という違いが今までどおり AST から見える形のまま保たれる）。
-       呼び出し側(cmd_run_dsl)がこの関数の戻り値(after)を使って自分で呼ぶ。"""
+       呼び出し側(cmd_run_dsl)がこの関数の戻り値(after)を使って自分で呼ぶ。
+       ★ 摩擦⑥: LO の一時不調（TRANSIENT_LO_MARKERS）で①回目の適用が失敗したら、
+       stop_office() → source_book（無垢の原本）から apply_target を作り直し → 1回だけ
+       再試行する（正規化側の normalize_book/M2c と同型）。半適用の残骸の上に再実行しない
+       （②契約）。source_book が無い(None)呼び出しは復元先が無いので再試行しない。
+       2回目も失敗すれば従来どおり err_apply をそのまま返す（③・正直な失敗）。
+       step_prefix: 複合計画の段番号表示（"  1段目: " 等）。単発は既定の "" のまま。"""
     t0 = deps.progress_start(apply_progress_label)
     okrun, err_apply, _raw = deps.basrun_apply(apply_target, code, workdir, helper_files,
                                                 timeout=apply_timeout)
     deps.progress_end(t0)
+    if not okrun and source_book is not None and is_transient_lo_error(err_apply):
+        deps.stop_office()
+        shutil.copy2(source_book, apply_target)   # 半適用の残骸を消し、無垢の原本から作り直す
+        print(f"{step_prefix}{TRANSIENT_LO_RETRY_NOTICE}")
+        t0 = deps.progress_start(apply_progress_label)
+        okrun, err_apply, _raw = deps.basrun_apply(apply_target, code, workdir, helper_files,
+                                                    timeout=apply_timeout)
+        deps.progress_end(t0)
     if not okrun:
         return DslApplyResult(runtime_error=err_apply, after=None, changes=None, changed=False,
                                postcondition_status=None, postcondition_reason=None)
