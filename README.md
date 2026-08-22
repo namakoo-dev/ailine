@@ -118,6 +118,16 @@ python ailine.py undo demo/sample.xlsx --list   # 一覧だけ表示（復元し
 # 用語集（税率等の取り決め値）に語を登録する。「税込み合計」等で率が本文にも
 # 用語集にも無い場合、この形のコピペ可能な1行が CLARIFY のメッセージに出る
 python ailine.py vocab add 消費税 1.1
+
+# ★ 独自の言い回しの登録（2026-08-22〜）: 依頼が操作一覧に照合できなかったとき、
+# 「もしかして: 並べ替え？」と候補+解釈（+反映されない部分の名指し）を見せる。
+# y と答えるとその場で実行され、**その言い回しが自動で登録**されて次回からは聞かずに通る。
+# 登録は解釈への同意であって白紙委任ではない ── 登録済みでも確認・関所は一切スキップしない。
+# 手動でも登録/取り消しできる（対応する操作名は ailine ops の左端の英字）:
+python ailine.py alias add "大きい順にして" SORT
+python ailine.py alias list
+python ailine.py alias undo      # 直近の登録を取り消す
+python ailine.py alias remove "大きい順にして"
 python ailine.py vocab list
 ```
 
