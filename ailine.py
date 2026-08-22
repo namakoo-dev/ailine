@@ -2309,6 +2309,69 @@ def translate_task(model: str, task: str, book_meta: dict, temperature: float = 
     return {"plan": [_normalize_plan_step(s) for s in steps_raw]}
 
 
+# ★ W10 便B: 二段目翻訳（op 固定で args だけ埋めさせる）── 頷きの対象（本物の解釈行）と、
+#   別名ヒット後の翻訳の両方が使う心臓（REVIEW-20260822-w10-architect.md 1-1 + Namakoo 決裁）。
+#   ★ 第4の凍結定数。build_translation_messages/TRANSLATION_SYSTEM/OPS_DOC/TRANSLATION_FEWSHOT
+#   は一切触らない（既存3定数の SHA は test_prompt_freeze の番人が別に持つ）。
+#   ★ W9 実測（few-shot 1 例で誤断定 27.3%）に倣い、OPS_DOC 全文も別名も見せない ──
+#   固定した op 1 つ分のスキーマだけを見せる方が 7B に優しく速い（対象語彙が狭いほど暴走しにくい）。
+TRANSLATION_FIXED_OP_SYSTEM = """あなたは表計算操作の翻訳係。操作の種類は既に "{op}" に確定している。
+あなたの仕事は、この操作の args（引数）だけを日本語の依頼から埋めることだ。
+op を変更してはいけない（別の操作の方が適切だと思っても、必ず "{op}" のまま返す。
+op を変えて返しても、呼び出し側は "{op}" を強制するのであなたの判断は無視される）。
+
+出力形式は必ず {{"op": "{op}", "args": {{...}}}}。それ以外は書かない。
+
+この操作の引数: {schema}
+列は必ず「対象ブックの構成」に実在する列名で指定する（番号ではなく）。
+確定できない引数を推測で埋めてはいけない（分かる範囲だけを埋める）。
+JSON のみ出力（説明・markdown 柵は禁止）。"""
+
+
+def _op_schema_doc(op: str) -> str:
+    """固定した op 1 つ分だけのスキーマ文（OPS_DOC 全文でなく OP_SCHEMA[op] から機械生成）。"""
+    required = OP_SCHEMA.get(op, ())
+    if not required:
+        return f"{op} は引数不要"
+    return f"{op}: args: " + ", ".join(required)
+
+
+def build_translation_fixed_op_messages(op: str, task: str, book_meta: dict) -> list:
+    """② 翻訳の第4の messages ビルダ。build_translation_messages とは別関数
+       （op 固定・few-shot 無し・OPS_DOC 全文を見せない ── 混ぜると W9 の 27.3% を繰り返す）。"""
+    system = TRANSLATION_FIXED_OP_SYSTEM.format(op=op, schema=_op_schema_doc(op))
+    book_desc = json.dumps(book_meta.get("headers", {}), ensure_ascii=False)
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": TRANSLATION_USER.format(book=book_desc, text=task)},
+    ]
+
+
+def translate_task_fixed_op(model: str, op: str, task: str, book_meta: dict,
+                             temperature: float = 0.1) -> dict | None:
+    """二段目翻訳: op を機械が固定し、その op の args だけを LLM に埋めさせる（W10 便B）。
+       頷き（本物の解釈行への確認）と、別名ヒット後の再翻訳の両方が使う心臓。
+       ①: LLM が別の op を返しても、返り値の op は固定した op で強制上書きする
+       （毒の第一防壁: 頷いた op と違う操作が走る経路を構造的に塞ぐ）。
+       ②: 応答が壊れていれば（JSON 不正・op が dict でない・args が dict でない）
+       正直に None を返す（幻覚 args で進まない・呼び出し側が CLARIFY に倒せる）。"""
+    try:
+        messages = build_translation_fixed_op_messages(op, task, book_meta)
+        # ★ 検分の差し戻し(2026-08-22): 本流 translate_task と同じ ollama_generate_json
+        #   （format=json 強制）を使う ── 素の呼び出しでは 7B が ```json の柵で包み、
+        #   正解の応答を parse 失敗で捨てていた（実機 2/5 の真因・片配線の再演）
+        raw = ollama_generate_json(model, messages, temperature=temperature, num_predict=300)
+        data = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    args = data.get("args")
+    if not isinstance(args, dict):
+        return None
+    return {"op": op, "args": args}
+
+
 # --- ② 検証（接地：実在するシート/列名かを機械照合） -------------------------
 
 COLOR_MAP = {

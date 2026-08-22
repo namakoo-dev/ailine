@@ -27,6 +27,11 @@ _FROZEN = {
     "OPS_DOC": "2a87a1945bc6e29c",
     "TRANSLATION_SYSTEM": "8dd5cd3a43d833fe",
     "TRANSLATION_FEWSHOT": "c10a9b45e6cada35",
+    # ★ 2026-08-22: W10 便B（二段目翻訳・op 固定で args だけ埋めさせる）で追加した第4の定数。
+    #   OPS_DOC 全文を見せず、固定した op 1 つ分のスキーマだけを見せる（W9 の 27.3% 誤断定の
+    #   教訓＝別名/few-shot を混ぜると壊れる部品）。frozen 対象は tests/test_fixed_op_translation.py
+    #   が番人（test_fixed_op_prompt_is_frozen_constant）。
+    "TRANSLATION_FIXED_OP_SYSTEM": "230c3e0e92d3aa20",
 }
 
 
