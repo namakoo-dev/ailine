@@ -1,8 +1,14 @@
-"""W10 便C1: 凍結セット bench/w10_suggest_frozen_set.json での suggest_ops 実測。
+"""W10 便C2: 凍結セット bench/w10_suggest_frozen_set.json での suggest_ops 実測。
 
-★ このスクリプトは検体・bars を一切変更しない（読むだけ）。ここでやるのは測定と
-件数の報告だけ ── 何かに合わせて suggest_ops や match_phrases を調整する場所ではない
+★ このスクリプトは凍結セット（検体・bars）を一切変更しない（読むだけ）。ここでやるのは
+測定と件数の報告だけ ── 何かに合わせて suggest_ops や match_phrases を調整する場所ではない
 （それは ailine.py 側の仕事。ここで見つけた不足は「発火条件」として報告するだけ）。
+
+★ REGRESSION_FLOOR（回帰の床）だけは凍結セットではなくこのスクリプト本体が持つ
+（Namakoo 決裁 2026-08-22）。便C1 の veto 名簿が凍結セットの true_out_of_vocab
+10件に過適合し、封印されていた別の12件で 5/12 誤提示が出た事故の再発防止用。
+この12件の個別語を veto 名簿や match_phrases に書き足すことは禁止 ── 一般則
+（語としての厳格一致）の効果だけで下げる。
 
 出力（すべて件数。n が小さいので比率で語らない）:
   ① 陽性対照        recall@1（バー: 18/18）
@@ -10,6 +16,7 @@
   ③ in_vocab        recall@1/@3（about なし版・内部診断・バー無し）
   ④ true_out_of_vocab 候補提示（バー: 2/10 以下）
   ⑤ slot_missing / adversarial_compound の挙動観察（合否ではなく実際の出力を記録）
+  ⑥ REGRESSION_FLOOR 候補提示（バー: 1/12 以下）
   + about あり版（in_vocab・ollama 到達時のみ・落ちていれば明記して省略）
 
 使い方: python bench/run_w10_suggest_eval.py [model]
@@ -24,6 +31,24 @@ sys.path.insert(0, str(AILINE_DIR))
 import ailine  # noqa: E402
 
 FROZEN = json.loads((HERE / "w10_suggest_frozen_set.json").read_text(encoding="utf-8"))
+
+# ★ 回帰の床(便C2・2026-08-22): 封印して抜き打ちで開けた12件。凍結セットではなく
+#   このスクリプトが直接持つ（Namakoo の指示どおり ── 凍結 JSON の構造は増やさない）。
+#   ここの文言を見て veto 名簿や match_phrases に個別語を足すのは禁止（過適合の再発）。
+REGRESSION_FLOOR = [
+    {"id": "RF01", "text": "ヘッダーとフッターにページ番号を入れて"},
+    {"id": "RF02", "text": "シートごとに別のブックに分割して保存して"},
+    {"id": "RF03", "text": "入力規則で日付しか入れられないようにして"},
+    {"id": "RF04", "text": "商品名にリンクを一括で貼って"},
+    {"id": "RF05", "text": "2行目までスクロールしても常に見えるようにして"},
+    {"id": "RF06", "text": "テーブルとして書式設定して"},
+    {"id": "RF07", "text": "売上の横にスパークラインを付けて"},
+    {"id": "RF08", "text": "行の高さを全部そろえて"},
+    {"id": "RF09", "text": "重複してるセルに色を付けて"},
+    {"id": "RF10", "text": "このシートをPDFにして"},
+    {"id": "RF11", "text": "変更履歴が残るようにして"},
+    {"id": "RF12", "text": "セルを斜線で消して"},
+]
 
 # ★ about あり版で translate_task に渡す book_meta（凍結セットは書名/シート構成を宣言
 #   していないため、in_vocab の文言に登場する列名を広く含む汎用ブックで代用する。
@@ -126,6 +151,18 @@ def run_slot_missing_and_adversarial() -> None:
         print(f"    {e['id']} 「{e['text']}」→ {cands}  ({e['expect']})")
 
 
+def run_regression_floor() -> int:
+    fired = []
+    for e in REGRESSION_FLOOR:
+        cands = ailine.suggest_ops(e["text"]) or []
+        if cands:
+            fired.append((e["id"], e["text"], cands))
+    print(f"⑥ REGRESSION_FLOOR 候補提示: {len(fired)}/{len(REGRESSION_FLOOR)}（バー 1/12 以下）")
+    for f in fired:
+        print(f"    fired: {f}")
+    return len(fired)
+
+
 def run_about_augmented(model: str) -> None:
     """about あり版は、about が実際に取れた検体**だけ**を対象に before/after を比べる
        （★ 直し: 旧版は before 側を 44 件全体の累計・after 側だけ分母を揃え忘れていて、
@@ -165,7 +202,7 @@ def run_about_augmented(model: str) -> None:
 
 def main() -> int:
     model = sys.argv[1] if len(sys.argv) > 1 else ailine.DEFAULT_MODEL
-    print("=== W10 便C1 凍結セット実測（bench/w10_suggest_frozen_set.json） ===")
+    print("=== W10 便C2 凍結セット実測（bench/w10_suggest_frozen_set.json + REGRESSION_FLOOR） ===")
     _match_phrase_pool_overlap()
     print()
     run_positive_control()
@@ -177,6 +214,8 @@ def main() -> int:
     run_true_out_of_vocab()
     print()
     run_slot_missing_and_adversarial()
+    print()
+    run_regression_floor()
     print()
     run_about_augmented(model)
     return 0

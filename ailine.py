@@ -120,7 +120,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
                           #   「翻訳の捏造」かの照合に、単位B の部分文字列規律を再利用する
 )
 from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/照合/保存形式（純関数）
-from ailine_core import suggest as suggest_candidates   # ★ W10 便C1: もしかして提案の候補生成（文字マッチ+about）
+from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もしかして提案の候補生成（語としての厳格一致+about）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
@@ -1815,15 +1815,45 @@ OP_META = {
 
 OP_LABELS = {op: meta["label"] for op, meta in OP_META.items()}
 
+# ★ W10 反復(棄権設計・便④): 「op の意味領域の外側」にある Excel 機能語彙。OP_META の
+#   19 op が一切対応しない、よく知られた Excel の機能名を意味から書く（凍結セット
+#   bench/w10_suggest_frozen_set.json の文言の写しではない ── 書いた後に
+#   bench/run_w10_suggest_eval.py が重複率を透明化する）。ここに挙げた語が依頼文に
+#   語として現れたら、pool 側の一致に関わらず候補ゼロで応答する（できないことに候補を
+#   出す＝二度目の「できません」の方が重い、という設計の線）。
+#   ★ 便C2(2026-08-22 抜き打ち検体で 5/12 誤提示・Namakoo 決裁): この名簿は主対策では
+#   なくなった。「非対応機能」は列挙できない開集合であり、増築しても収束しない
+#   （現に封印されていた別の12件はこの名簿の外から誤提示した）。主対策は
+#   suggest_ops 側の白側の証拠要求の厳格化（語としての一致のみを候補にする）に移した
+#   ── この名簿は「効く分には害がない」補助として残すだけで、以後は増築しない。
+OUT_OF_SCOPE_TERMS = [
+    "印刷", "ページ設定", "印刷範囲", "PDF",
+    "パスワード", "シート保護", "保護", "ロック",
+    "条件付き書式",
+    "入力規則", "ドロップダウン",
+    "ふりがな", "フリガナ",
+    "ウィンドウ枠の固定", "先頭行固定", "行固定", "列固定", "固定",
+    "コメント", "メモ",
+    "マクロ", "VBA",
+    "画像", "図形", "アイコン",
+    "ハイパーリンク", "リンク",
+    "共有", "保存", "バックアップ",
+    "テーマ", "スタイル", "グラデーション",
+]
+
 
 def suggest_ops(task: str, about: str | None = None, exclude_ops=None) -> list:
-    """★ W10 便C1: もしかして提案の候補生成。OP_META の label/synonyms/match_phrases を
-       照合プールに組み、ailine_core/suggest.py の純ロジック（文字マッチ+about）へ薄く
-       委譲する（op 名・スコア降順・最大3・実在 op のみ）。凍結セットでの測定は
+    """★ W10 便C2: もしかして提案の候補生成。OP_META の label/synonyms/match_phrases を
+       照合プールに組み、ailine_core/suggest.py の純ロジック（語としての厳格一致・
+       phrase_is_standalone_in_task と同じ断片ガード）へ薄く委譲する（op 名・一致した
+       最長フレーズの文字数降順・最大3・実在 op のみ）。OUT_OF_SCOPE_TERMS を veto
+       プールとして渡し、語彙外の強い語が語として現れる依頼は候補ゼロに落とす
+       （主対策ではなく補助 ── 主対策は白側の一致要求そのもの）。凍結セットでの測定は
        bench/run_w10_suggest_eval.py、契約は tests/test_suggest_candidates.py。"""
     pool = {op: [meta["label"], *meta["synonyms"], *meta.get("match_phrases", ())]
             for op, meta in OP_META.items()}
-    return suggest_candidates.suggest_ops(task, pool, about=about, exclude_ops=exclude_ops)
+    return suggest_candidates.suggest_ops(task, pool, about=about, exclude_ops=exclude_ops,
+                                           veto_phrases=OUT_OF_SCOPE_TERMS)
 
 
 # op → 必須 slot 名のタプル。翻訳直後の slot 欠落チェックと確認行の項目順を兼ねる。
