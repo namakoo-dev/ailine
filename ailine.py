@@ -120,6 +120,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
                           #   「翻訳の捏造」かの照合に、単位B の部分文字列規律を再利用する
 )
 from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/照合/保存形式（純関数）
+from ailine_core import suggest as suggest_candidates   # ★ W10 便C1: もしかして提案の候補生成（文字マッチ+about）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
@@ -1734,55 +1735,96 @@ def extract_quoted_literal(text: str) -> str | None:
 #   よく使う言い方の例・宣言のみ＝翻訳プロンプトへ機械的に注入はしない) を一箇所で持つ。
 #   OP_LABELS は後方互換のためこの dict から導出する（既存コードの OP_LABELS.get(op, op)
 #   はそのまま・値は完全に同じ）。
+#   ★ W10 便C1: match_phrases を追加（もしかして提案 suggest_ops の照合専用プール）。
+#   synonyms とは別物 ── synonyms は `ailine ops` 表示用で3語までに絞る（表が壁にならない
+#   ため）。match_phrases は表示しない・件数上限なし。op の**意味**から一般語で書く
+#   （凍結セット bench/w10_suggest_frozen_set.json の文言は写さない ── 写すと自己汚染。
+#   セットとの重複率は bench/run_w10_suggest_eval.py が測って報告する＝透明化）。
+#   label/synonyms も照合プールに含めてよい（suggest_ops 側で合成する）ので、ここでは
+#   synonyms と文字列が重複しない言い回しだけを足す。
 OP_META = {
     "SORT": {"category": "並べ替える", "label": "並べ替え", "folder": False,
-              "synonyms": ["並べ替え", "ソート", "順に並べる"]},
+              "synonyms": ["並べ替え", "ソート", "順に並べる"],
+              "match_phrases": ["順番", "昇順", "降順", "整列", "並び替える", "順位付け"]},
     "COMPUTE_COLUMN": {"category": "計算する", "label": "計算列", "folder": False,
-                         "synonyms": ["計算", "掛け算・割り算", "列同士の演算"]},
+                         "synonyms": ["計算", "掛け算・割り算", "列同士の演算"],
+                         "match_phrases": ["演算", "掛け算", "割り算", "足し算", "引き算",
+                                            "式を入れる", "計算式", "算出する", "列を作る"]},
     "LOOKUP_FILL": {"category": "表を編集する", "label": "転記", "folder": False,
-                     "synonyms": ["引っ張ってくる", "転記", "VLOOKUP"]},
+                     "synonyms": ["引っ張ってくる", "転記", "VLOOKUP"],
+                     "match_phrases": ["参照する", "引き当てる", "突き合わせる", "マスタ参照",
+                                        "値を持ってくる", "対応する値を入れる"]},
     "AGGREGATE": {"category": "計算する", "label": "集計", "folder": False,
-                   "synonyms": ["集計", "まとめる", "グループごとに小計"]},
+                   "synonyms": ["集計", "まとめる", "グループごとに小計"],
+                   "match_phrases": ["小計", "合算", "グループ集計", "内訳", "サマリー",
+                                      "項目ごとにまとめる"]},
     "BOLD": {"category": "見た目を整える", "label": "太字", "folder": False,
-              "synonyms": ["太字", "ボールド", "強調"]},
+              "synonyms": ["太字", "ボールド", "強調"],
+              "match_phrases": ["太くする", "強調する", "目立たせる"]},
     "FILL_COLOR": {"category": "見た目を整える", "label": "背景色", "folder": False,
-                    "synonyms": ["色を付ける", "塗りつぶす", "ハイライト"]},
+                    "synonyms": ["色を付ける", "塗りつぶす", "ハイライト"],
+                    "match_phrases": ["背景に色", "色付け", "着色する", "マーキングする"]},
     "NUMBER_FORMAT": {"category": "見た目を整える", "label": "数値書式", "folder": False,
-                        "synonyms": ["桁区切り", "カンマ区切り", "3桁区切り"]},
+                        "synonyms": ["桁区切り", "カンマ区切り", "3桁区切り"],
+                        "match_phrases": ["数値の表示形式", "3桁ごとに区切る", "通貨表示",
+                                           "小数点の桁数", "カンマを入れる"]},
     "MERGE": {"category": "表を編集する", "label": "セル結合", "folder": False,
-               "synonyms": ["結合", "セルを繋げる", "セルをまとめる"]},
+               "synonyms": ["結合", "セルを繋げる", "セルをまとめる"],
+               "match_phrases": ["結合する", "つなげる", "一つのセルにする", "まとめて一体化"]},
     "CHART": {"category": "グラフを作る", "label": "グラフ", "folder": False,
-               "synonyms": ["グラフ", "棒グラフ", "チャート"]},
+               "synonyms": ["グラフ", "棒グラフ", "チャート"],
+               "match_phrases": ["グラフ化", "図にする", "可視化", "折れ線グラフ", "円グラフ",
+                                  "チャートを作る"]},
     "CENTER_ALIGN": {"category": "見た目を整える", "label": "中央揃え", "folder": False,
-                       "synonyms": ["中央揃え", "センタリング", "真ん中に寄せる"]},
+                       "synonyms": ["中央揃え", "センタリング", "真ん中に寄せる"],
+                       "match_phrases": ["中央に配置", "センターに合わせる", "均等に中央配置"]},
     "APPEND_TOTAL": {"category": "計算する", "label": "合計追加", "folder": False,
-                       "synonyms": ["合計を出す", "税込み合計", "一番下に合計"]},
+                       "synonyms": ["合計を出す", "税込み合計", "一番下に合計"],
+                       "match_phrases": ["合計を追加", "総額を出す", "合計行", "締めの合計"]},
     # ★ W9: 検証済みヘルパ4種の DSL 語彙昇格。
     "INSERT_ROWS": {"category": "表を編集する", "label": "行挿入", "folder": False,
-                      "synonyms": ["行を挿入", "行を追加", "行を足す"]},
+                      "synonyms": ["行を挿入", "行を追加", "行を足す"],
+                      "match_phrases": ["行を追加する", "空行を入れる", "行間を空ける"]},
     "DRAW_BORDERS": {"category": "見た目を整える", "label": "けい線", "folder": False,
-                       "synonyms": ["けい線を引く", "罫線を引く", "枠線を付ける"]},
+                       "synonyms": ["けい線を引く", "罫線を引く", "枠線を付ける"],
+                       "match_phrases": ["線で囲む", "表に枠を付ける", "けい線"]},
     "AUTOFIT": {"category": "見た目を整える", "label": "列幅自動調整", "folder": False,
-                 "synonyms": ["幅を内容に合わせる", "列幅調整", "列を自動調整"]},
+                 "synonyms": ["幅を内容に合わせる", "列幅調整", "列を自動調整"],
+                 "match_phrases": ["列幅を自動調整", "はみ出しを直す", "列幅を整える"]},
     "PIVOT": {"category": "計算する", "label": "ピボット", "folder": False,
-               "synonyms": ["ピボットテーブル", "ピボットで集計", "クロス集計"]},
+               "synonyms": ["ピボットテーブル", "ピボットで集計", "クロス集計"],
+               "match_phrases": ["縦横に組み替える", "行と列を入れ替えて集計", "クロス表にする"]},
     # ★ 致命3(W10e): 「列を一括で定数に書き換える」の DSL 昇格（査定所見:総務事務が
     #   最も頻繁に行う操作に信頼できる経路が無かった）。
     "SET_COLUMN_VALUE": {"category": "表を編集する", "label": "一括書換", "folder": False,
-                           "synonyms": ["全部同じ値にする", "一括で書き換える", "列を統一する"]},
+                           "synonyms": ["全部同じ値にする", "一括で書き換える", "列を統一する"],
+                           "match_phrases": ["一斉に置き換える", "同じ内容で埋める", "列をまとめて更新"]},
     # ★ 生まれた時から検証つきの1例目（コミット 2edcb08「EXTRACT op」参照）: 単一条件
     #   （列×比較×値）に一致する行を新シートへ抜き出す。自由生成の実弾2件（全セル文字列化・
     #   空シートで exit 0）を事後条件(check_extract)が直接殺す形で op に昇格させる。
     "EXTRACT": {"category": "表を編集する", "label": "抽出", "folder": True,
-                 "synonyms": ["抜き出す", "抽出", "絞り込んでコピー"]},
+                 "synonyms": ["抜き出す", "抽出", "絞り込んでコピー"],
+                 "match_phrases": ["抽出する", "条件で絞り込む", "該当行だけ取り出す", "別シートに出す"]},
     # ★ freeform 廃止バンドル前段: DEDUP（EXTRACT の兄弟・非破壊形）。判定キー列の値の
     #   組が同じ行のうち最初の1行だけを新シートへ残す（元シートの行は消さない）。
     #   ★ folder は False（M2 のフォルダ抽出対応は EXTRACT だけ・DEDUP の folder 版は未実装）。
     "DEDUP": {"category": "表を編集する", "label": "重複除去", "folder": False,
-               "synonyms": ["重複を除く", "重複除去", "重複行を消す", "ユニークにする"]},
+               "synonyms": ["重複を除く", "重複除去", "重複行を消す", "ユニークにする"],
+               "match_phrases": ["ダブりを消す", "重複行を削除"]},
 }
 
 OP_LABELS = {op: meta["label"] for op, meta in OP_META.items()}
+
+
+def suggest_ops(task: str, about: str | None = None, exclude_ops=None) -> list:
+    """★ W10 便C1: もしかして提案の候補生成。OP_META の label/synonyms/match_phrases を
+       照合プールに組み、ailine_core/suggest.py の純ロジック（文字マッチ+about）へ薄く
+       委譲する（op 名・スコア降順・最大3・実在 op のみ）。凍結セットでの測定は
+       bench/run_w10_suggest_eval.py、契約は tests/test_suggest_candidates.py。"""
+    pool = {op: [meta["label"], *meta["synonyms"], *meta.get("match_phrases", ())]
+            for op, meta in OP_META.items()}
+    return suggest_candidates.suggest_ops(task, pool, about=about, exclude_ops=exclude_ops)
+
 
 # op → 必須 slot 名のタプル。翻訳直後の slot 欠落チェックと確認行の項目順を兼ねる。
 OP_SCHEMA = {

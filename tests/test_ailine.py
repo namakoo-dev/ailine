@@ -6010,12 +6010,15 @@ def test_op_meta_op_schema_confirm_fields_share_same_op_set():
 def test_op_meta_entries_have_category_label_synonyms():
     # ★ M2（2026-08-21）: folder（フォルダ＝複数ファイルに対応しているか）を宣言に追加した。
     #   cmd_run_folder の断り（E11）はこの宣言だけを読む ── 対応表を別に手書きしない。
+    # ★ W10 便C1（2026-08-22）: match_phrases（もしかして提案 suggest_ops の照合専用プール・
+    #   synonyms とは別・件数上限なし）を追加。全 op が持つので必須キーに昇格させる。
     for op, meta in ailine.OP_META.items():
-        assert set(meta.keys()) == {"category", "label", "synonyms", "folder"}
+        assert set(meta.keys()) == {"category", "label", "synonyms", "folder", "match_phrases"}
         assert isinstance(meta["category"], str) and meta["category"]
         assert isinstance(meta["label"], str) and meta["label"]
         assert isinstance(meta["synonyms"], list) and meta["synonyms"]
         assert isinstance(meta["folder"], bool)
+        assert isinstance(meta["match_phrases"], list) and meta["match_phrases"]
 
 
 def test_op_meta_folder_support_is_extract_only_for_now():
