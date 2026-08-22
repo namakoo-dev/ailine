@@ -113,6 +113,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
     Slot, Consumed as SubjectConsumed, classify_slots,
     COLUMN as SUBJ_COLUMN, REGION as SUBJ_REGION, ROW as SUBJ_ROW,
     SHEET as SUBJ_SHEET, LABEL as SUBJ_LABEL, INPUT as SUBJ_INPUT,
+    SHEET_INPUT as SUBJ_SHEET_INPUT,   # ★ operator8 ①: LOOKUP_FILL の source_sheet 消費用
     name_matches_task,   # ★ W3 改定(2026-08-20): 実在しない target が「依頼文の名指し」か
                           #   「翻訳の捏造」かの照合に、単位B の部分文字列規律を再利用する
 )
@@ -594,6 +595,73 @@ def resolve_header_rows(struct_dump: dict, sheets: list, target_sheet: str | Non
         header_rows[target] = row
         return header_rows, None
     return header_rows, CLARIFY_HEADER_ROW_QUESTION
+
+
+def _struct_dump_info_missing(struct_dump: dict, sheets: list, target_sheet: str | None) -> bool:
+    """★ operator8 ③（測定器の修正・2026-08-22）: resolve_header_rows が『StructDump に
+       対象シートの情報が無ければ無言で1行目とみなす』フォールバック（同関数 docstring・
+       上の `if info is None: return header_rows, None` の分岐）を踏んだかどうかを、
+       resolve_header_rows 自身の戻り値（2-tuple・複数の凍結テストが tuple 等価で固定して
+       いるため形を変えられない）に触れずに、呼び出し側で独立に判定する。
+       ★ 実機で起きる形: LO の一時不調等で build_struct_dump が対象シート分の情報を
+       持たずに戻る（operator の実物ファイルで再現した実事故の機構そのもの）。
+       判定条件は resolve_header_rows の info 取得と完全に同じにする（ここだけ緩めたり
+       厳しくしたりしない）。"""
+    if not sheets:
+        return False
+    target = target_sheet if target_sheet in sheets else sheets[0]
+    sd_sheets = (struct_dump or {}).get("sheets", {})
+    return sd_sheets.get(target) is None
+
+
+def _scan_first_rows(path: Path, sheet_name: str, max_rows: int = 10) -> dict:
+    """★ operator8 ③: 対象シートの先頭 max_rows 行を実ファイルから読み、
+       {行番号(1起点): 非空セル値を文字列化した集合} を返す（空行は含めない）。
+       見出し行の検出が外れた/使えなかった場合の敗者復活（列解決が失敗した時だけ参照）
+       専用のデータ ―― A' 原則: 実在するセル値だけが材料（LLM は使わない）。
+       読めない/シートが無い等はどんな理由でも空 dict（呼び出し側は『従来のまま』に
+       フォールバックする）。"""
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception:
+        return {}
+    try:
+        if sheet_name not in wb.sheetnames:
+            return {}
+        ws = wb[sheet_name]
+        out: dict = {}
+        for r, row in enumerate(ws.iter_rows(min_row=1, max_row=max_rows), start=1):
+            cells = {str(c.value) for c in row if c.value not in (None, "")}
+            if cells:
+                out[r] = cells
+        return out
+    except Exception:
+        return {}
+    finally:
+        wb.close()
+
+
+def _header_row_hint_for_missing_col(book_meta: dict, sheet_name: str, raw_col) -> str | None:
+    """★ operator8 ③: 列解決が失敗したときの敗者復活。book_meta["_row_scan"]
+       （_translate_and_dispatch が実ファイルから積む・単体テストで直接 verify_dsl_args を
+       呼ぶ場合は無い＝常に None で従来のまま）を見て、要求された列名 raw_col と完全一致する
+       セルが**現在の見出し行以外**の行Rに見つかったら、--header-row R への導線を返す。
+       見つからなければ None（呼び出し側は従来の「列『X』がありません。ある列:…」のまま）。
+       ★ 走査は完全一致のみ（部分一致で誤誘導しない）。"""
+    raw = str(raw_col) if raw_col not in (None, "") else ""
+    if not raw:
+        return None
+    scan = (book_meta.get("_row_scan") or {}).get(sheet_name) or {}
+    if not scan:
+        return None
+    current = (book_meta.get("header_rows") or {}).get(sheet_name, 1)
+    for r in sorted(scan):
+        if r == current:
+            continue
+        if raw in scan[r]:
+            return (f"列『{raw}』は{r}行目に見出しがあるようです。"
+                    f"`--header-row {r}` のように指定して再実行してください")
+    return None
 
 
 def _charts_count(path: Path) -> int:
@@ -1474,6 +1542,35 @@ def lookup_vocab_factor(text: str, vocab: dict) -> tuple:
     return None, None
 
 
+def lookup_vocab_tax_factor(vocab: dict) -> tuple:
+    """★ operator8 ②: 恒真式の番人が CLARIFY に倒す**直前**の敗者復活。第一照合
+       （lookup_vocab_factor・依頼文の字面部分一致）と依頼文の率抽出（extract_rate_factor）
+       の優先順は一切変えない ―― これはその両方が外れた（label が税/込を含むのに倍率が
+       確定できない）場合だけ呼ばれる最後の一手。
+       label『税込み合計』は語彙 key『消費税』を字面に含まないため第一照合は当たらないが、
+       「税込み/税抜き」の依頼で使う倍率は用語集の中でも key に「税」を含む語である
+       可能性が高い ―― そこだけ緩めて拾う（A' 原則は維持: 実在する用語集エントリの
+       値だけを使い、LLM は使わない）。
+       戻り値: (factor, term, candidates)。
+         ・相異なる値がちょうど1つ → (その値, 名前, ())。
+         ・相異なる値が2つ以上 → (None, None, ((value, term), ...))
+           （呼び出し側が候補を名指しした CLARIFY にする ―― 「登録してください」とは言わない。
+           登録は既に済んだ手だから）。
+         ・0件 → (None, None, ())（呼び出し側は従来どおりの登録案内）。"""
+    if not vocab:
+        return None, None, ()
+    seen: dict = {}   # value -> term（最初に見つかった名前。表示・一意判定の両方に使う）
+    for term, value in vocab.items():
+        if term and "税" in term:
+            seen.setdefault(value, term)
+    if len(seen) == 1:
+        value, term = next(iter(seen.items()))
+        return value, term, ()
+    if len(seen) >= 2:
+        return None, None, tuple(seen.items())
+    return None, None, ()
+
+
 # --- ★ A' 原則(致命3・W10e): SET_COLUMN_VALUE が書き込む定数値を LLM から切り離す ------
 #   依頼文の引用符（「」『』""''）で囲まれた文字列を機械抽出する。extract_rate_factor と
 #   同じ考え方 — ちょうど1つに絞れる時だけ確定・0件/2件以上は CLARIFY に委ねる（None）。
@@ -1713,7 +1810,12 @@ OP_SUBJECT_SLOTS = {
     #   （input 種別・subject.py 参照）。これが無いと「売上から原価を引いた利益列を作って、
     #   利益で降順に」の 2 段目が、誰にも拾われない『売上』『原価』を反証と誤読する。
     "COMPUTE_COLUMN": (("operands", SUBJ_INPUT), ("target", SUBJ_COLUMN)),
-    "LOOKUP_FILL": (("target_col", SUBJ_COLUMN), ("key_col", SUBJ_COLUMN)),
+    # ★ operator8 ①: source_sheet は「対象」ではないが、依頼文がそのシートだけを名指しした
+    #   自然な言い回し（「単価表シートから単価を引っ張ってきて」）で、その言及を
+    #   _target_sheet スロットの反証として誤って消費させないよう先に消費する
+    #   （INPUT の列版と同じ考え方・sheets 版は SHEET_INPUT）。
+    "LOOKUP_FILL": (("target_col", SUBJ_COLUMN), ("key_col", SUBJ_COLUMN),
+                     ("source_sheet", SUBJ_SHEET_INPUT)),
     "AGGREGATE": (("group_col", SUBJ_COLUMN), ("value_col", SUBJ_COLUMN)),
     "BOLD": (("target", SUBJ_REGION),),
     "FILL_COLOR": (("target", SUBJ_REGION),),
@@ -2172,7 +2274,9 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     def resolve_in(key: str, sheet_name: str):
         val, was_inferred, err = resolve_col_ref(resolved.get(key), headers.get(sheet_name, []))
         if err:
-            return err
+            # ★ operator8 ③: 列解決の失敗時だけ敗者復活（book_meta に _row_scan が無い
+            #   単体テスト等では常に None ＝従来のまま）。
+            return _header_row_hint_for_missing_col(book_meta, sheet_name, resolved.get(key)) or err
         resolved[key] = val
         if was_inferred:
             inferred.add(key)
@@ -2476,12 +2580,26 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         #   1.0 のままだと、税抜き金額に「税込み」ラベルが付いた恒真の誤りを事後条件が
         #   pass にしてしまう（args 基準の検証だから）。ここで機械的に CLARIFY へ倒す
         #   （語リストは 税/込 の2語で凍結・むやみに増やさない）。
+        # ★ operator8 ②: CLARIFY に倒す直前に敗者復活（lookup_vocab_tax_factor・
+        #   docstring 参照）。第一照合（上の text_factor/vocab_factor）の優先順は変えない
+        #   ―― ここに来るのはその両方が外れた場合だけ。
         if resolved["factor"] == 1.0 and any(k in label for k in ("税", "込")):
-            return False, resolved, inferred, (
-                f"ラベル『{label}』は税/込を含みますが倍率が分かりません。"
-                "依頼文に税率を書く（例:「消費税10%」）か、用語集に登録してください"
-                "（例: ailine vocab add 消費税 1.1）"
-            )
+            tax_factor, tax_term, tax_candidates = lookup_vocab_tax_factor(vocab or {})
+            if tax_factor is not None:
+                resolved["factor"] = tax_factor
+                sources["factor"] = f"用語集: {tax_term}（ラベル『{label}』の税に適用）"
+            elif tax_candidates:
+                listed = "・".join(f"{term}={value:g}" for value, term in tax_candidates)
+                return False, resolved, inferred, (
+                    f"ラベル『{label}』は税/込を含みますが、用語集に候補が複数あります"
+                    f"（{listed}）。どちらを使うか依頼文に書いてください（例:「消費税10%」）"
+                )
+            else:
+                return False, resolved, inferred, (
+                    f"ラベル『{label}』は税/込を含みますが倍率が分かりません。"
+                    "依頼文に税率を書く（例:「消費税10%」）か、用語集に登録してください"
+                    "（例: ailine vocab add 消費税 1.1）"
+                )
 
         if sources:
             resolved["_sources"] = sources
@@ -5428,10 +5546,55 @@ def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
     a._target_sheet = target_sheet
     a._sheet_conflict = sheet_conflict      # ★ 挙動変更#3: 3択の関門(_sheet_conflict_gate)が読む
     a._rerun_ctx = (book, source_book, struct_dump, sheets)
+    # ★ operator8 ①: sheet_source=="task" の推測（依頼文中の裸/マーカー付き言及）は、
+    #   op が LOOKUP_FILL だと分かった時に「実は参照シート(source_sheet)だった」と
+    #   判明することがある（このブックは2シート・依頼文が言及したのは参照シートだけ、
+    #   という自然な言い回し）。誤った「操作するシート」を印字してしまう前に、この源だけ
+    #   接地（op が分かるところ）まで印字を遅らせる。"cli"/"default" 由来は常に正しい
+    #   （--sheet 明示 or 唯一の既定）ので従来どおり即時に印字する。
+    if sheet_source == "task" and len(sheets) > 1:
+        a._pending_sheet_announce = (sheets, target_sheet, sheet_source)
+    else:
+        announce = describe_target_sheet(sheets, target_sheet, sheet_source)
+        if announce:
+            print(announce)
+    return _translate_and_dispatch(a, book, source_book, struct_dump, sheets)
+
+
+def _flush_pending_sheet_announce(a: argparse.Namespace) -> None:
+    """★ operator8 ①: 遅延した事前行をそのまま（推測どおり）印字する
+       （op が LOOKUP_FILL 以外だった・または LOOKUP_FILL でも推測が正しかった場合）。"""
+    pending = getattr(a, "_pending_sheet_announce", None)
+    a._pending_sheet_announce = None
+    if not pending:
+        return
+    sheets, target_sheet, sheet_source = pending
     announce = describe_target_sheet(sheets, target_sheet, sheet_source)
     if announce:
         print(announce)
-    return _translate_and_dispatch(a, book, source_book, struct_dump, sheets)
+
+
+def _announce_lookup_fill_target_sheet(a: argparse.Namespace, sheets: list, args: dict) -> None:
+    """★ operator8 ①: LOOKUP_FILL と分かった時点で、遅延させた事前行を接地する。
+       翻訳が返した target_sheet が推測（task 由来）と食い違うなら、依頼文が名指ししたのは
+       参照シート(source_sheet)の方だった＝推測は誤りだったということ。誤った主張
+       （「操作するシート: N枚目『（実は参照シート）』」）は印字せず、本当の target_sheet を
+       source="default"（依頼文からの判断ではなく、参照シート以外の消去法で決まった）で
+       出し直す。a._target_sheet もここで訂正する（以降 codegen/事後条件が読む値と揃える・
+       verify_dsl_args が resolved["_target_sheet"] で二重に決め直すのと結果は同じだが、
+       事前行と実際の対象が食い違って見えないようにする）。
+       食い違いが無ければ（推測どおり・または target_sheet が実在しない）、遅延した事前行を
+       そのまま出す。"""
+    pending = getattr(a, "_pending_sheet_announce", None)
+    real_target = args.get("target_sheet") if isinstance(args, dict) else None
+    if pending and isinstance(real_target, str) and real_target in sheets and real_target != a._target_sheet:
+        a._pending_sheet_announce = None
+        a._target_sheet = real_target
+        announce = describe_target_sheet(sheets, real_target, "default")
+        if announce:
+            print(announce)
+    else:
+        _flush_pending_sheet_announce(a)
 
 
 def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path,
@@ -5456,11 +5619,27 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         clarify_q = None
     else:
         header_rows, clarify_q = resolve_header_rows(struct_dump, sheets, target_sheet=target_sheet)
+        # ★ operator8 ③: resolve_header_rows が「StructDump に対象シートが無い→無言で
+        #   1行目」フォールバックを踏んだら、その無言の仮定を開示する（LO の一時不調等で
+        #   起きうる・実機の再現形）。clarify_q が立つ分岐とは互いに排他（docstring 参照）。
+        #   ★ --dry は元から struct_dump を作らない（意図的なスキップ・_cmd_run_dispatch
+        #   参照）ため対象外 ―― LO 不調と区別が付かない誤発火を避ける。
+        if (clarify_q is None and not getattr(a, "dry", False)
+                and _struct_dump_info_missing(struct_dump, sheets, target_sheet)):
+            print(f"（見出し行の自動検出が使えなかったため、"
+                  f"『{target_sheet or (sheets[0] if sheets else '')}』シートの1行目を"
+                  "見出しとみなしています。違う場合は --header-row で指定してください）")
     if clarify_q:
+        # ★ operator8 ①: 翻訳まで届かずに止まる分岐 ―― op が分からないので LOOKUP_FILL 訂正の
+        #   出番は無い。遅延させていた推測どおりの事前行をここで出す（従来と同じタイミング差）。
+        _flush_pending_sheet_announce(a)
         print(f"？ {clarify_q}")
         return 3
 
     book_meta = build_book_meta(source_book, header_rows=header_rows)
+    # ★ operator8 ③: 列解決が失敗した時の敗者復活（_header_row_hint_for_missing_col）用の
+    #   材料。実ファイルからここで一度だけ読む（各シート先頭~10行・軽量）。
+    book_meta["_row_scan"] = {s: _scan_first_rows(source_book, s) for s in sheets}
     translation = getattr(a, "_reuse_translation", None)
     a._reuse_translation = None
     if translation is None:
@@ -5479,6 +5658,12 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     if len(plan) == 1:
         step = plan[0]
         op = step.get("op")
+        # ★ operator8 ①: op が分かった ―― LOOKUP_FILL なら遅延した事前行を接地して
+        #   訂正の要否を判断する。それ以外は推測どおりに出す（従来と同じ文言・タイミング差のみ）。
+        if op == "LOOKUP_FILL":
+            _announce_lookup_fill_target_sheet(a, sheets, step.get("args") or {})
+        else:
+            _flush_pending_sheet_announce(a)
         if op == "CLARIFY":
             question = step.get("question") or "確認が必要です"
             print(f"？ {question}")
@@ -5492,6 +5677,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             return cmd_run_dsl(a, book, source_book, book_meta, op, step.get("args", {}))
         return cmd_refuse_vocab_miss(a, book, step)
 
+    # ★ operator8 ①: 複合計画は対象範囲外（このブリーフの検体は単発 LOOKUP_FILL のみ）。
+    #   遅延させた推測をそのまま出す ―― 複合計画の段別 LOOKUP_FILL 訂正は今回やらない。
+    _flush_pending_sheet_announce(a)
     return cmd_run_plan(a, book, source_book, book_meta, plan)
 
 

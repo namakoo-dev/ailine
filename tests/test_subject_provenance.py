@@ -582,8 +582,8 @@ def test_op_subject_slots_declares_all_ops():
 
 
 def test_op_subject_slots_are_well_formed():
-    from ailine_core.subject import COLUMN, INPUT, LABEL, REGION, ROW, SHEET
-    known = {COLUMN, INPUT, LABEL, REGION, ROW, SHEET}
+    from ailine_core.subject import COLUMN, INPUT, LABEL, REGION, ROW, SHEET, SHEET_INPUT
+    known = {COLUMN, INPUT, LABEL, REGION, ROW, SHEET, SHEET_INPUT}
     for op, decl in ailine.OP_SUBJECT_SLOTS.items():
         keys = [k for k, _kind in decl]
         assert len(set(keys)) == len(keys), f"{op}: 同じ slot を二重に宣言している"

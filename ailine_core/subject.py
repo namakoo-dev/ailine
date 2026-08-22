@@ -88,8 +88,13 @@ LABEL = "label"     # 書き込むラベル（★ 金額の性質を限定する
 #   「売上から原価を引いた利益列を作って、利益で降順に」のような正しい連鎖で、
 #   誰にも拾われないままの『売上』『原価』が 2 段目の反証に化ける（実測で掴んだ誤爆）。
 INPUT = "input"
+# ★ operator8 ①: LOOKUP_FILL の source_sheet のように「対象」ではないが依頼文のシート言及を
+#   消費する実在シート名。INPUT の列版と同じ考え方（「言及は参照側で消費された」）だが、
+#   consumed の家系が列/行/全体とは別（sheets）なので INPUT とは別種別にする
+#   （_match_slot で others=sheets・token family="sheet" を使うため）。
+SHEET_INPUT = "sheet_input"
 
-_KINDS = frozenset({COLUMN, REGION, ROW, SHEET, LABEL, INPUT})
+_KINDS = frozenset({COLUMN, REGION, ROW, SHEET, LABEL, INPUT, SHEET_INPUT})
 
 # 「見出し行」を指す語。★ 実在物への接地: 見出し行はブックの実体（book_meta["header_rows"]）
 # として機械が知っている行番号なので、この語は行番号への機械照合が可能。
@@ -262,6 +267,9 @@ def _match_slot(slot: Slot, task: str, columns, d: TaskDesignators, sheets,
     if slot.kind == INPUT:   # 判定はしない（None）が、照合できたなら語を消費する
         matched = name_matches_task(raw, task, others=columns)
         return None, (("column", raw) if matched else None)
+    if slot.kind == SHEET_INPUT:   # ★ operator8 ①: シート版の INPUT（判定はしない・消費のみ）
+        matched = name_matches_task(raw, task, others=sheets)
+        return None, (("sheet", raw) if matched else None)
     if slot.kind == SHEET:
         if name_matches_task(raw, task, others=sheets):
             return True, ("sheet", raw)
