@@ -2130,9 +2130,14 @@ def _normalize_plan_step(data) -> dict:
        - モデルが明示した op="OUT_OF_VOCAB" は about を保って素通し。
        - op が語彙外・必須 slot 欠落・非 dict 要素は op="FREEFORM" にする
         （旧 translate_task の『退避は FREEFORM』という分類をそのまま踏襲。単一依頼のときの
-        後方互換＝cmd_run の全面自由生成 retreat が変わらないようにするため）。"""
+        後方互換＝cmd_run の全面自由生成 retreat が変わらないようにするため）。
+       ★ W10 前提工事①（architect レビュー致命5-2）: FREEFORM に落ちた**理由**を
+       "_fail_reason" として持たせる（"out_of_vocab"=非dict要素/未知op・
+       "slot_missing"=必須slot欠落）。呼び出し側(cmd_refuse_vocab_miss)が
+       history の failure_kind を下位区分するための材料 ── OUT_OF_VOCAB/CLARIFY の
+       dict 形は既存テストの exact-equality を壊さないよう不変のまま。"""
     if not isinstance(data, dict):
-        return {"op": "FREEFORM", "args": {}}
+        return {"op": "FREEFORM", "args": {}, "_fail_reason": "out_of_vocab"}
     op = str(data.get("op", "")).upper()
     if op == "CLARIFY":
         question = data.get("question")
@@ -2141,14 +2146,14 @@ def _normalize_plan_step(data) -> dict:
         about = data.get("about")
         return {"op": "OUT_OF_VOCAB", "about": str(about) if about else "内容不明の依頼", "args": {}}
     if op not in OP_SCHEMA:
-        return {"op": "FREEFORM", "args": {}}
+        return {"op": "FREEFORM", "args": {}, "_fail_reason": "out_of_vocab"}
     args = data.get("args")
     if not isinstance(args, dict):
         # モデルが args で包まず op と slot をフラットに返した場合の救済（寛容に受ける）。
         args = {k: v for k, v in data.items() if k not in ("op", "about", "question")}
     required = OP_SCHEMA[op]
     if any(k not in args or args[k] in (None, "") for k in required):
-        return {"op": "FREEFORM", "args": {}}
+        return {"op": "FREEFORM", "args": {}, "_fail_reason": "slot_missing"}
     return {"op": op, "args": args}
 
 
@@ -2161,13 +2166,17 @@ def translate_task(model: str, task: str, book_meta: dict, temperature: float = 
        {"op": "CLARIFY", "question": ...} / {"op": "FREEFORM"}（退避）のいずれか。
        ★ 失敗（API 不通・JSON 不正・空応答）は例外を投げずクラッシュさせない。
        op="FREEFORM" 一段の計画に退避し、呼び出し側が現行の自由生成経路（M2a 助言つき）
-       へフォールバックできるようにする。"""
+       へフォールバックできるようにする。
+       ★ W10 前提工事①: この関数レベルの退避（API 不通/JSON 不正/空応答）は
+       "_fail_reason": "translate_error" を付ける ── _normalize_plan_step 内の
+       out_of_vocab/slot_missing とは別種（翻訳が DSL の形にすら届かなかった）で、
+       断りの文言も「照合できませんでした」とは言わない（cmd_refuse_vocab_miss 参照）。"""
     try:
         messages = build_translation_messages(task, book_meta)
         raw = ollama_generate_json(model, messages, temperature=temperature, num_predict=700)
         data = json.loads(raw)
     except Exception:
-        return {"plan": [{"op": "FREEFORM", "args": {}}]}
+        return {"plan": [{"op": "FREEFORM", "args": {}, "_fail_reason": "translate_error"}]}
     steps_raw = None
     if isinstance(data, dict) and isinstance(data.get("plan"), list):
         steps_raw = data["plan"]
@@ -2176,7 +2185,7 @@ def translate_task(model: str, task: str, book_meta: dict, temperature: float = 
     elif isinstance(data, list):
         steps_raw = data
     if not steps_raw:
-        return {"plan": [{"op": "FREEFORM", "args": {}}]}
+        return {"plan": [{"op": "FREEFORM", "args": {}, "_fail_reason": "translate_error"}]}
     return {"plan": [_normalize_plan_step(s) for s in steps_raw]}
 
 
@@ -5289,7 +5298,11 @@ def format_history_table(entries: list) -> str:
             line += "  (下見)"
         kind = e.get("failure_kind")
         if not e.get("ok") and kind not in (None, "none"):
-            line += f"  [{kind}]"
+            # ★ W10 前提工事①: failure_kind は記録側で「語彙外/out_of_vocab」等に
+            #   下位区分したが、表示は従来どおり上位ラベル「語彙外」に畳む
+            #   （表示互換のため・区分は history.jsonl の生データ側で見る）。
+            shown = kind.split("/", 1)[0] if isinstance(kind, str) else kind
+            line += f"  [{shown}]"
         lines.append(line)
     return "\n".join(lines)
 
@@ -6314,6 +6327,29 @@ def detect_helper_sweep(code: str, helper_names: set) -> str | None:
             "— 依頼と無関係な操作が混じっていないか確認してください")
 
 
+# ★ W10 前提工事①（architect レビュー致命5-2）: 単発の語彙外(FREEFORM/OUT_OF_VOCAB)が
+#   落ちた理由を history の failure_kind に持ち込むための対応表。上位ラベル「語彙外」は
+#   接頭辞として残す（format_history_table の表示互換のため・表示自体は従来どおり
+#   「語彙外」に畳んで良いが、記録側は区分を保持するというレビュー指示）。
+_VOCAB_MISS_KIND_PREFIX = "語彙外"
+_VOCAB_MISS_REASONS = ("out_of_vocab", "slot_missing", "translate_error")
+
+
+def _vocab_miss_reason(step: dict) -> str:
+    """単発の語彙外 step から失敗理由を1つに決める。
+       - op="OUT_OF_VOCAB"（モデルが明示的に「照合したが無い」と答えた）→ out_of_vocab
+       - op="FREEFORM" は _normalize_plan_step / translate_task が付けた
+         "_fail_reason"（out_of_vocab/slot_missing/translate_error）をそのまま使う。
+       - _fail_reason が無い（例: テストが translate_task 自体を monkeypatch して
+         生の {"op": "FREEFORM"} を返す等、正規化を経ていない経路）は out_of_vocab を
+         既定にする ── 「未知の理由」を「翻訳失敗」と偽って接続エラー文言を出すよりは
+         安全側（照合できなかった、が最も広く成立する既定）。"""
+    if step.get("op") == "OUT_OF_VOCAB":
+        return "out_of_vocab"
+    reason = step.get("_fail_reason")
+    return reason if reason in _VOCAB_MISS_REASONS else "out_of_vocab"
+
+
 def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None = None) -> int:
     """★ freeform 最終決定（DESIGN-20260821-multifile.md「freeform 最終決定」節・
        Namakoo 2026-08-21 19:37「廃止しよう」で確定）: 単発の語彙外（翻訳が
@@ -6323,11 +6359,20 @@ def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None =
        （実測）・可逆性の非対称（廃止は git から復活可・悪印象は不可逆）・恩恵層が
        実測上不在）。将来の復活は発火条件つきで設計書側に凍結（ここには実装しない）。
 
-       ★ vocab_miss の記録: history.jsonl に failure_kind="語彙外" で残す（依頼文・book・
-       ts は build_history_entry が普段どおり詰める）。生成も適用も一切していないので
-       result は ok=False・attempts=0・changes=[] のまま ―― _finish_run/build_history_entry
-       を素通しで再利用する（頻度×原始性の二軸で開発キューへ、という設計書の使い道に
-       machine-readable な形で残す）。
+       ★ vocab_miss の記録: history.jsonl に failure_kind="語彙外/<理由>" で残す
+       （依頼文・book・ts は build_history_entry が普段どおり詰める）。★ W10 前提工事①
+       （architect レビュー致命5-2）: 従来は理由を問わず一色で「語彙外」だった
+       （未知op/必須slot欠落/translate_task自体の例外・空応答が全部合流していた）。
+       ここで _vocab_miss_reason() が out_of_vocab/slot_missing/translate_error に
+       仕分ける（上位ラベル「語彙外」は接頭辞として残す）。生成も適用も一切していない
+       ので result は ok=False・attempts=0・changes=[] のまま ―― _finish_run/
+       build_history_entry を素通しで再利用する（頻度×原始性の二軸で開発キューへ、
+       という設計書の使い道に machine-readable な形で残す）。
+
+       ★ 断りの文言は理由で変えない ── ただし translate_error（ollama 不通/JSON不正/
+       空応答で翻訳がそもそも DSL の形にならなかった経路）だけは「頼める操作の一覧に
+       照合できませんでした」と言うと嘘になる（照合を試みてすらいない）ため、
+       render_vocab_miss_refusal に translate_error=True を渡して理由行を差し替える。
 
        ★ --allow-freeform は受理する（後方互換のため flag 自体は argparse に残す）が、
        廃止告知を1行足すだけで断り自体は変えない（自由生成そのものへは戻らない）。
@@ -6336,12 +6381,14 @@ def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None =
        対象は単発経路だけ（compound-plan 側は意図的に変えていない）。"""
     step = step or {}
     about = str(step.get("about") or "").strip()
-    for ln in render_vocab_miss_refusal(about, sunset_notice=bool(getattr(a, "allow_freeform", False))):
+    reason = _vocab_miss_reason(step)
+    for ln in render_vocab_miss_refusal(about, sunset_notice=bool(getattr(a, "allow_freeform", False)),
+                                         translate_error=(reason == "translate_error")):
         print(ln)
     result = {"ok": False, "attempts": 0, "task": a.task, "model": a.model,
               "path": "vocab_miss", "command": None, "postcondition": None,
               "changes": [], "out": str(book)}
-    _finish_run(a, book, result, failure_kind="語彙外")
+    _finish_run(a, book, result, failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/{reason}")
     return 3
 
 

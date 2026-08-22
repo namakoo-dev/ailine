@@ -35,3 +35,30 @@ def _default_normalize_book_is_passthrough(request, monkeypatch):
     if request.node.get_closest_marker("real_normalize_book"):
         return   # normalize_book 自身の挙動を検証するテストは対象外（pytest.ini 参照）
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
+
+
+# ★ W10 前提工事②（architect レビュー致命5-3）: 実 ~/.ailine/history.jsonl 等へ
+# テストが書いてしまう穴を塞ぐ番人。
+#
+# 実測（2026-08-22）: 実 history.jsonl 641 行中、failure_kind=語彙外(vocab_miss) 93 件
+# のうち 92 件が pytest 由来（book=b.xlsx 等・real 実利用は 1 件のみ）。原因は
+# tests/test_golden_transcripts.py の _isolate（HISTORY_FILE/VOCAB_FILE/BACKUP_DIR/
+# RUN_LOCK_FILE を tmp_path に寄せる小道具）を、個々のテストが monkeypatch し忘れる
+# 「適用漏れ」（例: tests/test_freeform_out_only.py の一部は HISTORY_FILE を一切
+# monkeypatch しない）。_isolate は各テストが「思い出して呼ぶ」もので、思い出さなければ
+# 実ホームに書く既定のまま――同じ地雷を新しいテストが踏み続ける。
+#
+# ここで一箇所に寄せ、HISTORY_FILE/VOCAB_FILE/MISCLASS_FILE の既定を autouse で
+# tmp_path に強制する。個々のテストが自分の tmp_path へ monkeypatch する分は、
+# こちらより後に setattr されるのでそのまま優先される（後勝ち＝無害・_isolate や
+# 個別 monkeypatch を削る必要は無い）。
+#
+# ★ 対象は history/vocab/misclass の3つだけ（BACKUP_DIR/RUN_LOCK_FILE はこの番人の
+# スコープ外 ── 実測で漏れが確認されたのはこの3つ）。
+# ★ 既存の実 ~/.ailine/history.jsonl 等の掃除はしない（本番データ・触るのは
+# Namakoo 決裁）。
+@pytest.fixture(autouse=True)
+def _guard_real_home_writes(monkeypatch, tmp_path):
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "_guard_history.jsonl")
+    monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "_guard_vocab.json")
+    monkeypatch.setattr(ailine, "MISCLASS_FILE", tmp_path / "_guard_misclass.jsonl")

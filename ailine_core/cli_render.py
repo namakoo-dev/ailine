@@ -89,15 +89,23 @@ def freeform_notice_reason(op: str, about: str = "") -> str:
 #   cmd_run_freeform 自体が消えたため（git が墓場・復活条件は設計書に凍結）。
 #   複合計画側の render_freeform_notice_compact（下）は生成が残る経路なので変えない。
 
-def render_vocab_miss_refusal(about: str = "", sunset_notice: bool = False) -> list:
+def render_vocab_miss_refusal(about: str = "", sunset_notice: bool = False,
+                               translate_error: bool = False) -> list:
     """単発の語彙外（FREEFORM/OUT_OF_VOCAB）の断り。既存の CLARIFY 系（`？` 接頭・
        「（頼める操作の一覧: ailine ops）」の1文）に文体をそろえる。3要素は必須:
        理由・vocab_miss を記録する開示・次の手（ops/言い換え/照合への導線）。
        about があれば OUT_OF_VOCAB が名指しした対象を理由行に添える（FREEFORM は空）。
        sunset_notice: --allow-freeform を受け取った場合だけ廃止告知を1行足す
-       （自由生成そのものは受理しない ── 断りの中身は変えない）。"""
+       （自由生成そのものは受理しない ── 断りの中身は変えない）。
+       ★ W10 前提工事①: translate_error=True（ollama 不通/JSON 不正/空応答で
+       translate_task 自体が退避した経路）は理由行を差し替える ──「頼める操作の
+       一覧に照合できませんでした」は**照合を試みた**ことを含意し、翻訳が
+       そもそも走らなかった/形にならなかったこの経路では嘘になるため。"""
     suffix = f"（{about}）" if about else ""
-    lines = [f"？ この依頼{suffix}は、頼める操作の一覧に照合できませんでした。要望として記録します。"]
+    if translate_error:
+        lines = ["？ 翻訳に失敗した（ollama に接続できない等）。要望として記録します。"]
+    else:
+        lines = [f"？ この依頼{suffix}は、頼める操作の一覧に照合できませんでした。要望として記録します。"]
     if sunset_notice:
         lines.append("自由生成は廃止しました（理由: 機械検証できない操作は行わない方針）。")
     lines.append("  （頼める操作の一覧: ailine ops）")
