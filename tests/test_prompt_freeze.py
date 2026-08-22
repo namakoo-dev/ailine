@@ -32,6 +32,11 @@ _FROZEN = {
     #   教訓＝別名/few-shot を混ぜると壊れる部品）。frozen 対象は tests/test_fixed_op_translation.py
     #   が番人（test_fixed_op_prompt_is_frozen_constant）。
     "TRANSLATION_FIXED_OP_SYSTEM": "230c3e0e92d3aa20",
+    # ★ 2026-08-22: W10 便C2（もしかして提案の判定器・第2段）で追加した第5の定数。
+    #   両面プロンプト（candidates+unsupported）── unsupported が非空なら候補を丸ごと
+    #   捨てる。frozen 対象は tests/test_suggest_flow.py が番人
+    #   （test_judge_prompt_is_fifth_frozen_constant）。
+    "SUGGEST_JUDGE_SYSTEM": "27286fa0a6be6117",
 }
 
 

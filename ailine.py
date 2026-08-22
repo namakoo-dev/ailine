@@ -121,6 +121,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
 )
 from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/照合/保存形式（純関数）
 from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もしかして提案の候補生成（語としての厳格一致+about）
+from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
@@ -1842,6 +1843,15 @@ OUT_OF_SCOPE_TERMS = [
 ]
 
 
+def _op_match_pool(op: str) -> list:
+    """op 1つ分の照合語彙（label+synonyms+match_phrases）。suggest_ops の pool 構築と
+       同じ規則を1 op 分だけ切り出したもの（★ W10 便C2 S5: 残差検出(ailine_core/residue.py)
+       が「この操作の照合語彙で消費された部分」を判定するのにも同じプールを使う ──
+       suggest_ops と別のプールを持つと片方だけ更新されて食い違う事故になるため）。"""
+    meta = OP_META.get(op, {})
+    return [meta.get("label", op), *meta.get("synonyms", ()), *meta.get("match_phrases", ())]
+
+
 def suggest_ops(task: str, about: str | None = None, exclude_ops=None) -> list:
     """★ W10 便C2: もしかして提案の候補生成。OP_META の label/synonyms/match_phrases を
        照合プールに組み、ailine_core/suggest.py の純ロジック（語としての厳格一致・
@@ -1850,10 +1860,85 @@ def suggest_ops(task: str, about: str | None = None, exclude_ops=None) -> list:
        プールとして渡し、語彙外の強い語が語として現れる依頼は候補ゼロに落とす
        （主対策ではなく補助 ── 主対策は白側の一致要求そのもの）。凍結セットでの測定は
        bench/run_w10_suggest_eval.py、契約は tests/test_suggest_candidates.py。"""
-    pool = {op: [meta["label"], *meta["synonyms"], *meta.get("match_phrases", ())]
-            for op, meta in OP_META.items()}
+    pool = {op: _op_match_pool(op) for op in OP_META}
     return suggest_candidates.suggest_ops(task, pool, about=about, exclude_ops=exclude_ops,
                                            veto_phrases=OUT_OF_SCOPE_TERMS)
+
+
+# ---------------------------------------------------------------------------
+# ★ W10 便C2 第2段: もしかして提案の判定器（段1の厳格一致(suggest_ops)が空の時だけ呼ばれる）。
+#   両面プロンプト（candidates+unsupported）── 2026-08-22 夜の bench 探針（/tmp/judge3.log）で
+#   実測済みの形をそのまま製品化する: 陽性対照 18/18・in_vocab recall@1 41/44・
+#   true_out_of_vocab 誤提示 0/10・回帰の床 誤提示 3/12。
+#   ★ unsupported が非空なら「依頼全体が対応外」という自己申告として candidates を丸ごと
+#   捨てる。★ 部分対応（一部は対応・残りは対応外）の自己申告は信用しない ── 実測で 7B の
+#   自己棄権（残りは対応外だと自分で申告すること）は 5/6 素通り（並べ替えてから印刷して、
+#   のような複合依頼で「印刷」の対応外を自分からは言わない）。残差の検出は別の機械
+#   （ailine_core/residue.py・S5）に任せ、ここでは「全く対応できない」の判定だけを信用する。
+#   ★ 第5の凍結定数（tests/test_prompt_freeze.py 登録・S6）。W9 の教訓（few-shot/別名を
+#   混ぜると壊れる部品）に倣い、op の意味カテゴリの一覧だけを渡す（args のスキーマは不要）。
+# ---------------------------------------------------------------------------
+
+SUGGEST_JUDGE_SYSTEM = """あなたは表計算操作の判定係。日本語の依頼が、下の「対応できる操作」の
+どれかに言い換えれば一致するかどうかを判定する。あなたの仕事は判定だけで、実際の操作は行わない。
+
+出力形式は必ず {{"candidates": [...], "unsupported": [...]}}。それ以外は書かない。
+- candidates: 依頼が言い換えれば一致する操作名（下の一覧の名前そのまま）。一致が無ければ空配列。
+  一覧に無い名前を出してはいけない
+- unsupported: 依頼**全体**が一覧のどの操作にも一致しない場合だけ、その理由を短い日本語で
+  1つ入れる。依頼の一部だけが一覧の操作に一致し、残りが対応外でも、一致した部分がある限り
+  unsupported は空配列のままにする（一致した操作は candidates に入れる。残りをどう扱うかは
+  あなたの仕事ではない）
+
+★ 自信の無い当てはめより「一致しない」と正直に言う方を選ぶ。JSON のみ出力（説明・markdown
+柵は禁止）。
+
+対応できる操作:
+{ops}"""
+
+
+def _judge_ops_catalog() -> str:
+    """SUGGEST_JUDGE_SYSTEM の {ops} 差し込み用: OP_META の category/label/synonyms を
+       簡潔な一覧にしたもの（args のスキーマは要らない・judge は op を選ぶだけ）。
+       ★ OPS_DOC/TRANSLATION_SYSTEM と同じ関係 ── OP_META が伸びても SUGGEST_JUDGE_SYSTEM
+       自体のハッシュ（凍結対象）は変わらない。"""
+    return "\n".join(
+        f"{op}: {meta['category']}・{meta['label']}（{'/'.join(meta['synonyms'])}）"
+        for op, meta in OP_META.items())
+
+
+def build_suggest_judge_messages(task: str, about: str | None) -> list:
+    """判定器の messages（system + 実クエリ）を組む。few-shot は持たない（W9 の教訓）。"""
+    system = SUGGEST_JUDGE_SYSTEM.format(ops=_judge_ops_catalog())
+    about_line = f"\n一次翻訳の要約: 「{about}」" if about else ""
+    return [{"role": "system", "content": system},
+            {"role": "user", "content": f"依頼: 「{task}」{about_line}"}]
+
+
+def judge_ops_via_llm(task: str, about: str | None = None) -> list:
+    """★ W10 便C2 第2段。厳格一致(suggest_ops)が空の時だけ呼ばれる（+3秒・呼び出し側が
+       進捗表示を出す）。戻り値は実在 op のみ・重複除去・最大 suggest_candidates.MAX_CANDIDATES
+       件（幻覚 op の構造的封鎖・suggest_ops と同じ考え方）。
+       応答が壊れていれば（JSON不正・型不正・ollama 不通）正直に空リストを返す
+       （幻覚候補で先へ進まない・呼び出し側は従来の断りへ retreat できる）。"""
+    try:
+        raw = ollama_generate_json(DEFAULT_MODEL, build_suggest_judge_messages(task, about),
+                                    temperature=0.1, num_predict=200)
+        data = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    if data.get("unsupported"):
+        return []
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list):
+        return []
+    seen = []
+    for c in candidates:
+        if c in OP_META and c not in seen:
+            seen.append(c)
+    return seen[:suggest_candidates.MAX_CANDIDATES]
 
 
 # op → 必須 slot 名のタプル。翻訳直後の slot 欠落チェックと確認行の項目順を兼ねる。
@@ -6010,7 +6095,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             return 3
         if op in OP_SCHEMA:
             return cmd_run_dsl(a, book, source_book, book_meta, op, step.get("args", {}))
-        return cmd_refuse_vocab_miss(a, book, step)
+        return _maybe_suggest_or_refuse(a, book, source_book, book_meta, sheets, step)
 
     # ★ operator8 ①: 複合計画は対象範囲外（このブリーフの検体は単発 LOOKUP_FILL のみ）。
     #   遅延させた推測をそのまま出す ―― 複合計画の段別 LOOKUP_FILL 訂正は今回やらない。
@@ -6671,6 +6756,94 @@ def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None =
               "changes": [], "out": str(book)}
     _finish_run(a, book, result, failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/{reason}")
     return 3
+
+
+# ---------------------------------------------------------------------------
+# ★ W10 便C2: もしかして提案の UX 配線。out_of_vocab（_vocab_miss_reason 参照）の断りの
+#   直前に挟む。slot_missing/translate_error はここに来ず従来の断りへ直行する
+#   （REVIEW-20260822-w10-architect.md「フローの設計」・Namakoo 決裁）。
+# ---------------------------------------------------------------------------
+
+def _ground_via_fixed_op(a: argparse.Namespace, task: str, book_meta: dict, op: str):
+    """op を固定した二段目翻訳(translate_task_fixed_op)→接地(verify_dsl_args)を1回で行う。
+       戻り値: 成功すれば (raw_args, resolved, inferred)。二段目翻訳の応答が壊れている
+       （None・op不一致・args が dict でない）か、接地に失敗すれば (None, None, None)。
+       段0(別名直行)と段1/2(もしかして提案)の両方がこの同じ手順を使う ── 二段目翻訳の
+       スキーマ（op 固定）と接地の規則を2箇所に書くと片方だけ直されて食い違う事故になる。"""
+    fixed = translate_task_fixed_op(a.model, op, task, book_meta, temperature=0.1)
+    if not fixed or fixed.get("op") != op or not isinstance(fixed.get("args"), dict):
+        return None, None, None
+    ok, resolved, inferred, _err = verify_dsl_args(
+        op, fixed["args"], book_meta, task=task, vocab=load_vocab(),
+        target_sheet=getattr(a, "_target_sheet", None))
+    if not ok:
+        return None, None, None
+    return fixed["args"], resolved, inferred
+
+
+def _maybe_suggest_or_refuse(a: argparse.Namespace, book: Path, source_book: Path,
+                              book_meta: dict, sheets: list, step: dict) -> int:
+    """★ W10 便C2: もしかして提案の入口。out_of_vocab でだけ発火する（それ以外の理由は
+       従来の断りへ直行）。
+       段0: lookup_alias がヒットしたら、もしかしてを経ずに二段目翻訳→接地→適用まで直行
+       する（登録済みの言い回しは、既に一度 y で頷いた実績がある信頼できる経路・S1後半）。
+       段1: suggest_ops（厳格一致・0秒）。空なら段2: judge_ops_via_llm（+3秒・進捗表示）
+       ── ★ about は段2にだけ渡す（段1に渡すと一次翻訳の要約自体が語彙のラベルを含む
+       ことがあり、厳格一致が常に先取りしてしまい判定器の出番が無くなる。凍結検体
+       test_judge_tier_fires_only_when_strict_empty の実測で判明）。
+       候補の先頭だけを試す（外れたら2番目は試さず正直に断る）。
+       二段目翻訳→接地まで通ったら、もしかしてブロック（解釈行+残差行）を見せて y/N を聞く
+       （非対話は ask_yes_no が既定 False を返すだけ・表示は既に済んでいる＝S4）。
+       y: 通常の run フロー(cmd_run_dsl)で適用し、成功後に暗黙登録+開示（S1）。
+       N: 従来の断り + misclass 第3信号 signal="suggest_decline"（対話で明示的に断った時
+       だけ記録する・S3）。
+       候補なし/二段目翻訳の応答が壊れている/接地失敗: 従来の断りのまま。"""
+    if _vocab_miss_reason(step) != "out_of_vocab":
+        return cmd_refuse_vocab_miss(a, book, step)
+    task = a.task
+    about = str(step.get("about") or "").strip() or None
+
+    alias_op = lookup_alias(task)
+    if alias_op:
+        args, _resolved, _inferred = _ground_via_fixed_op(a, task, book_meta, alias_op)
+        if args is not None:
+            return cmd_run_dsl(a, book, source_book, book_meta, alias_op, args)
+        return cmd_refuse_vocab_miss(a, book, step)
+
+    candidates = suggest_ops(task)
+    if not candidates:
+        t0 = progress_start("⏳ 似た操作を確認中…")
+        candidates = judge_ops_via_llm(task, about)
+        progress_end(t0)
+    if not candidates:
+        return cmd_refuse_vocab_miss(a, book, step)
+
+    op = candidates[0]
+    args, resolved, inferred = _ground_via_fixed_op(a, task, book_meta, op)
+    if args is None:
+        return cmd_refuse_vocab_miss(a, book, step)
+
+    print(f"もしかして: {OP_LABELS.get(op, op)}？")
+    print(format_confirmation_line(op, resolved, inferred, sheets=sheets,
+                                    target_sheet=resolved.get("_target_sheet")))
+    note = suggest_residue.render_residue_note(
+        suggest_residue.find_unconsumed_words(task, resolved, _op_match_pool(op)))
+    if note:
+        print(note)
+
+    interactive = is_interactive(stdin_isatty=_stdin_isatty(), json_mode=getattr(a, "json", False),
+                                  dry=getattr(a, "dry", False))
+    if not ask_yes_no("この操作を適用しますか？ [y/N]: ", interactive=interactive, default=False):
+        if interactive:   # ★ 非対話の素通りは「断った」のではない ── 第3信号は N の時だけ
+            _record_misclass_suspect("suggest_decline", task,
+                                      getattr(a, "_last_translation", None) or {}, book)
+        return cmd_refuse_vocab_miss(a, book, step)
+
+    rc = cmd_run_dsl(a, book, source_book, book_meta, op, args)
+    if rc == 0:
+        save_alias(task, op)
+        print("この言い回しを登録しました（alias undo で取り消せます）")
+    return rc
 
 
 # ---------------------------------------------------------------------------

@@ -215,6 +215,7 @@ def test_success_message_none_on_failure():
 
 # --- ollama エラー分類（P1: 404 なのに ollama serve を疑わせる誤ヒントの修正） ---
 
+@pytest.mark.ollama_internals
 def test_ollama_generate_404_suggests_pull(monkeypatch):
     def fake_urlopen(req, timeout=300):
         raise urllib.error.HTTPError(url="http://x", code=404, msg="Not Found", hdrs=None, fp=None)
@@ -226,6 +227,7 @@ def test_ollama_generate_404_suggests_pull(monkeypatch):
     assert "pull" in msg
     assert "ollama serve" not in msg   # 接続不能の案内と混同しない
 
+@pytest.mark.ollama_internals
 def test_ollama_generate_connection_refused_suggests_serve(monkeypatch):
     def fake_urlopen(req, timeout=300):
         raise urllib.error.URLError("connection refused")
@@ -236,6 +238,7 @@ def test_ollama_generate_connection_refused_suggests_serve(monkeypatch):
     assert "ollama serve" in msg
     assert "pull" not in msg   # 404 の案内と混同しない
 
+@pytest.mark.ollama_internals
 def test_ollama_generate_other_http_error_is_distinct(monkeypatch):
     # 404/接続不能のどちらの定型文にも紐付けない（誤誘導しない）
     def fake_urlopen(req, timeout=300):

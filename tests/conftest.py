@@ -62,3 +62,20 @@ def _guard_real_home_writes(monkeypatch, tmp_path):
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "_guard_history.jsonl")
     monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "_guard_vocab.json")
     monkeypatch.setattr(ailine, "MISCLASS_FILE", tmp_path / "_guard_misclass.jsonl")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ollama(request, monkeypatch):
+    """★ W10 便C2 検分（2026-08-22 夜）: 「CI には ollama が居ない」をローカルで再現する番人。
+       mock されていない経路が実 ollama を呼ぶと、ローカルでは黙って緑（ollama が答える）・
+       CI では赤/非決定になる ── 「居るから見えない」を居ない側に倒して全穴をその場で鳴らす。
+       実機を使う検体は @pytest.mark.local で免除（従来どおり -m local で別走）。"""
+    if "local" in request.keywords or "ollama_internals" in request.keywords:
+        yield
+        return
+    def _boom(*a, **k):
+        raise AssertionError(
+            "実 ollama を呼んだ（mock されていない経路 ── CI には存在しない・conftest._no_real_ollama）")
+    monkeypatch.setattr(ailine, "ollama_generate_json", _boom, raising=False)
+    monkeypatch.setattr(ailine, "ollama_generate", _boom, raising=False)
+    yield

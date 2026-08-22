@@ -218,6 +218,11 @@ def _freeform_setup(monkeypatch, op="FREEFORM", about=""):
     def _translate(model, task, book_meta, temperature=0.1):
         return {"op": op, "about": about} if op == "OUT_OF_VOCAB" else {"op": op, "args": {}}
     monkeypatch.setattr(ailine, "translate_task", _translate)
+    # ★ W10 便C2 検分（2026-08-22 夜）: 判定器は決定論の空に固定する ── mock しないと
+    #   本物の ollama の応答が golden に焼き込まれ（非決定・CI には ollama が居ない）、
+    #   ローカルでだけ緑に見える。この golden 群の目的は「断りの顔」の凍結であり、
+    #   提案の顔は test_suggest_flow.py が担う。
+    monkeypatch.setattr(ailine, "judge_ops_via_llm", lambda task, about=None: [])
 
 
 def _t_freeform_gate_yes(tmp_path, monkeypatch, capsys):
