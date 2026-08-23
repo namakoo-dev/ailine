@@ -216,37 +216,49 @@ def test_success_message_none_on_failure():
 # --- ollama エラー分類（P1: 404 なのに ollama serve を疑わせる誤ヒントの修正） ---
 
 @pytest.mark.ollama_internals
-def test_ollama_generate_404_suggests_pull(monkeypatch):
+def test_ollama_generate_404_suggests_pull(monkeypatch, capsys):
     def fake_urlopen(req, timeout=300):
         raise urllib.error.HTTPError(url="http://x", code=404, msg="Not Found", hdrs=None, fp=None)
     monkeypatch.setattr(ailine.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(SystemExit) as exc:
         ailine.ollama_generate("qwen2.5-coder:7b", [{"role": "user", "content": "hi"}])
-    msg = str(exc.value)
+    # ★ 終了コードの分離（2026-08-23）: メッセージは stderr に出し、SystemExit は
+    #   意味を持つ番号（EXIT_ENVIRONMENT=9）を運ぶようになった。意図（型番と次の手を
+    #   名指しする）は不変・読む場所だけ追従する。
+    assert exc.value.code == ailine.EXIT_ENVIRONMENT
+    msg = capsys.readouterr().err
     assert "qwen2.5-coder:7b" in msg
     assert "pull" in msg
     assert "ollama serve" not in msg   # 接続不能の案内と混同しない
 
 @pytest.mark.ollama_internals
-def test_ollama_generate_connection_refused_suggests_serve(monkeypatch):
+def test_ollama_generate_connection_refused_suggests_serve(monkeypatch, capsys):
     def fake_urlopen(req, timeout=300):
         raise urllib.error.URLError("connection refused")
     monkeypatch.setattr(ailine.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(SystemExit) as exc:
         ailine.ollama_generate("qwen2.5-coder:7b", [{"role": "user", "content": "hi"}])
-    msg = str(exc.value)
+    # ★ 終了コードの分離（2026-08-23）: メッセージは stderr に出し、SystemExit は
+    #   意味を持つ番号（EXIT_ENVIRONMENT=9）を運ぶようになった。意図（型番と次の手を
+    #   名指しする）は不変・読む場所だけ追従する。
+    assert exc.value.code == ailine.EXIT_ENVIRONMENT
+    msg = capsys.readouterr().err
     assert "ollama serve" in msg
     assert "pull" not in msg   # 404 の案内と混同しない
 
 @pytest.mark.ollama_internals
-def test_ollama_generate_other_http_error_is_distinct(monkeypatch):
+def test_ollama_generate_other_http_error_is_distinct(monkeypatch, capsys):
     # 404/接続不能のどちらの定型文にも紐付けない（誤誘導しない）
     def fake_urlopen(req, timeout=300):
         raise urllib.error.HTTPError(url="http://x", code=500, msg="Internal Error", hdrs=None, fp=None)
     monkeypatch.setattr(ailine.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(SystemExit) as exc:
         ailine.ollama_generate("qwen2.5-coder:7b", [{"role": "user", "content": "hi"}])
-    msg = str(exc.value)
+    # ★ 終了コードの分離（2026-08-23）: メッセージは stderr に出し、SystemExit は
+    #   意味を持つ番号（EXIT_ENVIRONMENT=9）を運ぶようになった。意図（型番と次の手を
+    #   名指しする）は不変・読む場所だけ追従する。
+    assert exc.value.code == ailine.EXIT_ENVIRONMENT
+    msg = capsys.readouterr().err
     assert "500" in msg
     assert "pull" not in msg
     assert "ollama serve" not in msg

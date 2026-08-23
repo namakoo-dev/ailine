@@ -65,7 +65,7 @@ try:
     import openpyxl
     from openpyxl.utils import get_column_letter, column_index_from_string
 except ImportError:
-    sys.exit("openpyxl が要る:  pip install openpyxl")
+    exit_environment("openpyxl が要る:  pip install openpyxl")
 
 # ★ C4（再設計 分割の一歩目）: 新しい単位は ailine.py に足さず ailine_core/ に置き、
 #   ここからは import するだけにする（tests/ailine_py_line_budget.txt が単調減少を見張る）。
@@ -189,6 +189,22 @@ ALIASES_FILE = HISTORY_DIR / "aliases.json"
 MISCLASS_FILE = HISTORY_DIR / "misclass.jsonl"
 
 
+# ★ 終了コードの分離（2026-08-23 の取り込みで見つかった穴・実測）: 依存の欠落・外部
+#   プログラムに繋がらない・入力が無い、といった「実行の前提が満たされていない」状態は、
+#   検証の失敗（適用したが事後条件を満たさない = 1）と意味が違う。旧実装は exit_environment("...") が
+#   全部 1 に潰れており、CI や自動化から「⚠ が出た」と「道具が壊れた」を区別できなかった。
+#   既存の 3(CLARIFY)/4(忠実度)/5(verify)/6(ロック)/7(上書き関所)/8(自由生成の関所) と
+#   argparse の 2 を避けて 9 を割り当てる。
+EXIT_ENVIRONMENT = 9
+
+
+def exit_environment(message: str):
+    """実行の前提が満たされていない旨を述べて EXIT_ENVIRONMENT で落ちる。
+       ★ sys.exit(文字列) は必ず 1 になる ── 意味を持つ番号で落ちる唯一の入口にする。"""
+    print(message, file=sys.stderr)
+    raise SystemExit(EXIT_ENVIRONMENT)
+
+
 def _find_basrun_path() -> Path | None:
     """basrun.py の場所。環境変数 BASRUN > ailine と並びの checkout の順で探す。
        見つからなければ None（sys.exit しない版。doctor から非致命的に使う）。"""
@@ -212,7 +228,7 @@ def basrun_path() -> Path:
     """basrun.py の場所。無ければ理由つきで落とす（run から使う致命版）。"""
     p = _find_basrun_path()
     if p is None:
-        sys.exit("basrun.py が見つからない: 環境変数 BASRUN にパスを指定するか、"
+        exit_environment("basrun.py が見つからない: 環境変数 BASRUN にパスを指定するか、"
                  "https://github.com/namakoo-dev/basrun を clone して"
                  "ailine と同じ階層に置く")
     return p
@@ -276,11 +292,11 @@ def ollama_generate(model: str, messages: list, temperature: float = 0.2) -> str
         # ★ HTTPError は URLError のサブクラスなので先に拾う。
         #   404 は「繋がっているがモデルが無い」で、接続不能とは原因も対処も別。
         if e.code == 404:
-            sys.exit(f"ollama にモデル '{model}' が見つからない (HTTP 404)。\n"
+            exit_environment(f"ollama にモデル '{model}' が見つからない (HTTP 404)。\n"
                      f"★ `ollama pull {model}` で取得してから再実行して。")
-        sys.exit(f"ollama がエラーを返した ({OLLAMA}): HTTP {e.code} {e.reason}")
+        exit_environment(f"ollama がエラーを返した ({OLLAMA}): HTTP {e.code} {e.reason}")
     except urllib.error.URLError as e:
-        sys.exit(f"ollama に繋がらない ({OLLAMA}): {e}\n"
+        exit_environment(f"ollama に繋がらない ({OLLAMA}): {e}\n"
                  "★ `ollama serve` が動いているか確認。外部送信はしない設計。")
     return d.get("message", {}).get("content", "")
 
@@ -5173,7 +5189,7 @@ def normalize_book(book: Path, workdir: Path,
         shutil.copy2(book, normalized)   # 中途半端な保存状態を残さず作り直す
         ok, err, _ = basrun_apply(normalized, struct_code, workdir, timeout=timeout)
     if not ok:
-        sys.exit(f"正規化パスに失敗した（LibreOffice で開けなかった）: {err}")
+        exit_environment(f"正規化パスに失敗した（LibreOffice で開けなかった）: {err}")
     return normalized
 
 
@@ -6280,7 +6296,7 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
 
     book = Path(a.book).resolve()
     if not book.exists():
-        sys.exit(f"文書が無い: {book}")
+        exit_environment(f"文書が無い: {book}")
 
     lock_reason = check_excel_lock(book)
     if lock_reason:
