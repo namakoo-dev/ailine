@@ -1514,7 +1514,7 @@ def vocab_add(term: str, value, path: Path | None = None) -> tuple:
 # ---------------------------------------------------------------------------
 # ★ W10 便A: 別名ストア（言い回し → op 名）── REVIEW-20260822-w10-architect.md 3-2/3-3/6-4・
 #   Namakoo 決裁（二段目翻訳・文字マッチ開始）に基づく前提工事。ここでは登録/照合だけを作る
-#   （翻訳経路への接続は便C。lookup_alias は作るが、どこからも呼ばない）。
+#   （翻訳経路への接続は便C。lookup_alias は便C2 以降、提案フロー（_maybe_suggest_or_refuse の段0）から呼ばれる
 #
 #   形式: ~/.ailine/aliases.json に {"aliases": {言い回し: op名}, "order": [登録順]} の
 #   平文 JSON（vocab.json とは別ファイル・上記 ALIASES_FILE 参照）。order は undo

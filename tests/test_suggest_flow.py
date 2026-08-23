@@ -136,7 +136,8 @@ def test_decline_records_third_signal_and_no_registration(tmp_path, monkeypatch,
     monkeypatch.setattr(ailine, "translate_task_fixed_op", _fixed_op_sort)
     _interactive_yes(monkeypatch, answers="n\n")
     rc, out = _run_main(["run", str(book), "金額を並べ替えして", "--copy"], capsys)
-    assert rc != 0
+    # ★ 検分の締め直し（次元③の指摘）: != 0 は無関係な失敗も通す ── 断りの 3 に固定
+    assert rc == 3, out
     entries = [json.loads(ln) for ln in
                 (tmp_path / "misclass.jsonl").read_text(encoding="utf-8").splitlines() if ln]
     assert any(e["signal"] == "suggest_decline" for e in entries), \
