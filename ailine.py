@@ -36,6 +36,11 @@
   （太字も当初「環境不可」と誤断したが、実際は `CharWeight`+`CharWeightAsian` の native 書きで解決済み）。
 - ローカル LLM(ollama) と LibreOffice(basrun 経由) が要る。**外部送信はしない。**
 - no-op ガードが保証するのは「変化したこと」だけ。「**正しいか**」は差分を人が見て判断する。
+
+## 置き場所（上級者向け）
+
+- 既定は `~/.ailine`。環境変数 **AILINE_HOME** を設定すると、履歴/用語集/別名/バックアップ等
+  すべての置き場所をそこへ差し替えられる（`resolve_home_dir()` 参照）。
 """
 from __future__ import annotations
 
@@ -134,7 +139,20 @@ OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 DEFAULT_MODEL = os.environ.get("AILINE_MODEL", "qwen2.5-coder:7b")
 DEFAULT_APPLY_TIMEOUT = 180.0  # M1: 暴走マクロで無限ハングしないよう既定 ON（--timeout 0 で無効化）
 
-HISTORY_DIR = Path.home() / ".ailine"
+def resolve_home_dir() -> Path:
+    """ailine のホームディレクトリ（第二波 ①）。環境変数 AILINE_HOME があればその Path、
+       無ければ従来どおり ~/.ailine。★ subprocess 起動のテストにも env 継承で届く構造の
+       隔離 ── monkeypatch.setattr は同一プロセスにしか効かないため、`ailine.py` を
+       別プロセスとして起動する経路（14 ファイルの subprocess テスト）はこれまで実 home に
+       素通りしていた（SEALED-20260823-jisaku-ultra.md 所見⑦）。呼び出しのたび環境変数を
+       読む（モジュール import 時点の値に固定しない）ので、テストから直接呼んでも効く。"""
+    env = os.environ.get("AILINE_HOME")
+    if env:
+        return Path(env)
+    return Path.home() / ".ailine"
+
+
+HISTORY_DIR = resolve_home_dir()
 HISTORY_FILE = HISTORY_DIR / "history.jsonl"
 BACKUP_DIR = HISTORY_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 10   # M2c: book ごとにこの世代数を超えたら古い順に削除する
@@ -7120,7 +7138,7 @@ def _maybe_suggest_or_refuse(a: argparse.Namespace, book: Path, source_book: Pat
 
 # col系 slot を持つ op → その slot 名（依存つき連鎖の新規列フォールバック対象）。
 _COLUMN_ARG_KEYS = {
-    "SORT": ("col",), "NUMBER_FORMAT": ("col",), "CHART": ("value_col",),
+    "SORT": ("col",), "NUMBER_FORMAT": ("col",), "CHART": ("value_col", "category_col"),
     "AGGREGATE": ("group_col", "value_col"),
 }
 
@@ -8520,8 +8538,12 @@ def _evaluate_csv(csv_path: Path) -> _CsvEvaluation:
     classifications = [csv_quarantine.classify_column(col) for col in columns]
 
     warnings = []
-    if enc.ambiguous:
-        warnings.append("文字コード: utf-8 でも cp932 でも読めました（両方成立・utf-8 で続行）")
+    # ★ 第二波 ③ 追補: 文字コードの曖昧さは全ての報告関数が冒頭行
+    #   「文字コード: {encoding} で読みました（…両方成立…）」で必ず開示する（enc.ambiguous
+    #   参照）。ここでも ⚠ として二重に積むと、実在する内容語彙（例: 日本語見出し）を持つ
+    #   きれいな CSV が「制御文字1件」のような単一の実欠陥に対しても「⚠ 2 件」と数える
+    #   （実欠陥1件+既出の曖昧さ再掲1件）── 制御文字の二重報告と同根の重複。utf-8 は
+    #   確定的に選ばれ実際に使われているので、これは是正の必要な ⚠ ではなく開示で足りる。
     for rename in parsed.header_renames:
         warnings.append(f"見出し『{rename.original}』が重複していたため"
                         f"『{rename.renamed}』に機械リネームしました")
@@ -8542,9 +8564,10 @@ def _evaluate_csv(csv_path: Path) -> _CsvEvaluation:
                             f"文字列として保持し、この列に判定を出しません{detail}")
     for rec_idx, rec in enumerate(parsed.records):
         raw_idx = rec_idx + header_offset
-        for col_idx, code in csv_quarantine.control_char_cells(rec.cells):
-            warnings.append(f"{_csv_record_label(parsed, raw_idx, header_offset)} "
-                            f"{col_idx + 1}列目: 制御文字 {code} を含むため除去しました")
+        # ★ 第二波 ③（本家 bug_001）: 制御文字の検出は writer 側
+        #   write_result.removed_control_chars に一本化する（re.sub 全件で厳密・行/列/
+        #   コードの名指しはそちらで足りる）。ここで重ねて拾うと同じ1件が2行の ⚠ になり、
+        #   warn_count（「⚠ N 件」の N）も二重計上される（1件を2件と数える）。
         for col_idx, length in csv_quarantine.overlong_cells(rec.cells):
             warnings.append(f"{_csv_record_label(parsed, raw_idx, header_offset)} "
                             f"{col_idx + 1}列目: {length} 文字（Excel 上限 32,767 超）")
@@ -8690,10 +8713,41 @@ def cmd_run_csv(a: argparse.Namespace) -> int:
     if not compare_result.ok:
         for ln in _render_csv_transfer_failure(csv_path, out, evaluation, write_result, compare_result):
             print(ln)
+        _record_csv_conversion_history(csv_path, out, ok=False)
         return 3
     for ln in _render_csv_report(csv_path, out, evaluation, write_result, compare_result):
         print(ln)
+    _record_csv_conversion_history(csv_path, out, ok=True)
     return 0
+
+
+def _record_csv_conversion_history(csv_path: Path, out_path: Path, ok: bool) -> None:
+    """★ 第二波 ①(AILINE_HOME): `ailine csv` の変換も history.jsonl に残す（run と同じ
+       HISTORY_FILE・AILINE_HOME 配下）。build_history_entry は DSL の run 向けの形
+       （task/model/command/postcondition 等）なので流用せず、csv 変換に要る最小限の
+       形で直接 append する。書き込みに失敗しても csv 変換自体の結果（rc・出力ファイル）
+       は変えない（履歴は付帯情報）。"""
+    try:
+        append_history({
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "book": str(csv_path),
+            "task": f"csv: {csv_path.name} → {out_path.name}",
+            "model": None,
+            "ok": ok,
+            "dry": False,
+            "attempts": 1,
+            "failure_kind": None if ok else "csv_transfer_failed",
+            "error_detail": None,
+            "changes": [],
+            "out": str(out_path),
+            "path": "csv",
+            "command": None,
+            "postcondition": None,
+            "provenance": None,
+            "fidelity": None,
+        })
+    except OSError:
+        pass
 
 
 def _cmd_run_csv_prestage(a: argparse.Namespace) -> int:

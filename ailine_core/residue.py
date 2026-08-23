@@ -44,8 +44,14 @@ def find_unconsumed_words(task: str, resolved_args: dict, pool_phrases) -> list:
     if not task:
         return []
     remaining = _NUMBER_RE.sub(" ", task)
-    for v in (resolved_args or {}).values():
-        if isinstance(v, str) and v and v in remaining:
+    # ★ 第二波 ④（本家 bug_008）: dict の反復順（＝呼び出し側が args を組んだ key の順）で
+    #   はなく、値の**長さ降順**で消費する。「商品」「商品コード」のように片方がもう片方を
+    #   部分文字列として含む場合、短い方を先に消費すると長い方の残骸（「コード」）が
+    #   偽の残差として漏れる（pool_phrases 側は元々この順でやっていた・args 側に同じ規律を
+    #   足すだけ＝pool と対称）。
+    for v in sorted({v for v in (resolved_args or {}).values() if isinstance(v, str) and v},
+                    key=len, reverse=True):
+        if v in remaining:
             remaining = remaining.replace(v, " ")
     for phrase in sorted({p for p in (pool_phrases or ()) if p}, key=len, reverse=True):
         if phrase in remaining:

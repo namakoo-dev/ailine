@@ -134,6 +134,7 @@ python ailine.py vocab list
 `~/.ailine/vocab.json` に平坦な `{"語": 値}` で保持する（グローバルのみ・ブック別上書きは
 無い）。テンプレは `vocab.template.json`（値は空・古びた法定値を焼き込まない。値を埋めて
 `~/.ailine/vocab.json` にコピーするか `vocab add` で登録する）。
+環境変数 `AILINE_HOME` を設定すると `~/.ailine` の代わりの置き場所を指定できる（既定は不変・上級者向け）。
 
 試せる表を `demo/` に同梱している: `sample.xlsx`（商品×金額の一覧）・
 `sales.xlsx`（部門×金額 — ピボット/集計表向き）・`lookup.xlsx`（明細＋単価表 — VLOOKUP 向き）。

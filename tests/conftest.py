@@ -53,15 +53,23 @@ def _default_normalize_book_is_passthrough(request, monkeypatch):
 # こちらより後に setattr されるのでそのまま優先される（後勝ち＝無害・_isolate や
 # 個別 monkeypatch を削る必要は無い）。
 #
-# ★ 対象は history/vocab/misclass の3つだけ（BACKUP_DIR/RUN_LOCK_FILE はこの番人の
-# スコープ外 ── 実測で漏れが確認されたのはこの3つ）。
+# ★ 対象は history/vocab/misclass/aliases の4つ（BACKUP_DIR/RUN_LOCK_FILE はこの番人の
+# setattr スコープ外だったが、下の AILINE_HOME 環境変数がそれも含めて根治する）。
 # ★ 既存の実 ~/.ailine/history.jsonl 等の掃除はしない（本番データ・触るのは
 # Namakoo 決裁）。
+#
+# ★ 第二波 ①（SEALED-20260823-jisaku-ultra.md 所見⑦の根治）: setattr は同一プロセスにしか
+# 効かないため、`ailine.py` を subprocess で別プロセス起動するテスト（14 ファイル）は
+# この番人の setattr をすり抜けて実 home に書いていた。env 経由なら subprocess.run が
+# 明示 env= を渡さない限り os.environ をそのまま継承するので、そちら側も一箇所で塞げる
+# （resolve_home_dir() が呼び出しのたび環境変数を読むため、import 順を問わず効く）。
 @pytest.fixture(autouse=True)
 def _guard_real_home_writes(monkeypatch, tmp_path):
+    monkeypatch.setenv("AILINE_HOME", str(tmp_path / "_guard_ailine_home"))
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "_guard_history.jsonl")
     monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "_guard_vocab.json")
     monkeypatch.setattr(ailine, "MISCLASS_FILE", tmp_path / "_guard_misclass.jsonl")
+    monkeypatch.setattr(ailine, "ALIASES_FILE", tmp_path / "_guard_aliases.json")
 
 
 @pytest.fixture(autouse=True)

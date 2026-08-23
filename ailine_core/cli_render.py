@@ -198,7 +198,10 @@ def render_ops_table(op_meta: dict, op_schema: dict, confirm_fields: dict) -> li
                 continue
             says = "／".join(meta["synonyms"])
             need = _needed_info(op, op_schema, confirm_fields)
-            lines.append(f"  {meta['label']}    こう書く: {says}")
+            # ★ 第二波 ⑤: 行の左端に英字 op 名を出す（README「対応する操作名は
+            #   ailine ops の左端の英字」・alias --help「op 名（例: SORT）」の誘導先を
+            #   実在させる。手書きでなく登録簿の op（op_meta のキー）そのもの）。
+            lines.append(f"  {op}  {meta['label']}    こう書く: {says}")
             if need:
                 lines.append(f"      必要な情報: {need}")
         lines.append("")
