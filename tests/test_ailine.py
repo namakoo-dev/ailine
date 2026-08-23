@@ -2740,15 +2740,19 @@ def test_verify_dsl_args_compute_column_single_operand_no_rate_signal_questions_
     assert "倍率（税率等）が分かりません" not in err
 
 def test_verify_dsl_args_compute_column_single_operand_with_rate_signal_keeps_old_message():
-    # 率らしい語（税/倍/掛け等）が依頼文にあれば、従来どおりの「倍率が分かりません」を返す
+    # 率らしい語（税/倍/掛け等）が依頼文にあれば、従来どおり「倍率が分かりません」系を返す
     # （regression: test_verify_dsl_args_compute_column_single_operand_clarifies_when_no_rate
     # と同じ入力・上の新しい番人が誤って一般ケースまで飲み込んでいないことの確認）。
+    # ★ 致命③(2026-08-23レビュー)による golden 更新: 「税」を含む依頼は敗者復活
+    # （_resolve_tax_rescue・APPEND_TOTAL と共有）を先に試すようになった。用語集が
+    # 空なので rescue も失敗し、APPEND_TOTAL と同じ文面（「依頼『...』は税/込を含みますが
+    # 倍率が分かりません」）に変わる（片配線の解消 ── 挙動は APPEND_TOTAL の現状が正）。
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "金額"]}}
     ok, resolved, inferred, err = ailine.verify_dsl_args(
         "COMPUTE_COLUMN", {"operands": ["金額"], "operator": "*"}, meta,
         task="税込みの列を追加して")
     assert not ok
-    assert "倍率（税率等）が分かりません" in err
+    assert "税/込を含みますが倍率が分かりません" in err
 
 def test_verify_dsl_args_compute_column_single_operand_labels_new_column_for_tax_inclusive():
     # ★ W10c 中: 依頼文が「税込」と明言していれば、新規列の見出しに使う自然なラベルを

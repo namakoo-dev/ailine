@@ -35,7 +35,8 @@ def _ref_column(f_text: str) -> str | None:
 
 
 def check_chart_series(path, kind: str, value_col_letter: str,
-                        category_col_letter: str | None = None) -> tuple:
+                        category_col_letter: str | None = None,
+                        before_chart_paths: set | None = None) -> tuple:
     """(status, reason)。status ∈ {"pass", "fail"}。
 
     ① 種別（c:plotArea 直下の子タグ）が kind と一致するか
@@ -43,6 +44,14 @@ def check_chart_series(path, kind: str, value_col_letter: str,
     ③ category_col_letter を渡した場合のみ、項目列の参照（c:ser/c:cat/c:strRef/c:f）も見る
 
     読めない/該当が無ければ fail（読めない時に pass へ倒れない ── check_extract 等と同じ線）。
+
+    ★ 致命④(2026-08-23レビュー): 先頭一致で最初に見つかった chart だけを見ていたため、
+      本に既にグラフがある状態で新しいグラフを足すと「今回増えた1個」を誤って
+      判定していた（誤 fail: 既存グラフの種別が違うだけで先に fail・
+      誤 pass: 既存グラフが適合していれば新規の壊れたグラフを見ずに pass）。
+      before_chart_paths（apply 前の chart XML パス集合）を渡すと、after との差分
+      （今回新しく増えたチャートだけ）を検証する。None なら従来どおり全チャートを
+      先頭一致で見る（後方互換）。
     """
     want_tag = _KIND_TAGS.get(kind)
     if want_tag is None:
@@ -50,6 +59,10 @@ def check_chart_series(path, kind: str, value_col_letter: str,
     try:
         with zipfile.ZipFile(path) as z:
             chart_paths = _chart_xml_paths(z)
+            if before_chart_paths is not None:
+                chart_paths = sorted(set(chart_paths) - set(before_chart_paths))
+                if not chart_paths:
+                    return "fail", "新しく増えたグラフが見つからない（chart XML の差分が空）"
             if not chart_paths:
                 return "fail", "グラフが見つからない（chart XML が無い）"
             for chart_path in chart_paths:

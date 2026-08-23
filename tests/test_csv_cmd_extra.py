@@ -62,13 +62,19 @@ def test_csv_command_control_char_cell_is_removed_and_disclosed(tmp_path, monkey
 
 
 def test_csv_command_overlong_cell_is_disclosed(tmp_path, monkeypatch, capsys):
+    # ★ 致命①(2026-08-23レビュー)による golden 更新: 32,768文字セルは xlsx 書き込み時に
+    # 32,767文字へ実際に切り詰められる（実測: 転送検算が不一致1を検出）。旧実装は
+    # warn_count（この切り詰めの ⚠ 開示）だけを見て △ rc=0 を返し、compare_result（実際に
+    # 1セルも変えずに書けたか）を見ていなかった ── 転送の主張自体が成立していないので、
+    # ① の修正後は △ でなく × rc!=0 に倒す（該当セルを名指し）。
     _isolate(monkeypatch, tmp_path)
     long_cell = "x" * 32768
     csv_path = _write_csv(tmp_path, "長大.csv", f"メモ\n{long_cell}\n")
     rc, out = _run_main(["csv", str(csv_path)], capsys)
-    assert rc == 0, out
+    assert rc != 0, out
     assert "32,767" in out or "32768" in out, out
-    assert "△" in out, out   # 長大セルも ⚠ 扱いなので ✓ は名乗らない
+    assert "×" in out and "✓" not in out and "△" not in out, out
+    assert "不一致1" in out.replace(" ", ""), out
 
 
 # ===========================================================================

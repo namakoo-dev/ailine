@@ -66,7 +66,8 @@ _BOM_UTF16 = (b"\xff\xfe", b"\xfe\xff")   # ★ 対象外宣言（設計 v2）�
 
 
 class UndecidableEncodingError(ValueError):
-    """utf-8 でも cp932 でも復号できないバイト列（EUC/JIS/UTF-16 は設計 v2 で対象外）。"""
+    """utf-8 でも cp932 でも復号できないバイト列、または EUC-JP/ISO-2022-JP と判定した
+    バイト列（設計 v2 で対象外・README の約束: 黙って cp932 読みせず名指しで断る）。"""
 
 
 @dataclass(frozen=True)
@@ -81,13 +82,29 @@ def detect_encoding(raw: bytes) -> EncodingResult:
     """BOM 最優先 → UTF-8 → cp932 の順で判定する（実測: 短文 UTF-8 の cp932 黙読
     36〜41%・逆方向 0% ── だから UTF-8 を先に試す）。
 
-    ★ 純 ASCII バイト列は UTF-8/cp932 のどちらで読んでも同一内容になるため、
-      cp932 を試すまでもなく非曖昧（ambiguous=False）と即決する。
+    ★ 致命②(2026-08-23レビュー): EUC-JP は cp932 として「読める」ことが多く
+      （実測: cp932 デコードは成功するが文字化けする ── 例外を投げないので旧実装は
+      黙って cp932 採用していた）、cp932 フォールバックの**前**に EUC-JP/ISO-2022-JP の
+      陽性シグネチャを検査する。
+      ・ISO-2022-JP: ESC (0x1B) バイトの有無で判定（実測: cp932/EUC-JP/UTF-8 の実物
+        合計 40 種のどれにも ESC バイトは現れない・0 誤爆）。
+      ・EUC-JP: 生バイト列を厳格 (strict) に "euc-jp" でデコードできるかで判定
+        （実測: cp932 実物 20 種・utf-8 実物 20 種は 1 件も "euc-jp" として復号できず
+        （0/40 偽陽性）、EUC-JP 実物 20 種は全件復号できる（20/20 真陽性）── 半角カナ・
+        記号・数字混在・多様な業務文面で確認。数字は本 module のコメントに実測根拠として残す）。
+      ISO-2022-JP は全バイトが 0x80 未満（7bit）のため、下の ASCII 即決より前に検査する
+      （でなければ ASCII 即決に飲まれて utf-8 誤判定になる）。
+
+    ★ 純 ASCII バイト列（ESC を含まない）は UTF-8/cp932 のどちらで読んでも同一内容に
+      なるため、cp932 を試すまでもなく非曖昧（ambiguous=False）と即決する。
     """
     if raw.startswith(_BOM_UTF8):
         return EncodingResult(encoding="utf-8-sig", ambiguous=False)
     if raw.startswith(_BOM_UTF16):
         raise UndecidableEncodingError("UTF-16 は対象外（設計 v2・名指しで宣言）")
+    if b"\x1b" in raw:
+        raise UndecidableEncodingError(
+            "ISO-2022-JP のエスケープシーケンスを検出しました（EUC/JIS 系は対象外・設計 v2）")
     if all(b < 0x80 for b in raw):
         return EncodingResult(encoding="utf-8", ambiguous=False)
 
@@ -104,6 +121,13 @@ def detect_encoding(raw: bytes) -> EncodingResult:
         except UnicodeDecodeError:
             return EncodingResult(encoding="utf-8", ambiguous=False)
         return EncodingResult(encoding="utf-8", ambiguous=True)
+
+    try:
+        raw.decode("euc-jp")
+    except UnicodeDecodeError:
+        pass
+    else:
+        raise UndecidableEncodingError("EUC-JP と判定しました（対象外・設計 v2）")
 
     try:
         raw.decode("cp932")
@@ -212,6 +236,12 @@ def classify_column(cells) -> ColumnClassification:
         if c[:1] in ("=", "@"):
             veto_reasons.add("formula_head")
         n = _digit_run_length(c)
+        if n is None and _COMMA_GROUP_RE.match(c):
+            # ★ 致命⑤(2026-08-23レビュー追補): カンマ桁区切りは _DIGIT_RUN_RE に
+            #   届かない（カンマを含むため）ため、桁溢れの一票拒否権が素通りしていた
+            #   （実測: "1,234,567,890,123,456" が number/comma_grouped 判定になる）。
+            #   カンマを除いた整数部で改めて桁数を数える。
+            n = _digit_run_length(c.replace(",", ""))
         if n is not None and n >= _DIGIT_OVERFLOW_LEN:
             veto_reasons.add("digit_overflow")
         if c != c.strip():

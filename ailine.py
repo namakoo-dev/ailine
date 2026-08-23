@@ -690,6 +690,19 @@ def _charts_count(path: Path) -> int:
         return 0
 
 
+def _chart_paths(path: Path) -> frozenset:
+    """★ 致命④(2026-08-23レビュー): _charts_count の隣に置く集合版（同じタイミング・
+       同じ判定基準で数える）。before との差分で「今回増えた1個」を同定する材料
+       （check_chart_series の before_chart_paths に渡す）。"""
+    try:
+        with zipfile.ZipFile(path) as z:
+            return frozenset(n for n in z.namelist()
+                             if "chart" in n.lower() and n.lower().endswith(".xml")
+                             and "/charts/chart" in n.lower())
+    except Exception:
+        return frozenset()
+
+
 def snapshot(path: Path) -> dict:
     """文書の状態を取る。★ 値/数値書式/背景色/太字 に加え、罫線・結合・列幅・行高・
        水平配置も捉える。これで『書式のみ・罫線のみ・列幅のみ・結合のみ・中央揃えのみ』
@@ -1698,6 +1711,34 @@ def lookup_vocab_tax_factor(vocab: dict) -> tuple:
     if len(seen) >= 2:
         return None, None, tuple(seen.items())
     return None, None, ()
+
+
+def _resolve_tax_rescue(context_word: str, context_text: str, vocab: dict | None) -> tuple:
+    """★ 致命③(2026-08-23レビュー): lookup_vocab_tax_factor の敗者復活を APPEND_TOTAL・
+       COMPUTE_COLUMN の両方から呼ぶ共有実装（レビュー所見: 逐語コピー2箇所のうち
+       COMPUTE_COLUMN 側だけ配線が届いていなかった片配線 ── 登録済みの税語彙があるのに
+       「登録してください」と嘘をつく）。context_text（APPEND_TOTAL は label、
+       COMPUTE_COLUMN は task）に「税」か「込」が無ければ rescue 対象外。
+       戻り値: (factor, term, error_message)。
+         ・rescue 対象外（税/込を含まない） → (None, None, None)
+         ・rescue 成立 → (factor, term, None)
+         ・rescue 失敗（候補複数/0件） → (None, None, "エラー文言")。"""
+    if not any(k in context_text for k in ("税", "込")):
+        return None, None, None
+    tax_factor, tax_term, tax_candidates = lookup_vocab_tax_factor(vocab or {})
+    if tax_factor is not None:
+        return tax_factor, tax_term, None
+    if tax_candidates:
+        listed = "・".join(f"{term}={value:g}" for value, term in tax_candidates)
+        return None, None, (
+            f"{context_word}『{context_text}』は税/込を含みますが、用語集に候補が複数あります"
+            f"（{listed}）。どちらを使うか依頼文に書いてください（例:「消費税10%」）"
+        )
+    return None, None, (
+        f"{context_word}『{context_text}』は税/込を含みますが倍率が分かりません。"
+        "依頼文に税率を書く（例:「消費税10%」）か、用語集に登録してください"
+        "（例: ailine vocab add 消費税 1.1）"
+    )
 
 
 # --- ★ A' 原則(致命3・W10e): SET_COLUMN_VALUE が書き込む定数値を LLM から切り離す ------
@@ -2756,10 +2797,22 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                         "倍率を掛ける処理であれば、依頼文に率を書く（例:「消費税10%」）か、"
                         "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
                     )
-                return False, resolved, inferred, (
-                    "倍率（税率等）が分かりません。依頼文に率を書く（例:「消費税10%」）か、"
-                    "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
-                )
+                # ★ 致命③(2026-08-23レビュー): 敗者復活（_resolve_tax_rescue・APPEND_TOTAL と
+                #   共有）。第一照合（上の text_factor/vocab_factor）の優先順は変えない ──
+                #   ここに来るのはその両方が外れ、かつ依頼文に率らしき語（税/込を含む）が
+                #   ある場合だけ（片配線の解消: 登録済みの税語彙で「登録してください」と
+                #   嘘をつかない）。
+                tax_factor, tax_term, tax_err = _resolve_tax_rescue("依頼", task or "", vocab)
+                if tax_factor is not None:
+                    resolved["factor"] = tax_factor
+                    sources["factor"] = f"用語集: {tax_term}（依頼『{task}』の税に適用）"
+                elif tax_err:
+                    return False, resolved, inferred, tax_err
+                else:
+                    return False, resolved, inferred, (
+                        "倍率（税率等）が分かりません。依頼文に率を書く（例:「消費税10%」）か、"
+                        "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
+                    )
             if resolved["factor"] <= 0:
                 return False, resolved, inferred, f"倍率『{resolved['factor']}』は正の数でなければなりません"
             if sources:
@@ -3022,22 +3075,12 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         #   docstring 参照）。第一照合（上の text_factor/vocab_factor）の優先順は変えない
         #   ―― ここに来るのはその両方が外れた場合だけ。
         if resolved["factor"] == 1.0 and any(k in label for k in ("税", "込")):
-            tax_factor, tax_term, tax_candidates = lookup_vocab_tax_factor(vocab or {})
+            tax_factor, tax_term, tax_err = _resolve_tax_rescue("ラベル", label, vocab)
             if tax_factor is not None:
                 resolved["factor"] = tax_factor
                 sources["factor"] = f"用語集: {tax_term}（ラベル『{label}』の税に適用）"
-            elif tax_candidates:
-                listed = "・".join(f"{term}={value:g}" for value, term in tax_candidates)
-                return False, resolved, inferred, (
-                    f"ラベル『{label}』は税/込を含みますが、用語集に候補が複数あります"
-                    f"（{listed}）。どちらを使うか依頼文に書いてください（例:「消費税10%」）"
-                )
-            else:
-                return False, resolved, inferred, (
-                    f"ラベル『{label}』は税/込を含みますが倍率が分かりません。"
-                    "依頼文に税率を書く（例:「消費税10%」）か、用語集に登録してください"
-                    "（例: ailine vocab add 消費税 1.1）"
-                )
+            elif tax_err:
+                return False, resolved, inferred, tax_err
 
         if sources:
             resolved["_sources"] = sources
@@ -4814,7 +4857,8 @@ POSTCONDITIONS = {
 
 def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_charts: int = 0,
                        header_row: int = 1, use_formula: bool = False,
-                       source_book: Path | None = None) -> tuple:
+                       source_book: Path | None = None,
+                       before_chart_paths: frozenset | None = None) -> tuple:
     """⑥ op 別事後条件。(status, reason)。status ∈ {"pass","warn","fail","error"}。
        CHART だけ before_charts と比較する専用の形。
        ★ W3: header_row（1起点、省略時1）を全チェッカーに一貫して渡す（『三層全部が
@@ -4829,7 +4873,10 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
        （before/after の突き合わせが要る2op・他は無視される安全なキーワード引数）。
        ★ 止血2: チェッカー内で予期しない例外が起きても生の Python トレースバックを
        出さない。ここで必ず捕まえて "error" ステータス + 要約1行に変換する
-       （C②の教訓: 事後条件チェッカー自身のクラッシュがユーザーに未捕捉のまま漏れていた）。"""
+       （C②の教訓: 事後条件チェッカー自身のクラッシュがユーザーに未捕捉のまま漏れていた）。
+       ★ 致命④(2026-08-23レビュー): before_chart_paths（snapshot()["chart_paths"]・
+       apply 前の chart XML パス集合）を CHART の check_chart_series へそのまま渡す。
+       None なら check_chart_series 側が従来どおり先頭一致で見る（後方互換）。"""
     try:
         if op == "CHART":
             # ★ グラフ段: 事後条件を二層にする。①グラフ数+1（旧 check_chart・恒真殺しの
@@ -4849,7 +4896,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
             return check_chart_series(
                 out_book, kind=resolved_args.get("kind") or "bar",
                 value_col_letter=get_column_letter(val_idx),
-                category_col_letter=get_column_letter(cat_idx) if cat_idx else None)
+                category_col_letter=get_column_letter(cat_idx) if cat_idx else None,
+                before_chart_paths=before_chart_paths)
         fn = POSTCONDITIONS.get(op)
         if fn is None:
             return "fail", f"未対応の op: {op}"
@@ -6638,11 +6686,16 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         return 0
 
     before = snapshot(source_book)
+    # ★ 致命④: chart_paths は snapshot() の戻り値（golden 検体が丸ごと JSON へ落とす辞書）
+    #   には入れない ── before_charts の数え上げと同じタイミングで、_charts_count の隣の
+    #   集合版関数を直接呼ぶだけにする（同じファイル・まだ何も適用していない時点）。
+    before_chart_paths = _chart_paths(source_book)
     shutil.copy2(source_book, out_book)   # 原本は触らず、正規化済みコピーに適用
 
     # ★ C7: ⑤適用〜⑥事後条件（共有エンジン）。print_changes は単発固有（docstring 参照）。
     apply_result = apply_dsl_step(
         op, resolved, code, apply_target=out_book, before=before, before_charts=before["charts"],
+        before_chart_paths=before_chart_paths,
         workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout, header_row=header_row,
         use_formula=use_formula, source_book=source_book, deps=deps,
         apply_progress_label="⏳ LibreOffice で適用中…", print_changes=True)
@@ -7041,8 +7094,15 @@ def _maybe_suggest_or_refuse(a: argparse.Namespace, book: Path, source_book: Pat
 
     rc = cmd_run_dsl(a, book, source_book, book_meta, op, args)
     if rc == 0:
-        save_alias(task, op)
-        print("この言い回しを登録しました（alias undo で取り消せます）")
+        # ★ 致命⑥(2026-08-23レビュー): save_alias の bool を見ずに常に「登録しました」と
+        #   断定していた（実測: 40字超の言い回しで登録に失敗しても成功を騙る）。
+        #   alias_add の (ok, msg) 形で理由を受け取り、失敗時は正直に開示する。
+        ok, msg = alias_add(task, op)
+        if ok:
+            print("この言い回しを登録しました（alias undo で取り消せます）")
+        else:
+            print(f"{msg}（この言い回しは登録されませんでした。"
+                  "次回もまた「もしかして」で確認します）")
     return rc
 
 
@@ -7288,7 +7348,8 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
                         first_sheet: str | None, out_book: Path, workdir: Path, helper_files, apply_timeout,
                         use_formula: bool, header_rows: dict, before_charts: int, a: argparse.Namespace, vocab: dict,
                         book_name: str, subject_sink: dict | None = None,
-                        suspicion_sink: list | None = None) -> tuple:
+                        suspicion_sink: list | None = None,
+                        before_chart_paths: frozenset | None = None) -> tuple:
     """★ C7: cmd_run_plan の DSL 語彙段の1段分。cmd_run_dsl と同じ ailine_core.dsl_step の共有エンジンを通る
        （非対称は dsl_step.py 参照）。この分離で stage_organs の dsl_plan_step 代表関数はここになる（DoD7）。
        戻り値: (gate_exit, item, plan_json_entry, step_advisories, provenance_entry, mention_exclude_sheets, current_meta)。
@@ -7356,6 +7417,7 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
 
     apply_result = apply_dsl_step(
         op, resolved, code, apply_target=out_book, before=step_before, before_charts=before_charts,
+        before_chart_paths=before_chart_paths,
         workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
         header_row=step_header_row, use_formula=use_formula, source_book=stepsource, deps=deps,
         apply_progress_label=f"⏳ {i}段目 LibreOffice で適用中…", print_changes=False,
@@ -7503,6 +7565,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
     before_all = snapshot(out_book)
     before_charts = before_all["charts"]
+    # ★ 致命④: 「今回増えた1個」の同定に使う（snapshot() の辞書には入れない・上のコメント参照）。
+    before_chart_paths = _chart_paths(out_book)
 
     current_meta = book_meta
     items: list = []         # (idx, label, status, detail)
@@ -7551,7 +7615,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 original_headers=original_headers, first_sheet=first_sheet, out_book=out_book,
                 workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
                 use_formula=use_formula, header_rows=header_rows, before_charts=before_charts, a=a, vocab=vocab,
-                book_name=book.name, subject_sink=subject_sink, suspicion_sink=suspicion_sink)
+                book_name=book.name, subject_sink=subject_sink, suspicion_sink=suspicion_sink,
+                before_chart_paths=before_chart_paths)
         if gate_exit is not None:
             return gate_exit
         if item is not None:
@@ -8573,6 +8638,36 @@ def _render_csv_report(csv_path: Path, out_path: Path, evaluation: _CsvEvaluatio
     return lines
 
 
+def _render_csv_transfer_failure(csv_path: Path, out_path: Path, evaluation: _CsvEvaluation,
+                                 write_result, compare_result) -> list:
+    """★ 致命①(2026-08-23レビュー): compare_result（欠落/不一致/余剰）が非 ok の時に
+       `ailine csv` が呼ぶ報告。✓ でも △ でもない ── 「1 セルも変えずに書いた」という
+       転送の主張自体が成立していないので、× 側（該当セルを名指しして exit 非 0）に倒す。
+       暗黙前段 _cmd_run_csv_prestage は元から `or not compare_result.ok` を見ていた
+       （片配線の解消・明示コマンド側にも同じ判定を通す）。"""
+    lines = [f"■ ailine csv  file={csv_path}"]
+    enc = evaluation.encoding
+    enc_note = "（utf-8/cp932 どちらでも読めたため utf-8 で続行）" if enc.ambiguous else ""
+    lines.append(f"文字コード: {enc.encoding} で読みました{enc_note}")
+    lines.append(f"出力先: {out_path}")
+    lines.append(f"× 読み取った {write_result.rows_written} 行×{write_result.cols_written} 列を"
+                 f" 1 セルも変えずに書けませんでした"
+                 f"（欠落{len(compare_result.missing)}・不一致{len(compare_result.mismatched)}・"
+                 f"余剰{len(compare_result.surplus)}）")
+    for w in evaluation.warnings:
+        lines.append(f"  ⚠ {w}")
+    for row, col, code in write_result.removed_control_chars:
+        lines.append(f"  ⚠ {row}行目{col}列目: 制御文字 {code} を除去して書きました")
+    for row, col in compare_result.missing:
+        lines.append(f"  ⚠ {row}行目{col}列目: 転送で欠落しました")
+    for row, col, dval, aval in compare_result.mismatched:
+        lines.append(f"  ⚠ {row}行目{col}列目: 転送で値が変わりました（{dval!r} → {aval!r}）")
+    for row, col, aval in compare_result.surplus:
+        lines.append(f"  ⚠ {row}行目{col}列目: 転送で余剰として現れました（{aval!r}）")
+    lines.append(f"原本 CSV: 変更なし（sha256 {evaluation.sha256} 一致）")
+    return lines
+
+
 def cmd_run_csv(a: argparse.Namespace) -> int:
     """`ailine csv <file>`: CSV 検疫の明示入口（設計 v2「入口2つ」の②・7B ゼロ・0秒）。
        DESIGN-20260821-multifile.md「CSV 検疫 設計 v2」・REVIEW-20260822-csv-architect.md。
@@ -8592,6 +8687,10 @@ def cmd_run_csv(a: argparse.Namespace) -> int:
         if not (mark == csv_quarantine.CREATOR_MARK and same_source):
             return _refuse_output_conflict(out, mark)
     write_result, compare_result = _write_csv_output(evaluation, out)
+    if not compare_result.ok:
+        for ln in _render_csv_transfer_failure(csv_path, out, evaluation, write_result, compare_result):
+            print(ln)
+        return 3
     for ln in _render_csv_report(csv_path, out, evaluation, write_result, compare_result):
         print(ln)
     return 0

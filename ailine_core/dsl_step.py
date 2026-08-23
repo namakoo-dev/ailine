@@ -281,7 +281,8 @@ def apply_dsl_step(op: str, resolved: dict, code: str, *, apply_target: Path, be
                     before_charts: int, workdir: Path, helper_files, apply_timeout,
                     header_row: int, use_formula: bool, source_book: Path | None,
                     deps: DslStepDeps, apply_progress_label: str,
-                    print_changes: bool, step_prefix: str = "") -> DslApplyResult:
+                    print_changes: bool, step_prefix: str = "",
+                    before_chart_paths: frozenset | None = None) -> DslApplyResult:
     """④codegen 済みの code を⑤適用し⑥事後条件を見る。
        ★ print_changes: 単発(cmd_run_dsl)は True（「変更点:」+差分行を常に印字）・
        複合計画は False（段ごとの差分行は印字せず、after を助言計算にだけ使う ── 既存の
@@ -301,7 +302,10 @@ def apply_dsl_step(op: str, resolved: dict, code: str, *, apply_target: Path, be
        再試行する（正規化側の normalize_book/M2c と同型）。半適用の残骸の上に再実行しない
        （②契約）。source_book が無い(None)呼び出しは復元先が無いので再試行しない。
        2回目も失敗すれば従来どおり err_apply をそのまま返す（③・正直な失敗）。
-       step_prefix: 複合計画の段番号表示（"  1段目: " 等）。単発は既定の "" のまま。"""
+       step_prefix: 複合計画の段番号表示（"  1段目: " 等）。単発は既定の "" のまま。
+       ★ 致命④(2026-08-23レビュー): before_chart_paths（snapshot()["chart_paths"]）は
+       run_postcondition の CHART 判定へそのまま運ぶだけ（今回増えた1個の同定・
+       chart_check.check_chart_series 参照）。None なら従来どおり（後方互換）。"""
     t0 = deps.progress_start(apply_progress_label)
     okrun, err_apply, _raw = deps.basrun_apply(apply_target, code, workdir, helper_files,
                                                 timeout=apply_timeout)
@@ -327,6 +331,7 @@ def apply_dsl_step(op: str, resolved: dict, code: str, *, apply_target: Path, be
 
     status, reason = deps.run_postcondition(
         op, apply_target, resolved, before_charts=before_charts,
-        header_row=header_row, use_formula=use_formula, source_book=source_book)
+        header_row=header_row, use_formula=use_formula, source_book=source_book,
+        before_chart_paths=before_chart_paths)
     return DslApplyResult(runtime_error=None, after=after, changes=lines, changed=changed,
                            postcondition_status=status, postcondition_reason=reason)

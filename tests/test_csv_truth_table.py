@@ -179,3 +179,22 @@ def test_encoding_truth_table(raw, enc, ambiguous):
     d = csv_quarantine.detect_encoding(raw)
     assert d.encoding == enc
     assert d.ambiguous is ambiguous
+
+
+# レビュー実測で発見した穴の追補 2026-08-23（rule d: 桁溢れの一票拒否権がカンマ桁区切りに
+# 届いていなかった・SEALED-20260823-jisaku-ultra.md 致命⑤）
+
+@needs_impl
+def test_comma_grouped_16_digits_is_vetoed_truth_table():
+    """"1,234,567,890,123,456"（整数部16桁）── カンマ形でも digit_overflow で string。"""
+    v = csv_quarantine.classify_column(["1,234,567,890,123,456"])
+    assert v.kind == "string"
+    assert "digit_overflow" in v.reasons
+
+
+@needs_impl
+def test_comma_grouped_15_digits_still_number_truth_table():
+    """誤爆防止: 整数部15桁ちょうど（境界の1つ内側）のカンマ列は従来どおり number。"""
+    v = csv_quarantine.classify_column(["123,456,789,012,345"])
+    assert v.kind == "number"
+    assert "comma_grouped" in v.reasons
