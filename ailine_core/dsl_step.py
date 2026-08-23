@@ -141,7 +141,7 @@ def resolve_dsl_step_args(op: str, raw_args: dict, task: str, meta: dict, vocab:
 def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, task: str,
                                  before: dict, after: dict, *, exclude_sheets: set | None = None,
                                  sheet_conflict=None, precondition_broken: str | None = None,
-                                 deps: DslStepDeps) -> list:
+                                 after_path=None, deps: DslStepDeps) -> list:
     """⑤適用後の助言。mode="flat"（単発）は build_advisories(exclude_sheets 込み) を丸ごと、
        mode="structural"（複合計画の段）は _structural_advisories + unrequested_new_sheet_advisory
        だけ（依頼文言との重なり④は計画全体に対して1回だけ評価するため、段ごとのここには
@@ -158,15 +158,19 @@ def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, 
        段は依頼文言との重なり④を評価しないので受け取っても使い道が無く、渡さない）。
        ★★ 単位G: precondition_broken は「単位F の前提検査で破れた種類」（破れていなければ
        None）。中立化は前提が成立していた時だけ行われるべきなので、判定する側（助言の
-       発生源）まで運ぶ。★ ここでも同じ検査をやり直さない ── 検査は呼び出し側で 1 度だけ。"""
+       発生源）まで運ぶ。★ ここでも同じ検査をやり直さない ── 検査は呼び出し側で 1 度だけ。
+       ★ operator10 ⑤: after_path（適用後の実ファイル・省略可）は build_advisories/
+       structural_advisories へそのまま横流しするだけ（数式セルの偽アラーム判定専用）。"""
     if mode == "flat":
         advisories = deps.build_advisories(task, before, after, exclude_sheets=exclude_sheets,
                                             op=op, resolved=resolved, meta=meta,
                                             sheet_conflict=sheet_conflict,
-                                            precondition_broken=precondition_broken)
+                                            precondition_broken=precondition_broken,
+                                            after_path=after_path)
     else:
         advisories = list(deps.structural_advisories(before, after, op=op, resolved=resolved, meta=meta,
-                                                     precondition_broken=precondition_broken))
+                                                     precondition_broken=precondition_broken,
+                                                     after_path=after_path))
         advisories.extend(deps.unrequested_new_sheet_advisory(task, before, after, op=op))
     return advisories
 

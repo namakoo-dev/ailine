@@ -6,6 +6,9 @@
       "Sheet"
     ],
     "charts": 0,
+    "chart_counts": {
+      "Sheet": 0
+    },
     "cells": {
       "Sheet!1,1": [
         "商品",
@@ -76,6 +79,10 @@
       "新規"
     ],
     "charts": 0,
+    "chart_counts": {
+      "Sheet": 0,
+      "新規": 0
+    },
     "cells": {
       "Sheet!1,1": [
         "商品",

@@ -3,10 +3,15 @@
 **自然言語のタスクを、ローカル LLM が LibreOffice Basic に書き起こし、[basrun](https://github.com/namakoo-dev/basrun) で文書に適用し、★ 効果を読み戻して検証する。**
 
 **何が頼めるかは `python ailine.py ops` で出る**（一覧は登録簿から自動生成 — この文書の表とずれない）。
-★ freeform 最終決定（2026-08-21）: 一覧に無い依頼は、生成に入らず 0 秒で断る（理由・
-要望として記録した旨・`ailine ops`/言い換え/2冊の突き合わせという次の手を言う）。以前の
-版はここで AI が直接生成を試していたが、機械検証できない操作は行わない方針に変えた
-（廃止は git から復活できる・悪印象は不可逆という非対称を踏まえた判断）。
+★ freeform 最終決定（2026-08-21）: 一覧に無い依頼は、生成に入らず断る（理由・要望として
+記録した旨・`ailine ops`/言い換え/2冊の突き合わせという次の手を言う）。以前の版はここで
+AI が直接生成を試していたが、機械検証できない操作は行わない方針に変えた（廃止は git から
+復活できる・悪印象は不可逆という非対称を踏まえた判断）。
+★ 断るまでの判定は二段構え（W10 便C2、上記の日付より後に追加）: ①別名ストアへの直行 ②語
+としての厳格一致（`suggest_ops`）はどちらも LLM を呼ばず即座（0秒）。①②が空振りした時
+だけ③「もしかして」判定器（LLM 呼び出し1回・実測 +3秒前後）に一度だけ回してから、提案
+するか断るかを決める。①〜③のどこで終わっても**生成には入らない**（機械検証できない操作は
+書かない、という方針自体は不変）。
 依頼が曖昧なだけで聞き返された（？ CLARIFY）場合は、言い方の問題か未対応かをここで確かめる。
 （複数の操作をまとめた依頼のうち一部だけが語彙外の場合に限り、その段だけは今も AI が
 直接生成する — 下の「自由生成の関所」参照。）
@@ -468,7 +473,7 @@ python ailine.py run 売上一覧.csv "金額で降順に並べ替えて"
 | ヘルパ | モデルが書くのは | 隠している難所 |
 |---|---|---|
 | `SortByColumn(oDoc, headerRow, lastCol, col, ascending)` | `Call SortByColumn(oDoc, 0, 4, 1, False)` | 範囲検出・`SortFields`・`ContainsHeader=False` |
-| `InsertChart(oDoc, headerRow, catCol, valCol, kind)` | `Call InsertChart(oDoc, 0, 0, 1, "bar")` | 見栄えのするグラフ(棒/折れ線/円)。タイトル・系列色を見出しから自動導出（棒/折れ線は横軸タイトルも。データラベルは付けず読ませる清潔な既定。LO native の表現力を自前で引き出す） |
+| `InsertChart(oDoc, headerRow, catCol, valCol, kind, maxDataRow)` | `Call InsertChart(oDoc, 0, 0, 1, "bar", 4)` | 見栄えのするグラフ(棒/折れ線/円)。タイトル・系列色を見出しから自動導出（棒/折れ線は横軸タイトルも。データラベルは付けず読ませる清潔な既定。LO native の表現力を自前で引き出す）。`maxDataRow` は省略可（合計行のある表でだけ codegen が渡し、合計行をグラフ範囲から除く） |
 | `MergeCells(oDoc, c1, r1, c2, r2)` | `Call MergeCells(oDoc, 0, 0, 1, 0)` | 範囲を渡さず単一セルに merge する誤りを封じる |
 | `InsertRows(oDoc, atRow, count)` | `Call InsertRows(oDoc, 1, 1)` | `Rows.insertByIndex`・0起点の位置 |
 | `DrawTableBorders(oDoc)` | `Call DrawTableBorders(oDoc)` | データ範囲を自動検出・`TableBorder2` の格子 |

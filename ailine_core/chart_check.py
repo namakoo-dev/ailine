@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+import posixpath
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -21,6 +22,11 @@ _NS = {"c": "http://schemas.openxmlformats.org/drawingml/2006/chart"}
 _KIND_TAGS = {"bar": "barChart", "line": "lineChart", "pie": "pieChart"}
 _CHART_XML_RE = re.compile(r"xl/charts/chart\d+\.xml", re.IGNORECASE)
 _COL_REF_RE = re.compile(r"\$([A-Za-z]+)\$\d+")
+
+# ---- シート単位のグラフ個数（operator 盲検10度目 ②の材料） -----------------------
+_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_NS_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
+_R_ID_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 
 
 def _chart_xml_paths(z: zipfile.ZipFile) -> list:
@@ -105,3 +111,78 @@ def check_chart_series(path, kind: str, value_col_letter: str,
             return "fail", "グラフの種別タグ（bar/line/pieChart）が読めない"
     except Exception as e:
         return "fail", f"グラフ検証に失敗: {type(e).__name__}: {e}"
+
+
+
+def _resolve_rel_target(base_dir: str, target: str) -> str:
+    """rels の Target を、その rels を持つパートのディレクトリ基準で正規化する。
+
+    ★ 2026-08-23 の実測: LibreOffice は `Target="../drawings/drawing1.xml"` のように
+      **相対**で書く。旧実装は `xl/` を前置するだけで `..` を畳まなかったため
+      `xl/../drawings/drawing1.xml` になり、zip の名前一覧と一致せずグラフを 0 と数えていた
+      （openpyxl 産の検体では別の書き方だったので緑に見えていた ── 治具と実物の食い違い）。
+    """
+    t = (target or "").replace("\\", "/")
+    if t.startswith("/"):
+        return t.lstrip("/")
+    return posixpath.normpath(posixpath.join(base_dir, t)).lstrip("/")
+
+def charts_by_sheet(path) -> dict:
+    """xlsx内の embedded chart 数をシート名ごとに数える（operator 盲検10度目 ②の材料）。
+
+    ★ なぜ要る: ailine.snapshot() の既存の "charts" はブック全体の合計数（_charts_count）
+      でしかなく、「どのシートにグラフが増えたか」が分からない ── そのためグラフだけを
+      挿すrunで、変更検出（_changed_sheets）がセル値しか見ておらず『変更されていません』の
+      誤アラームが出ていた。ここは workbook.xml → 各シートの <drawing> → drawing の rels →
+      chart part、と関係(rels)を辿ってシート名に帰属させる（xml_readback._sheet_target と
+      同じ考え方の rels 解決を、drawing まで一段深く辿るだけ）。
+
+    読めない/構造が想定外なら安全側で {}（呼び出し側は「シート単位では分からない」として
+    扱う ── 全域を「変わった」と誤って広げない）。"""
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            wb_root = ET.fromstring(z.read("xl/workbook.xml"))
+            sheets = wb_root.findall(f".//{{{_NS_MAIN}}}sheets/{{{_NS_MAIN}}}sheet")
+            rid_to_target = {}
+            if "xl/_rels/workbook.xml.rels" in names:
+                wb_rels_root = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+                for rel in wb_rels_root.findall(f"{{{_NS_REL}}}Relationship"):
+                    rid_to_target[rel.get("Id")] = _resolve_rel_target(
+                        "xl", rel.get("Target") or "")
+            out: dict = {}
+            for s in sheets:
+                name = s.get("name")
+                out[name] = 0
+                sheet_path = rid_to_target.get(s.get(_R_ID_ATTR))
+                if not sheet_path or sheet_path not in names:
+                    continue
+                sheet_root = ET.fromstring(z.read(sheet_path))
+                drawing_el = sheet_root.find(f"{{{_NS_MAIN}}}drawing")
+                if drawing_el is None:
+                    continue
+                drawing_rid = drawing_el.get(_R_ID_ATTR)
+                sheet_dir, sheet_file = sheet_path.rsplit("/", 1)
+                sheet_rels_path = f"{sheet_dir}/_rels/{sheet_file}.rels"
+                if sheet_rels_path not in names:
+                    continue
+                sheet_rels_root = ET.fromstring(z.read(sheet_rels_path))
+                drawing_target = None
+                for rel in sheet_rels_root.findall(f"{{{_NS_REL}}}Relationship"):
+                    if rel.get("Id") == drawing_rid:
+                        drawing_target = _resolve_rel_target(sheet_dir, rel.get("Target") or "")
+                        break
+                if not drawing_target or drawing_target not in names:
+                    continue
+                d_dir, d_file = drawing_target.rsplit("/", 1)
+                drawing_rels_path = f"{d_dir}/_rels/{d_file}.rels"
+                count = 0
+                if drawing_rels_path in names:
+                    drawing_rels_root = ET.fromstring(z.read(drawing_rels_path))
+                    for rel in drawing_rels_root.findall(f"{{{_NS_REL}}}Relationship"):
+                        if "chart" in (rel.get("Type") or "").lower():
+                            count += 1
+                out[name] = count
+            return out
+    except Exception:
+        return {}

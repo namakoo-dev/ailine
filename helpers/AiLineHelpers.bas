@@ -62,11 +62,16 @@ End Sub
 '    全スライスが同じ色になり、円グラフの用を成さなくなるため当てない。同じ理由で
 '    横軸(カテゴリ軸)自体が無いので HasXAxisTitle も設定しない。凡例はスライスの
 '    区別に要るため棒/折れ線と逆に立てる。
-'   headerRow : 見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
-'   catCol    : 項目名にする列（0 起点）
-'   valCol    : 値にする列（0 起点。例: 金額=1, 売上=3）
-'   sKind     : "bar" / "line" / "pie"（省略不可。既定は呼び側の codegen_dsl が "bar" を渡す）
-Sub InsertChart(oDoc As Object, headerRow As Integer, catCol As Integer, valCol As Integer, sKind As String)
+'   headerRow  : 見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
+'   catCol     : 項目名にする列（0 起点）
+'   valCol     : 値にする列（0 起点。例: 金額=1, 売上=3）
+'   sKind      : "bar" / "line" / "pie"（省略不可。既定は呼び側の codegen_dsl が "bar" を渡す）
+'   maxDataRow : ★ operator10 ①(片配線の解消): データ範囲の上限行（0起点・省略可）。
+'                合計行のある表で codegen_dsl（Python 側・ailine_core/chart_range.py の
+'                total_row.py 再利用判定）が渡す ── 自前走査の lastRow がこれを超えたら
+'                切り詰め、合計行がグラフの第4の柱として混入するのを防ぐ。省略時
+'                (IsMissing) は従来どおり自前走査の結果をそのまま使う（後方互換）。
+Sub InsertChart(oDoc As Object, headerRow As Integer, catCol As Integer, valCol As Integer, sKind As String, Optional maxDataRow As Variant)
     Dim oSheet As Object, oCharts As Object, oChart As Object, oDiag As Object
     Dim lastRow As Long
     Dim sCat As String, sVal As String
@@ -79,6 +84,9 @@ Sub InsertChart(oDoc As Object, headerRow As Integer, catCol As Integer, valCol 
         lastRow = lastRow + 1
     Loop
     lastRow = lastRow - 1
+    If Not IsMissing(maxDataRow) Then
+        If lastRow > CLng(maxDataRow) Then lastRow = CLng(maxDataRow)
+    End If
     If lastRow < headerRow + 1 Then Exit Sub
 
     oCharts = oSheet.Charts

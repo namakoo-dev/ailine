@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Callable
 
 import openpyxl
+from openpyxl.utils import get_column_letter
+
+from ailine_core.xml_readback import numeric_cells_became_strings
 
 # OOXML のエラー値。openpyxl は data_only=True で開くと、LibreOffice/Excel が保存時に
 # 計算・保存したキャッシュ値をそのまま文字列として返す（エラー値も同じ経路で読める）。
@@ -88,13 +91,27 @@ def _parses_as_number(s: str) -> bool:
         return False
 
 
+def _looks_like_formula(s) -> bool:
+    """数式セルの見た目（"=B2*C2" 等）か。openpyxl の素の .value（data_only=False）は
+       数式セルなら常にこの形の文字列を返す ── それ自体は「型が壊れた」証拠にならない
+       （★ operator10 ⑤）。"""
+    return isinstance(s, str) and s.strip().startswith("=")
+
+
 def detect_write_target_type_change(before: dict, after: dict, *, op: str | None, resolved: dict | None,
-                                     meta: dict | None, op_write_target: dict, is_number: Callable) -> str | None:
+                                     meta: dict | None, op_write_target: dict, is_number: Callable,
+                                     after_path=None) -> str | None:
     """(b) OP_WRITE_TARGET が宣言する書き込み先列（狙い撃ち）で、変化前が数値・変化後が
        数値に見えない文字列のセルが1件でもあれば予防の確認行を返す（関所にはしない・
        理由はモジュール docstring 参照）。新規列（元の型という概念が無い）は対象外。
        ★ 単位C: op_write_target の値は `.col_key` / `.sheet_key` を持つ宣言オブジェクト
-       （呼び出し側が渡す・ここは属性を読むだけで ailine を import しない）。"""
+       （呼び出し側が渡す・ここは属性を読むだけで ailine を import しない）。
+       ★ operator10 ⑤: before/after は snapshot()（openpyxl の素の .value・data_only=False）
+       由来のため、数式セル（例 `=B2*C2`）は after 側の値が数式文字列そのものになり、
+       キャッシュ値が数値でも「文字列に変わった」と誤検出していた（偽の破壊アラーム）。
+       数式の見た目をした値は、after_path（適用後の実ファイル）が渡されていれば
+       numeric_cells_became_strings でキャッシュ値を読み直して判定し、無ければ
+       安全側（数式の文字列表現そのものは型変化の証拠にしない＝カウントしない）に倒す。"""
     if not (op and resolved is not None and meta is not None):
         return None
     write_target = op_write_target.get(op)
@@ -117,15 +134,22 @@ def detect_write_target_type_change(before: dict, after: dict, *, op: str | None
         if not k.startswith(prefix):
             continue
         _, rc = k.split("!", 1)
-        _, c_str = rc.split(",")
+        r_str, c_str = rc.split(",")
         if int(c_str) != col_idx:
             continue
         if not is_number(b[0] if b else None):
             continue
         a = after["cells"].get(k)
         a_val = a[0] if a else None
-        if isinstance(a_val, str) and not _parses_as_number(a_val):
-            flips += 1
+        if not (isinstance(a_val, str) and not _parses_as_number(a_val)):
+            continue
+        if _looks_like_formula(a_val):
+            if after_path is not None:
+                ref = f"{get_column_letter(int(c_str))}{r_str}"
+                if numeric_cells_became_strings(after_path, [ref], sheet_name=sheet):
+                    flips += 1
+            continue
+        flips += 1
     if flips == 0:
         return None
     return (f"（確認）列『{col_name}』は元は数値でしたが、{flips} 件のセルが数値に見えない"

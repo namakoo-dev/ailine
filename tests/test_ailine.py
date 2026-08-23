@@ -7684,7 +7684,11 @@ def test_set_column_value_nonnumeric_write_triggers_both_advisories(tmp_path, mo
 
 def test_set_column_value_numeric_looking_write_no_advisory(tmp_path, monkeypatch, capsys):
     """★ DoD4/5②: 過剰検出でないことの実証。同じ列に数値そのものの文字列『500』を書く
-       正常系（数式は壊れない）では、(a)(b) どちらの警告も出ない。"""
+       正常系（数式は壊れない）では、(a)(b) どちらの警告も出ない。
+       ★ operator10 ④: 対象列『原価』は数値列・書く値『500』も数値として読めるため、
+       codegen は setValue（数値）で書く（fake_apply もその実体を模す）。型が変わらない
+       のでそもそも(b)の対象外 ── 「数値に見えるが実は文字列」の旧経路より一段強い
+       『最初から型を保つ』形で同じ結論（無警告）になる。"""
     book = _genka_book(tmp_path)
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
@@ -7697,7 +7701,7 @@ def test_set_column_value_numeric_looking_write_no_advisory(tmp_path, monkeypatc
         wb2 = openpyxl.load_workbook(out_book)
         ws2 = wb2.active
         for r in (2, 3, 4):
-            ws2.cell(row=r, column=3, value="500")
+            ws2.cell(row=r, column=3, value=500)
             ws2.cell(row=r, column=4, value=500)   # 数式は数値そのものへ正常に再計算された想定
         wb2.save(out_book)
         return True, None, "ok"

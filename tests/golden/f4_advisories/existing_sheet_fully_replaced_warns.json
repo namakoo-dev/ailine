@@ -7,6 +7,10 @@
       "集計"
     ],
     "charts": 0,
+    "chart_counts": {
+      "Sheet": 0,
+      "集計": 0
+    },
     "cells": {
       "Sheet!1,1": [
         "a",
@@ -81,6 +85,10 @@
       "集計"
     ],
     "charts": 0,
+    "chart_counts": {
+      "Sheet": 0,
+      "集計": 0
+    },
     "cells": {
       "Sheet!1,1": [
         "a",

@@ -105,7 +105,10 @@ from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘�
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
 from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
-from ailine_core.chart_check import check_chart_series   # ★ グラフ段: 事後条件②（種別+参照の検証）
+from ailine_core.chart_check import check_chart_series, charts_by_sheet   # ★ グラフ段: 事後条件②（種別+参照の検証）+ operator10 ②（シート別グラフ数）
+from ailine_core.chart_range import chart_data_last_row   # ★ operator10 ①: グラフ範囲から合計行を除く
+from ailine_core.column_type import column_is_all_numeric, value_parses_as_number   # ★ operator10 ④: 型の機械決定
+from ailine_core.xml_readback import numeric_cells_became_strings   # ★ operator10 ⑤: 数式セルの偽アラーム防止
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -307,8 +310,9 @@ def load_helpers(helpers_dir: Path) -> tuple:
         "★ headerRow 引数は見出し行（0起点）。見出しが物理1行目ならほぼ常に 0。\n"
         "例: 列0〜4の表で金額が列1なら、金額で降順に並べ替え"
         " → `Call SortByColumn(oDoc, 0, 4, 1, False)`（第2引数 lastCol=表の最終列）\n"
-        "例: 金額(列1)の棒グラフ（項目名は列0）→ `Call InsertChart(oDoc, 0, 0, 1, \"bar\")`"
-        "（第3引数=項目名の列・第4引数=値の列・第5引数=\"bar\"/\"line\"/\"pie\"）\n"
+        "例: 金額(列1)の棒グラフ（項目名は列0）→ `Call InsertChart(oDoc, 0, 0, 1, \"bar\", 4)`"
+        "（第3引数=項目名の列・第4引数=値の列・第5引数=\"bar\"/\"line\"/\"pie\"・"
+        "第6引数=データ範囲の最終行(0起点・省略可・省略時は自動検出)）\n"
         "例: A1とB1を結合 → `Call MergeCells(oDoc, 0, 0, 1, 0)`\n"
         "例: 先頭データ行(2行目)の前に1行挿入 → `Call InsertRows(oDoc, 1, 1)`\n"
         "例: 表に罫線を引く → `Call DrawTableBorders(oDoc)`\n"
@@ -414,12 +418,17 @@ def book_columns(path: Path, header_rows: dict | None = None) -> dict:
 
 
 def build_book_meta(path: Path, header_rows: dict | None = None) -> dict:
-    """{"sheets": [...], "headers": {シート名: [列名,...]}, "header_rows": {シート名: 行(1起点)}}。
-       M2b 翻訳・検証の接地情報。★ W3: header_rows 省略時は全シート1行目（旧挙動と同一）。"""
+    """{"sheets": [...], "headers": {シート名: [列名,...]}, "header_rows": {シート名: 行(1起点)},
+       "path": path}。M2b 翻訳・検証の接地情報。★ W3: header_rows 省略時は全シート1行目
+       （旧挙動と同一）。★ operator10 ①④: "path" は実ファイルを読み直す必要がある機能
+       （chart_data_last_row・column_is_all_numeric）専用の追加キー。手組みの book_meta
+       （単体テスト・_SAMPLE_META 等）はこのキーを持たないため、それらの経路は
+       従来どおり「実ファイルを読まない」判定に自然と後退する（後方互換）。"""
     header_rows = dict(header_rows or {})
     headers = book_columns(path, header_rows)
     resolved_header_rows = {name: header_rows.get(name, 1) for name in headers}
-    return {"sheets": list(headers.keys()), "headers": headers, "header_rows": resolved_header_rows}
+    return {"sheets": list(headers.keys()), "headers": headers,
+            "header_rows": resolved_header_rows, "path": path}
 
 
 # ---------------------------------------------------------------------------
@@ -733,6 +742,9 @@ def snapshot(path: Path) -> dict:
     #   count_reconciliation が「データ 999 行のうち…」と 嘘の分母 を出していた根治に使う。
     #   値は既にこのループで計算していた（捨てていただけ）。
     snap = {"sheets": list(wb.sheetnames), "charts": _charts_count(path),
+            # ★ operator10 ②: シート単位のグラフ数（_changed_sheets がセル以外の変化を
+            #   このシートの「変わった」に数えるための材料）。
+            "chart_counts": charts_by_sheet(path),
             "cells": {}, "merges": {}, "colw": {}, "rowh": {}, "truncated": False,
             "true_rows": {}}
     for name in wb.sheetnames:
@@ -1325,7 +1337,11 @@ OP_DECLARED_SHEET_NAME = {"AGGREGATE": "集計", "PIVOT": "ピボット"}
 
 
 def _changed_sheets(before: dict, after: dict) -> set:
-    """何かしら変わったシート名の集合（セル・結合・列幅・行高・追加/削除）。"""
+    """何かしら変わったシート名の集合（セル・結合・列幅・行高・グラフ・追加/削除）。
+       ★ operator10 ②: グラフだけを挿す run はセル値が一切変わらないため、以前は
+       ここが沈黙し「★ 依頼で言及された『集計』は存在しません/変更されていません」の
+       誤アラームで ✓ が △ に落ちていた。chart_counts（snapshot() がシート別に持つ）の
+       差分もこのシートの「変わった」に数える。"""
     changed = set()
     for name in set(before["sheets"]) | set(after["sheets"]):
         if name not in before["sheets"] or name not in after["sheets"]:
@@ -1339,6 +1355,11 @@ def _changed_sheets(before: dict, after: dict) -> set:
             changed.add(name)
     for sheet, _r, _c in _changed_cells(before, after):
         changed.add(sheet)
+    before_charts = before.get("chart_counts") or {}
+    after_charts = after.get("chart_counts") or {}
+    for name in set(before_charts) | set(after_charts):
+        if before_charts.get(name, 0) != after_charts.get(name, 0):
+            changed.add(name)
     return changed
 
 
@@ -1384,7 +1405,8 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
 
 def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
                             resolved: dict | None = None, meta: dict | None = None,
-                            precondition_broken: str | None = None) -> list:
+                            precondition_broken: str | None = None,
+                            after_path: Path | None = None) -> list:
     """助言のうち『この差分そのものが疑わしいか』を判定する部分だけ
        （①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身・★ W6）。
        依頼文言との重なり(④ mention_overlap_advisory)は含めない。
@@ -1396,7 +1418,9 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
        評価する（そちらは1段しかないため局所=全体で一致し、挙動は不変）。
        ★ C9: op/resolved/meta（呼び出し側が今回の段の宣言済み効果を渡す・省略時は None）は
        detect_ghost_data の new_col_letter 判定と existing_sheet_replaced_advisory の宣言シート判定・
-       detect_write_target_type_change（★宣言つき挙動変更#1(b)）にそのまま渡す（旧 _neutralize_* 三兄弟の後処理を発生源へ先取り）。"""
+       detect_write_target_type_change（★宣言つき挙動変更#1(b)）にそのまま渡す（旧 _neutralize_* 三兄弟の後処理を発生源へ先取り）。
+       ★ operator10 ⑤: after_path（適用後の実ファイル・省略可）は detect_write_target_type_change
+       の数式セル偽アラーム判定にのみ使う（無ければ安全側＝数式セルはカウントしない）。"""
     lines = []
     new_col_letter = _declared_new_column_letter(op, resolved, meta) if (op and resolved is not None and meta is not None) else None
     new_row_at_end = _op_writes(op, WRITE_NEW_ROW_AT_END)   # ★ 単位C(D10): 合計行は宣言済みの効果
@@ -1408,14 +1432,15 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
     if recon:
         lines.append(recon)
     lines.extend(new_sheet_advisories(before, after))
-    lines.extend(existing_sheet_replaced_advisory(before, after, op=op, precondition_broken=precondition_broken) + [m for m in [detect_write_target_type_change(before, after, op=op, resolved=resolved, meta=meta, op_write_target=OP_WRITE_TARGET, is_number=_is_number)] if m])   # ★ 致命2(W10e) + 挙動変更#1(b)
+    lines.extend(existing_sheet_replaced_advisory(before, after, op=op, precondition_broken=precondition_broken) + [m for m in [detect_write_target_type_change(before, after, op=op, resolved=resolved, meta=meta, op_write_target=OP_WRITE_TARGET, is_number=_is_number, after_path=after_path)] if m])   # ★ 致命2(W10e) + 挙動変更#1(b)
     return lines
 
 
 def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set | None = None, *,
                       op: str | None = None, resolved: dict | None = None,
                       meta: dict | None = None, sheet_conflict=None,
-                      precondition_broken: str | None = None) -> list:
+                      precondition_broken: str | None = None,
+                      after_path: Path | None = None) -> list:
     """diff の後に表示する助言行を全部集める。
        ①幽霊データ ②一様埋め ③件数の突き合わせ ⑤新規シートの中身（★ W6・
        _structural_advisories が担当） ⑥依頼にないシート新設の申告（★ W6）
@@ -1429,9 +1454,11 @@ def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set |
        ★ 誤爆#3: sheet_conflict（resolve_target_sheet が「この語は列名とも一致したので
        曖昧＝既定へ後退した」と決めた記録）に載る同名シートも、同じ和に足す ── 助言側で
        「曖昧かどうか」を判定し直さず、決めた側の結果をそのまま運ぶ
-       （ailine_core.target_sheet.conflict_excluded_sheets 参照）。"""
+       （ailine_core.target_sheet.conflict_excluded_sheets 参照）。
+       ★ operator10 ⑤: after_path は _structural_advisories へそのまま横流しするだけ
+       （省略可・無ければ従来どおり）。"""
     lines = list(_structural_advisories(before, after, op=op, resolved=resolved, meta=meta,
-                                        precondition_broken=precondition_broken))
+                                        precondition_broken=precondition_broken, after_path=after_path))
     lines.extend(unrequested_new_sheet_advisory(task, before, after, op=op))
     mentions = extract_task_mentions(task, before["sheets"])
     excluded = (set(exclude_sheets or ()) | _declared_reads_only_sheets(op, resolved)
@@ -2717,6 +2744,17 @@ def _raw_target_not_embedded_in_task(raw_target: str, task: str) -> bool:
     return False
 
 
+def _task_names_single_real_column(task: str, headers: list) -> str | None:
+    """★ operator10 ③ (A' 原則): 依頼文が対象シートの実在列名を独立した語として名指しし、
+       候補がちょうど1つに絞れるならその列名を返す（0件/複数件は None ── 曖昧なときは
+       機械が断定しない）。断片ガードは COMPUTE_COLUMN の target 判定と同じ
+       _raw_target_not_embedded_in_task を再利用する（二重実装しない）。"""
+    if not task:
+        return None
+    hits = [h for h in (headers or []) if h and _raw_target_not_embedded_in_task(str(h), task)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab: dict | None = None,
                      target_sheet: str | None = None) -> tuple:
     """② 検証。(ok, resolved_args, inferred_keys, error_message)。
@@ -2744,6 +2782,26 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     def resolve_in(key: str, sheet_name: str):
         val, was_inferred, err = resolve_col_ref(resolved.get(key), headers.get(sheet_name, []))
         if err:
+            # ★ operator10 ③ (A' 原則): LLM の値がこのシートに実在しなくても、依頼文が
+            #   対象シートの実在列名を独立した語として一意に名指ししていれば、そちらを
+            #   採用する（別シートの同名列に汚染された答えより、依頼文+実在照合が勝つ ──
+            #   factor/cmp/kind と同じ「機械抽出が LLM に勝つ」系譜）。依頼文にも手掛かりが
+            #   無ければ従来どおり CLARIFY で止める。
+            #   ★ 誤爆防止: 既に別のスロット（例: CHART の value_col）が採用した列名は
+            #   候補から外す（同じ列名が依頼文に1回出るだけで、値列の言及を横取りして
+            #   欠けたスロットへ誤って流用しないため）。
+            original = resolved.get(key)
+            claimed = {v for k2, v in resolved.items()
+                       if k2 != key and isinstance(v, str) and not k2.startswith("_")}
+            candidates = [h for h in headers.get(sheet_name, []) if h not in claimed]
+            rescued = _task_names_single_real_column(task, candidates)
+            if rescued is not None:
+                resolved[key] = rescued
+                resolved["_warnings"] = resolved.get("_warnings", []) + [
+                    f"LLM が返した列『{original}』は対象シートに無いため、依頼文が名指しする"
+                    f"列『{rescued}』を採用しました"
+                ]
+                return None
             # ★ operator8 ③: 列解決の失敗時だけ敗者復活（book_meta に _row_scan が無い
             #   単体テスト等では常に None ＝従来のまま）。
             return _header_row_hint_for_missing_col(book_meta, sheet_name, resolved.get(key)) or err
@@ -3161,6 +3219,24 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 f"LLM が返した値('{llm_value_raw}')と依頼文の引用('{quoted}')が食い違うため"
                 f"依頼文側('{quoted}')を採用しました"
             ]
+        # ★ operator10 ④: 書き込む型を列の実体から機械決定する（A' 原則: LLM に決めさせない）。
+        #   book_meta にファイルパスがある（実行時）場合だけ実体を読める ── 手組みの
+        #   book_meta（単体テスト等）では従来どおり判定しない（_write_numeric を付けない）。
+        book_path = book_meta.get("path")
+        if book_path is not None:
+            numeric_value = value_parses_as_number(quoted)
+            write_numeric = False
+            if numeric_value is not None:
+                header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
+                col_idx1 = headers[first_sheet].index(resolved["col"]) + 1
+                try:
+                    write_numeric = column_is_all_numeric(book_path, first_sheet, col_idx1,
+                                                           header_row_here)
+                except Exception:
+                    write_numeric = False
+            resolved["_write_numeric"] = write_numeric
+            if write_numeric:
+                resolved["_write_numeric_value"] = numeric_value
 
     # ★ EXTRACT: 単一条件（col × cmp × value）に一致する行を新シートへ抜き出す
     #   （コミット 2edcb08「EXTRACT op」参照）。col は実在検証、cmp は語彙の6値に限定、value は
@@ -3259,7 +3335,10 @@ _CONFIRM_FIELDS = {
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": (("分類列", "group_col", None), ("集計列", "value_col", None)),
-    "SET_COLUMN_VALUE": (("対象列", "col", None), ("値", "value", None)),
+    # ★ operator10 ④: 「型」は resolved_args に "_write_numeric" キーがある時だけ表示される
+    #   （M2c のフィールド省略・手組みの resolved_args ではキー自体が無いので出ない）。
+    "SET_COLUMN_VALUE": (("対象列", "col", None), ("値", "value", None),
+                          ("型", "_write_numeric", lambda v: "数値" if v else "文字列")),
     "EXTRACT": (("対象列", "col", None), ("条件", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
                  ("値", "value", lambda v: _format_extract_value(v))),
     "DEDUP": (("判定キー", "keys", lambda v: "・".join(v)),),
@@ -3526,7 +3605,18 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         cat_name = resolved_args.get("category_col") or headers[first_sheet][0]
         cat_idx = headers[first_sheet].index(cat_name)
         kind = resolved_args.get("kind") or "bar"
-        return wrap(f'    Call InsertChart(oDoc, {hr0}, {cat_idx}, {v_idx}, "{kind}")\n')
+        # ★ operator10 ①: 合計行をグラフ範囲から除く（片配線の解消）。book_meta にファイル
+        #   パスがある（実行時）場合だけ実ファイルを読める ── 手組みの book_meta（単体テスト・
+        #   ゴールデン等）では従来どおり最終引数を付けない＝InsertChart が自前走査する旧挙動。
+        book_path = book_meta.get("path")
+        max_row_arg = ""
+        if book_path is not None:
+            try:
+                last_row = chart_data_last_row(book_path, first_sheet, header_row)
+                max_row_arg = f", {last_row - 1}"   # Basic 0起点
+            except Exception:
+                max_row_arg = ""
+        return wrap(f'    Call InsertChart(oDoc, {hr0}, {cat_idx}, {v_idx}, "{kind}"{max_row_arg})\n')
 
     if op == "APPEND_TOTAL":
         # ★ W6: ヘルパは無し（罫線・カンマ等の見栄えまでは踏み込まない・素の SUM 式だけ）。
@@ -3706,16 +3796,28 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         return wrap(f"    Call PivotSum(oDoc, {g_idx}, {v_idx})\n")
 
     if op == "SET_COLUMN_VALUE":
-        # ★ 致命3(W10e): ヘルパ無し・既存列のデータ行全部に同じ文字列を setString する
+        # ★ 致命3(W10e): ヘルパ無し・既存列のデータ行全部に同じ値を書く
         #   （CENTER_ALIGN の col: 分岐と同じ「走査してヘッダ直下から最終行まで」の作法）。
+        # ★ operator10 ④: verify_dsl_args が列の実体（書換前）から機械決定した型
+        #   （resolved_args["_write_numeric"]）に従い、数値列には setValue で数値を書く
+        #   （既定/判定できない場合は従来どおり setString）。
         col_idx = headers[first_sheet].index(resolved_args["col"])
-        value = str(resolved_args["value"]).replace('"', '""')
-        body = ("    Dim oSheet As Object, lastRow As Long, r As Long\n"
-                "    oSheet = oDoc.Sheets.getByIndex(0)\n"
-                + _scan_last_row_basic(start_row=str(hr0 + 1))
-                + f"    For r = {hr0 + 1} To lastRow\n"
-                f"        oSheet.getCellByPosition({col_idx}, r).setString(\"{value}\")\n"
-                "    Next r\n")
+        body_head = ("    Dim oSheet As Object, lastRow As Long, r As Long\n"
+                     "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                     + _scan_last_row_basic(start_row=str(hr0 + 1)))
+        if resolved_args.get("_write_numeric"):
+            num = float(resolved_args["_write_numeric_value"])
+            num_lit = str(int(num)) if num.is_integer() else repr(num)
+            body = (body_head
+                    + f"    For r = {hr0 + 1} To lastRow\n"
+                    f"        oSheet.getCellByPosition({col_idx}, r).setValue({num_lit})\n"
+                    "    Next r\n")
+        else:
+            value = str(resolved_args["value"]).replace('"', '""')
+            body = (body_head
+                    + f"    For r = {hr0 + 1} To lastRow\n"
+                    f"        oSheet.getCellByPosition({col_idx}, r).setString(\"{value}\")\n"
+                    "    Next r\n")
         return wrap(body)
 
     if op == "EXTRACT":
@@ -4607,7 +4709,10 @@ def check_pivot(path: Path, args: dict, header_row: int = 1) -> tuple:
 def check_set_column_value(path: Path, args: dict, header_row: int = 1) -> tuple:
     """★ 致命3(W10e): SET_COLUMN_VALUE の事後条件。対象列のデータ行が全部、機械抽出した
        定数値(args["value"])と一致するかを見る（型を問わず文字列表現で比較 — codegen は
-       setString で書くため、読み戻しも文字列として揃える）。"""
+       setString で書くため、読み戻しも文字列として揃える）。
+       ★ operator10 ④: args["_write_numeric"] が真（codegen が setValue で数値として
+       書いた）なら、検証も数値として揃える（型に追従 ── 文字列表現比較のままだと
+       10 と 10.0 のような表記差で偽 fail になる）。"""
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
         idx = _col_index_by_header(ws, args["col"], header_row=header_row)
@@ -4618,6 +4723,11 @@ def check_set_column_value(path: Path, args: dict, header_row: int = 1) -> tuple
             return "fail", _ZERO_TARGET_REASON
         value = args["value"]
         vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
+    if args.get("_write_numeric"):
+        want = float(args["_write_numeric_value"])
+        if not all(_is_number(v) and abs(float(v) - want) <= 1e-6 for v in vals):
+            return "fail", f"列『{args['col']}』に数値『{want:g}』でないセルがある"
+        return "pass", f"{len(vals)} 行を数値『{want:g}』に統一"
     if not all(str(v) == str(value) for v in vals):
         return "fail", f"列『{args['col']}』に『{value}』でないセルがある"
     return "pass", f"{len(vals)} 行を『{value}』に統一"
@@ -6750,7 +6860,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
         sheet_conflict=getattr(a, "_sheet_conflict", None),
-        precondition_broken=precondition_broken) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
+        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -7305,7 +7415,8 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
             continue
 
         advisories = build_advisories(task_text, before, after,
-                                       sheet_conflict=getattr(a, "_sheet_conflict", None))   # ★ 誤爆#3
+                                       sheet_conflict=getattr(a, "_sheet_conflict", None),
+                                       after_path=out_book)   # ★ 誤爆#3
         # ★ W10f 項目2: 旧・単発 cmd_run_freeform と同じ率リテラルの機械スキャン。この段の
         #   依頼文(task_text)だけを出典として見る（他段の依頼文言に混ざらないよう局所判定）。
         advisories = advisories + scan_rate_literals(code, task_text, vocab) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
@@ -7476,7 +7587,7 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
         print(f"{step_prefix}{own_notice}")
     step_advisories.extend(compose_dsl_step_advisories(
         "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps,
-        precondition_broken=precondition_broken) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref))   # ★ 挙動変更#1(a)
+        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref))   # ★ 挙動変更#1(a)
 
     status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
     # ★ 止血1/2: "error"→fail 扱い。"warn"(検証対象不足)は成功は名乗るが機械検証済みとは言わない。

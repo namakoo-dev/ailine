@@ -248,6 +248,27 @@ def row_has_any_value(data: dict, row: int, num_cols: int) -> bool:
     return any((row, c) in grid for c in range(1, num_cols + 1))
 
 
+def numeric_cells_became_strings(path, cell_refs, sheet_name: str | None = None) -> list:
+    """cell_refs（例 ["C2","C3"]）のうち、実際に非数値の文字列になっているものだけを返す。
+
+    ★ operator 盲検10度目 ⑤: `=B2*C2`（キャッシュ値は数値）の列を、openpyxl の素の
+    .value（data_only=False）で見ると「文字列 '=B2*C2' に変わった」と誤検出される。
+    数式セルはキャッシュ値（<v>）で判定すれば数値のまま ── ここは read_grid をそのまま
+    再利用するだけ（数式か否かを問わず<v>の型で読む・二重実装しない）。
+    キャッシュが無い（None）セルは「本当に文字列になった」と断定できないので含めない
+    （保守的＝誤検知回避）。
+    戻り値: 渡した順のうち、本当に非数値文字列だったものだけのサブセット。"""
+    data = read_grid(path, sheet_name=sheet_name)
+    grid = data["grid"]
+    out = []
+    for ref in cell_refs:
+        row, col = _parse_ref(ref)
+        v = grid.get((row, col))
+        if isinstance(v, str):
+            out.append(ref)
+    return out
+
+
 def read_core_properties(path) -> tuple:
     """docProps/core.xml の (dc:creator, dc:description) を直読みする。
        ★ M2（verify の種類判定・architect 致命3）: 検算の入口は『このブックは誰が何として

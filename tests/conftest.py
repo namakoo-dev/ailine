@@ -70,6 +70,11 @@ def _guard_real_home_writes(monkeypatch, tmp_path):
     monkeypatch.setattr(ailine, "VOCAB_FILE", tmp_path / "_guard_vocab.json")
     monkeypatch.setattr(ailine, "MISCLASS_FILE", tmp_path / "_guard_misclass.jsonl")
     monkeypatch.setattr(ailine, "ALIASES_FILE", tmp_path / "_guard_aliases.json")
+    # ★ 2026-08-23 の追補: AILINE_HOME の setenv は子プロセスにしか効かない
+    #   （module 変数は import 時に実 home で束縛済み）。同一プロセスの run.lock /
+    #   backups も明示的に tmp へ寄せる ── 実測で並行 pytest の相互妨害が続いていた。
+    monkeypatch.setattr(ailine, "RUN_LOCK_FILE", tmp_path / "_guard_run.lock", raising=False)
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "_guard_backups", raising=False)
 
 
 @pytest.fixture(autouse=True)
