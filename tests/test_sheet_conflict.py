@@ -502,6 +502,24 @@ def test_conflict_fallback_does_not_warn_that_the_sheet_was_not_changed(tmp_path
     assert _FALSE_STAR not in out
 
 
+def test_conflict_fallback_shows_no_menu_but_discloses_the_default_noninteractively(tmp_path, monkeypatch, capsys):
+    """★ operator 盲検9回目 CONFUSING②(自分の検体): 非対話で衝突に当たっても、
+       メニュー（"1)"/"2)"/"3)"）は1つも出ず、代わりに既定続行の1行が出る。
+       _never_input により input() が一度も呼ばれないこと（＝待たない）も同時に守る。"""
+    _isolate(monkeypatch, tmp_path)
+    _fixed_sort(monkeypatch)
+    _tty(monkeypatch, False)
+    _never_input(monkeypatch)
+    rc = ailine.main(run_argv(book=str(_sales_book(tmp_path)),
+                              task="金額を降順に並べ替えて", copy=True))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    for menu_word in ("1) ", "2) ", "3) "):
+        assert menu_word not in out, f"非対話なのにメニューが出た: {out}"
+    assert "2通りに読めます" not in out, f"非対話なのに3択の前置きが出た: {out}"
+    assert "非対話のため既定で続行" in out, f"既定続行の告知が無い: {out}"
+
+
 def test_same_words_still_warn_when_there_was_no_conflict(tmp_path, monkeypatch, capsys):
     """★ 対照: --sheet で対象を明示すると衝突判定は起きない（記録が残らない）ので、
        同じ依頼文・同じ結果でも警告は従来どおり出る ── 誤爆が消えたのは語のせいではなく
@@ -526,12 +544,18 @@ CHOICES = [ask_choice_mod.Choice("1", "そのまま"), ask_choice_mod.Choice("2"
            ask_choice_mod.Choice("3", "やめる")]
 
 
-def test_ask_choice_is_silent_and_returns_none_when_not_interactive():
+def test_ask_choice_skips_the_menu_but_discloses_the_default_when_not_interactive():
+    """★ operator 盲検9回目 CONFUSING②の直し: メニュー（"N)" 形式）は出さないが、
+       既定へ進んだ事実は1行だけ出す（以前は完全に無言で、非対話実行でメニューが
+       フル表示されてから勝手に進むように見える紛らわしさがあった）。"""
     printed = []
     result = ask_choice_mod.ask_choice(["前置き"], CHOICES, interactive=False,
                                        input_fn=lambda p: "1", print_fn=printed.append)
     assert result == ask_choice_mod.ChoiceResult(key=None, asked=False)
-    assert printed == []   # 非対話では1行も出さない（既存の出力を汚さない）
+    assert len(printed) == 1, f"非対話では既定の告知1行だけのはず: {printed}"
+    assert not any(f"{c.key})" in printed[0] for c in CHOICES), \
+        f"非対話なのにメニュー語が出た: {printed}"
+    assert "非対話" in printed[0] and "そのまま" in printed[0]
 
 
 def test_ask_choice_renders_block_and_returns_the_key():

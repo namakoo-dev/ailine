@@ -223,7 +223,13 @@ def _needed_info(op: str, op_schema: dict, confirm_fields: dict) -> str:
 
 def render_scan_report(folder_label: str, result: dict) -> list:
     """分母つき報告（「N ファイル中 M 照合できた」）・失敗は名指し+理由・並べ替えは開示する。
-       ★ ⚠ の連打はしない ── 異常のあるファイル（取れなかった）だけ名指しする。"""
+       ★ operator 盲検9回目 CONFUSING①: 全員照合できた場合、従来は分母の1行だけで
+       「どのファイルが」照合できたのかが見えなかった（README の「列は揃っているかを
+       分母つきで報告」の約束に対し、分子の中身が不透明）。★ ファイルごとに必ず1行出す形に
+       直した ── ⚠ の連打（憲法の禁）は避けたまま、取れたファイルも「{名前}: 取れた」で
+       名指しする（並べ替え/シートのフォールバックはその1行に畳んで足す）。
+       ★ データ行数は含めない ── evaluate_file の戻り値に無い情報を、この報告のためだけに
+       evaluate 側へ足すのは今回の範囲外（挙動の本体は変えない・表示側だけの修正）。"""
     files = result["files"]
     matched = sum(1 for f in files if f["status"] == "取れた")
     lines = [f"■ ailine scan  folder={folder_label}"]
@@ -237,14 +243,22 @@ def render_scan_report(folder_label: str, result: dict) -> list:
     if excluded.get("csv"):
         lines.append(f"対象外: .csv {excluded['csv']} 件（1本ずつなら `ailine csv` で扱ってください）")
     for f in files:
-        if f["status"] == "取れなかった":
-            lines.append(f"  ⚠ {f['name']}: 取れなかった（{f['reason']}）")
-        elif f.get("reordered"):
-            lines.append(f"  {f['name']}: 取れた（並べ替え）")
-        fb = f.get("sheet_fallback")
-        if fb:
-            lines.append(f"  {f['name']}: シート『{fb['wanted']}』が無いので1枚目『{fb['used']}』を使いました")
+        lines.append(_render_scan_file_line(f))
     return lines
+
+
+def _render_scan_file_line(f: dict) -> str:
+    """scan のファイル1件分の行（★ 必ず1行・情報が複数あれば同じ行に畳む）。"""
+    if f["status"] == "取れなかった":
+        return f"  ⚠ {f['name']}: 取れなかった（{f['reason']}）"
+    notes = []
+    if f.get("reordered"):
+        notes.append("並べ替え")
+    fb = f.get("sheet_fallback")
+    if fb:
+        notes.append(f"シート『{fb['wanted']}』が無いので1枚目『{fb['used']}』を使用")
+    suffix = f"（{'・'.join(notes)}）" if notes else ""
+    return f"  {f['name']}: 取れた{suffix}"
 
 
 # --- `ailine stack` / `ailine verify` の人間向け出力 -------------------------------------

@@ -175,6 +175,22 @@ def test_total_row_candidates_respect_reordered_columns(tmp_path):
     assert counts["b.xlsx"] == 1, f"並べ替えファイルの合計行を取り逃がした: {counts}"
 
 
+def test_all_matched_files_each_get_their_own_line(tmp_path):
+    """★ operator 盲検9回目 CONFUSING①(自分の検体): 全員照合できても「N ファイル中 M
+       照合できた」の1行だけで終わらない ── README の「列は揃っているかを分母つきで
+       報告」の約束どおり、各ファイル名が1行ずつ名指しされる。"""
+    folder = tmp_path / "books"
+    _book(folder / "a.xlsx", HDRS, rows=(("J-1", "甲", 100),))
+    _book(folder / "b.xlsx", HDRS, rows=(("J-2", "乙", 200),))
+    _book(folder / "c.xlsx", HDRS, rows=(("J-3", "丙", 300),))
+    p = _scan(folder)
+    assert p.returncode == 0, p.stderr[-500:]
+    assert "3 ファイル中 3 照合できた" in p.stdout
+    for name in ("a.xlsx", "b.xlsx", "c.xlsx"):
+        assert f"{name}: 取れた" in p.stdout, \
+            f"全員照合できた場合にファイル名が名指しされていない: {name}\n{p.stdout}"
+
+
 def test_scan_discloses_sheet_fallback_to_first_sheet(tmp_path):
     """★ P2（architect 致命5 前段）: 基準名のシートが無いファイルは1枚目へ落ちる。
        scan の人間向け報告・--json のどちらにもその事実を開示すること。"""

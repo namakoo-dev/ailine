@@ -15,6 +15,12 @@ ailine_core/stage_organs.py の docstring 参照）。シート衝突は**この
   - 聞けない場面（非対話）は**必ず既定で素通り**する。ここで止めると、パイプや CI で
     動いていたスクリプトが黙って固まる/壊れる（オーナーの縛り: 「止めると動いていた
     スクリプトが黙って壊れる」）。
+  - ★ operator 盲検9回目 CONFUSING②: 素通りする際、以前はメニューも告知も一切出さず
+    黙って既定へ進んでいた。実測では非対話でも `1) 2) 3)` のメニュー＋入力待ち風の
+    記号が出た後で待たずに進む形になっており（スクリプト/CI 用途で紛らわしい）、
+    メニュー自体は`interactive=False`なら出ないのが正しいが、それなら今度は
+    「なぜ既定になったか」が一切見えない黙る素通りだった。★ メニューは出さないまま、
+    既定を選んだ事実だけを1行で告知する形に直した（render_default_notice）。
 
 ★ 移植可能性（tests/test_line_budget.py が機械で守る）: ailine を import しない。
 標準ライブラリのみ。
@@ -65,18 +71,32 @@ def render_choice_block(lines: list, choices: list, indent: str = "  ") -> list:
     return out
 
 
+def render_default_notice(choices: list) -> str:
+    """★ operator 盲検9回目 CONFUSING②の直し: 非対話で素通りする時にメニューの代わりに
+       出す1行。既定は**呼び出し側の並び順の先頭(choices[0])**という既存の慣例をそのまま使う
+       （sheet_conflict_choice_lines の「1」＝「上の解釈のとおり実行する」がその慣例の由来。
+       ask_choice はここでも choices の中身の意味を知らない・先頭という位置だけで決める）。"""
+    return f"（非対話のため既定で続行: {choices[0].text}）"
+
+
 def ask_choice(lines: list, choices: list, *, interactive: bool,
                input_fn: Callable | None = None, print_fn: Callable | None = None,
                prompt: str = "> ") -> ChoiceResult:
     """選択肢を出して1つ選ばせる。
 
-    interactive=False なら**何も印字せず** ChoiceResult(key=None, asked=False) を返す
-    （呼び出し側が既定の挙動へ倒す）。EOF/入力不能・不正入力が MAX_REPROMPTS 回続いた
-    場合も key=None（asked=True）を返し、決して例外を投げない。
+    interactive=False なら**メニューは出さず**、既定へ倒した事実だけを1行印字して
+    ChoiceResult(key=None, asked=False) を返す（呼び出し側はこの key=None を既定の
+    挙動として扱う ── 何が起きたかを黙らない、というだけで判定ロジックは変えない）。
+    choices が空なら（選ばせる対象が無い）その1行も出さずそのまま返す。
+    EOF/入力不能・不正入力が MAX_REPROMPTS 回続いた場合も key=None（asked=True）を返し、
+    決して例外を投げない。
     """
-    if not interactive or not choices:
+    if not choices:
         return ChoiceResult(key=None, asked=False)
     say = print_fn or print
+    if not interactive:
+        say(render_default_notice(choices))
+        return ChoiceResult(key=None, asked=False)
     ask = input_fn or input
     for ln in render_choice_block(lines, choices):
         say(ln)
