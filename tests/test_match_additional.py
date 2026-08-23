@@ -16,7 +16,7 @@ from pathlib import Path
 import openpyxl
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 from ailine_core import match as multifile_match  # noqa: E402
 

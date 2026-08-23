@@ -34,7 +34,7 @@ def _book(path, headers, rows=((1,),)):
 
 def _scan(folder, *extra):
     return subprocess.run(
-        [sys.executable, str(REPO / "ailine.py"), "scan", str(folder), *extra],
+        [sys.executable, "-m", "ailine", "scan", str(folder), *extra],
         capture_output=True, text=True, timeout=120, encoding="utf-8")
 
 

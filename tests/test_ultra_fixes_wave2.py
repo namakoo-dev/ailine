@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -52,7 +52,7 @@ def test_subprocess_respects_ailine_home(tmp_path):
         return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in real.glob("*") if p.is_file()}
     before = _state()
-    r = subprocess.run([sys.executable, str(REPO / "ailine.py"), "csv", str(csvp)],
+    r = subprocess.run([sys.executable, "-m", "ailine", "csv", str(csvp)],
                         capture_output=True, text=True, env=env, cwd=str(tmp_path),
                         encoding="utf-8", errors="replace", timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr

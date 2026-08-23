@@ -11,11 +11,11 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from ailine_core.sum_identity import rows_matching_sum_above  # noqa: E402
 
-MODULE_PATH = REPO_ROOT / "ailine_core" / "sum_identity.py"
+MODULE_PATH = REPO_ROOT / "src" / "ailine_core" / "sum_identity.py"
 
 
 def _rows(hits):

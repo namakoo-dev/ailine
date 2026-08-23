@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE.parent))   # ailine.py
+sys.path.insert(0, str(HERE.parent / "src"))   # ailine.py
 sys.path.insert(0, str(HERE))          # translation_spike.py (BATTERY/score_slots の再利用)
 
 import ailine  # noqa: E402

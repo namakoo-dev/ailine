@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 
 from ailine_core.total_row import split_total_rows  # noqa: E402
 

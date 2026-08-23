@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 from ailine_core import residue  # noqa: E402
 
 # SORT の照合語彙（ailine.py の OP_META["SORT"] の label+synonyms+match_phrases と同じもの）。

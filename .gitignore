@@ -5,3 +5,8 @@ __pycache__/
 .ailine_*/
 *.out.xlsx
 *.out.ods
+
+# wheel のビルド生成物（release-test / ローカルの確認で出る）
+dist/
+*.egg-info/
+.venv-check/

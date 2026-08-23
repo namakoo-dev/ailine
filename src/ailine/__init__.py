@@ -196,10 +196,15 @@ def _find_basrun_path() -> Path | None:
     if env:
         p = Path(env)
         return p if p.exists() else None
-    for name in ("basrun", "nagi-bas"):  # 公開 repo 名 / 作者ローカルの旧ディレクトリ名
-        p = HERE.parent / name / "basrun.py"
-        if p.exists():
-            return p
+    # ★ wheel 化（2026-08-23）で HERE は src/ailine（install 後は site-packages/ailine）に
+    #   なった。「並びの checkout」は repo から動かす場合の便宜なので、祖先を数段さかのぼって
+    #   探す（src/ailine → src → <repo> → <repo の親> の順で C:\Devasrun 等に届く）。
+    #   install した利用者にとっての正規の指定は環境変数 BASRUN（上で処理済み）。
+    for base in (HERE, *HERE.parents[:3]):
+        for name in ("basrun", "nagi-bas"):  # 公開 repo 名 / 作者ローカルの旧ディレクトリ名
+            p = base / name / "basrun.py"
+            if p.exists():
+                return p
     return None
 
 
@@ -207,9 +212,9 @@ def basrun_path() -> Path:
     """basrun.py の場所。無ければ理由つきで落とす（run から使う致命版）。"""
     p = _find_basrun_path()
     if p is None:
-        sys.exit("basrun.py が見つからない: ailine と並びに"
-                 " https://github.com/namakoo-dev/basrun を clone するか、"
-                 "環境変数 BASRUN でパスを指定する")
+        sys.exit("basrun.py が見つからない: 環境変数 BASRUN にパスを指定するか、"
+                 "https://github.com/namakoo-dev/basrun を clone して"
+                 "ailine と同じ階層に置く")
     return p
 
 
@@ -5813,8 +5818,9 @@ def _check_libreoffice() -> tuple:
 def _check_basrun() -> tuple:
     p = _find_basrun_path()
     if p is None:
-        return False, ("ailine と並びに https://github.com/namakoo-dev/basrun を"
-                       " clone するか、環境変数 BASRUN でパスを指定して")
+        return False, ("環境変数 BASRUN に basrun.py のパスを指定するか、"
+                        "https://github.com/namakoo-dev/basrun を clone して"
+                        "ailine と同じ階層に置いて")
     return True, str(p)
 
 
@@ -9310,3 +9316,10 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _console_entry() -> int:
+    """`ailine` コマンド（wheel の console_scripts）の入口。
+       ★ main(argv=None) は sys.argv[1:] を読む既存の形をそのまま使う ── 引数の解釈を
+       二重化しない。戻り値の終了コードは console_scripts が sys.exit に渡す。"""
+    return main()

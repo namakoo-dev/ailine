@@ -21,7 +21,7 @@ import openpyxl
 import pytest
 from openpyxl.styles import Font
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import ailine  # noqa: E402
 
 from golden._harness import GOLDEN_ROOT, assert_golden_json  # noqa: E402

@@ -10,11 +10,11 @@ from pathlib import Path
 import openpyxl
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 
 
 def test_demo_sample_has_no_readme_example_output_baked_in():
-    ws = openpyxl.load_workbook(REPO / "demo" / "sample.xlsx").active
+    ws = openpyxl.load_workbook(REPO / "src" / "ailine" / "demo" / "sample.xlsx").active
     headers = [c.value for c in ws[1]]
     assert "売上-原価" not in headers, (
         f"README 例文の実行結果が demo に焼き込まれている（初見の一発目が exit 7 になる）: {headers}"

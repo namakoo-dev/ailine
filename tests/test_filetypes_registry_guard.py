@@ -16,8 +16,8 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AILINE_PY = REPO_ROOT / "ailine.py"
-CORE_DIR = REPO_ROOT / "ailine_core"
+AILINE_PY = REPO_ROOT / "src" / "ailine" / "__init__.py"
+CORE_DIR = REPO_ROOT / "src" / "ailine_core"
 REGISTRY_FILE = CORE_DIR / "filetypes.py"
 
 _EXT_LITERAL_RE = re.compile(r"^\.[A-Za-z0-9]{1,6}$")

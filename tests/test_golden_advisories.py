@@ -20,7 +20,7 @@ import openpyxl
 import pytest
 from openpyxl.styles import Alignment
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import ailine  # noqa: E402
 from ailine_core.target_sheet import SheetNameConflict  # noqa: E402
 

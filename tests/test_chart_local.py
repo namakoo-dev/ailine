@@ -9,7 +9,7 @@ import openpyxl
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
 
@@ -23,7 +23,7 @@ def test_chart_line_runs_on_real_lo_and_series_verifies(tmp_path):
         ws.append(r)
     wb.save(book)
     p = subprocess.run(
-        [sys.executable, str(REPO / "ailine.py"), "run", str(book),
+        [sys.executable, "-m", "ailine", "run", str(book),
          "売上の推移を折れ線で見せて", "--copy", "--timeout", "60"],
         capture_output=True, text=True, timeout=300, encoding="utf-8")
     assert p.returncode == 0, f"実機 CHART(line) が失敗:\n{p.stdout[-600:]}"

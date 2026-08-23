@@ -39,7 +39,7 @@ from ailine_core.stage_organs import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AILINE_PY = REPO_ROOT / "ailine.py"
+AILINE_PY = REPO_ROOT / "src" / "ailine" / "__init__.py"
 
 
 def _ailine_ast() -> ast.Module:

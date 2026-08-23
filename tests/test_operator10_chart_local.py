@@ -13,7 +13,7 @@ import openpyxl
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
 _NS = {"c": "http://schemas.openxmlformats.org/drawingml/2006/chart"}
@@ -40,7 +40,7 @@ def test_chart_range_excludes_total_row_on_real_lo(tmp_path):
         ws.append(r)
     wb.save(book)
     p = subprocess.run(
-        [sys.executable, str(REPO / "ailine.py"), "run", str(book),
+        [sys.executable, "-m", "ailine", "run", str(book),
          "集計シートで部門ごとの棒グラフを作って", "--copy", "--timeout", "60"],
         capture_output=True, text=True, timeout=300, encoding="utf-8")
     assert p.returncode == 0, f"実機 CHART(bar) が失敗:\n{p.stdout[-600:]}"

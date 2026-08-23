@@ -20,10 +20,10 @@ import openpyxl
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
 import ailine
 
-HELPERS_DIR = REPO_ROOT / "helpers"
+HELPERS_DIR = REPO_ROOT / "src" / "ailine" / "helpers"
 
 
 def _soffice_process_count() -> int:

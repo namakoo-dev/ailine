@@ -37,7 +37,7 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.chart.data_source import AxDataSource, StrRef
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import ailine  # noqa: E402
 
 from _run_argv import run_argv  # noqa: E402

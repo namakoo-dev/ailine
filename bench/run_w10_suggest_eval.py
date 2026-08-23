@@ -27,7 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 AILINE_DIR = HERE.parent
-sys.path.insert(0, str(AILINE_DIR))
+sys.path.insert(0, str(AILINE_DIR / "src"))
 import ailine  # noqa: E402
 
 FROZEN = json.loads((HERE / "w10_suggest_frozen_set.json").read_text(encoding="utf-8"))

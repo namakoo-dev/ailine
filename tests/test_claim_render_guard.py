@@ -24,12 +24,12 @@ import ast
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RENDERER_MODULE = REPO_ROOT / "ailine_core" / "claim.py"
+RENDERER_MODULE = REPO_ROOT / "src" / "ailine_core" / "claim.py"
 MARKER = "機械検証済み"
 
 _TARGET_FILES = (
-    [REPO_ROOT / "ailine.py"]
-    + sorted(p for p in (REPO_ROOT / "ailine_core").glob("*.py") if p != RENDERER_MODULE)
+    [REPO_ROOT / "src" / "ailine" / "__init__.py"]
+    + sorted(p for p in (REPO_ROOT / "src" / "ailine_core").glob("*.py") if p != RENDERER_MODULE)
     + sorted((REPO_ROOT / "bench").glob("*.py"))
 )
 

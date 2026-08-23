@@ -10,7 +10,7 @@ import openpyxl
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
 def _book(tmp_path):

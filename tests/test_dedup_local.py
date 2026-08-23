@@ -22,7 +22,7 @@ def test_dedup_rows_runs_on_real_lo_and_keeps_first_per_key(tmp_path):
         ws.append(r)
     wb.save(book)
     p = subprocess.run(
-        [sys.executable, str(REPO / "ailine.py"), "run", str(book),
+        [sys.executable, "-m", "ailine", "run", str(book),
          "取引先が同じ行を重複として除いて", "--copy", "--timeout", "60"],
         capture_output=True, text=True, timeout=300, encoding="utf-8")
     assert p.returncode == 0, f"実機 DEDUP が失敗（無限ループの再発?）:\n{p.stdout[-600:]}"

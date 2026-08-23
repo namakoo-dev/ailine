@@ -36,7 +36,7 @@ def _book(path, headers, rows=()):
 
 def _stack(folder, out, *extra):
     return subprocess.run(
-        [sys.executable, str(REPO / "ailine.py"), "stack", str(folder), "--out", str(out), *extra],
+        [sys.executable, "-m", "ailine", "stack", str(folder), "--out", str(out), *extra],
         capture_output=True, text=True, timeout=180, encoding="utf-8")
 
 
@@ -598,7 +598,7 @@ def test_verify_also_trips_on_stacked_total_word_rows(tmp_path):
     assert p.returncode == 0
     ws = openpyxl.load_workbook(out).active
     stacked_texts = " ".join(str(c.value) for row in ws.iter_rows(min_row=2) for c in row if c.value)
-    v = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out), str(folder)],
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
                        capture_output=True, text=True, timeout=120, encoding="utf-8")
     if "合計" in stacked_texts:
         assert v.returncode == 5, f"合計語の行が積まれた出力を verify が合格させた:\n{v.stdout}"
@@ -615,7 +615,7 @@ def test_total_word_in_filename_does_not_trip_the_wire(tmp_path):
     assert p.returncode == 0, p.stdout
     assert "⚠" not in p.stdout.split("出力先:")[-1] or "合計語" not in p.stdout, \
         f"ファイル名の『合計』でワイヤが誤発火:\n{p.stdout}"
-    v = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out), str(folder)],
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
                        capture_output=True, text=True, timeout=120, encoding="utf-8")
     assert v.returncode == 0, f"ファイル名の『合計』で verify が落ちた:\n{v.stdout}"
 
@@ -630,7 +630,7 @@ def test_verify_never_fails_silently(tmp_path):
     out = tmp_path / "out.xlsx"
     p = _stack(folder, out)
     assert p.returncode == 0
-    v = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out), str(folder)],
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
                        capture_output=True, text=True, timeout=120, encoding="utf-8")
     if v.returncode != 0:
         assert "⚠" in v.stdout and ("合計" in v.stdout), \

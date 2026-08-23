@@ -9,7 +9,7 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from ailine_core.cli_render import (
     render_code_block, render_retry_options, render_aborted, render_run_header,

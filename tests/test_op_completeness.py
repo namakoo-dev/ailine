@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 
 import ailine  # noqa: E402
 from ailine_core import target_sheet  # noqa: E402
@@ -67,7 +67,7 @@ def _exemptions_by_requirement(register: dict, requirement: str) -> set:
 
 
 def _scan_target_files() -> list:
-    return [REPO / "ailine.py"] + sorted((REPO / "ailine_core").glob("*.py"))
+    return [REPO / "src" / "ailine" / "__init__.py"] + sorted((REPO / "src" / "ailine_core").glob("*.py"))
 
 
 def discover_op_tables(min_hits: int = 3) -> dict:

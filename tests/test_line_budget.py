@@ -30,8 +30,8 @@ import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AILINE_PY = REPO_ROOT / "ailine.py"
-CORE_DIR = REPO_ROOT / "ailine_core"
+AILINE_PY = REPO_ROOT / "src" / "ailine" / "__init__.py"
+CORE_DIR = REPO_ROOT / "src" / "ailine_core"
 BUDGET_FILE = Path(__file__).resolve().parent / "ailine_py_line_budget.txt"
 
 

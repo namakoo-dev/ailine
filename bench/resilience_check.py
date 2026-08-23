@@ -23,7 +23,7 @@ HERE = Path(__file__).parent
 WORK = HERE / "resilience_check_work"
 WORK.mkdir(exist_ok=True)
 AILINE_DIR = HERE.parent
-sys.path.insert(0, str(AILINE_DIR))
+sys.path.insert(0, str(AILINE_DIR / "src"))
 import ailine  # noqa: E402
 
 

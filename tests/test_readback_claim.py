@@ -37,7 +37,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import ailine  # noqa: E402
 
 # ★ ✓ の行の形（実装の文字列を import せず、このテストが独立に持つ）。

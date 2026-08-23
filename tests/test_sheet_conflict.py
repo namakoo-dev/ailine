@@ -23,7 +23,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import ailine  # noqa: E402
 from ailine_core import ask_choice as ask_choice_mod  # noqa: E402
 from ailine_core.target_sheet import (  # noqa: E402

@@ -24,7 +24,7 @@ from types import SimpleNamespace
 import openpyxl
 from openpyxl.utils import get_column_letter
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from ailine_core.formula_health import (   # noqa: E402
     _error_cells, formula_error_advisory, _parses_as_number, detect_write_target_type_change,

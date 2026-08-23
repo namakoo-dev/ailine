@@ -21,7 +21,7 @@ HERE = Path(__file__).parent
 REALWORLD = HERE / "realworld"
 WORK = HERE / "fidelity_baseline_work"
 AILINE_DIR = HERE.parent
-sys.path.insert(0, str(AILINE_DIR))
+sys.path.insert(0, str(AILINE_DIR / "src"))
 import ailine  # noqa: E402
 
 # ★ make_specimens.py が生成する検体。shapes.xlsx は openpyxl に高水準 API が無く

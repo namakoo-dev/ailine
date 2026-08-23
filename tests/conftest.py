@@ -19,12 +19,19 @@ normalize_book/basrun_apply を monkeypatch すれば、そちらが後勝ちで
 ★ 実運用（本番の ailine.py 実行）の既定値・呼び出し経路は一切変えない（テスト専用の
 既定であり、production の normalize_book 定義そのものは無傷）。
 """
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# ★ wheel 化（2026-08-23）: subprocess から `python -m ailine` を叩く検体は子プロセスなので
+#   上の sys.path 挿入が届かない。PYTHONPATH で src を渡す ── 実運用では wheel を install
+#   すれば不要な、テスト harness 側だけの橋渡し。
+_SRC = str(Path(__file__).resolve().parent.parent / "src")
+os.environ["PYTHONPATH"] = _SRC + os.pathsep + os.environ.get("PYTHONPATH", "")
 import ailine  # noqa: E402
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 import openpyxl
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
 HDRS = ["注文ID", "取引先", "金額"]
@@ -31,7 +31,7 @@ def _book(path, headers, rows=()):
 
 def _stack(folder, out, *extra):
     return subprocess.run(
-        [sys.executable, str(REPO / "ailine.py"), "stack", str(folder), "--out", str(out), *extra],
+        [sys.executable, "-m", "ailine", "stack", str(folder), "--out", str(out), *extra],
         capture_output=True, text=True, timeout=180, encoding="utf-8")
 
 
@@ -103,7 +103,7 @@ def test_verify_and_determinism_survive_inspection_sheet(tmp_path):
     """検分シートを足しても verify は緑のまま・2 回実行でセル内容（検分込み）が一致。"""
     folder, out = _made(tmp_path)
     assert "検分" in openpyxl.load_workbook(out).sheetnames, "前提: 検分シートが存在すること"
-    p = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out), str(folder)],
+    p = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
                        capture_output=True, text=True, timeout=120, encoding="utf-8")
     assert p.returncode == 0, f"検分シートで verify が壊れた:\n{p.stdout}"
     out2 = tmp_path / "out2.xlsx"

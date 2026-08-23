@@ -15,7 +15,7 @@ import pytest
 # この行を外す変更が同じ diff に必ず現れる（黙って通過できない）。
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
 HDRS = ["注文ID", "取引先", "金額"]
@@ -178,7 +178,7 @@ def test_verify_extract_kind_mismatch_exits_5(tmp_path, monkeypatch, capsys):
     ws = wb.active
     ws.cell(row=2, column=3).value = 99999999
     wb.save(out_book)
-    p = subprocess.run([sys.executable, str(REPO / "ailine.py"), "verify", str(out_book), str(folder)],
+    p = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out_book), str(folder)],
                        capture_output=True, text=True, timeout=120, encoding="utf-8")
     assert "⚠" in p.stdout, p.stdout
     assert p.returncode == 5, f"⚠ を出したのに exit={p.returncode}（自動化経路が見逃す）:\n{p.stdout}"

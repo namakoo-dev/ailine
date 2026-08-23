@@ -14,7 +14,7 @@ from pathlib import Path
 
 import openpyxl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import ailine  # noqa: E402
 
 _ARGS = {"col": "金額", "cmp": "gte", "value": 40000.0,

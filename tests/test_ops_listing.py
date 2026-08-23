@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 
 import ailine  # noqa: E402
 from ailine_core.cli_render import render_ops_table  # noqa: E402
@@ -50,7 +50,7 @@ def test_needed_info_uses_existing_japanese_labels_only():
 
 
 def test_ops_subcommand_runs_and_exits_zero():
-    r = subprocess.run([sys.executable, str(REPO / "ailine.py"), "ops"],
+    r = subprocess.run([sys.executable, "-m", "ailine", "ops"],
                        capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
     assert "ailine に頼めること" in r.stdout
@@ -59,5 +59,5 @@ def test_ops_subcommand_runs_and_exits_zero():
 def test_clarify_points_at_the_way_out():
     """★ 行き止まりに出口を置く。聞き返しは「言い方が悪い」と「未対応」を区別できないので、
     区別する手段を毎回そえる。"""
-    src = (REPO / "ailine.py").read_text(encoding="utf-8")
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     assert "（頼める操作の一覧: ailine ops）" in src

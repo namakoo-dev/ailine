@@ -45,7 +45,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import ailine  # noqa: E402
 
 from _run_argv import run_argv  # noqa: E402
@@ -295,7 +295,7 @@ def test_f9_two_blocks_separated_by_blank_row_do_not_misfire(tmp_path, monkeypat
     assert "4600" not in out, out
 
 
-DEMO_SALES = Path(__file__).resolve().parent.parent / "demo" / "sales.xlsx"
+DEMO_SALES = Path(__file__).resolve().parent.parent / "src" / "ailine" / "demo" / "sales.xlsx"
 
 
 def test_f10_bundled_demo_book_quickstart_still_passes(tmp_path, monkeypatch, capsys):

@@ -25,7 +25,7 @@ import openpyxl
 import pytest
 from openpyxl.styles import Font
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import ailine  # noqa: E402
 from ailine_core.subject import (  # noqa: E402
     CONTRADICTED, MATCHED, UNSPOKEN, Consumed, Slot, classify_slots, name_matches_task,

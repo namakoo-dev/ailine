@@ -31,7 +31,7 @@ def _book(path, headers, rows=()):
 
 def _run(cmd, *args):
     return subprocess.run(
-        [sys.executable, str(REPO / "ailine.py"), cmd, *map(str, args)],
+        [sys.executable, "-m", "ailine", cmd, *map(str, args)],
         capture_output=True, text=True, timeout=180, encoding="utf-8")
 
 

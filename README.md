@@ -2,7 +2,7 @@
 
 **自然言語のタスクを、ローカル LLM が LibreOffice Basic に書き起こし、[basrun](https://github.com/namakoo-dev/basrun) で文書に適用し、★ 効果を読み戻して検証する。**
 
-**何が頼めるかは `python ailine.py ops` で出る**（一覧は登録簿から自動生成 — この文書の表とずれない）。
+**何が頼めるかは `ailine ops` で出る**（一覧は登録簿から自動生成 — この文書の表とずれない）。
 ★ freeform 最終決定（2026-08-21）: 一覧に無い依頼は、生成に入らず断る（理由・要望として
 記録した旨・`ailine ops`/言い換え/2冊の突き合わせという次の手を言う）。以前の版はここで
 AI が直接生成を試していたが、機械検証できない操作は行わない方針に変えた（廃止は git から
@@ -50,90 +50,113 @@ AI が直接生成を試していたが、機械検証できない操作は行�
 **`✓` の意味は 1 行で**: `✓` は「あなたのファイルは**今**こうなっている」（適用後に読み戻して
 確かめた事実）であって、「あなたの指示に従った」ではない。詳しくは後述の設計判断「`✓` は「あなたのファイルは今こうなっている」だけを意味する」。
 
+## 入れ方
+
+```bash
+# 1) ailine 本体（tag を指定して固定する）
+uv tool install git+https://github.com/namakoo-dev/ailine@v0.1.0
+#    uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.1.0
+
+# 2) 文書に適用する土台（別 repo・MIT）。clone して環境変数で場所を教える
+git clone https://github.com/namakoo-dev/basrun
+setx BASRUN "%CD%asrunasrun.py"       # Windows。bash なら export BASRUN=...
+
+# 3) 診断（python / openpyxl / ollama / モデル / LibreOffice / basrun / demo を一度に見る）
+ailine doctor
+```
+
+LibreOffice と ollama（既定モデル `qwen2.5-coder:7b`）は別途入れる ── どちらも
+`ailine doctor` が在否を名指しで教える。
+
+repo から直接動かす場合は install 不要で `python -m ailine ...`（以下の例の `ailine` を
+これに読み替える）。
+
 ## 使い方
+
+以下の例の `demo/*.xlsx` は repo 直下（`src/ailine/demo/`）の同梱サンプル。install した場合はパッケージ内に入るので、自分のファイルで読み替えてほしい。
 
 ```bash
 # 生成 → 検品ゲート → 原本に反映 → 変化を検証 → 差分を表示（既定=原本直接・自動バックアップ+undo つき）
-python ailine.py run demo/sample.xlsx "売上から原価を引いた利益の列を作って"
+ailine run demo/sample.xlsx "売上から原価を引いた利益の列を作って"
 
 # 生成して見せるだけ（レビュー用。適用しない）
-python ailine.py run demo/sample.xlsx "..." --dry
+ailine run demo/sample.xlsx "..." --dry
 
 # ★ W8b-2: 既定で原本に直接反映する（反映前に自動でバックアップを作る）。
 # 何もつけなくてよい
-python ailine.py run demo/sample.xlsx "..."
+ailine run demo/sample.xlsx "..."
 
 # 原本には触らず <book>.out に結果を作りたいとき（旧既定・原本は無変更）
-python ailine.py run demo/sample.xlsx "..." --copy
+ailine run demo/sample.xlsx "..." --copy
 
 # LibreOffice 往復だけで失われる飾り（条件付き書式・図形・ピボット・VBA 等）を
 # 検出したら、原本に触る前に申告して止まる（exit 4）。承知の上で続けるか
 # （バックアップから ailine undo で戻せる）、.out に切り替えるか選ぶ
-python ailine.py run demo/sample.xlsx "..." --accept-loss
-python ailine.py run demo/sample.xlsx "..." --copy   # ゲートも走らせず原本に触らない
+ailine run demo/sample.xlsx "..." --accept-loss
+ailine run demo/sample.xlsx "..." --copy   # ゲートも走らせず原本に触らない
 
 # ★ W10a: 既存データを持つ列への上書きが起きる場合（列名の数字誤解決を含む）は
 # --ask 無指定でも確認を挟む（対話可なら y/N・非対話なら exit 7）。承知の上で続ける
-python ailine.py run demo/sample.xlsx "..." --overwrite
+ailine run demo/sample.xlsx "..." --overwrite
 
 # ★ freeform 最終決定（2026-08-21）: 単発の依頼が DSL 語彙に分類できない場合、以前は
 # ここで AI が直接生成（自由生成）していたが今は生成に入らず即座に断る。--allow-freeform は
 # 後方互換のため受理するだけ（廃止告知 1 行が足されるだけで断り自体は変わらない）
-python ailine.py run demo/sample.xlsx "..." --allow-freeform
+ailine run demo/sample.xlsx "..." --allow-freeform
 
 # 別のモデルに載せ替える（天井を上げたいとき）
-python ailine.py run demo/sample.xlsx "..." --model qwen2.5-coder:32b
+ailine run demo/sample.xlsx "..." --model qwen2.5-coder:32b
 
 # 参照ライブラリ / ヘルパのディレクトリを差し替える（既定は ./refs, ./helpers）
-python ailine.py run demo/sample.xlsx "..." --refs my_refs --helpers my_helpers
+ailine run demo/sample.xlsx "..." --refs my_refs --helpers my_helpers
 
 # 生成の温度・修復の最大回数・適用タイムアウト秒を調整する
-python ailine.py run demo/sample.xlsx "..." --temperature 0.1 --repair 3 --timeout 60
+ailine run demo/sample.xlsx "..." --temperature 0.1 --repair 3 --timeout 60
 
 # 見出しが何行目か機械が確信を持てず「？ 見出しが何行目か分かりません」で止まったとき、
 # 見出し行(1起点)を明示して自動検出をスキップする
-python ailine.py run demo/sample.xlsx "..." --header-row 3
+ailine run demo/sample.xlsx "..." --header-row 3
 
 # ★ 対象シートをシート名で明示指定する（省略時は依頼文中のシート名の言及 → 1枚目。
 # 複数シートのブックで「〇〇シートで」「N枚目のシートで」と依頼文に書けば、指定しなくても
 # 機械的な名前照合で解決する。適用前に必ず
 # 「操作するシート: 2枚目『工事台帳』（依頼文から判断・このブックは3シート）」と明示する）
-python ailine.py run demo/請求書.xlsx "工事台帳シートで取引先ごとの売上を集計して"
-python ailine.py run demo/請求書.xlsx "取引先ごとの売上を集計して" --sheet 工事台帳
+ailine run demo/請求書.xlsx "工事台帳シートで取引先ごとの売上を集計して"
+ailine run demo/請求書.xlsx "取引先ごとの売上を集計して" --sheet 工事台帳
 
 # 結果を JSON でも出す（changes/advisories/out などを機械可読で受け取る）
-python ailine.py run demo/sample.xlsx "..." --json
+ailine run demo/sample.xlsx "..." --json
 
 # 起動した LibreOffice を落とす
-python ailine.py stop
+ailine stop
 
 # セットアップを診断する（python/openpyxl/ollama/モデル/LibreOffice/basrun/demo）
-python ailine.py doctor
+ailine doctor
 
 # 実行履歴を見る（新しい順。既定 10 件）
-python ailine.py history --max 20
+ailine history --max 20
 
 # 原本への反映前のバックアップから復元する（復元前の現状も自動で退避＝復元自体も可逆。
 # 退避先は backups/<フォルダのハッシュ>/undo/ で、遡りの段数には数えない）。
 # ailine undo が restore の昇格版（あと何段遡れるかを表示・restore は互換のため残す）。
 # 最も古い世代まで戻ると「これ以上は戻せません」と言って止まる（終了コード 1）
-python ailine.py undo demo/sample.xlsx
-python ailine.py undo demo/sample.xlsx --list   # 一覧だけ表示（復元しない）
+ailine undo demo/sample.xlsx
+ailine undo demo/sample.xlsx --list   # 一覧だけ表示（復元しない）
 
 # 用語集（税率等の取り決め値）に語を登録する。「税込み合計」等で率が本文にも
 # 用語集にも無い場合、この形のコピペ可能な1行が CLARIFY のメッセージに出る
-python ailine.py vocab add 消費税 1.1
+ailine vocab add 消費税 1.1
 
 # ★ 独自の言い回しの登録（2026-08-22〜）: 依頼が操作一覧に照合できなかったとき、
 # 「もしかして: 並べ替え？」と候補+解釈（+反映されない部分の名指し）を見せる。
 # y と答えるとその場で実行され、**その言い回しが自動で登録**されて次回からは聞かずに通る。
 # 登録は解釈への同意であって白紙委任ではない ── 登録済みでも確認・関所は一切スキップしない。
 # 手動でも登録/取り消しできる（対応する操作名は ailine ops の左端の英字）:
-python ailine.py alias add "大きい順にして" SORT
-python ailine.py alias list
-python ailine.py alias undo      # 直近の登録を取り消す
-python ailine.py alias remove "大きい順にして"
-python ailine.py vocab list
+ailine alias add "大きい順にして" SORT
+ailine alias list
+ailine alias undo      # 直近の登録を取り消す
+ailine alias remove "大きい順にして"
+ailine vocab list
 ```
 
 `~/.ailine/vocab.json` に平坦な `{"語": 値}` で保持する（グローバルのみ・ブック別上書きは
@@ -151,17 +174,17 @@ python ailine.py vocab list
 
 ```bash
 # フォルダの棚卸し（書き込みゼロ）: 何冊読めるか・列は揃っているかを分母つきで報告
-python ailine.py scan 請求書2026-07
+ailine scan 請求書2026-07
 
 # 縦積み: フォルダ内の同じ形のブックを 1 冊に積む（合計行は自動で除外・出所列つき）
-python ailine.py stack 請求書2026-07 --out まとめ.xlsx
+ailine stack 請求書2026-07 --out まとめ.xlsx
 
 # 条件抽出: run にフォルダを渡すと、条件に一致する行を全ブックから 1 冊に抜き出す
-python ailine.py run 請求書2026-07 "金額が40000以上の行を抜き出して"
+ailine run 請求書2026-07 "金額が40000以上の行を抜き出して"
 
 # 検算の単独再実行: 出力ブックと元フォルダだけで、行数・Σ・行の帰属を検算し直す
 # （あとから誰かが編集した箇所を、どの行がいくつ→いくつまで名指しで特定する）
-python ailine.py verify 請求書2026-07_金額40000以上.xlsx 請求書2026-07
+ailine verify 請求書2026-07_金額40000以上.xlsx 請求書2026-07
 ```
 
 **報告の約束**（「漏れゼロ」ではなく「黙る漏れゼロ」）:
@@ -187,11 +210,11 @@ CSV を Excel で開くと壊れるもの ── 先頭ゼロの品番（0123 �
 
 ```bash
 # CSV → xlsx 変換（LLM 不使用・0 秒起動）。<元名>.xlsx を CSV の隣に作る
-python ailine.py csv 売上一覧.csv
+ailine csv 売上一覧.csv
 
 # run に .csv を渡すと、同じ検疫で <元名>.xlsx を作ってから通常の操作を適用する
 # （出力は常に xlsx・元の CSV には 1 バイトも書かない）
-python ailine.py run 売上一覧.csv "金額で降順に並べ替えて"
+ailine run 売上一覧.csv "金額で降順に並べ替えて"
 ```
 
 - 文字コードは BOM → UTF-8 → cp932 の順で判定して**開示**する（EUC/JIS/UTF-16 は対象外と正直に言う）
@@ -398,7 +421,7 @@ python ailine.py run 売上一覧.csv "金額で降順に並べ替えて"
   出力の差分を人が見て判断すること。ツールは必ず「差分を見て判断せよ」と促す。
   M2a の助言（★ 疑わしい 等）も同じ層 — 「変化」の機械保証であって、「依頼を
   達成したか」は助言＋人の確認が要る。
-- **timeout kill 後に固まった LibreOffice** は、稀に手動で `python ailine.py stop`
+- **timeout kill 後に固まった LibreOffice** は、稀に手動で `ailine stop`
   （または OS のタスクマネージャ）から止める必要がある場合がある。
 - ★ **倍率の機械確定は DSL 経路(APPEND_TOTAL)に限る。** 依頼が `APPEND_TOTAL` として
   分類されなかった場合（列が曖昧・見慣れない書き方等で翻訳が `OUT_OF_VOCAB`/FREEFORM に

@@ -16,11 +16,11 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-HELPERS_BAS = REPO_ROOT / "helpers" / "AiLineHelpers.bas"
+HELPERS_BAS = REPO_ROOT / "src" / "ailine" / "helpers" / "AiLineHelpers.bas"
 README = REPO_ROOT / "README.md"
 
 import sys
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
 import ailine
 
 
@@ -67,7 +67,7 @@ def test_helper_signatures_stay_in_sync_across_readme_ailine_and_bas():
     readme_sigs = _parse_readme_table(README.read_text(encoding="utf-8"))
     assert readme_sigs, "README のヘルパ表が1件もパースできなかった（表の書式が変わった？）"
 
-    catalog, _ = ailine.load_helpers(REPO_ROOT / "helpers")
+    catalog, _ = ailine.load_helpers(REPO_ROOT / "src" / "ailine" / "helpers")
     catalog_sigs = _parse_catalog_call_examples(catalog)
     assert catalog_sigs, "ailine.py のカタログから Call 例が1件もパースできなかった"
 
