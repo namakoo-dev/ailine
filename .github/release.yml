@@ -1,0 +1,14 @@
+# リリースノートの自動分類（tagpr が生成する CHANGELOG の見出し）。
+# ★ 分類は「買い手から見て何が変わったか」で切る ── 内部リファクタは その他 に落ちてよい。
+changelog:
+  categories:
+    - title: 直った不具合
+      labels: ["bug", "fix"]
+    - title: できるようになったこと
+      labels: ["feature", "enhancement"]
+    - title: 保証・検証の強化
+      labels: ["verification", "safety"]
+    - title: ドキュメント
+      labels: ["documentation"]
+    - title: その他
+      labels: ["*"]

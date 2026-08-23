@@ -1,0 +1,12 @@
+[tagpr]
+	# ★ 出荷の自動化（ABSORB-20260823-k1low ①-1/①-4）。main への push でリリース PR が
+	#   立ち、merge した瞬間にタグが打たれる。版の正本は pyproject.toml の `version =`
+	#   （tagpr の版検出は __version__ を厳密側で拾えず「ファイル中の最初の semver」に
+	#   落ちる ── ソース中の "3.10" 等を掴む事故を避けるため pyproject に置いた）。
+	vPrefix = true
+	releaseBranch = main
+	versionFile = pyproject.toml
+	# ★ draft で作る: 配布物（wheel）を貼り終えてから公開に倒す ── 中身の無いリリースを
+	#   世に出さない（「資産が全部揃ってから」の作法）。
+	release = draft
+	changelog = true

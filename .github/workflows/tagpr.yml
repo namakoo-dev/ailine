@@ -1,0 +1,61 @@
+name: tagpr
+
+# ★ タグ 1 本で配布物と変更履歴が揃う形（k1LoW の出荷の型）。
+#   main への push → リリース PR が立つ/更新される（版と CHANGELOG の差分が見える）
+#   → その PR を merge → タグが打たれ、draft のリリースが作られる
+#   → 下の release ジョブが wheel を貼ってから公開に倒す。
+#
+# ★ 権限は最小で要求する: repo 既定は "read" のまま、この workflow だけが write を持つ。
+#   （PR の作成だけは repo 設定「Allow GitHub Actions to create and approve pull requests」
+#   が要る ── 権限の話は README の「出荷」節を参照）
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  tagpr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      tag: ${{ steps.run-tagpr.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: run-tagpr
+        uses: Songmu/tagpr@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    needs: tagpr
+    if: needs.tagpr.outputs.tag != ''
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        run: |
+          python -m pip install --quiet build
+          python -m build --wheel -o dist
+      - name: Verify the payload before publishing
+        # ★ 中身の検査を挟んでから公開に倒す（release-test.yml と同じ合否条件 ──
+        #   refs が配布物の中で生きているか。静かに壊れた版を世に出さない）
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m venv .venv-rel
+          .venv-rel\Scripts\python -m pip install --quiet (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
+          .venv-rel\Scripts\python -c "import ailine, sys; refs=len(list(ailine.DEFAULT_REFS.glob('*.bas'))); sys.exit(0 if refs >= 3 else 1)"
+      - name: Attach the wheel and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ needs.tagpr.outputs.tag }} (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName --clobber
+          gh release edit ${{ needs.tagpr.outputs.tag }} --draft=false --latest
