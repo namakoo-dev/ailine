@@ -34,6 +34,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.data_source import AxDataSource, StrRef
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -480,10 +481,20 @@ def _f5_merge(out_book, code, workdir, helper_files=(), timeout=None):
 
 
 def _f5_chart(out_book, code, workdir, helper_files=(), timeout=None):
+    # ★ グラフ段: 本物のヘルパ(InsertChart)は項目名列(c:cat)も必ずセットする
+    #   （addNewByName に2本の CellRangeAddress を渡す ── 値だけの1本にはならない）。
+    #   check_chart_series の恒真殺しがそこまで見るようになったので、fake も同じ形に合わせる。
+    #   ★ openpyxl の set_categories() は常に numRef を作る（ChartBase.set_categories
+    #   実装）が、実 LO は文字列カテゴリを strRef で書く（fixtures/charts/*.xlsx で実測済み・
+    #   ailine_core/chart_check.py が見るのも c:cat/c:strRef）。fake をその形に合わせて
+    #   AxDataSource(strRef=...) を手で組む。
     wb = openpyxl.load_workbook(out_book)
     ws = wb.active
     ch = BarChart()
     ch.add_data(Reference(ws, min_col=2, min_row=1, max_row=3), titles_from_data=True)
+    cat_ref = Reference(ws, min_col=1, min_row=2, max_row=3)
+    for s in ch.series:
+        s.cat = AxDataSource(strRef=StrRef(f=str(cat_ref)))
     ws.add_chart(ch, "D2")
     wb.save(out_book)
     return True, None, "ok"

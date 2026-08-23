@@ -3267,8 +3267,14 @@ def test_codegen_dsl_merge_converts_a1_range_to_zero_based():
     assert "Call MergeCells(oDoc, 0, 0, 4, 0)" in code
 
 def test_codegen_dsl_chart_calls_helper():
+    # ★ グラフ段: category_col/kind 省略時は既定（先頭列・"bar"）。
     code = ailine.codegen_dsl("CHART", {"value_col": "金額"}, _SAMPLE_META)
-    assert "Call InsertBarChart(oDoc, 0, 1)" in code
+    assert 'Call InsertChart(oDoc, 0, 0, 1, "bar")' in code
+
+def test_codegen_dsl_chart_line_with_category_col():
+    code = ailine.codegen_dsl(
+        "CHART", {"value_col": "金額", "kind": "line", "category_col": "商品"}, _SAMPLE_META)
+    assert 'Call InsertChart(oDoc, 0, 0, 1, "line")' in code
 
 def test_codegen_dsl_center_align_all_calls_helper():
     code = ailine.codegen_dsl("CENTER_ALIGN", {"target": "all"}, _SAMPLE_META)

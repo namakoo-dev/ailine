@@ -316,7 +316,12 @@ _add("merge_fail_not_merged", "MERGE", {"range": "A1:B1"}, _b_bold_fail)
 
 # --- CHART --------------------------------------------------------------
 def _b_chart_pass(tmp_path):
+    # ★ グラフ段: 本物のヘルパ(InsertChart)は項目名列(c:cat)も必ずセットする。
+    #   check_chart_series の恒真殺しがそこまで見るので、fake もその形に合わせる
+    #   （openpyxl の set_categories() は常に numRef を作るので、実 LO と同じ strRef を
+    #   手で組む ── test_write_precondition.py の _f5_chart と同じ理由・同じ作法）。
     from openpyxl.chart import BarChart, Reference
+    from openpyxl.chart.data_source import AxDataSource, StrRef
     p = tmp_path / "b.xlsx"
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -325,6 +330,9 @@ def _b_chart_pass(tmp_path):
     chart = BarChart()
     data = Reference(ws, min_col=2, min_row=1, max_row=3)
     chart.add_data(data, titles_from_data=True)
+    cat_ref = Reference(ws, min_col=1, min_row=2, max_row=3)
+    for s in chart.series:
+        s.cat = AxDataSource(strRef=StrRef(f=str(cat_ref)))
     ws.add_chart(chart, "D1")
     wb.save(p)
     return p, None

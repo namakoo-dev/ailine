@@ -24,7 +24,10 @@ _FROZEN = {
     #   （qwen2.5-coder:7b）で凍結バーを確認済み: op 96.2%→98.1%（合格線90%）・
     #   slot 98.6%→98.6%（合格線80%）・曖昧誤断定 0%→0%（合格線20%以下、変化なし）。
     #   DEDUP 専用 battery（items_v8・3件）は op/slot とも100%。
-    "OPS_DOC": "2a87a1945bc6e29c",
+    # ★ 2026-08-23: グラフ段（kind/category_col の語彙拡張）で OPS_DOC の CHART 行を更新。
+    #   bench/translation_dsl_battery_run.py 実 7B（qwen2.5-coder:7b）で凍結バーを確認済み:
+    #   op 98.1%→98.1%・slot 98.6%→98.6%・曖昧誤断定 0%→0%（合格線90%/80%/20%以下・変化なし）。
+    "OPS_DOC": "310108602de1b75b",
     "TRANSLATION_SYSTEM": "8dd5cd3a43d833fe",
     "TRANSLATION_FEWSHOT": "c10a9b45e6cada35",
     # ★ 2026-08-22: W10 便B（二段目翻訳・op 固定で args だけ埋めさせる）で追加した第4の定数。

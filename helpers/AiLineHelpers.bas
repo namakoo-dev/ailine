@@ -47,25 +47,35 @@ Sub SortByColumn(oDoc As Object, headerRow As Integer, lastCol As Integer, col A
 End Sub
 
 
-' 1枚目シートに「見栄えのする」棒グラフを1つ挿入する。範囲もスタイルも内部で組む。
-' ★ 項目名は先頭列(列0)に固定。呼び側は「見出し行・値の列」を渡す（迷わせない）。
-' ★ タイトル・横軸タイトル・系列色を見出しから自動導出して styling する
+' 1枚目シートに「見栄えのする」グラフを1つ挿入する（棒/折れ線/円）。範囲もスタイルも内部で組む。
+' ★ グラフ段: 項目名の列(catCol)は呼び側が指定する（旧 InsertBarChart は列0固定だったが、
+'    非隣接列（例: 横軸=A・値=C）も選べるよう引数化）。
+' ★ spike 実測: line/pie は addNewByName（棒と同じ2本の CellRangeAddress）の後に
+'    createInstance("com.sun.star.chart.{Line,Pie}Diagram") + setDiagram の差し替えだけでよい。
+' ★ タイトル・系列色を見出しから自動導出して styling する（棒/折れ線はさらに横軸タイトルも）
 '    ＝ LibreOffice native チャートの表現力を自前で引き出す（外部依存なし・ours）。
-'    データラベルは付けない（値は縦軸で読める。全棒に数字を振らない方が清潔＝プロの既定）。
+'    line/pie にも棒と同等のスタイリングを適用する（商品の顔を揃える・spike の素の line/pie は
+'    タイトル無しだった）。データラベルは付けない（値は縦軸/凡例で読める。全要素に数字を
+'    振らない方が清潔＝プロの既定）。
+' ★ 円グラフは「1系列を複数スライスに割る」形なので、スライスごとの区別はグラフ自体の
+'    自動配色（visualColors）に任せる ── 棒/折れ線と同じ単色の FillColor を当てると
+'    全スライスが同じ色になり、円グラフの用を成さなくなるため当てない。同じ理由で
+'    横軸(カテゴリ軸)自体が無いので HasXAxisTitle も設定しない。凡例はスライスの
+'    区別に要るため棒/折れ線と逆に立てる。
 '   headerRow : 見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
-'   valCol    : 棒にする値の列（0 起点。例: 金額=1, 売上=3）
-Sub InsertBarChart(oDoc As Object, headerRow As Integer, valCol As Integer)
+'   catCol    : 項目名にする列（0 起点）
+'   valCol    : 値にする列（0 起点。例: 金額=1, 売上=3）
+'   sKind     : "bar" / "line" / "pie"（省略不可。既定は呼び側の codegen_dsl が "bar" を渡す）
+Sub InsertChart(oDoc As Object, headerRow As Integer, catCol As Integer, valCol As Integer, sKind As String)
     Dim oSheet As Object, oCharts As Object, oChart As Object, oDiag As Object
     Dim lastRow As Long
-    Dim catCol As Integer
     Dim sCat As String, sVal As String
     Dim sName As String
-    catCol = 0                        ' 項目名は先頭列に固定
     oSheet = oDoc.Sheets.getByIndex(0)
 
-    ' 最終データ行（A 列を見出しの直下から走査）
+    ' 最終データ行（項目名の列を見出しの直下から走査）
     lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
+    Do While oSheet.getCellByPosition(catCol, lastRow).getString() <> ""
         lastRow = lastRow + 1
     Loop
     lastRow = lastRow - 1
@@ -78,7 +88,7 @@ Sub InsertBarChart(oDoc As Object, headerRow As Integer, valCol As Integer)
     Dim oRect As New com.sun.star.awt.Rectangle
     oRect.X = 9000 : oRect.Y = 400 : oRect.Width = 14000 : oRect.Height = 8500
 
-    ' 項目名の列 と 値の列（見出し行を含める＝ラベルになる）の2範囲
+    ' 項目名の列 と 値の列（見出し行を含める＝ラベルになる）の2範囲（非隣接でもよい）
     Dim oRanges(1) As New com.sun.star.table.CellRangeAddress
     oRanges(0).Sheet = 0
     oRanges(0).StartColumn = catCol : oRanges(0).StartRow = headerRow
@@ -86,27 +96,37 @@ Sub InsertBarChart(oDoc As Object, headerRow As Integer, valCol As Integer)
     oRanges(1).Sheet = 0
     oRanges(1).StartColumn = valCol : oRanges(1).StartRow = headerRow
     oRanges(1).EndColumn = valCol   : oRanges(1).EndRow = lastRow
-    ' True,True = 先頭行=系列名・先頭列=項目名。既定は縦棒グラフ。
+    ' True,True = 先頭行=系列名・先頭列=項目名。既定(addNewByName)は縦棒グラフ。
     oCharts.addNewByName(sName, oRect, oRanges(), True, True)
+
+    oChart = oCharts.getByName(sName).getEmbeddedObject()
+
+    ' ── 種別の差し替え（spike 実測: 棒は既定のまま・line/pie だけ Diagram を差し替える） ──
+    If sKind = "line" Then
+        oChart.setDiagram(oChart.createInstance("com.sun.star.chart.LineDiagram"))
+    ElseIf sKind = "pie" Then
+        oChart.setDiagram(oChart.createInstance("com.sun.star.chart.PieDiagram"))
+    End If
 
     ' ── styling（見出しから導出。LO native は色/ラベル/タイトル/軸/フォントを honor する） ──
     sCat = oSheet.getCellByPosition(catCol, headerRow).getString()
     sVal = oSheet.getCellByPosition(valCol, headerRow).getString()
-    oChart = oCharts.getByName(sName).getEmbeddedObject()
 
-    ' タイトル＝値の見出し。太字・濃色
+    ' タイトル＝値の見出し。太字・濃色（種別によらず商品の顔を揃える）
     oChart.HasMainTitle = True
     oChart.Title.String = sVal
     oChart.Title.CharColor = &H1B2B49&      ' 濃紺
     oChart.Title.CharHeight = 15
     oChart.Title.CharWeight = com.sun.star.awt.FontWeight.BOLD
-    ' 単系列なので凡例は畳む（余計な要素を出さない）
-    oChart.HasLegend = False
+    ' 棒/折れ線は単系列なので凡例は畳む。円グラフはスライスの区別に凡例が要るので立てる。
+    oChart.HasLegend = (sKind = "pie")
 
-    oDiag = oChart.getDiagram()
-    oDiag.HasXAxisTitle = True : oDiag.XAxisTitle.String = sCat     ' 横軸＝項目名の見出し
-    ' 系列色（★16進 RRGGBB。VBASupport の RGB は BGR になるので使わない）
-    oDiag.getDataRowProperties(0).FillColor = &H2E86C1&            ' 落ち着いた青
+    If sKind <> "pie" Then
+        oDiag = oChart.getDiagram()
+        oDiag.HasXAxisTitle = True : oDiag.XAxisTitle.String = sCat   ' 横軸＝項目名の見出し
+        ' 系列色（★16進 RRGGBB。VBASupport の RGB は BGR になるので使わない）
+        oDiag.getDataRowProperties(0).FillColor = &H2E86C1&            ' 落ち着いた青
+    End If
 End Sub
 
 

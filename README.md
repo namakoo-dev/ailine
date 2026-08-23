@@ -467,7 +467,7 @@ python ailine.py run 売上一覧.csv "金額で降順に並べ替えて"
 | ヘルパ | モデルが書くのは | 隠している難所 |
 |---|---|---|
 | `SortByColumn(oDoc, headerRow, lastCol, col, ascending)` | `Call SortByColumn(oDoc, 0, 4, 1, False)` | 範囲検出・`SortFields`・`ContainsHeader=False` |
-| `InsertBarChart(oDoc, headerRow, valCol)` | `Call InsertBarChart(oDoc, 0, 1)` | 見栄えのする棒グラフ。タイトル・横軸・系列色を見出しから自動導出（データラベルは付けず縦軸で読ませる清潔な既定。LO native の表現力を自前で引き出す。項目名は列0固定） |
+| `InsertChart(oDoc, headerRow, catCol, valCol, kind)` | `Call InsertChart(oDoc, 0, 0, 1, "bar")` | 見栄えのするグラフ(棒/折れ線/円)。タイトル・系列色を見出しから自動導出（棒/折れ線は横軸タイトルも。データラベルは付けず読ませる清潔な既定。LO native の表現力を自前で引き出す） |
 | `MergeCells(oDoc, c1, r1, c2, r2)` | `Call MergeCells(oDoc, 0, 0, 1, 0)` | 範囲を渡さず単一セルに merge する誤りを封じる |
 | `InsertRows(oDoc, atRow, count)` | `Call InsertRows(oDoc, 1, 1)` | `Rows.insertByIndex`・0起点の位置 |
 | `DrawTableBorders(oDoc)` | `Call DrawTableBorders(oDoc)` | データ範囲を自動検出・`TableBorder2` の格子 |

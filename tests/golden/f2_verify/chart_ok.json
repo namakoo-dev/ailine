@@ -2,8 +2,12 @@
   "ok": true,
   "resolved": {
     "value_col": "金額",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "kind": "bar",
+    "category_col": "商品"
   },
-  "inferred": [],
+  "inferred": [
+    "category_col"
+  ],
   "err": null
 }

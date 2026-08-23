@@ -2,5 +2,5 @@ Option VBASupport 1
 Option Explicit
 
 Sub Run(oDoc As Object)
-    Call InsertBarChart(oDoc, 2, 3)
+    Call InsertChart(oDoc, 2, 0, 3, "bar")
 End Sub

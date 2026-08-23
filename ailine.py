@@ -100,6 +100,7 @@ from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘�
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
 from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
+from ailine_core.chart_check import check_chart_series   # ★ グラフ段: 事後条件②（種別+参照の検証）
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
     check_write_preconditions_detail,
@@ -288,7 +289,8 @@ def load_helpers(helpers_dir: Path) -> tuple:
         "★ headerRow 引数は見出し行（0起点）。見出しが物理1行目ならほぼ常に 0。\n"
         "例: 列0〜4の表で金額が列1なら、金額で降順に並べ替え"
         " → `Call SortByColumn(oDoc, 0, 4, 1, False)`（第2引数 lastCol=表の最終列）\n"
-        "例: 金額(列1)の棒グラフ（項目名は先頭列に自動）→ `Call InsertBarChart(oDoc, 0, 1)`\n"
+        "例: 金額(列1)の棒グラフ（項目名は列0）→ `Call InsertChart(oDoc, 0, 0, 1, \"bar\")`"
+        "（第3引数=項目名の列・第4引数=値の列・第5引数=\"bar\"/\"line\"/\"pie\"）\n"
         "例: A1とB1を結合 → `Call MergeCells(oDoc, 0, 0, 1, 0)`\n"
         "例: 先頭データ行(2行目)の前に1行挿入 → `Call InsertRows(oDoc, 1, 1)`\n"
         "例: 表に罫線を引く → `Call DrawTableBorders(oDoc)`\n"
@@ -2147,7 +2149,15 @@ OP_SUBJECT_SLOTS = {
     "CENTER_ALIGN": (("target", SUBJ_REGION),),
     "NUMBER_FORMAT": (("col", SUBJ_COLUMN),),
     "MERGE": (),
-    "CHART": (("value_col", SUBJ_COLUMN),),
+    # ★ グラフ段: category_col は EXTRACT の cmp/value と同じ理由で対象に含めない（多くの
+    #   依頼は横軸の列名を明示しない ── 「金額のグラフを作って」は健全系そのもので、
+    #   依頼文に無い横軸の既定決定を毎回 ★ で申告すると常時ノイズになる。kind も同様に対象外
+    #   （どちらも列名と同種の「利用者が名指しうる対象」ではない）。
+    # ★ グラフ段の検分（2026-08-23）: category_col は SUBJ_INPUT ── 依頼文の言及
+    #   （「商品ごとの」の商品）を消費するが自身は判定されない。登録しないと、その言及が
+    #   value_col への ③（依頼文と矛盾する対象）として誤爆し ✓ が消える
+    #   （operator8 ① LOOKUP_FILL の参照シートと同じ形・SHEET_INPUT の列版は既存の SUBJ_INPUT）。
+    "CHART": (("value_col", SUBJ_COLUMN), ("category_col", SUBJ_INPUT)),
     # ★ label は「金額の性質の限定（税込み/税抜き）」が依頼文にある時だけ問う（subject.py 参照）。
     "APPEND_TOTAL": (("col", SUBJ_COLUMN), ("label", SUBJ_LABEL)),
     "INSERT_ROWS": (("at", SUBJ_ROW),),
@@ -2234,7 +2244,11 @@ BOLD: 太字。args: target("row:行番号" か "col:列名")
 FILL_COLOR: 背景色。args: target("row:N"か"col:列名"), color(英語色名)
 NUMBER_FORMAT: 数値書式。args: col(列名), style("thousands")
 MERGE: セル結合。args: range("A1:C1"形式)
-CHART: 棒グラフ。args: value_col(列名)
+CHART: グラフ。args: value_col(列名),
+  kind(省略可・既定"bar"。"bar"=棒, "line"=折れ線/推移, "pie"=円/構成比・割合・内訳。
+  依頼文の言い方に合わせて選ぶ),
+  category_col(省略可・既定は先頭列。横軸/項目名にする列名)
+  ★ kind は依頼文からも機械抽出され、LLM の値と食い違えば機械抽出が優先される
 CENTER_ALIGN: 中央揃え。args: target("all" か "col:列名")
 APPEND_TOTAL: 列の合計(SUM)を表の最終行の下に追加する（税込み合計等）。args: col(合計する列名),
   label(省略可・既定"合計"。表示ラベル。「税込み合計」等、依頼の言い方をそのまま入れる)
@@ -2942,6 +2956,33 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     elif op == "CHART":
         if (err := resolve_in("value_col", first_sheet)):
             return False, resolved, inferred, err
+        # ★ グラフ段①: kind も A' 原則の中へ（cmp と同じ作法）。依頼文からの機械抽出が
+        #   非 None かつ LLM の kind と食い違えば機械が勝つ（EXTRACT の cmp と同じ形）。
+        llm_kind_raw = str(resolved.get("kind") or "").strip().lower()
+        mechanical_kind = extract_chart_kind_from_task(task)
+        if mechanical_kind is not None and mechanical_kind != llm_kind_raw:
+            kind = mechanical_kind
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"LLM が返した種類({llm_kind_raw or '(空)'})と依頼文の機械抽出({mechanical_kind})が"
+                f"食い違うため機械抽出({mechanical_kind})を採用しました"
+            ]
+        else:
+            kind = llm_kind_raw or "bar"
+        if kind not in _CHART_KINDS:
+            return False, resolved, inferred, (
+                f"グラフ種類『{resolved.get('kind')}』は {'/'.join(_CHART_KINDS)} のどれでもありません"
+            )
+        resolved["kind"] = kind
+        # ★ グラフ段②: category_col(省略可・既定は先頭列)。指定があれば実在列検証。
+        raw_cat = resolved.get("category_col")
+        if raw_cat in (None, ""):
+            first_col = (headers.get(first_sheet) or [None])[0]
+            if first_col is None:
+                return False, resolved, inferred, f"シート『{first_sheet}』に列がありません"
+            resolved["category_col"] = first_col
+            inferred.add("category_col")
+        elif (err := resolve_in("category_col", first_sheet)):
+            return False, resolved, inferred, err
 
     elif op == "APPEND_TOTAL":
         if (err := resolve_in("col", first_sheet)):
@@ -3145,7 +3186,9 @@ _CONFIRM_FIELDS = {
     "FILL_COLOR": (("対象", "target", None), ("色", "color", None)),
     "NUMBER_FORMAT": (("対象列", "col", None), ("書式", "style", None)),
     "MERGE": (("範囲", "range", None),),
-    "CHART": (("値列", "value_col", None),),
+    "CHART": (("値列", "value_col", None),
+               ("種類", "kind", lambda v: _CHART_KIND_LABELS.get(v, v)),
+               ("横軸列", "category_col", None)),
     "CENTER_ALIGN": (("対象", "target", None),),
     # ★ W8a 項目5: 表示ラベルのみ「倍率」→「率」（税率・掛け率の文脈での事務向け言い換え）。
     #   内部キー("factor")・関数名・コメントは不変。
@@ -3208,6 +3251,44 @@ def extract_cmp_from_task(task: str) -> str | None:
                         continue
                 if best is None or idx < best[0]:
                     best = (idx, cmp_name)
+                break
+    return best[1] if best else None
+
+
+# ★ グラフ段①: kind の機械抽出（cmp と同じ作法・extract_cmp_from_task の兄弟）。
+#   折れ線/推移→line・円/構成比/割合/内訳→pie・棒→bar・手掛かりなし→None。
+_CHART_KINDS = ("bar", "line", "pie")
+_CHART_KIND_LABELS = {"bar": "棒", "line": "折れ線", "pie": "円"}
+_CHART_KIND_WORDS = (
+    ("line", ("折れ線", "推移")),
+    ("pie", ("構成比", "割合", "内訳", "円")),
+    # ★ 断片ガード①: 「棒」単独は「相棒」等の複合語と衝突するため、単独の「棒」でなく
+    #   「棒グラフ」全体を語にする（凍結検体はどれも「棒グラフ」表記のみで単独「棒」を要らない）。
+    ("bar", ("棒グラフ",)),
+)
+# ★ 断片ガード②: 「円」は単独では通貨表記（「500円」）と衝突するため、直前の文字が
+#   数字（半角/全角）なら採用しない（extract_cmp_from_task の gte/lte 数字近傍ガードと同じ考え方）。
+_CHART_KIND_YEN_GUARD = frozenset({"円"})
+_CHART_KIND_NUM_RE = re.compile(r'[0-9０-９]')
+
+
+def extract_chart_kind_from_task(task: str) -> str | None:
+    """依頼文からグラフ種別を機械抽出する（extract_cmp_from_task と同じ作法）。
+       一致が無ければ None（機械は断定しない）。複数の種別語が現れても、依頼文中で
+       最初に出現した(かつ断片ガードを通った)ものを採る。"""
+    if not task:
+        return None
+    best = None   # (出現位置, kind名)
+    for kind_name, words in _CHART_KIND_WORDS:
+        for w in words:
+            idx = task.find(w)
+            while idx >= 0:
+                if (w in _CHART_KIND_YEN_GUARD and idx > 0
+                        and _CHART_KIND_NUM_RE.match(task[idx - 1])):
+                    idx = task.find(w, idx + 1)
+                    continue
+                if best is None or idx < best[0]:
+                    best = (idx, kind_name)
                 break
     return best[1] if best else None
 
@@ -3378,7 +3459,13 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
 
     if op == "CHART":
         v_idx = headers[first_sheet].index(resolved_args["value_col"])
-        return wrap(f"    Call InsertBarChart(oDoc, {hr0}, {v_idx})\n")
+        # ★ グラフ段: category_col/kind は verify_dsl_args が既定を確定させるが、codegen_dsl
+        #   を単体で直接呼ぶ(ゴールデン等)呼び出し元もあるため、ここでも既定を持つ
+        #   （value_col と同様の作法・省略時は1列目/"bar"）。
+        cat_name = resolved_args.get("category_col") or headers[first_sheet][0]
+        cat_idx = headers[first_sheet].index(cat_name)
+        kind = resolved_args.get("kind") or "bar"
+        return wrap(f'    Call InsertChart(oDoc, {hr0}, {cat_idx}, {v_idx}, "{kind}")\n')
 
     if op == "APPEND_TOTAL":
         # ★ W6: ヘルパは無し（罫線・カンマ等の見栄えまでは踏み込まない・素の SUM 式だけ）。
@@ -4745,7 +4832,24 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
        （C②の教訓: 事後条件チェッカー自身のクラッシュがユーザーに未捕捉のまま漏れていた）。"""
     try:
         if op == "CHART":
-            return check_chart(out_book, before_charts)
+            # ★ グラフ段: 事後条件を二層にする。①グラフ数+1（旧 check_chart・恒真殺しの
+            #   手前）②その1個が意図した種別/値列を指しているか（check_chart_series・
+            #   恒真殺し本体）。①が fail/error ならそこで止める（②は「グラフが在る」前提）。
+            status, reason = check_chart(out_book, before_charts)
+            if status != "pass":
+                return status, reason
+            with BookView(out_book) as bv:
+                ws = bv.sheet(resolved_args.get("_target_sheet"))
+                val_idx = _col_index_by_header(ws, resolved_args["value_col"], header_row=header_row)
+                cat_name = resolved_args.get("category_col")
+                cat_idx = (_col_index_by_header(ws, cat_name, header_row=header_row)
+                           if cat_name else None)
+            if val_idx is None:
+                return "fail", f"値列『{resolved_args['value_col']}』が見つからない"
+            return check_chart_series(
+                out_book, kind=resolved_args.get("kind") or "bar",
+                value_col_letter=get_column_letter(val_idx),
+                category_col_letter=get_column_letter(cat_idx) if cat_idx else None)
         fn = POSTCONDITIONS.get(op)
         if fn is None:
             return "fail", f"未対応の op: {op}"
