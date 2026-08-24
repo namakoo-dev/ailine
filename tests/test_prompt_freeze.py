@@ -46,7 +46,17 @@ _FROZEN = {
     #   機械が必ず強制する規則（実在検証・印以外に触らない・出力名の決定）を OPS_DOC から
     #   外して 4 行に削り、98.1%/98.6% に復帰。代償は v9 が 4/4→3/4（合格線 75% ちょうど）。
     #   ★ これ以上は同じ検体で調整しない（自己汚染）── 実運用の誤分類が出たら測り直す。
-    "OPS_DOC": "4e7ebfb24413d822",
+    # ★ 2026-08-24: SPLIT_CELL の語彙昇格で OPS_DOC に op 説明を **1 行**追加。
+    #   bench/translation_dsl_battery_run.py 実 7B（qwen2.5-coder:7b・items v1・52件）で
+    #   実走して確認: op 96.2%(50/52)・slot 98.6%(69/70)・曖昧誤断定 0%(0/11)
+    #   （合格線 90%/80%/20%以下 ── すべてクリア）。
+    #   ★ 正直に記録する: 帳票段直後の 98.1% からは **1 件ぶん下がった**（不一致は
+    #   #12 LOOKUP_FILL→FREEFORM と #39 NUMBER_FORMAT→CLARIFY）。1 行でも他 op を
+    #   押しのけるという 08-24 の観測（16 行で 98.1%→94.2%）と同じ向きで、桁が小さいだけ。
+    #   ★ この実測を根拠に、台帳の残り（DATE_CALC 2 件・PRINT/EXPORT_DOC 4 件）は
+    #   **OPS_DOC を増やさない形**で実装した ── PRINT/EXPORT_DOC は `export-pdf`
+    #   サブコマンド、日付の扱いは既存 op（EXTRACT/SORT）の穴埋めとして。
+    "OPS_DOC": "f1d00fb654aed28a",
     "TRANSLATION_SYSTEM": "8dd5cd3a43d833fe",
     "TRANSLATION_FEWSHOT": "c10a9b45e6cada35",
     # ★ 2026-08-22: W10 便B（二段目翻訳・op 固定で args だけ埋めさせる）で追加した第4の定数。

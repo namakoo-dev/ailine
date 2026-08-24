@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "商品",
+    "sep": ",",
+    "_target_sheet": "Sheet",
+    "_parts": 3,
+    "_new_cols": [
+      "商品_1",
+      "商品_2",
+      "商品_3"
+    ]
+  },
+  "inferred": [],
+  "err": null
+}

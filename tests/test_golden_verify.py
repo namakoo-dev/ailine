@@ -297,6 +297,34 @@ _add("format_map_unknown_placeholder_column", "FORMAT_MAP", {"template_sheet": "
      book_meta=BM_FORMAT_MAP_BAD)
 _add("format_map_missing_book_path", "FORMAT_MAP", {"template_sheet": "単価表"})
 
+# --- SPLIT_CELL（1セルの複数値を右の列へ割る）---------------------------------
+# ★ 何列必要かは**実データ**が決めるので、この golden も実ファイルを持つ book_meta を使う。
+_SPLIT_DIR = Path(tempfile.mkdtemp(prefix="ailine_golden_f2_split_"))
+_SPLIT_BOOK_PATH = _SPLIT_DIR / "split_src.xlsx"
+
+
+def _build_split_book() -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    ws.append(["商品", "金額"])
+    ws.append(["a,b", 100])
+    ws.append(["c,d,e", 200])
+    wb.save(_SPLIT_BOOK_PATH)
+
+
+_build_split_book()
+BM_SPLIT = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]},
+            "header_rows": {"Sheet": 1}, "path": _SPLIT_BOOK_PATH}
+
+_add("split_cell_ok", "SPLIT_CELL", {"col": "商品", "sep": ","}, book_meta=BM_SPLIT)
+_add("split_cell_unknown_separator", "SPLIT_CELL",
+     {"col": "商品", "sep": "これは区切りの説明としか読めない長い文字列"}, book_meta=BM_SPLIT)
+_add("split_cell_separator_not_found", "SPLIT_CELL", {"col": "金額", "sep": ","},
+     book_meta=BM_SPLIT)
+_add("split_cell_unknown_column", "SPLIT_CELL", {"col": "存在しない", "sep": ","},
+     book_meta=BM_SPLIT)
+
 # --- 境界: verify_dsl_args 自体の全体ガード ----------------------------------
 _add("no_sheets_in_book", "SORT", {"col": "金額", "order": "asc"}, book_meta=BM_NO_SHEETS)
 _add("unsupported_op", "FOOBAR", {})

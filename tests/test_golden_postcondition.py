@@ -690,6 +690,50 @@ def _b_format_map_fail_mismatch(tmp_path):
 _add("format_map_pass", "FORMAT_MAP", _FORMAT_MAP_ARGS, _b_format_map_pass)
 _add("format_map_fail_mismatch", "FORMAT_MAP", _FORMAT_MAP_ARGS, _b_format_map_fail_mismatch)
 
+# --- SPLIT_CELL（繋ぎ直して元と一致するか）------------------------------------
+_SPLIT_ARGS = {"col": "URL", "sep": ",", "_target_sheet": "一覧",
+                "_new_cols": ["URL_1", "URL_2"]}
+
+
+def _b_split_pass(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "一覧"
+    ws.append(["会社", "URL", "URL_1", "URL_2"])
+    ws.append(["甲社", "a,b", "a", "b"])
+    ws.append(["乙社", "c", "c", ""])
+    wb.save(p)
+    return p, None
+
+
+def _b_split_fail_lost_fragment(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "一覧"
+    ws.append(["会社", "URL", "URL_1", "URL_2"])
+    ws.append(["甲社", "a,b", "a", ""])   # ★ 2つ目の断片が落ちている
+    wb.save(p)
+    return p, None
+
+
+def _b_split_fail_source_column_gone(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "一覧"
+    ws.append(["会社", "URL_1", "URL_2"])   # ★ 元の列が消えている
+    ws.append(["甲社", "a", "b"])
+    wb.save(p)
+    return p, None
+
+
+_add("split_cell_pass", "SPLIT_CELL", _SPLIT_ARGS, _b_split_pass)
+_add("split_cell_fail_lost_fragment", "SPLIT_CELL", _SPLIT_ARGS, _b_split_fail_lost_fragment)
+_add("split_cell_fail_source_column_gone", "SPLIT_CELL", _SPLIT_ARGS,
+     _b_split_fail_source_column_gone)
+
 # --- error 状態（事後条件チェッカー自身の例外をキャッチして "error" に変換する境界） -----
 _add("error_missing_required_arg_key", "SORT", {}, _b_sort_pass)   # args["col"] で KeyError
 

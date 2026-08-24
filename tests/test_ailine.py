@@ -1240,6 +1240,15 @@ def test_declared_new_column_letter_driven_by_op_write_target():
             assert ailine._declared_new_column_letter(op, {}, meta) is None, op
             continue
         resolved = {write_target.sheet_key: "Sheet"} if write_target.sheet_key else {}
+        # ★ 2026-08-24: 宣言が「1列(col_key)」だけでなく「列の並び(cols_key)」も持つように
+        #   なった（SPLIT_CELL は 1 回で N 列作る）。単数の関数は cols_key しか持たない op に
+        #   対して None を返すのが**正しい** ── 判定の入口を複数対応版へ移し、
+        #   「宣言した op はどれかの形で必ず列文字を返す」という番人の意図は保つ。
+        if write_target.cols_key:
+            resolved[write_target.cols_key] = ["新1", "新2"]
+            letters = ailine._declared_new_column_letters(op, resolved, meta)
+            assert letters == {"C", "D"}, f"{op}: 複数の新規列が返らなかった: {letters}"
+            continue
         letter = ailine._declared_new_column_letter(op, resolved, meta)
         assert letter == "C", f"{op}: 新規列作成のはずが列文字が返らなかった: {letter}"
 

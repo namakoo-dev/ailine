@@ -58,7 +58,7 @@ import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date as _date_cls, datetime, timezone
 from pathlib import Path
 
 try:
@@ -110,6 +110,8 @@ from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリ�
 from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
 from ailine_core import csv_export   # ★ CSV_EXPORT: `ailine export-csv`（検疫の逆方向）の本体
 from ailine_core import date_compare   # ★ EXTRACT の日付範囲比較（台帳 DATE_RANGE_AGG の正体）
+from ailine_core import split_cell   # ★ SPLIT_CELL: 1セルの複数値を右の列へ割る（台帳2件）
+from ailine_core import pdf_export   # ★ PRINT/EXPORT_DOC: `ailine export-pdf`（台帳4件）
 from ailine_core.date_compare import (   # noqa: F401  ← 試験と呼び出し側が ailine. で引く
     parse_date_literal, date_to_serial, classify_date_column,
 )
@@ -1030,11 +1032,16 @@ def detect_ghost_data(before: dict, after: dict, *, new_col_letter: str | None =
     cols = [c for _, c in outside]
     min_c, max_c = min(cols), max(cols)
     if new_col_letter is not None:
-        try:
-            new_col_idx = column_index_from_string(new_col_letter)
-        except ValueError:
-            new_col_idx = None
-        if new_col_idx is not None and min_c == max_c == new_col_idx:
+        # ★ 2026-08-24: 1 列だけでなく**列の集合**を受ける（SPLIT_CELL は N 列作る）。
+        #   範囲外セルの列が全部その集合に収まっていれば、宣言どおりの効果＝誤警報。
+        raw = new_col_letter if isinstance(new_col_letter, (set, frozenset, list, tuple))             else [new_col_letter]
+        declared = set()
+        for letter in raw:
+            try:
+                declared.add(column_index_from_string(letter))
+            except (ValueError, AttributeError):
+                pass
+        if declared and set(cols) <= declared:
             return "（新規列の追加は意図どおりです）"
     if new_row_at_end and below_only:
         return "（表の末尾への追記は意図どおりです）"
@@ -1091,6 +1098,71 @@ def _declared_new_column_letter(op: str, resolved: dict, book_meta: dict) -> str
         return None   # 既存列への書き込み（上書き側の話・新規列ではない）
     new_col_idx = len(headers)   # 0起点・新規列は既存見出しの直後
     return get_column_letter(new_col_idx + 1)
+
+
+def _letterlike_header_columns(book_meta: dict | None) -> set:
+    """英字だけの**見出し名**（URL / ID / AB …）を、列文字として読んだ時の列番号の集合。
+
+    ★ なぜ要るか（2026-08-24 実測）: 依頼文の「URL列を…」を列文字参照と読んで
+      column_index_from_string("URL")=14676 列目とし、「『列URL』は変更されていません」
+      という偽の ⚠ を出していた。決裁③でこれが ✓ を △ へ降格させる。op を問わず、
+      英字の見出しを持つブック全部で起きる。
+    ★ 名前つき列の変更を見る仕組みは別に無いので、ここは「言えないことは言わない」に倒す
+      （黙るのであって、正しいと主張するのではない）。"""
+    cols = set()
+    if not book_meta:
+        return cols
+    for headers in (book_meta.get("headers") or {}).values():
+        for h in headers or ():
+            name = str(h).strip()
+            if not name or not name.isascii() or not name.isalpha():
+                continue
+            try:
+                cols.add(column_index_from_string(name.upper()))
+            except ValueError:
+                pass
+    return cols
+
+
+def _declared_kept_subject_cols(op: str, resolved: dict, book_meta: dict | None) -> set:
+    """対象列を**意図して変えない**と宣言している op の、その列番号（1起点）の集合。
+       ★ 宣言駆動（OP_WRITE_TARGET.keeps_subject）── op ごとの if を増やさない。
+       SPLIT_CELL は元の列を残すのが契約なので、「言及された列が変更されていません」は
+       誤警報であり、それが ✓ を △ へ降格させていた（実測 2026-08-24）。"""
+    wt = OP_WRITE_TARGET.get(op)
+    if not wt or not wt.keeps_subject or not resolved or not book_meta:
+        return set()
+    sheets = book_meta.get("sheets") or []
+    sheet = resolved.get("_target_sheet") or (sheets[0] if sheets else None)
+    headers = book_meta.get("headers", {}).get(sheet, []) if sheet else []
+    cols = set()
+    for key, _kind in OP_SUBJECT_SLOTS.get(op, ()):  # 対象スロット＝この op の主語の列
+        name = resolved.get(key)
+        for one in (name if isinstance(name, list) else [name]):
+            if one in headers:
+                cols.add(headers.index(one) + 1)
+    return cols
+
+
+def _declared_new_column_letters(op: str, resolved: dict, book_meta: dict) -> set:
+    """今回の宣言で新しく作られる列の**全部**の列文字。単数宣言(col_key)と
+       複数宣言(cols_key)の両方を 1 つの集合にまとめる ── 免除の判定を「1 列だけ」に
+       縛らないため（SPLIT_CELL は 1 回で N 列作る）。"""
+    letters = set()
+    single = _declared_new_column_letter(op, resolved, book_meta)
+    if single:
+        letters.add(single)
+    wt = OP_WRITE_TARGET.get(op)
+    if wt and wt.cols_key and resolved:
+        names = resolved.get(wt.cols_key) or []
+        sheets = book_meta.get("sheets") or []
+        sheet = resolved.get("_target_sheet") or (sheets[0] if sheets else None)
+        headers = book_meta.get("headers", {}).get(sheet, []) if sheet else []
+        base = len(headers)   # 0起点・新規列は既存見出しの直後から並ぶ
+        for k, name in enumerate(names):
+            if name not in headers:
+                letters.add(get_column_letter(base + k + 1))
+    return letters
 
 
 def detect_uniform_fill(before: dict, after: dict) -> str | None:
@@ -1405,7 +1477,8 @@ def _changed_sheets(before: dict, after: dict) -> set:
 
 
 def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
-                              exclude_sheets: set | None = None) -> list:
+                              exclude_sheets: set | None = None,
+                              exclude_cols: set | None = None) -> list:
     """言及があるのに変更範囲と全く重ならない場合だけ警告する（保守的）。
        数字表記の列は 0 起点/1 起点の両解釈を許し、どちらかが触られていれば沈黙する。
        ★ W10b 項目4b(摩擦): exclude_sheets に載るシート（例: LOOKUP_FILL の参照専用
@@ -1414,6 +1487,9 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
        ★ 安全器官の減衰なので保守的に: 抑制は呼び出し側が op から明示的に渡す時だけ・
        既定(None)は従来どおり無抑制。"""
     exclude_sheets = exclude_sheets or set()
+    # ★ 2026-08-24: 対象列を**意図して変えない** op（SPLIT_CELL は元の列を残すのが契約）
+    #   のために、列にも同じ抑制を用意した（シート側の exclude_sheets と同じ考え方）。
+    exclude_cols = exclude_cols or set()
     if not (mentions["cols"] or mentions.get("digit_cols") or mentions["rows"]
             or mentions["sheets"]):
         return []
@@ -1424,6 +1500,8 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
 
     lines = []
     for col in sorted(mentions["cols"]):
+        if col in exclude_cols:
+            continue
         if col not in changed_cols:
             letter = get_column_letter(col)
             lines.append(f"★ 依頼で言及された『列{letter}』は存在しません/変更されていません")
@@ -1463,7 +1541,8 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
        ★ operator10 ⑤: after_path（適用後の実ファイル・省略可）は detect_write_target_type_change
        の数式セル偽アラーム判定にのみ使う（無ければ安全側＝数式セルはカウントしない）。"""
     lines = []
-    new_col_letter = _declared_new_column_letter(op, resolved, meta) if (op and resolved is not None and meta is not None) else None
+    new_col_letter = _declared_new_column_letters(op, resolved, meta) or None \
+        if (op and resolved is not None and meta is not None) else None
     new_row_at_end = _op_writes(op, WRITE_NEW_ROW_AT_END)   # ★ 単位C(D10): 合計行は宣言済みの効果
     for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter, "new_row_at_end": new_row_at_end}), (detect_uniform_fill, {})):
         msg = fn(before, after, **kwargs)
@@ -1504,7 +1583,10 @@ def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set |
     mentions = extract_task_mentions(task, before["sheets"])
     excluded = (set(exclude_sheets or ()) | _declared_reads_only_sheets(op, resolved)
                 | conflict_excluded_sheets(sheet_conflict))
-    lines.extend(mention_overlap_advisory(mentions, before, after, excluded or None))
+    excluded_cols = (_declared_kept_subject_cols(op, resolved, meta)
+                      | _letterlike_header_columns(meta))
+    lines.extend(mention_overlap_advisory(mentions, before, after, excluded or None,
+                                           excluded_cols or None))
     return lines
 
 
@@ -1940,6 +2022,10 @@ OP_META = {
     # ★ freeform 廃止バンドル前段: DEDUP（EXTRACT の兄弟・非破壊形）。判定キー列の値の
     #   組が同じ行のうち最初の1行だけを新シートへ残す（元シートの行は消さない）。
     #   ★ folder は False（M2 のフォルダ抽出対応は EXTRACT だけ・DEDUP の folder 版は未実装）。
+    "SPLIT_CELL": {"category": "表を編集する", "label": "セル分割", "folder": False,
+                    "synonyms": ["セルを分ける", "1セルを複数セルに", "項目分割"],
+                    "match_phrases": ["別のセルに分ける", "別セルに分ける", "1件ずつ別のセルに",
+                                       "区切りで分ける", "セルを分割"]},
     "DEDUP": {"category": "表を編集する", "label": "重複除去", "folder": False,
                "synonyms": ["重複を除く", "重複除去", "重複行を消す", "ユニークにする"],
                "match_phrases": ["ダブりを消す", "重複行を削除"]},
@@ -2165,6 +2251,7 @@ OP_SCHEMA = {
     "EXTRACT": ("col", "cmp", "value"),
     # ★ DEDUP: keys(判定キー列名のリスト)。無ければ CLARIFY（全列一致を既定にしない）。
     #   出力シート名は verify_dsl_args が機械で決め打ちする（EXTRACT と同じ A' 原則）。
+    "SPLIT_CELL": ("col", "sep"),
     "DEDUP": ("keys",),
     # ★ 帳票段: REPORT_PER_ROW。template_sheet(人が作った雛形シート)・name_col
     #   (シート名に使う列＝データ行の見出し役)。印({{列名}})の実在検証・出力シート名
@@ -2216,11 +2303,18 @@ class WriteTarget:
        col_key: 書き込み先列を指す resolved args のキー（既存列を書く op だけが持つ）。
        sheet_key: 対象シート名を指す resolved args のキー（None = resolved["_target_sheet"]）。
        reads_only: 参照専用シートを指す resolved args のキー（そのシートが無変更なのは
-                   正常なので、助言側は「変更されていません」を言ってはいけない）。"""
+                   正常なので、助言側は「変更されていません」を言ってはいけない）。
+       cols_key: 書き込み先列**の並び**を指す resolved args のキー（1回で複数の新規列を
+                 作る op のため・2026-08-24 SPLIT_CELL）。col_key が単数しか表せず、
+                 「範囲外への書き込み」の免除が 1 列にしか効かなかった実測への対応。
+       keeps_subject: 対象列を**意図して変えない** op（SPLIT_CELL は元の列を残すのが契約）。
+                 助言側が「言及された列が変更されていません」と誤って言うのを止める。"""
     writes: tuple = ()
     col_key: str | None = None
     sheet_key: str | None = None
     reads_only: tuple = ()
+    cols_key: str | None = None
+    keeps_subject: bool = False
 
 
 OP_WRITE_TARGET = {
@@ -2258,6 +2352,9 @@ OP_WRITE_TARGET = {
     #   固定表には乗らない ── 単位H(_own_output_headers)側で動的な名前を扱う。
     "EXTRACT": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
     # ★ DEDUP: EXTRACT と同じ形（新規シートを作るだけ・入力シートは読むだけ）。
+    # ★ 右端に新しい列を「複数」作る（col_key は単数しか表せないので付けない）。
+    "SPLIT_CELL": WriteTarget(writes=(WRITE_NEW_COLUMN,), cols_key="_new_cols",
+                               keeps_subject=True),
     "DEDUP": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
     # ★ 帳票段: REPORT_PER_ROW は N 枚の新規シート＋検分シートを作るだけ（新規シートの
     #   前提検査 _check_new_sheet は before に存在しないシートを一切対象にしないので、
@@ -2341,6 +2438,7 @@ OP_SUBJECT_SLOTS = {
     # ★ DEDUP: keys は列名のリスト（_subject_slots が list を1件ずつ Slot に展開する・
     #   COMPUTE_COLUMN の operands と同じ仕組み）。SUBJ_COLUMN にする理由: keys は
     #   「計算の入力」ではなく依頼文が直接名指す対象そのもの（EXTRACT の col と同じ扱い）。
+    "SPLIT_CELL": (("col", SUBJ_COLUMN),),
     "DEDUP": (("keys", SUBJ_COLUMN),),
     # ★ 帳票段: name_col は依頼文が名指しうる「対象」そのもの（AGGREGATE の group_col と
     #   同じ扱い）。template_sheet は「対象」ではなく、依頼文がその名で言及していれば
@@ -2464,6 +2562,7 @@ REPORT_PER_ROW: 表の1行を雛形シート1枚に写してN枚出す（請求�
   args: template_sheet(雛形のシート名), name_col(出力シート名の元になる列)
 
 FORMAT_MAP: 表の各行を雛形シートの様式に写してN行の表を作る（受注CSV→出荷CSV 等）。
+SPLIT_CELL: 1つのセルに詰まった複数の値を、区切り(sep)で右の新しい列へ割る。args: col, sep。
   args: template_sheet(雛形のシート名)
 """
 
@@ -3407,6 +3506,26 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     # ★ DEDUP（EXTRACT の兄弟）: 判定キー列（1つ以上）の値の組が同じ行のうち最初の1行だけを
     #   新シートへ残す。★ keys が無い/空なら CLARIFY ── 全列一致を黙って既定にしない
     #   （「取引先が同じなら重複」は人の意図であって機械が推測してよい既定ではない）。
+    elif op == "SPLIT_CELL":
+        if (err := resolve_in("col", first_sheet)):
+            return False, resolved, inferred, err
+        sep = split_cell.normalize_separator(resolved.get("sep"))
+        if not sep:
+            return False, resolved, inferred, (
+                "区切り(sep)が読み取れません（改行/カンマ/、/スペース などで指定してください）"
+            )
+        resolved["sep"] = sep
+        # ★ 何列必要かは**実データ**が決める（LLM に数えさせない）。
+        values = _column_values(book_meta, first_sheet, resolved["col"])
+        parts = split_cell.max_parts(values, sep)
+        if parts < 2:
+            return False, resolved, inferred, (
+                f"列『{resolved['col']}』に区切り『{split_cell.describe_separator(sep)}』が"
+                f"見つからないため、分けられません"
+            )
+        resolved["_parts"] = parts
+        resolved["_new_cols"] = [f"{resolved['col']}_{k}" for k in range(1, parts + 1)]
+
     elif op == "DEDUP":
         raw_keys = resolved.get("keys")
         if not isinstance(raw_keys, list) or not raw_keys:
@@ -3682,6 +3801,8 @@ _CONFIRM_FIELDS = {
                           ("型", "_write_numeric", lambda v: "数値" if v else "文字列")),
     "EXTRACT": (("対象列", "col", None), ("条件", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
                  ("値", "value", lambda v: _format_extract_value(v))),
+    "SPLIT_CELL": (("対象列", "col", None),
+                    ("区切り", "sep", lambda v: split_cell.describe_separator(v))),
     "DEDUP": (("判定キー", "keys", lambda v: "・".join(v)),),
     "REPORT_PER_ROW": (("雛形", "template_sheet", None), ("シート名の元列", "name_col", None)),
     "FORMAT_MAP": (("雛形", "template_sheet", None),),
@@ -3795,6 +3916,28 @@ def _format_extract_value(value) -> str:
     return str(value)
 
 
+def _column_values(meta: dict, sheet: str, col: str, limit: int = 500) -> list:
+    """対象列の中身を実際に読む（宣言でなく実体を見る側の共通の入口）。
+       読めない時は空リスト ── ここで例外を投げると無関係な入力まで巻き添えで壊れる。"""
+    try:
+        book_path = meta.get("path")
+        headers = meta.get("headers", {}).get(sheet) or []
+        if not book_path or col not in headers:
+            return []
+        col_idx1 = headers.index(col) + 1
+        header_row = int(meta.get("header_rows", {}).get(sheet, 1))
+        wb = openpyxl.load_workbook(book_path, read_only=True, data_only=True)
+        try:
+            ws = wb[sheet]
+            return [row[0] for row in ws.iter_rows(
+                min_row=header_row + 1, min_col=col_idx1, max_col=col_idx1,
+                max_row=header_row + limit, values_only=True)]
+        finally:
+            wb.close()
+    except Exception:
+        return []
+
+
 def _extract_column_date_kind(meta: dict, sheet: str, col: str) -> tuple:
     """対象列の中身を実際に見て、日付として比較できるかを返す（("date"|"text_date"|
        "other"|"empty", 時刻を含むか)）。
@@ -3812,17 +3955,7 @@ def _extract_column_date_kind(meta: dict, sheet: str, col: str) -> tuple:
         headers = meta.get("headers", {}).get(sheet) or []
         if col not in headers:
             return "other", False
-        col_idx1 = headers.index(col) + 1
-        header_row = int(meta.get("header_rows", {}).get(sheet, 1))
-        wb = openpyxl.load_workbook(book_path, read_only=True, data_only=True)
-        try:
-            ws = wb[sheet]
-            values = [row[0] for row in ws.iter_rows(
-                min_row=header_row + 1, min_col=col_idx1, max_col=col_idx1,
-                max_row=header_row + 500, values_only=True)]
-        finally:
-            wb.close()
-        return classify_date_column(values)
+        return classify_date_column(_column_values(meta, sheet, col))
     except Exception:
         return "other", False
 
@@ -4221,6 +4354,14 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         dst_name = str(resolved_args["_new_sheet"]).replace('"', '""')
         return wrap(f'    Call ExtractRows(oDoc, {hr0}, {col_idx}, {cmp_code}, {value_lit}, "{dst_name}")\n')
 
+    if op == "SPLIT_CELL":
+        # ★ ヘルパへの Call 1行だけ（helpers/AiLineHelpers.bas:SplitColumn）。
+        #   新しい見出し名は Python 側で決めて渡す（Basic 側で名前を作らない・帳票段と同じ作法）。
+        col_idx = headers[first_sheet].index(resolved_args["col"])
+        sep_lit = '"' + str(resolved_args["sep"]).replace('"', '""').replace(chr(10), '" & Chr(10) & "') + '"'
+        names_csv = ",".join(str(n).replace(",", "_") for n in resolved_args["_new_cols"])
+        return wrap(f'    Call SplitColumn(oDoc, {hr0}, {col_idx}, {sep_lit}, "{names_csv}")' + chr(10))
+
     if op == "DEDUP":
         # ★ ヘルパへの Call 1行だけ（helpers/AiLineHelpers.bas:DedupRows・EXTRACT と同じ作法）。
         #   キー列は複数ありうるため、0起点の列インデックスをカンマ区切りの文字列で渡す
@@ -4334,6 +4475,27 @@ def _apply_operator(a, b, operator: str):
 def _is_number(v) -> bool:
     """★ 止血2: bool は int のサブクラスだが数値セルとしては扱わない（True/False混入対策）。"""
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _numeric_value(v):
+    """セルの値を「表計算にとっての数値」にする。数値でなければ None。
+
+    ★ なぜ在るか（2026-08-24 の実測）: 出納帳を「日付の古い順に並べ替えて」と頼むと、
+      LibreOffice は正しく並べたのに事後条件が
+      「検証対象が0件（数値でない 3 行は対象外）」で拒否して原本に反映しなかった。
+      **表計算の日付はシリアル値という数値**であり、openpyxl が datetime を返すせいで
+      検証側だけがそれを見失っていた。日付を扱う道具で日付が並べ替えられないのは致命的。
+    ★ 日付→シリアル値の換算は ailine_core.date_compare に 1 箇所だけ置く
+      （EXTRACT の日付比較と同じ換算 ── 2 つ持つと片方だけ直る）。
+    """
+    if _is_number(v):
+        return float(v)
+    if isinstance(v, datetime):
+        return float(date_to_serial(v.date())) + (
+            v.hour * 3600 + v.minute * 60 + v.second) / 86400.0
+    if isinstance(v, _date_cls):
+        return float(date_to_serial(v))
+    return None
 
 
 # ★ 止血1/2 共通の文言。事後条件チェッカーは検証対象0件を絶対に「合格」にしない
@@ -4466,8 +4628,10 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
     excluded = 0
     uncached = 0
     for rv, ev in zip(raw_vals, eff_vals):
-        if _is_number(ev):
-            vals.append(ev)
+        # ★ 2026-08-24: 日付/日時もシリアル値として検証対象に入れる（_numeric_value 参照）。
+        num = _numeric_value(ev)
+        if num is not None:
+            vals.append(num)
         elif use_formula and isinstance(rv, str) and rv.startswith("="):
             uncached += 1   # ★ W10f: 式はあるがキャッシュ値が無い（『対象が無い』とは別）
         else:
@@ -5274,6 +5438,46 @@ def _dedup_normalize_key_part(v):
     return (type(v).__name__, v)
 
 
+def check_split_cell(path: Path, args: dict, header_row: int = 1,
+                      source_book: Path | None = None) -> tuple:
+    """SPLIT_CELL の事後条件。★ 名乗れる根拠は 1 つだけ ── **割った断片を同じ区切りで
+       繋ぎ直すと元の値と一致する**。「それらしく分かれた」では ✓ を出さない。
+       ①行数不変 ②元の列が残っている ③繋ぎ直しの一致 ④他の列が無変更（source_book 併用時）。"""
+    col = args.get("col")
+    sep = args.get("sep")
+    new_cols = args.get("_new_cols") or []
+    if not col or not sep or not new_cols:
+        return "fail", "分割の指定が決まっていません（verify_dsl_args を経由していない可能性）"
+    with BookView(path) as bv:
+        sh = bv.sheet(args.get("_target_sheet"))
+        src_idx = _col_index_by_header(sh, col, header_row=header_row)
+        if src_idx is None:
+            return "fail", f"元の列『{col}』が消えています（分割は元の列を残します）"
+        idxs = []
+        for name in new_cols:
+            i = _col_index_by_header(sh, name, header_row=header_row)
+            if i is None:
+                return "fail", f"分割先の列『{name}』が作られていません"
+            idxs.append(i)
+        originals, parts_by_row = [], []
+        r = header_row + 1
+        while sh.cell(row=r, column=1).value not in (None, ""):
+            originals.append(sh.cell(row=r, column=src_idx).value)
+            parts_by_row.append([sh.cell(row=r, column=i).value for i in idxs])
+            r += 1
+    if not originals:
+        return "warn", _ZERO_TARGET_REASON
+    res = split_cell.verify_rejoin(originals, parts_by_row, sep)
+    if res.mismatched:
+        first = res.mismatched[0]
+        return "fail", (f"{len(res.mismatched)} 行で、割った断片を繋ぎ直すと元と一致しません"
+                         f"（例: {first[0]} 行目 元『{first[1]}』→ 繋ぎ直し『{first[2]}』）")
+    if res.rows_checked == 0:
+        return "warn", _ZERO_TARGET_REASON
+    return "ok", (f"{res.rows_checked} 行を {len(new_cols)} 列へ分割"
+                   f"（繋ぎ直して元と一致・元の列は保存）")
+
+
 def check_dedup(path: Path, args: dict, header_row: int = 1,
                  source_book: Path | None = None) -> tuple:
     """DEDUP の事後条件（EXTRACT の兄弟・非破壊形）。
@@ -5599,6 +5803,7 @@ POSTCONDITIONS = {
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
     "EXTRACT": check_extract,
+    "SPLIT_CELL": check_split_cell,
     "DEDUP": check_dedup,
     # ★ 帳票段:
     "REPORT_PER_ROW": check_report_per_row,
@@ -10088,6 +10293,144 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
     return 3
 
 
+def _soffice_to_pdf(book_path, out_path, sheet=None, orientation=None, fit_to_width=False) -> tuple:
+    """LibreOffice を headless で呼んで PDF を作る（実 LO を呼ぶ唯一の門＝窒息点）。
+       戻り値 (ok, 理由)。★ basrun と同じ office_dir() で soffice を探す ── 探し方を
+       2 通り持つと片方だけ直る（片配線）ので、既にある入口を使う。"""
+    basrun = _find_basrun_path()
+    if basrun is None:
+        return False, "LibreOffice の場所が分からない（basrun.py が見つかりません）"
+    try:
+        mod = _load_module_from_path(basrun, "_ailine_basrun_pdf")
+        office = Path(mod.office_dir())
+    except Exception as e:
+        return False, f"LibreOffice を見つけられません: {e}"
+    soffice = office / ("soffice.exe" if os.name == "nt" else "soffice")
+    if not soffice.exists():
+        return False, f"soffice が無い: {soffice}"
+    out_dir = Path(out_path).parent
+    cmd = [str(soffice), "--headless", "--norestore", "--convert-to", "pdf",
+            "--outdir", str(out_dir), str(book_path)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                               encoding="utf-8", errors="replace")
+    except Exception as e:
+        return False, f"変換に失敗しました: {e}"
+    made = out_dir / (Path(book_path).stem + ".pdf")
+    if not made.exists():
+        return False, f"PDF が作られませんでした（{(proc.stderr or proc.stdout or "").strip()[:200]}）"
+    if made != Path(out_path):
+        made.replace(out_path)
+    return True, ""
+
+
+def _prepare_book_for_print(src: Path, dst: Path, sheet: str,
+                             orientation=None, fit_to_width: bool = False) -> None:
+    """印刷用の調整をした**コピー**を作る（原本には一切触らない）。
+       ★ 列幅は中身の長さから決める ── 全角を 2 文字ぶんとして数える
+       （日本語の帳票で「あかつき商事」が切れて PDF から消えた実測への対応）。"""
+    wb = openpyxl.load_workbook(src)
+    ws = wb[sheet] if sheet in wb.sheetnames else wb.active
+    if fit_to_width:
+        widths = {}
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    continue
+                text = str(cell.value)
+                width = sum(2 if ord(ch) > 127 else 1 for ch in text)
+                letter = cell.column_letter
+                if width > widths.get(letter, 0):
+                    widths[letter] = width
+        for letter, width in widths.items():
+            ws.column_dimensions[letter].width = min(width + 2, 120)
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+    if orientation:
+        ws.page_setup.orientation = orientation
+    wb.save(dst)
+    wb.close()
+
+
+def cmd_export_pdf(a: argparse.Namespace) -> int:
+    """`ailine export-pdf <book> [--sheet S] [--out PATH]`: 表を紙の形で外へ出す
+       （台帳 PRINT 2 件 + EXPORT_DOC 2 件）。LLM は使わない（0 秒起動）。
+
+       ★ 主張の形は export-csv と同じ ── 出した後に**読み戻して**確かめてから ✓ を言う。
+         読み戻しの道具（pdfplumber）が居ない環境では PDF は作るが ✓ を名乗らない。"""
+    book_path = Path(a.book).resolve()
+    if not book_path.exists():
+        print(f"文書が無い: {book_path}")
+        return 1
+    try:
+        wb = openpyxl.load_workbook(book_path, data_only=True)
+    except Exception as e:
+        print(f"× 読み込みに失敗しました: {e}")
+        return 1
+    sheet = a.sheet or wb.sheetnames[0]
+    if sheet not in wb.sheetnames:
+        print(f"× シート『{sheet}』がありません（ある: {chr(12289).join(wb.sheetnames)}）")
+        wb.close()
+        return 1
+    values = [c for row in wb[sheet].iter_rows(values_only=True) for c in row if c is not None]
+    wb.close()
+
+    out_path = Path(a.out).resolve() if a.out else book_path.with_suffix(".pdf")
+    # ★ 実測（2026-08-24）: 既定のまま出すと**列幅で文字が切れて PDF から消える**
+    #   （「あかつき商事」が落ちた）。Excel 印刷の古典的な事故で、読み戻しが掴んだ。
+    #   --fit-to-width / --orientation は原本を触らず**一時コピー**に効かせる。
+    source = book_path
+    tmp_holder = None
+    if a.fit_to_width or a.orientation:
+        tmp_holder = tempfile.TemporaryDirectory(prefix="ailine_pdf_")
+        source = Path(tmp_holder.name) / book_path.name
+        try:
+            _prepare_book_for_print(book_path, source, sheet,
+                                     orientation=a.orientation, fit_to_width=a.fit_to_width)
+        except Exception as e:
+            print(f"× 印刷用の調整に失敗しました: {e}")
+            tmp_holder.cleanup()
+            return 1
+    ok, why = _soffice_to_pdf(source, out_path, sheet=sheet,
+                               orientation=a.orientation, fit_to_width=a.fit_to_width)
+    if tmp_holder is not None:
+        tmp_holder.cleanup()
+    lines = [f"■ ailine export-pdf  file={book_path}  sheet={sheet}"]
+    if not ok:
+        lines.append(f"× {why}")
+        for ln in lines:
+            print(ln)
+        return EXIT_ENVIRONMENT
+    lines.append(f"出力先: {out_path}")
+
+    check = pdf_export.verify_values_in_pdf(out_path, values)
+    if not check.available:
+        lines.append("⚠ PDF は作りましたが、機械保証はありません"
+                      "（テキスト層の読み戻しに pdfplumber が要ります: pip install pdfplumber）")
+        for ln in lines:
+            print(ln)
+        return 0
+    if check.missing:
+        lines.append(f"× シートの {check.checked} 個の値のうち {len(check.missing)} 個が"
+                      f"PDF の中に見つかりません（読み戻しで確認）")
+        for v in check.missing[:10]:
+            lines.append(f"  ⚠ 『{v}』が PDF に見当たりません")
+        if not a.fit_to_width:
+            lines.append("  → 列幅で文字が切れている可能性があります。"
+                          "`--fit-to-width` を付けて出し直してください")
+        if len(check.missing) > 10:
+            lines.append(f"  … 他 {len(check.missing) - 10} 個")
+        lines.append("  （数値の書式や列幅で表示が変わっている可能性があります）")
+        for ln in lines:
+            print(ln)
+        return 3
+    lines.append(f"✓ シートの {check.checked} 個の値が PDF に載っていることを"
+                  f"読み戻して確認しました（欠落 0）")
+    for ln in lines:
+        print(ln)
+    return 0
+
 def cmd_stack(a: argparse.Namespace) -> int:
     """`ailine stack <folder> --out <path>`: M1書き ── 縦積み（UNION ALL）+ 出所列。
        DESIGN-20260821-multifile.md v2 §1(M1書き)・v2.1(単位L)。列挙・照合・合計行の識別は
@@ -10431,6 +10774,15 @@ def build_parser() -> argparse.ArgumentParser:
     ec.add_argument("--encoding", default=None,
                     help="出力の文字コード（既定 utf-8・BOM付き。会計ソフト向けに cp932 も選べる）")
     ec.set_defaults(func=cmd_export_csv)
+
+    ep = sub.add_parser("export-pdf", help="xlsx を PDF へ書き出す（出した PDF を読み戻して確かめる）")
+    ep.add_argument("book", help="対象の .xlsx ファイル")
+    ep.add_argument("--sheet", default=None, help="書き出すシート名（既定 1枚目）")
+    ep.add_argument("--out", default=None, help="出力先の .pdf（既定 同名 .pdf）")
+    ep.add_argument("--orientation", default=None, choices=["portrait", "landscape"],
+                     help="用紙の向き")
+    ep.add_argument("--fit-to-width", action="store_true", help="横幅を1ページに収める")
+    ep.set_defaults(func=cmd_export_pdf)
 
     sc = sub.add_parser("scan", help="フォルダ内の複数ブックを棚卸しする（書き込みゼロ）")
     sc.add_argument("folder", help="対象フォルダ（直下の .xlsx を処理・.xls/.csv は数えて名指しで断る・サブフォルダは見ない）")

@@ -25,7 +25,7 @@ HOLDOUT = json.loads((REPO / "bench" / "ledger_phrasing_holdout.json").read_text
 
 
 def test_ledger_phrasings_reach_the_ops_we_have():
-    """当たるべき 7 件のうち 6 件で、期待した op が候補に含まれる（等号）。"""
+    """当たるべき 8 件のうち 7 件で、期待した op が候補に含まれる（等号）。"""
     hit, missed = 0, []
     for e in HOLDOUT["should_hit"]:
         cands = ailine.suggest_ops(e["text"]) or []
@@ -33,7 +33,9 @@ def test_ledger_phrasings_reach_the_ops_we_have():
             hit += 1
         else:
             missed.append((e["id"], e["text"], cands))
-    assert hit == 6, f"到達件数が 6 でない（実測 {hit}）。外れ: {missed}"
+    # ★ 2026-08-24 更新: SPLIT_CELL を出荷したので L08 を should_hit へ移し、7/8 になった
+    #   （分母が増えたのは「持っていない機能」が 1 つ減ったため ── 事実の変化であって退行でない）。
+    assert hit == 7, f"到達件数が 7 でない（実測 {hit}）。外れ: {missed}"
 
 
 def test_the_known_hole_is_the_fragment_guard_not_the_vocabulary():
@@ -53,8 +55,8 @@ def test_the_known_hole_is_the_fragment_guard_not_the_vocabulary():
 
 
 def test_no_false_suggestions_for_ops_we_do_not_have():
-    """持っていない機能（横結合/セル分割/印刷/日付計算/ランダム割付/ツール納品）に
-       候補を出さない ── 0/6 の等号。★ ここが 1 でも増えたら「できると言う嘘」。"""
+    """持っていない機能（横結合/印刷/日付計算/ランダム割付/ツール納品）に
+       候補を出さない ── 0/5 の等号。★ ここが 1 でも増えたら「できると言う嘘」。"""
     fired = [(e["id"], e["text"], ailine.suggest_ops(e["text"]))
               for e in HOLDOUT["should_not_hit"] if ailine.suggest_ops(e["text"])]
     assert fired == [], f"無い機能に候補を出した: {fired}"

@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "存在しない",
+    "sep": ",",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "列『存在しない』がありません。ある列: 商品, 金額"
+}

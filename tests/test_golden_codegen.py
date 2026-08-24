@@ -190,6 +190,15 @@ _add("format_map_two_rows_hr3", "FORMAT_MAP",
       "_header_tpl_row": 1, "_placeholder_tpl_row": 2, "_data_rows": [4, 5]},
      book_meta=BM_HR3)
 
+# --- SPLIT_CELL（1セルの複数値を右の列へ割る）----------------------------------
+# ★ _parts/_new_cols は verify_dsl_args が**実データを数えて**積む値（LLM には数えさせない）。
+_add("split_cell_newline_hr1", "SPLIT_CELL",
+     {"col": "商品", "sep": chr(10), "_parts": 2, "_new_cols": ["商品_1", "商品_2"]})
+_add("split_cell_comma_hr3", "SPLIT_CELL",
+     {"col": "商品", "sep": ",", "_parts": 3,
+      "_new_cols": ["商品_1", "商品_2", "商品_3"]}, book_meta=BM_HR3)
+
+
 # --- 後方互換: header_rows キーが book_meta に無い旧テスト値 ------------------
 _add("sort_legacy_no_header_rows_key", "SORT", {"col": "金額", "order": "asc"},
      book_meta=BM_LEGACY_NO_HEADER_ROWS)

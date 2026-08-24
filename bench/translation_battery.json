@@ -1,1351 +1,1393 @@
 {
-  "_meta": {
-    "name": "M2b 変換精度 battery v1",
-    "frozen": "2026-08-14 21:05 JST (実行前凍結)",
-    "bar": {
-      "op_accuracy": 0.9,
-      "slot_accuracy": 0.8,
-      "misassert_on_ambiguous": 0.2,
-      "note": "op 分類 90%+ / 必須 slot 80%+ / 曖昧項目への誤断定 20% 以下。数字列参照は 0/1 起点の両解釈を正解扱い。届かなければ二段分解→few-shot 増強→翻訳段モデル梯子の順に切る"
-    },
-    "books": {
-      "sample": {
-        "sheets": {
-          "Sheet": [
-            "商品",
-            "金額",
-            "在庫",
-            "売上",
-            "原価"
-          ]
-        }
-      },
-      "sales": {
-        "sheets": {
-          "Sheet": [
-            "部門",
-            "金額"
-          ]
-        }
-      },
-      "lookup": {
-        "sheets": {
-          "明細": [
-            "商品",
-            "数量",
-            "単価"
-          ],
-          "単価表": [
-            "商品",
-            "単価"
-          ]
-        }
-      },
-      "staff": {
-        "sheets": {
-          "Sheet": [
-            "氏名",
-            "部署",
-            "金額"
-          ]
-        }
-      },
-      "product_calc": {
-        "sheets": {
-          "Sheet": [
-            "商品",
-            "数量",
-            "単価",
-            "金額"
-          ]
-        }
-      }
-    },
-    "v2": {
-      "frozen": "2026-08-14 22:14 JST (実行前凍結)",
-      "bar": {
-        "plan_completeness": 0.9,
-        "silent_drop": 0.0,
-        "note": "複合依頼: 全部分意図が計画に現れる率 90%+ (op or 語彙外明示のどちらでも可)。黙落 (部分意図が計画にも未対応表示にも現れない) は 0 が目標線・1 件でも要因分析。名指し列は target に反映されること"
-      },
-      "books_extra": {
-        "invoice": {
-          "sheets": {
-            "Sheet": [
-              "品目",
-              "数量",
-              "単価",
-              "小計"
-            ]
-          }
-        }
-      }
-    },
-    "v2_1": {
-      "changed": "2026-08-15 (実行前凍結の改訂・透明に記録)",
-      "note": "APPEND_TOTAL 語彙昇格（2026-08-15・監査 3 連続失敗の実測による昇格経済学）に伴い #102 の期待を [COMPUTE_COLUMN, APPEND_TOTAL] に改訂"
-    },
-    "v3": {
-      "frozen": "2026-08-15 (A' 実行前凍結)",
-      "bar": {
-        "clarify_true_positive": 0.9,
-        "clarify_false_positive": 0.1,
-        "note": "APPEND_TOTAL の倍率(factor)は machine が確定（extract_rate_factor/lookup_vocab_factor・regex のみ・LLM不使用）。ここで測るのは LLM 依存の唯一の残り: label が依頼文の「税込み/消費税」等の言い回しを機械の税/込語チェックが拾える形で保持しているか。真CLARIFY(率が本当に無い時に聞く) 90%+・誤CLARIFY(率が明記/用語集にあるのに聞く) 10%以下。"
-      },
-      "note": "translate_task(本番プロンプト・factorを求めない) → verify_dsl_args(task文字列+vocabで機械確定) を通しで実測する。抽出そのもの(regex)は決定論なので単体テストが担保・ここではLLMのlabel生成品質だけを見る。"
-    },
-    "noise_floor_20260815": {
-      "what": "A' 実装直前の回帰確認を兼ねて、v1/v2 battery を同一条件(qwen2.5-coder:7b, temperature=0.1)で3回連続実行し、run間の振れ幅を実測（今後の効果主張の土台）。",
-      "v1": {
-        "runs": [
-          {
-            "op_accuracy": "51/52=98.1%",
-            "slot_accuracy": "72/72=100.0%",
-            "misassert": "0/11"
-          },
-          {
-            "op_accuracy": "51/52=98.1%",
-            "slot_accuracy": "72/72=100.0%",
-            "misassert": "0/11"
-          },
-          {
-            "op_accuracy": "51/52=98.1%",
-            "slot_accuracy": "72/72=100.0%",
-            "misassert": "0/11"
-          }
-        ],
-        "variance": "0（3回とも完全に同一結果・振れ幅なし）"
-      },
-      "v2": {
-        "runs": [
-          {
-            "plan_completeness": "15/15=100.0%",
-            "silent_drop": 0,
-            "target": "2/2=100.0%"
-          },
-          {
-            "plan_completeness": "15/15=100.0%",
-            "silent_drop": 0,
-            "target": "2/2=100.0%"
-          },
-          {
-            "plan_completeness": "15/15=100.0%",
-            "silent_drop": 0,
-            "target": "2/2=100.0%"
-          }
-        ],
-        "variance": "0（3回とも完全に同一結果・振れ幅なし）"
-      },
-      "note": "A' (factor を LLM から除去)適用後もこの数値を維持（回帰なし）。vocab={} 明示は不要だった — v1/v2 の実行経路はどこも vocab を読まない（factor 解決は verify_dsl_args 側のみで、translate_task は関与しない設計のため）。"
-    },
-    "v4": {
-      "frozen": "2026-08-15 (W9 実行前凍結)",
-      "bar": {
-        "op_accuracy": 0.9,
-        "slot_accuracy": 0.8,
-        "note": "W9: 検証済みヘルパ4種(INSERT_ROWS/DRAW_BORDERS/AUTOFIT/PIVOT)の語彙昇格後の翻訳精度。合格線は v1 と同じ op90%/slot80%。PIVOT/AGGREGATE の分岐（『ピボット』明示の有無）検体を含む。"
-      }
-    },
-    "v5": {
-      "frozen": "2026-08-15 (W10b 実行前凍結)",
-      "bar": {
-        "op_accuracy": 0.833,
-        "factor_machine_determined": 1.0,
-        "note": "W10b: COMPUTE_COLUMN の「1列 × 率」パターン(税込み/税抜き)を DSL 語彙に収載した後の翻訳精度。合格線は分類成功 5/6=83.3%以上。倍率(factor)は LLM に確定させない(A原則) - verify_dsl_args が machine 抽出(extract_rate_factor/lookup_vocab_factor)だけで全件確定できること(LLM確定0件)も併せて測る。"
-      }
-    },
-    "v7": {
-      "frozen": "2026-08-20 (C9 実測3穴の battery 追加・実行前凍結)",
-      "bar": {
-        "target": "COMPUTE_COLUMN の target 反映 2/2 (n=2・比率でなく件数で見る)",
-        "scv": "SET_COLUMN_VALUE op 一致 90%+ / slot 一致 80%+ (n=2・v1/v4 と同じ合格線を暫定適用)",
-        "total_factor_true_clarify": "1/1 (n=1・v3 と同じ 90%+ 相当)",
-        "total_factor_false_clarify": "1/1 (n=1・v3 と同じ 誤CLARIFYなし=false_clarify_ok/n 90%+ 相当)",
-        "note": "n が極小のため比率でなく件数で報告する（bench/PREREG_translation_v7.md 参照）。予測・反証の線・反復上限(最大2回)は同ファイルに事前登録済み。"
-      }
-    },
-    "v9": {
-      "frozen": "2026-08-24 (帳票段 REPORT_PER_ROW 実行前凍結)",
-      "bar": {
-        "op_accuracy": 0.75,
-        "slot_accuracy": 0.8,
-        "note": "帳票段(REPORT_PER_ROW)の翻訳精度。新語彙のため v6(EXTRACT) 導入時と同じ暫定バーは強気すぎると見て 3/4=75%+ を暫定合格線にする（n が小さいうちは比率でなく件数も併記して報告する）。"
-      },
-      "books_extra": {
-        "invoice_report": {
-          "sheets": {
-            "売上": [
-              "取引先",
-              "金額",
-              "日付"
-            ],
-            "雛形": []
-          }
-        }
-      }
-    },
-    "v10": {
-      "frozen": "2026-08-24 (様式写像段 FORMAT_MAP 実行前凍結)",
-      "bar": {
-        "op_accuracy": 0.75,
-        "slot_accuracy": 0.8,
-        "note": "様式写像段(FORMAT_MAP)の翻訳精度。REPORT_PER_ROW(v9)と同じ新語彙・同じ暫定バー 3/4=75%+ を採用する（n が小さいうちは比率でなく件数も併記して報告する）。"
-      },
-      "books_extra": {
-        "format_map_book": {
-          "sheets": {
-            "出納帳": [
-              "日付",
-              "摘要",
-              "入金",
-              "出金"
-            ],
-            "様式": []
-          }
-        }
-      }
-    }
+ "_meta": {
+  "name": "M2b 変換精度 battery v1",
+  "frozen": "2026-08-14 21:05 JST (実行前凍結)",
+  "bar": {
+   "op_accuracy": 0.9,
+   "slot_accuracy": 0.8,
+   "misassert_on_ambiguous": 0.2,
+   "note": "op 分類 90%+ / 必須 slot 80%+ / 曖昧項目への誤断定 20% 以下。数字列参照は 0/1 起点の両解釈を正解扱い。届かなければ二段分解→few-shot 増強→翻訳段モデル梯子の順に切る"
   },
-  "items": [
-    {
-      "id": 1,
-      "book": "sample",
-      "text": "金額で降順に並べ替えて",
-      "expect": {
-        "op": "SORT",
-        "col": "金額",
-        "order": "desc"
-      }
-    },
-    {
-      "id": 2,
-      "book": "sample",
-      "text": "在庫の少ない順にソートしてほしい",
-      "expect": {
-        "op": "SORT",
-        "col": "在庫",
-        "order": "asc"
-      }
-    },
-    {
-      "id": 3,
-      "book": "sales",
-      "text": "売れてる部署が上に来るように金額で並び替え",
-      "expect": {
-        "op": "SORT",
-        "col": "金額",
-        "order": "desc"
-      }
-    },
-    {
-      "id": 4,
-      "book": "sample",
-      "text": "原価の高い順で",
-      "expect": {
-        "op": "SORT",
-        "col": "原価",
-        "order": "desc"
-      }
-    },
-    {
-      "id": 5,
-      "book": "sample",
-      "text": "売上から原価を引いた利益の列を作って",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "売上",
-          "原価"
-        ],
-        "operator": "-"
-      }
-    },
-    {
-      "id": 6,
-      "book": "sample",
-      "text": "金額と在庫を掛けた在庫金額列を追加",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "金額",
-          "在庫"
-        ],
-        "operator": "*"
-      }
-    },
-    {
-      "id": 7,
-      "book": "sample",
-      "text": "各行に売上−原価を出す列がほしい",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "売上",
-          "原価"
-        ],
-        "operator": "-"
-      }
-    },
-    {
-      "id": 8,
-      "book": "sample",
-      "text": "売上と原価の差額列を作成",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "売上",
-          "原価"
-        ],
-        "operator": "-"
-      }
-    },
-    {
-      "id": 9,
-      "book": "lookup",
-      "text": "明細に単価表から単価を引いてきて入れて",
-      "expect": {
-        "op": "LOOKUP_FILL",
-        "target_sheet": "明細",
-        "target_col": "単価",
-        "source_sheet": "単価表",
-        "key_col": "商品"
-      }
-    },
-    {
-      "id": 10,
-      "book": "lookup",
-      "text": "単価表を参照して明細の単価を埋めて",
-      "expect": {
-        "op": "LOOKUP_FILL",
-        "target_sheet": "明細",
-        "target_col": "単価",
-        "source_sheet": "単価表",
-        "key_col": "商品"
-      }
-    },
-    {
-      "id": 11,
-      "book": "lookup",
-      "text": "商品名をキーに単価表の値を明細へ転記",
-      "expect": {
-        "op": "LOOKUP_FILL",
-        "target_sheet": "明細",
-        "target_col": "単価",
-        "source_sheet": "単価表",
-        "key_col": "商品"
-      }
-    },
-    {
-      "id": 12,
-      "book": "lookup",
-      "text": "VLOOKUPで明細の単価を単価表から",
-      "expect": {
-        "op": "LOOKUP_FILL",
-        "target_sheet": "明細",
-        "target_col": "単価",
-        "source_sheet": "単価表",
-        "key_col": "商品"
-      }
-    },
-    {
-      "id": 13,
-      "book": "sales",
-      "text": "部門ごとに金額を合計した集計表を作って",
-      "expect": {
-        "op": "AGGREGATE",
-        "group_col": "部門",
-        "value_col": "金額"
-      }
-    },
-    {
-      "id": 14,
-      "book": "sales",
-      "text": "部署別の売上合計がみたい",
-      "expect": {
-        "op": "AGGREGATE",
-        "group_col": "部門",
-        "value_col": "金額"
-      }
-    },
-    {
-      "id": 15,
-      "book": "sample",
-      "text": "商品ごとの売上をまとめて",
-      "expect": {
-        "op": "AGGREGATE",
-        "group_col": "商品",
-        "value_col": "売上"
-      }
-    },
-    {
-      "id": 16,
-      "book": "sales",
-      "text": "金額を部門単位で集計",
-      "expect": {
-        "op": "AGGREGATE",
-        "group_col": "部門",
-        "value_col": "金額"
-      }
-    },
-    {
-      "id": 17,
-      "book": "sample",
-      "text": "見出し行を太字にして",
-      "expect": {
-        "op": "BOLD",
-        "target": "row:1"
-      }
-    },
-    {
-      "id": 18,
-      "book": "sample",
-      "text": "1行目を太くして",
-      "expect": {
-        "op": "BOLD",
-        "target": "row:1"
-      }
-    },
-    {
-      "id": 19,
-      "book": "sample",
-      "text": "商品の列を太字に",
-      "expect": {
-        "op": "BOLD",
-        "target": "col:商品"
-      }
-    },
-    {
-      "id": 20,
-      "book": "sales",
-      "text": "ヘッダーをボールドで",
-      "expect": {
-        "op": "BOLD",
-        "target": "row:1"
-      }
-    },
-    {
-      "id": 21,
-      "book": "sample",
-      "text": "在庫が書いてある列を黄色にして",
-      "expect": {
-        "op": "FILL_COLOR",
-        "target": "col:在庫",
-        "color": "yellow"
-      }
-    },
-    {
-      "id": 22,
-      "book": "sample",
-      "text": "見出し行の背景を薄い青に",
-      "expect": {
-        "op": "FILL_COLOR",
-        "target": "row:1",
-        "color": "lightblue"
-      }
-    },
-    {
-      "id": 23,
-      "book": "sales",
-      "text": "金額列を赤く塗って",
-      "expect": {
-        "op": "FILL_COLOR",
-        "target": "col:金額",
-        "color": "red"
-      }
-    },
-    {
-      "id": 24,
-      "book": "sample",
-      "text": "原価のところを緑色にしたい",
-      "expect": {
-        "op": "FILL_COLOR",
-        "target": "col:原価",
-        "color": "green"
-      }
-    },
-    {
-      "id": 25,
-      "book": "sample",
-      "text": "金額に3桁区切りのカンマをつけて",
-      "expect": {
-        "op": "NUMBER_FORMAT",
-        "col": "金額",
-        "style": "thousands"
-      }
-    },
-    {
-      "id": 26,
-      "book": "sales",
-      "text": "金額をカンマ区切りの表示にして",
-      "expect": {
-        "op": "NUMBER_FORMAT",
-        "col": "金額",
-        "style": "thousands"
-      }
-    },
-    {
-      "id": 27,
-      "book": "sample",
-      "text": "売上の数字を読みやすく桁区切りで",
-      "expect": {
-        "op": "NUMBER_FORMAT",
-        "col": "売上",
-        "style": "thousands"
-      }
-    },
-    {
-      "id": 28,
-      "book": "sample",
-      "text": "原価列に千の位区切りを入れる",
-      "expect": {
-        "op": "NUMBER_FORMAT",
-        "col": "原価",
-        "style": "thousands"
-      }
-    },
-    {
-      "id": 29,
-      "book": "sample",
-      "text": "A1からE1までを結合して",
-      "expect": {
-        "op": "MERGE",
-        "range": "A1:E1"
-      }
-    },
-    {
-      "id": 30,
-      "book": "sales",
-      "text": "A1とB1のセルをひとつにまとめて",
-      "expect": {
-        "op": "MERGE",
-        "range": "A1:B1"
-      }
-    },
-    {
-      "id": 31,
-      "book": "sample",
-      "text": "1行目のAからC列を結合",
-      "expect": {
-        "op": "MERGE",
-        "range": "A1:C1"
-      }
-    },
-    {
-      "id": 32,
-      "book": "sample",
-      "text": "金額のグラフを作って",
-      "expect": {
-        "op": "CHART",
-        "value_col": "金額"
-      }
-    },
-    {
-      "id": 33,
-      "book": "sales",
-      "text": "部門別金額を棒グラフにして",
-      "expect": {
-        "op": "CHART",
-        "value_col": "金額"
-      }
-    },
-    {
-      "id": 34,
-      "book": "sample",
-      "text": "売上を棒グラフで見たい",
-      "expect": {
-        "op": "CHART",
-        "value_col": "売上"
-      }
-    },
-    {
-      "id": 35,
-      "book": "sample",
-      "text": "表全体を中央揃えにして",
-      "expect": {
-        "op": "CENTER_ALIGN",
-        "target": "all"
-      }
-    },
-    {
-      "id": 36,
-      "book": "sales",
-      "text": "全部センタリングで",
-      "expect": {
-        "op": "CENTER_ALIGN",
-        "target": "all"
-      }
-    },
-    {
-      "id": 37,
-      "book": "sample",
-      "text": "在庫列だけ中央に寄せて",
-      "expect": {
-        "op": "CENTER_ALIGN",
-        "target": "col:在庫"
-      }
-    },
-    {
-      "id": 38,
-      "book": "sample",
-      "text": "列2を太字にして",
-      "expect": {
-        "op": "BOLD",
-        "target_either": [
-          "col:金額",
-          "col:在庫"
-        ]
-      },
-      "amb_col": true
-    },
-    {
-      "id": 39,
-      "book": "sample",
-      "text": "列3にカンマをつけて",
-      "expect": {
-        "op": "NUMBER_FORMAT",
-        "col_either": [
-          "在庫",
-          "売上"
-        ],
-        "style": "thousands"
-      },
-      "amb_col": true
-    },
-    {
-      "id": 40,
-      "book": "sample",
-      "text": "並べ替えて",
-      "expect": "clarify",
-      "why": "どの列か・昇降が不明"
-    },
-    {
-      "id": 41,
-      "book": "sample",
-      "text": "色をつけて",
-      "expect": "clarify",
-      "why": "どこに何色か不明"
-    },
-    {
-      "id": 42,
-      "book": "lookup",
-      "text": "埋めて",
-      "expect": "clarify",
-      "why": "何をどこへか不明"
-    },
-    {
-      "id": 43,
-      "book": "sales",
-      "text": "整えて",
-      "expect": "clarify",
-      "why": "操作が特定不能"
-    },
-    {
-      "id": 44,
-      "book": "sample",
-      "text": "グラフか集計か、いい方で",
-      "expect": "clarify",
-      "why": "操作の選択をユーザーに返すべき"
-    },
-    {
-      "id": 45,
-      "book": "sample",
-      "text": "金額列を削除して",
-      "expect": "freeform",
-      "why": "削除 op は語彙にない"
-    },
-    {
-      "id": 46,
-      "book": "sample",
-      "text": "在庫が5以下の行を赤くして",
-      "expect": "freeform",
-      "why": "条件付き書式は語彙にない"
-    },
-    {
-      "id": 47,
-      "book": "sample",
-      "text": "シートをコピーして予備という名前にして",
-      "expect": "freeform",
-      "why": "シート複製は語彙にない"
-    },
-    {
-      "id": 48,
-      "book": "sample",
-      "text": "いい感じにして",
-      "expect": "clarify",
-      "why": "意図不明 — freeform に丸投げせず聞き返しが望ましい"
-    },
-    {
-      "id": 49,
-      "book": "sample",
-      "text": "金額の平均値を一番下に追加して",
-      "expect": "freeform",
-      "why": "集計行の追記は語彙にない"
-    },
-    {
-      "id": 50,
-      "book": "lookup",
-      "text": "明細を印刷用に整形して",
-      "expect": "freeform",
-      "why": "印刷整形は語彙にない"
-    },
-    {
-      "id": 51,
-      "book": "sample",
-      "text": "きんがくでこうじゅんにならべて",
-      "expect": {
-        "op": "SORT",
-        "col": "金額",
-        "order": "desc"
-      },
-      "note": "ひらがな崩し"
-    },
-    {
-      "id": 52,
-      "book": "sales",
-      "text": "部門ごと金額合計→表にまとめる",
-      "expect": {
-        "op": "AGGREGATE",
-        "group_col": "部門",
-        "value_col": "金額"
-      },
-      "note": "省略記法"
+  "books": {
+   "sample": {
+    "sheets": {
+     "Sheet": [
+      "商品",
+      "金額",
+      "在庫",
+      "売上",
+      "原価"
+     ]
     }
-  ],
-  "items_v2": [
-    {
-      "id": 101,
-      "book": "invoice",
-      "text": "小計に数量×単価を入れて",
-      "expect_plan": [
-        {
-          "op": "COMPUTE_COLUMN",
-          "operands": [
-            "数量",
-            "単価"
-          ],
-          "target": "小計"
-        }
+   },
+   "sales": {
+    "sheets": {
+     "Sheet": [
+      "部門",
+      "金額"
+     ]
+    }
+   },
+   "lookup": {
+    "sheets": {
+     "明細": [
+      "商品",
+      "数量",
+      "単価"
+     ],
+     "単価表": [
+      "商品",
+      "単価"
+     ]
+    }
+   },
+   "staff": {
+    "sheets": {
+     "Sheet": [
+      "氏名",
+      "部署",
+      "金額"
+     ]
+    }
+   },
+   "product_calc": {
+    "sheets": {
+     "Sheet": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+     ]
+    }
+   },
+   "split_book": {
+    "sheets": {
+     "一覧": [
+      "会社",
+      "URL",
+      "備考"
+     ]
+    }
+   }
+  },
+  "v2": {
+   "frozen": "2026-08-14 22:14 JST (実行前凍結)",
+   "bar": {
+    "plan_completeness": 0.9,
+    "silent_drop": 0.0,
+    "note": "複合依頼: 全部分意図が計画に現れる率 90%+ (op or 語彙外明示のどちらでも可)。黙落 (部分意図が計画にも未対応表示にも現れない) は 0 が目標線・1 件でも要因分析。名指し列は target に反映されること"
+   },
+   "books_extra": {
+    "invoice": {
+     "sheets": {
+      "Sheet": [
+       "品目",
+       "数量",
+       "単価",
+       "小計"
       ]
-    },
-    {
-      "id": 102,
-      "book": "invoice",
-      "text": "小計に数量×単価を入れて、税込み合計を一番下に出して（消費税10%）",
-      "expect_plan": [
-        {
-          "op": "COMPUTE_COLUMN",
-          "target": "小計"
-        },
-        {
-          "op": "APPEND_TOTAL",
-          "col": "小計",
-          "label": "税込み合計",
-          "factor": 1.1
-        }
+     }
+    }
+   }
+  },
+  "v2_1": {
+   "changed": "2026-08-15 (実行前凍結の改訂・透明に記録)",
+   "note": "APPEND_TOTAL 語彙昇格（2026-08-15・監査 3 連続失敗の実測による昇格経済学）に伴い #102 の期待を [COMPUTE_COLUMN, APPEND_TOTAL] に改訂"
+  },
+  "v3": {
+   "frozen": "2026-08-15 (A' 実行前凍結)",
+   "bar": {
+    "clarify_true_positive": 0.9,
+    "clarify_false_positive": 0.1,
+    "note": "APPEND_TOTAL の倍率(factor)は machine が確定（extract_rate_factor/lookup_vocab_factor・regex のみ・LLM不使用）。ここで測るのは LLM 依存の唯一の残り: label が依頼文の「税込み/消費税」等の言い回しを機械の税/込語チェックが拾える形で保持しているか。真CLARIFY(率が本当に無い時に聞く) 90%+・誤CLARIFY(率が明記/用語集にあるのに聞く) 10%以下。"
+   },
+   "note": "translate_task(本番プロンプト・factorを求めない) → verify_dsl_args(task文字列+vocabで機械確定) を通しで実測する。抽出そのもの(regex)は決定論なので単体テストが担保・ここではLLMのlabel生成品質だけを見る。"
+  },
+  "noise_floor_20260815": {
+   "what": "A' 実装直前の回帰確認を兼ねて、v1/v2 battery を同一条件(qwen2.5-coder:7b, temperature=0.1)で3回連続実行し、run間の振れ幅を実測（今後の効果主張の土台）。",
+   "v1": {
+    "runs": [
+     {
+      "op_accuracy": "51/52=98.1%",
+      "slot_accuracy": "72/72=100.0%",
+      "misassert": "0/11"
+     },
+     {
+      "op_accuracy": "51/52=98.1%",
+      "slot_accuracy": "72/72=100.0%",
+      "misassert": "0/11"
+     },
+     {
+      "op_accuracy": "51/52=98.1%",
+      "slot_accuracy": "72/72=100.0%",
+      "misassert": "0/11"
+     }
+    ],
+    "variance": "0（3回とも完全に同一結果・振れ幅なし）"
+   },
+   "v2": {
+    "runs": [
+     {
+      "plan_completeness": "15/15=100.0%",
+      "silent_drop": 0,
+      "target": "2/2=100.0%"
+     },
+     {
+      "plan_completeness": "15/15=100.0%",
+      "silent_drop": 0,
+      "target": "2/2=100.0%"
+     },
+     {
+      "plan_completeness": "15/15=100.0%",
+      "silent_drop": 0,
+      "target": "2/2=100.0%"
+     }
+    ],
+    "variance": "0（3回とも完全に同一結果・振れ幅なし）"
+   },
+   "note": "A' (factor を LLM から除去)適用後もこの数値を維持（回帰なし）。vocab={} 明示は不要だった — v1/v2 の実行経路はどこも vocab を読まない（factor 解決は verify_dsl_args 側のみで、translate_task は関与しない設計のため）。"
+  },
+  "v4": {
+   "frozen": "2026-08-15 (W9 実行前凍結)",
+   "bar": {
+    "op_accuracy": 0.9,
+    "slot_accuracy": 0.8,
+    "note": "W9: 検証済みヘルパ4種(INSERT_ROWS/DRAW_BORDERS/AUTOFIT/PIVOT)の語彙昇格後の翻訳精度。合格線は v1 と同じ op90%/slot80%。PIVOT/AGGREGATE の分岐（『ピボット』明示の有無）検体を含む。"
+   }
+  },
+  "v5": {
+   "frozen": "2026-08-15 (W10b 実行前凍結)",
+   "bar": {
+    "op_accuracy": 0.833,
+    "factor_machine_determined": 1.0,
+    "note": "W10b: COMPUTE_COLUMN の「1列 × 率」パターン(税込み/税抜き)を DSL 語彙に収載した後の翻訳精度。合格線は分類成功 5/6=83.3%以上。倍率(factor)は LLM に確定させない(A原則) - verify_dsl_args が machine 抽出(extract_rate_factor/lookup_vocab_factor)だけで全件確定できること(LLM確定0件)も併せて測る。"
+   }
+  },
+  "v7": {
+   "frozen": "2026-08-20 (C9 実測3穴の battery 追加・実行前凍結)",
+   "bar": {
+    "target": "COMPUTE_COLUMN の target 反映 2/2 (n=2・比率でなく件数で見る)",
+    "scv": "SET_COLUMN_VALUE op 一致 90%+ / slot 一致 80%+ (n=2・v1/v4 と同じ合格線を暫定適用)",
+    "total_factor_true_clarify": "1/1 (n=1・v3 と同じ 90%+ 相当)",
+    "total_factor_false_clarify": "1/1 (n=1・v3 と同じ 誤CLARIFYなし=false_clarify_ok/n 90%+ 相当)",
+    "note": "n が極小のため比率でなく件数で報告する（bench/PREREG_translation_v7.md 参照）。予測・反証の線・反復上限(最大2回)は同ファイルに事前登録済み。"
+   }
+  },
+  "v9": {
+   "frozen": "2026-08-24 (帳票段 REPORT_PER_ROW 実行前凍結)",
+   "bar": {
+    "op_accuracy": 0.75,
+    "slot_accuracy": 0.8,
+    "note": "帳票段(REPORT_PER_ROW)の翻訳精度。新語彙のため v6(EXTRACT) 導入時と同じ暫定バーは強気すぎると見て 3/4=75%+ を暫定合格線にする（n が小さいうちは比率でなく件数も併記して報告する）。"
+   },
+   "books_extra": {
+    "invoice_report": {
+     "sheets": {
+      "売上": [
+       "取引先",
+       "金額",
+       "日付"
       ],
-      "note": "v2_1 改訂 (2026-08-15): APPEND_TOTAL 語彙昇格前は OUT_OF_VOCAB だった"
-    },
-    {
-      "id": 103,
-      "book": "sample",
-      "text": "金額で降順に並べ替えて、見出し行を太字にして",
-      "expect_plan": [
-        {
-          "op": "SORT",
-          "col": "金額",
-          "order": "desc"
-        },
-        {
-          "op": "BOLD",
-          "target": "row:1"
-        }
-      ]
-    },
-    {
-      "id": 104,
-      "book": "sales",
-      "text": "部門ごとに金額を集計して、そのグラフも作って",
-      "expect_plan": [
-        {
-          "op": "AGGREGATE",
-          "group_col": "部門",
-          "value_col": "金額"
-        },
-        {
-          "op": "CHART"
-        }
-      ]
-    },
-    {
-      "id": 105,
-      "book": "sample",
-      "text": "在庫の列を黄色にして中央揃えにして",
-      "expect_plan": [
-        {
-          "op": "FILL_COLOR",
-          "target": "col:在庫",
-          "color": "yellow"
-        },
-        {
-          "op": "CENTER_ALIGN",
-          "target": "col:在庫"
-        }
-      ]
-    },
-    {
-      "id": 106,
-      "book": "sample",
-      "text": "金額にカンマをつけて、原価も同じように",
-      "expect_plan": [
-        {
-          "op": "NUMBER_FORMAT",
-          "col": "金額"
-        },
-        {
-          "op": "NUMBER_FORMAT",
-          "col": "原価"
-        }
-      ]
-    },
-    {
-      "id": 107,
-      "book": "sample",
-      "text": "売上から原価を引いた利益列を作って、利益で降順に並べ替えて",
-      "expect_plan": [
-        {
-          "op": "COMPUTE_COLUMN",
-          "operands": [
-            "売上",
-            "原価"
-          ]
-        },
-        {
-          "op": "SORT",
-          "order": "desc"
-        }
+      "雛形": []
+     }
+    }
+   }
+  },
+  "v10": {
+   "frozen": "2026-08-24 (様式写像段 FORMAT_MAP 実行前凍結)",
+   "bar": {
+    "op_accuracy": 0.75,
+    "slot_accuracy": 0.8,
+    "note": "様式写像段(FORMAT_MAP)の翻訳精度。REPORT_PER_ROW(v9)と同じ新語彙・同じ暫定バー 3/4=75%+ を採用する（n が小さいうちは比率でなく件数も併記して報告する）。"
+   },
+   "books_extra": {
+    "format_map_book": {
+     "sheets": {
+      "出納帳": [
+       "日付",
+       "摘要",
+       "入金",
+       "出金"
       ],
-      "note": "2 段目が 1 段目の生成列を参照する依存つき"
-    },
-    {
-      "id": 108,
-      "book": "sample",
-      "text": "見出しを太字にして、それと在庫が5以下の行を赤くして",
-      "expect_plan": [
-        {
-          "op": "BOLD",
-          "target": "row:1"
-        },
-        {
-          "op": "OUT_OF_VOCAB",
-          "about": "条件付き書式"
-        }
-      ]
+      "様式": []
+     }
     }
-  ],
-  "items_v3": [
+   }
+  },
+  "sets": {}
+ },
+ "items": [
+  {
+   "id": 1,
+   "book": "sample",
+   "text": "金額で降順に並べ替えて",
+   "expect": {
+    "op": "SORT",
+    "col": "金額",
+    "order": "desc"
+   }
+  },
+  {
+   "id": 2,
+   "book": "sample",
+   "text": "在庫の少ない順にソートしてほしい",
+   "expect": {
+    "op": "SORT",
+    "col": "在庫",
+    "order": "asc"
+   }
+  },
+  {
+   "id": 3,
+   "book": "sales",
+   "text": "売れてる部署が上に来るように金額で並び替え",
+   "expect": {
+    "op": "SORT",
+    "col": "金額",
+    "order": "desc"
+   }
+  },
+  {
+   "id": 4,
+   "book": "sample",
+   "text": "原価の高い順で",
+   "expect": {
+    "op": "SORT",
+    "col": "原価",
+    "order": "desc"
+   }
+  },
+  {
+   "id": 5,
+   "book": "sample",
+   "text": "売上から原価を引いた利益の列を作って",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "売上",
+     "原価"
+    ],
+    "operator": "-"
+   }
+  },
+  {
+   "id": 6,
+   "book": "sample",
+   "text": "金額と在庫を掛けた在庫金額列を追加",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "金額",
+     "在庫"
+    ],
+    "operator": "*"
+   }
+  },
+  {
+   "id": 7,
+   "book": "sample",
+   "text": "各行に売上−原価を出す列がほしい",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "売上",
+     "原価"
+    ],
+    "operator": "-"
+   }
+  },
+  {
+   "id": 8,
+   "book": "sample",
+   "text": "売上と原価の差額列を作成",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "売上",
+     "原価"
+    ],
+    "operator": "-"
+   }
+  },
+  {
+   "id": 9,
+   "book": "lookup",
+   "text": "明細に単価表から単価を引いてきて入れて",
+   "expect": {
+    "op": "LOOKUP_FILL",
+    "target_sheet": "明細",
+    "target_col": "単価",
+    "source_sheet": "単価表",
+    "key_col": "商品"
+   }
+  },
+  {
+   "id": 10,
+   "book": "lookup",
+   "text": "単価表を参照して明細の単価を埋めて",
+   "expect": {
+    "op": "LOOKUP_FILL",
+    "target_sheet": "明細",
+    "target_col": "単価",
+    "source_sheet": "単価表",
+    "key_col": "商品"
+   }
+  },
+  {
+   "id": 11,
+   "book": "lookup",
+   "text": "商品名をキーに単価表の値を明細へ転記",
+   "expect": {
+    "op": "LOOKUP_FILL",
+    "target_sheet": "明細",
+    "target_col": "単価",
+    "source_sheet": "単価表",
+    "key_col": "商品"
+   }
+  },
+  {
+   "id": 12,
+   "book": "lookup",
+   "text": "VLOOKUPで明細の単価を単価表から",
+   "expect": {
+    "op": "LOOKUP_FILL",
+    "target_sheet": "明細",
+    "target_col": "単価",
+    "source_sheet": "単価表",
+    "key_col": "商品"
+   }
+  },
+  {
+   "id": 13,
+   "book": "sales",
+   "text": "部門ごとに金額を合計した集計表を作って",
+   "expect": {
+    "op": "AGGREGATE",
+    "group_col": "部門",
+    "value_col": "金額"
+   }
+  },
+  {
+   "id": 14,
+   "book": "sales",
+   "text": "部署別の売上合計がみたい",
+   "expect": {
+    "op": "AGGREGATE",
+    "group_col": "部門",
+    "value_col": "金額"
+   }
+  },
+  {
+   "id": 15,
+   "book": "sample",
+   "text": "商品ごとの売上をまとめて",
+   "expect": {
+    "op": "AGGREGATE",
+    "group_col": "商品",
+    "value_col": "売上"
+   }
+  },
+  {
+   "id": 16,
+   "book": "sales",
+   "text": "金額を部門単位で集計",
+   "expect": {
+    "op": "AGGREGATE",
+    "group_col": "部門",
+    "value_col": "金額"
+   }
+  },
+  {
+   "id": 17,
+   "book": "sample",
+   "text": "見出し行を太字にして",
+   "expect": {
+    "op": "BOLD",
+    "target": "row:1"
+   }
+  },
+  {
+   "id": 18,
+   "book": "sample",
+   "text": "1行目を太くして",
+   "expect": {
+    "op": "BOLD",
+    "target": "row:1"
+   }
+  },
+  {
+   "id": 19,
+   "book": "sample",
+   "text": "商品の列を太字に",
+   "expect": {
+    "op": "BOLD",
+    "target": "col:商品"
+   }
+  },
+  {
+   "id": 20,
+   "book": "sales",
+   "text": "ヘッダーをボールドで",
+   "expect": {
+    "op": "BOLD",
+    "target": "row:1"
+   }
+  },
+  {
+   "id": 21,
+   "book": "sample",
+   "text": "在庫が書いてある列を黄色にして",
+   "expect": {
+    "op": "FILL_COLOR",
+    "target": "col:在庫",
+    "color": "yellow"
+   }
+  },
+  {
+   "id": 22,
+   "book": "sample",
+   "text": "見出し行の背景を薄い青に",
+   "expect": {
+    "op": "FILL_COLOR",
+    "target": "row:1",
+    "color": "lightblue"
+   }
+  },
+  {
+   "id": 23,
+   "book": "sales",
+   "text": "金額列を赤く塗って",
+   "expect": {
+    "op": "FILL_COLOR",
+    "target": "col:金額",
+    "color": "red"
+   }
+  },
+  {
+   "id": 24,
+   "book": "sample",
+   "text": "原価のところを緑色にしたい",
+   "expect": {
+    "op": "FILL_COLOR",
+    "target": "col:原価",
+    "color": "green"
+   }
+  },
+  {
+   "id": 25,
+   "book": "sample",
+   "text": "金額に3桁区切りのカンマをつけて",
+   "expect": {
+    "op": "NUMBER_FORMAT",
+    "col": "金額",
+    "style": "thousands"
+   }
+  },
+  {
+   "id": 26,
+   "book": "sales",
+   "text": "金額をカンマ区切りの表示にして",
+   "expect": {
+    "op": "NUMBER_FORMAT",
+    "col": "金額",
+    "style": "thousands"
+   }
+  },
+  {
+   "id": 27,
+   "book": "sample",
+   "text": "売上の数字を読みやすく桁区切りで",
+   "expect": {
+    "op": "NUMBER_FORMAT",
+    "col": "売上",
+    "style": "thousands"
+   }
+  },
+  {
+   "id": 28,
+   "book": "sample",
+   "text": "原価列に千の位区切りを入れる",
+   "expect": {
+    "op": "NUMBER_FORMAT",
+    "col": "原価",
+    "style": "thousands"
+   }
+  },
+  {
+   "id": 29,
+   "book": "sample",
+   "text": "A1からE1までを結合して",
+   "expect": {
+    "op": "MERGE",
+    "range": "A1:E1"
+   }
+  },
+  {
+   "id": 30,
+   "book": "sales",
+   "text": "A1とB1のセルをひとつにまとめて",
+   "expect": {
+    "op": "MERGE",
+    "range": "A1:B1"
+   }
+  },
+  {
+   "id": 31,
+   "book": "sample",
+   "text": "1行目のAからC列を結合",
+   "expect": {
+    "op": "MERGE",
+    "range": "A1:C1"
+   }
+  },
+  {
+   "id": 32,
+   "book": "sample",
+   "text": "金額のグラフを作って",
+   "expect": {
+    "op": "CHART",
+    "value_col": "金額"
+   }
+  },
+  {
+   "id": 33,
+   "book": "sales",
+   "text": "部門別金額を棒グラフにして",
+   "expect": {
+    "op": "CHART",
+    "value_col": "金額"
+   }
+  },
+  {
+   "id": 34,
+   "book": "sample",
+   "text": "売上を棒グラフで見たい",
+   "expect": {
+    "op": "CHART",
+    "value_col": "売上"
+   }
+  },
+  {
+   "id": 35,
+   "book": "sample",
+   "text": "表全体を中央揃えにして",
+   "expect": {
+    "op": "CENTER_ALIGN",
+    "target": "all"
+   }
+  },
+  {
+   "id": 36,
+   "book": "sales",
+   "text": "全部センタリングで",
+   "expect": {
+    "op": "CENTER_ALIGN",
+    "target": "all"
+   }
+  },
+  {
+   "id": 37,
+   "book": "sample",
+   "text": "在庫列だけ中央に寄せて",
+   "expect": {
+    "op": "CENTER_ALIGN",
+    "target": "col:在庫"
+   }
+  },
+  {
+   "id": 38,
+   "book": "sample",
+   "text": "列2を太字にして",
+   "expect": {
+    "op": "BOLD",
+    "target_either": [
+     "col:金額",
+     "col:在庫"
+    ]
+   },
+   "amb_col": true
+  },
+  {
+   "id": 39,
+   "book": "sample",
+   "text": "列3にカンマをつけて",
+   "expect": {
+    "op": "NUMBER_FORMAT",
+    "col_either": [
+     "在庫",
+     "売上"
+    ],
+    "style": "thousands"
+   },
+   "amb_col": true
+  },
+  {
+   "id": 40,
+   "book": "sample",
+   "text": "並べ替えて",
+   "expect": "clarify",
+   "why": "どの列か・昇降が不明"
+  },
+  {
+   "id": 41,
+   "book": "sample",
+   "text": "色をつけて",
+   "expect": "clarify",
+   "why": "どこに何色か不明"
+  },
+  {
+   "id": 42,
+   "book": "lookup",
+   "text": "埋めて",
+   "expect": "clarify",
+   "why": "何をどこへか不明"
+  },
+  {
+   "id": 43,
+   "book": "sales",
+   "text": "整えて",
+   "expect": "clarify",
+   "why": "操作が特定不能"
+  },
+  {
+   "id": 44,
+   "book": "sample",
+   "text": "グラフか集計か、いい方で",
+   "expect": "clarify",
+   "why": "操作の選択をユーザーに返すべき"
+  },
+  {
+   "id": 45,
+   "book": "sample",
+   "text": "金額列を削除して",
+   "expect": "freeform",
+   "why": "削除 op は語彙にない"
+  },
+  {
+   "id": 46,
+   "book": "sample",
+   "text": "在庫が5以下の行を赤くして",
+   "expect": "freeform",
+   "why": "条件付き書式は語彙にない"
+  },
+  {
+   "id": 47,
+   "book": "sample",
+   "text": "シートをコピーして予備という名前にして",
+   "expect": "freeform",
+   "why": "シート複製は語彙にない"
+  },
+  {
+   "id": 48,
+   "book": "sample",
+   "text": "いい感じにして",
+   "expect": "clarify",
+   "why": "意図不明 — freeform に丸投げせず聞き返しが望ましい"
+  },
+  {
+   "id": 49,
+   "book": "sample",
+   "text": "金額の平均値を一番下に追加して",
+   "expect": "freeform",
+   "why": "集計行の追記は語彙にない"
+  },
+  {
+   "id": 50,
+   "book": "lookup",
+   "text": "明細を印刷用に整形して",
+   "expect": "freeform",
+   "why": "印刷整形は語彙にない"
+  },
+  {
+   "id": 51,
+   "book": "sample",
+   "text": "きんがくでこうじゅんにならべて",
+   "expect": {
+    "op": "SORT",
+    "col": "金額",
+    "order": "desc"
+   },
+   "note": "ひらがな崩し"
+  },
+  {
+   "id": 52,
+   "book": "sales",
+   "text": "部門ごと金額合計→表にまとめる",
+   "expect": {
+    "op": "AGGREGATE",
+    "group_col": "部門",
+    "value_col": "金額"
+   },
+   "note": "省略記法"
+  }
+ ],
+ "items_v2": [
+  {
+   "id": 101,
+   "book": "invoice",
+   "text": "小計に数量×単価を入れて",
+   "expect_plan": [
     {
-      "id": 301,
-      "book": "invoice",
-      "vocab": {},
-      "text": "小計に数量×単価を入れて、税込み合計を一番下に出して（消費税10%）",
-      "expect": {
-        "clarify": false,
-        "factor": 1.1
-      }
-    },
-    {
-      "id": 302,
-      "book": "invoice",
-      "vocab": {},
-      "text": "税込み合計を一番下に出して（消費税8%で）",
-      "expect": {
-        "clarify": false,
-        "factor": 1.08
-      }
-    },
-    {
-      "id": 303,
-      "book": "invoice",
-      "vocab": {},
-      "text": "税込み合計を一番下に出して(1.1倍)",
-      "expect": {
-        "clarify": false,
-        "factor": 1.1
-      }
-    },
-    {
-      "id": 304,
-      "book": "invoice",
-      "vocab": {
-        "消費税": 1.1
-      },
-      "text": "消費税込みの合計を出して",
-      "expect": {
-        "clarify": false,
-        "factor": 1.1
-      }
-    },
-    {
-      "id": 305,
-      "book": "invoice",
-      "vocab": {},
-      "text": "税込み合計を一番下に出して",
-      "expect": {
-        "clarify": true
-      }
-    },
-    {
-      "id": 306,
-      "book": "sales",
-      "vocab": {},
-      "text": "金額の合計を最後に",
-      "expect": {
-        "clarify": false,
-        "factor": 1.0
-      }
-    },
-    {
-      "id": 307,
-      "book": "invoice",
-      "vocab": {},
-      "text": "税込み合計を出して（消費税１０％）",
-      "expect": {
-        "clarify": false,
-        "factor": 1.1
-      }
-    },
-    {
-      "id": 308,
-      "book": "invoice",
-      "vocab": {},
-      "text": "消費税10%引き後、8%の手数料込みで税込み合計を出して",
-      "expect": {
-        "clarify": true
-      }
-    },
-    {
-      "id": 309,
-      "book": "invoice",
-      "vocab": {
-        "軽減税率": 1.08
-      },
-      "text": "軽減税率込みの合計を一番下に",
-      "expect": {
-        "clarify": false,
-        "factor": 1.08
-      }
-    },
-    {
-      "id": 310,
-      "book": "invoice",
-      "vocab": {},
-      "text": "税率0.1で税込み合計を出して",
-      "expect": {
-        "clarify": false,
-        "factor": 1.1
-      }
+     "op": "COMPUTE_COLUMN",
+     "operands": [
+      "数量",
+      "単価"
+     ],
+     "target": "小計"
     }
-  ],
-  "items_v4": [
+   ]
+  },
+  {
+   "id": 102,
+   "book": "invoice",
+   "text": "小計に数量×単価を入れて、税込み合計を一番下に出して（消費税10%）",
+   "expect_plan": [
     {
-      "id": 401,
-      "book": "sales",
-      "text": "3行目の前に1行挿入して",
-      "expect": {
-        "op": "INSERT_ROWS",
-        "at": 3,
-        "count": 1
-      }
+     "op": "COMPUTE_COLUMN",
+     "target": "小計"
     },
     {
-      "id": 402,
-      "book": "sample",
-      "text": "5行目に3行挿入して",
-      "expect": {
-        "op": "INSERT_ROWS",
-        "at": 5,
-        "count": 3
-      }
-    },
-    {
-      "id": 403,
-      "book": "invoice",
-      "text": "2行目の前に1行入れて",
-      "expect": {
-        "op": "INSERT_ROWS",
-        "at": 2,
-        "count": 1
-      }
-    },
-    {
-      "id": 404,
-      "book": "sample",
-      "text": "表にけい線を引いて",
-      "expect": {
-        "op": "DRAW_BORDERS"
-      }
-    },
-    {
-      "id": 405,
-      "book": "sales",
-      "text": "全体に格子の罫線を付けて",
-      "expect": {
-        "op": "DRAW_BORDERS"
-      }
-    },
-    {
-      "id": 406,
-      "book": "sample",
-      "text": "列幅を内容に合わせて自動調整して",
-      "expect": {
-        "op": "AUTOFIT"
-      }
-    },
-    {
-      "id": 407,
-      "book": "sales",
-      "text": "各列の幅を中身に合わせて広げて",
-      "expect": {
-        "op": "AUTOFIT"
-      }
-    },
-    {
-      "id": 408,
-      "book": "sales",
-      "text": "部門ごとにピボットテーブルで集計して",
-      "expect": {
-        "op": "PIVOT",
-        "group_col": "部門",
-        "value_col": "金額"
-      }
-    },
-    {
-      "id": 409,
-      "book": "sample",
-      "text": "商品別にピボットで売上をまとめて",
-      "expect": {
-        "op": "PIVOT",
-        "group_col": "商品",
-        "value_col": "売上"
-      }
-    },
-    {
-      "id": 410,
-      "book": "sales",
-      "text": "部門ごとに金額を集計して",
-      "expect": {
-        "op": "AGGREGATE",
-        "group_col": "部門",
-        "value_col": "金額"
-      }
-    },
-    {
-      "id": 411,
-      "book": "sample",
-      "text": "商品ごとの売上を集計表にして",
-      "expect": {
-        "op": "AGGREGATE",
-        "group_col": "商品",
-        "value_col": "売上"
-      }
+     "op": "APPEND_TOTAL",
+     "col": "小計",
+     "label": "税込み合計",
+     "factor": 1.1
     }
-  ],
-  "items_v5": [
+   ],
+   "note": "v2_1 改訂 (2026-08-15): APPEND_TOTAL 語彙昇格前は OUT_OF_VOCAB だった"
+  },
+  {
+   "id": 103,
+   "book": "sample",
+   "text": "金額で降順に並べ替えて、見出し行を太字にして",
+   "expect_plan": [
     {
-      "id": 501,
-      "book": "sales",
-      "text": "税込み金額の列を追加して（消費税10%）",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "金額"
-        ],
-        "operator": "*"
-      }
+     "op": "SORT",
+     "col": "金額",
+     "order": "desc"
     },
     {
-      "id": 502,
-      "book": "sales",
-      "text": "消費税10%を足した列を作って",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "金額"
-        ],
-        "operator": "*"
-      }
-    },
-    {
-      "id": 503,
-      "book": "sales",
-      "text": "金額に1.1を掛けた列を追加して",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "金額"
-        ],
-        "operator": "*"
-      }
-    },
-    {
-      "id": 504,
-      "book": "sales",
-      "text": "税込みの列を追加して（消費税10%）",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "金額"
-        ],
-        "operator": "*"
-      }
-    },
-    {
-      "id": 505,
-      "book": "sample",
-      "text": "原価に消費税10%を足した列を追加して",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "原価"
-        ],
-        "operator": "*"
-      }
-    },
-    {
-      "id": 506,
-      "book": "sample",
-      "text": "売上に1.1倍した列を作って",
-      "expect": {
-        "op": "COMPUTE_COLUMN",
-        "operands": [
-          "売上"
-        ],
-        "operator": "*"
-      }
+     "op": "BOLD",
+     "target": "row:1"
     }
-  ],
-  "items_v6": [
+   ]
+  },
+  {
+   "id": 104,
+   "book": "sales",
+   "text": "部門ごとに金額を集計して、そのグラフも作って",
+   "expect_plan": [
     {
-      "id": 601,
-      "book": "sample",
-      "text": "金額が40000以上の行だけを別シートに抜き出して",
-      "expect": {
-        "op": "EXTRACT",
-        "col": "金額",
-        "cmp": "gte",
-        "value": 40000
-      }
+     "op": "AGGREGATE",
+     "group_col": "部門",
+     "value_col": "金額"
     },
     {
-      "id": 602,
-      "book": "sample",
-      "text": "在庫が20未満の行を抜き出して",
-      "expect": {
-        "op": "EXTRACT",
-        "col": "在庫",
-        "cmp": "lt",
-        "value": 20
-      }
+     "op": "CHART"
     }
-  ],
-  "items_v7": [
+   ]
+  },
+  {
+   "id": 105,
+   "book": "sample",
+   "text": "在庫の列を黄色にして中央揃えにして",
+   "expect_plan": [
     {
-      "id": 701,
-      "book": "staff",
-      "kind": "scv",
-      "text": "部署列をすべて『本社』にして",
-      "expect": {
-        "op": "SET_COLUMN_VALUE",
-        "col": "部署",
-        "value": "本社"
-      }
+     "op": "FILL_COLOR",
+     "target": "col:在庫",
+     "color": "yellow"
     },
     {
-      "id": 702,
-      "book": "staff",
-      "kind": "scv",
-      "text": "氏名の列をすべて『契約終了』に書き換えて",
-      "expect": {
-        "op": "SET_COLUMN_VALUE",
-        "col": "氏名",
-        "value": "契約終了"
-      }
-    },
-    {
-      "id": 703,
-      "book": "invoice",
-      "kind": "total_factor",
-      "vocab": {
-        "消費税": 1.1
-      },
-      "text": "消費税込みの合計を一番下に出して",
-      "expect": {
-        "op": "APPEND_TOTAL",
-        "clarify": false,
-        "factor": 1.1
-      }
-    },
-    {
-      "id": 704,
-      "book": "invoice",
-      "kind": "total_factor",
-      "vocab": {},
-      "text": "税込みの合計を出して",
-      "expect": {
-        "op": "APPEND_TOTAL",
-        "clarify": true
-      }
-    },
-    {
-      "id": 705,
-      "book": "product_calc",
-      "kind": "target",
-      "text": "金額を数量×単価で埋めて",
-      "expect_plan": [
-        {
-          "op": "COMPUTE_COLUMN",
-          "operands": [
-            "数量",
-            "単価"
-          ],
-          "target": "金額"
-        }
-      ]
-    },
-    {
-      "id": 706,
-      "book": "product_calc",
-      "kind": "target",
-      "text": "単価と数量をかけて金額の列に入れて",
-      "expect_plan": [
-        {
-          "op": "COMPUTE_COLUMN",
-          "operands": [
-            "単価",
-            "数量"
-          ],
-          "target": "金額"
-        }
-      ]
+     "op": "CENTER_ALIGN",
+     "target": "col:在庫"
     }
-  ],
-  "items_v8": [
+   ]
+  },
+  {
+   "id": 106,
+   "book": "sample",
+   "text": "金額にカンマをつけて、原価も同じように",
+   "expect_plan": [
     {
-      "id": 801,
-      "book": "sales",
-      "kind": "dedup",
-      "text": "部門が同じ行を重複として除いて",
-      "expect": {
-        "op": "DEDUP",
-        "keys": [
-          "部門"
-        ]
-      }
+     "op": "NUMBER_FORMAT",
+     "col": "金額"
     },
     {
-      "id": 802,
-      "book": "staff",
-      "kind": "dedup",
-      "text": "氏名が同じ行を重複としてはじいて",
-      "expect": {
-        "op": "DEDUP",
-        "keys": [
-          "氏名"
-        ]
-      }
-    },
-    {
-      "id": 803,
-      "book": "staff",
-      "kind": "dedup",
-      "text": "氏名と部署の両方が同じ行を重複として除いて",
-      "expect": {
-        "op": "DEDUP",
-        "keys": [
-          "氏名",
-          "部署"
-        ]
-      }
+     "op": "NUMBER_FORMAT",
+     "col": "原価"
     }
-  ],
-  "items_v9": [
+   ]
+  },
+  {
+   "id": 107,
+   "book": "sample",
+   "text": "売上から原価を引いた利益列を作って、利益で降順に並べ替えて",
+   "expect_plan": [
     {
-      "id": 901,
-      "book": "invoice_report",
-      "text": "売上シートの各行から、雛形シートを使って取引先ごとに請求書を作って",
-      "expect": {
-        "op": "REPORT_PER_ROW",
-        "template_sheet": "雛形",
-        "name_col": "取引先"
-      }
+     "op": "COMPUTE_COLUMN",
+     "operands": [
+      "売上",
+      "原価"
+     ]
     },
     {
-      "id": 902,
-      "book": "invoice_report",
-      "text": "雛形シートの形式で、取引先ごとに見積書を1枚ずつ作って",
-      "expect": {
-        "op": "REPORT_PER_ROW",
-        "template_sheet": "雛形",
-        "name_col": "取引先"
-      }
-    },
-    {
-      "id": 903,
-      "book": "invoice_report",
-      "text": "取引先ごとに雛形を使って領収書を出して",
-      "expect": {
-        "op": "REPORT_PER_ROW",
-        "template_sheet": "雛形",
-        "name_col": "取引先"
-      }
-    },
-    {
-      "id": 904,
-      "book": "invoice_report",
-      "text": "売上の行ごとに雛形シートへ転記して帳票を作って（取引先名でシートを分ける）",
-      "expect": {
-        "op": "REPORT_PER_ROW",
-        "template_sheet": "雛形",
-        "name_col": "取引先"
-      }
+     "op": "SORT",
+     "order": "desc"
     }
-  ],
-  "items_v10": [
+   ],
+   "note": "2 段目が 1 段目の生成列を参照する依存つき"
+  },
+  {
+   "id": 108,
+   "book": "sample",
+   "text": "見出しを太字にして、それと在庫が5以下の行を赤くして",
+   "expect_plan": [
     {
-      "id": 1001,
-      "book": "format_map_book",
-      "text": "出納帳を様式シートの形に写して",
-      "expect": {
-        "op": "FORMAT_MAP",
-        "template_sheet": "様式"
-      }
+     "op": "BOLD",
+     "target": "row:1"
     },
     {
-      "id": 1002,
-      "book": "format_map_book",
-      "text": "様式シートの形式に合わせて、出納帳のデータを変換して",
-      "expect": {
-        "op": "FORMAT_MAP",
-        "template_sheet": "様式"
-      }
-    },
-    {
-      "id": 1003,
-      "book": "format_map_book",
-      "text": "出納帳の内容を、様式の決まったフォーマットで書き出して",
-      "expect": {
-        "op": "FORMAT_MAP",
-        "template_sheet": "様式"
-      }
-    },
-    {
-      "id": 1004,
-      "book": "format_map_book",
-      "text": "様式を使って出納帳のデータを別の様式に変換して",
-      "expect": {
-        "op": "FORMAT_MAP",
-        "template_sheet": "様式"
-      }
+     "op": "OUT_OF_VOCAB",
+     "about": "条件付き書式"
     }
-  ]
+   ]
+  }
+ ],
+ "items_v3": [
+  {
+   "id": 301,
+   "book": "invoice",
+   "vocab": {},
+   "text": "小計に数量×単価を入れて、税込み合計を一番下に出して（消費税10%）",
+   "expect": {
+    "clarify": false,
+    "factor": 1.1
+   }
+  },
+  {
+   "id": 302,
+   "book": "invoice",
+   "vocab": {},
+   "text": "税込み合計を一番下に出して（消費税8%で）",
+   "expect": {
+    "clarify": false,
+    "factor": 1.08
+   }
+  },
+  {
+   "id": 303,
+   "book": "invoice",
+   "vocab": {},
+   "text": "税込み合計を一番下に出して(1.1倍)",
+   "expect": {
+    "clarify": false,
+    "factor": 1.1
+   }
+  },
+  {
+   "id": 304,
+   "book": "invoice",
+   "vocab": {
+    "消費税": 1.1
+   },
+   "text": "消費税込みの合計を出して",
+   "expect": {
+    "clarify": false,
+    "factor": 1.1
+   }
+  },
+  {
+   "id": 305,
+   "book": "invoice",
+   "vocab": {},
+   "text": "税込み合計を一番下に出して",
+   "expect": {
+    "clarify": true
+   }
+  },
+  {
+   "id": 306,
+   "book": "sales",
+   "vocab": {},
+   "text": "金額の合計を最後に",
+   "expect": {
+    "clarify": false,
+    "factor": 1.0
+   }
+  },
+  {
+   "id": 307,
+   "book": "invoice",
+   "vocab": {},
+   "text": "税込み合計を出して（消費税１０％）",
+   "expect": {
+    "clarify": false,
+    "factor": 1.1
+   }
+  },
+  {
+   "id": 308,
+   "book": "invoice",
+   "vocab": {},
+   "text": "消費税10%引き後、8%の手数料込みで税込み合計を出して",
+   "expect": {
+    "clarify": true
+   }
+  },
+  {
+   "id": 309,
+   "book": "invoice",
+   "vocab": {
+    "軽減税率": 1.08
+   },
+   "text": "軽減税率込みの合計を一番下に",
+   "expect": {
+    "clarify": false,
+    "factor": 1.08
+   }
+  },
+  {
+   "id": 310,
+   "book": "invoice",
+   "vocab": {},
+   "text": "税率0.1で税込み合計を出して",
+   "expect": {
+    "clarify": false,
+    "factor": 1.1
+   }
+  }
+ ],
+ "items_v4": [
+  {
+   "id": 401,
+   "book": "sales",
+   "text": "3行目の前に1行挿入して",
+   "expect": {
+    "op": "INSERT_ROWS",
+    "at": 3,
+    "count": 1
+   }
+  },
+  {
+   "id": 402,
+   "book": "sample",
+   "text": "5行目に3行挿入して",
+   "expect": {
+    "op": "INSERT_ROWS",
+    "at": 5,
+    "count": 3
+   }
+  },
+  {
+   "id": 403,
+   "book": "invoice",
+   "text": "2行目の前に1行入れて",
+   "expect": {
+    "op": "INSERT_ROWS",
+    "at": 2,
+    "count": 1
+   }
+  },
+  {
+   "id": 404,
+   "book": "sample",
+   "text": "表にけい線を引いて",
+   "expect": {
+    "op": "DRAW_BORDERS"
+   }
+  },
+  {
+   "id": 405,
+   "book": "sales",
+   "text": "全体に格子の罫線を付けて",
+   "expect": {
+    "op": "DRAW_BORDERS"
+   }
+  },
+  {
+   "id": 406,
+   "book": "sample",
+   "text": "列幅を内容に合わせて自動調整して",
+   "expect": {
+    "op": "AUTOFIT"
+   }
+  },
+  {
+   "id": 407,
+   "book": "sales",
+   "text": "各列の幅を中身に合わせて広げて",
+   "expect": {
+    "op": "AUTOFIT"
+   }
+  },
+  {
+   "id": 408,
+   "book": "sales",
+   "text": "部門ごとにピボットテーブルで集計して",
+   "expect": {
+    "op": "PIVOT",
+    "group_col": "部門",
+    "value_col": "金額"
+   }
+  },
+  {
+   "id": 409,
+   "book": "sample",
+   "text": "商品別にピボットで売上をまとめて",
+   "expect": {
+    "op": "PIVOT",
+    "group_col": "商品",
+    "value_col": "売上"
+   }
+  },
+  {
+   "id": 410,
+   "book": "sales",
+   "text": "部門ごとに金額を集計して",
+   "expect": {
+    "op": "AGGREGATE",
+    "group_col": "部門",
+    "value_col": "金額"
+   }
+  },
+  {
+   "id": 411,
+   "book": "sample",
+   "text": "商品ごとの売上を集計表にして",
+   "expect": {
+    "op": "AGGREGATE",
+    "group_col": "商品",
+    "value_col": "売上"
+   }
+  }
+ ],
+ "items_v5": [
+  {
+   "id": 501,
+   "book": "sales",
+   "text": "税込み金額の列を追加して（消費税10%）",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "金額"
+    ],
+    "operator": "*"
+   }
+  },
+  {
+   "id": 502,
+   "book": "sales",
+   "text": "消費税10%を足した列を作って",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "金額"
+    ],
+    "operator": "*"
+   }
+  },
+  {
+   "id": 503,
+   "book": "sales",
+   "text": "金額に1.1を掛けた列を追加して",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "金額"
+    ],
+    "operator": "*"
+   }
+  },
+  {
+   "id": 504,
+   "book": "sales",
+   "text": "税込みの列を追加して（消費税10%）",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "金額"
+    ],
+    "operator": "*"
+   }
+  },
+  {
+   "id": 505,
+   "book": "sample",
+   "text": "原価に消費税10%を足した列を追加して",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "原価"
+    ],
+    "operator": "*"
+   }
+  },
+  {
+   "id": 506,
+   "book": "sample",
+   "text": "売上に1.1倍した列を作って",
+   "expect": {
+    "op": "COMPUTE_COLUMN",
+    "operands": [
+     "売上"
+    ],
+    "operator": "*"
+   }
+  }
+ ],
+ "items_v6": [
+  {
+   "id": 601,
+   "book": "sample",
+   "text": "金額が40000以上の行だけを別シートに抜き出して",
+   "expect": {
+    "op": "EXTRACT",
+    "col": "金額",
+    "cmp": "gte",
+    "value": 40000
+   }
+  },
+  {
+   "id": 602,
+   "book": "sample",
+   "text": "在庫が20未満の行を抜き出して",
+   "expect": {
+    "op": "EXTRACT",
+    "col": "在庫",
+    "cmp": "lt",
+    "value": 20
+   }
+  }
+ ],
+ "items_v7": [
+  {
+   "id": 701,
+   "book": "staff",
+   "kind": "scv",
+   "text": "部署列をすべて『本社』にして",
+   "expect": {
+    "op": "SET_COLUMN_VALUE",
+    "col": "部署",
+    "value": "本社"
+   }
+  },
+  {
+   "id": 702,
+   "book": "staff",
+   "kind": "scv",
+   "text": "氏名の列をすべて『契約終了』に書き換えて",
+   "expect": {
+    "op": "SET_COLUMN_VALUE",
+    "col": "氏名",
+    "value": "契約終了"
+   }
+  },
+  {
+   "id": 703,
+   "book": "invoice",
+   "kind": "total_factor",
+   "vocab": {
+    "消費税": 1.1
+   },
+   "text": "消費税込みの合計を一番下に出して",
+   "expect": {
+    "op": "APPEND_TOTAL",
+    "clarify": false,
+    "factor": 1.1
+   }
+  },
+  {
+   "id": 704,
+   "book": "invoice",
+   "kind": "total_factor",
+   "vocab": {},
+   "text": "税込みの合計を出して",
+   "expect": {
+    "op": "APPEND_TOTAL",
+    "clarify": true
+   }
+  },
+  {
+   "id": 705,
+   "book": "product_calc",
+   "kind": "target",
+   "text": "金額を数量×単価で埋めて",
+   "expect_plan": [
+    {
+     "op": "COMPUTE_COLUMN",
+     "operands": [
+      "数量",
+      "単価"
+     ],
+     "target": "金額"
+    }
+   ]
+  },
+  {
+   "id": 706,
+   "book": "product_calc",
+   "kind": "target",
+   "text": "単価と数量をかけて金額の列に入れて",
+   "expect_plan": [
+    {
+     "op": "COMPUTE_COLUMN",
+     "operands": [
+      "単価",
+      "数量"
+     ],
+     "target": "金額"
+    }
+   ]
+  }
+ ],
+ "items_v8": [
+  {
+   "id": 801,
+   "book": "sales",
+   "kind": "dedup",
+   "text": "部門が同じ行を重複として除いて",
+   "expect": {
+    "op": "DEDUP",
+    "keys": [
+     "部門"
+    ]
+   }
+  },
+  {
+   "id": 802,
+   "book": "staff",
+   "kind": "dedup",
+   "text": "氏名が同じ行を重複としてはじいて",
+   "expect": {
+    "op": "DEDUP",
+    "keys": [
+     "氏名"
+    ]
+   }
+  },
+  {
+   "id": 803,
+   "book": "staff",
+   "kind": "dedup",
+   "text": "氏名と部署の両方が同じ行を重複として除いて",
+   "expect": {
+    "op": "DEDUP",
+    "keys": [
+     "氏名",
+     "部署"
+    ]
+   }
+  }
+ ],
+ "items_v9": [
+  {
+   "id": 901,
+   "book": "invoice_report",
+   "text": "売上シートの各行から、雛形シートを使って取引先ごとに請求書を作って",
+   "expect": {
+    "op": "REPORT_PER_ROW",
+    "template_sheet": "雛形",
+    "name_col": "取引先"
+   }
+  },
+  {
+   "id": 902,
+   "book": "invoice_report",
+   "text": "雛形シートの形式で、取引先ごとに見積書を1枚ずつ作って",
+   "expect": {
+    "op": "REPORT_PER_ROW",
+    "template_sheet": "雛形",
+    "name_col": "取引先"
+   }
+  },
+  {
+   "id": 903,
+   "book": "invoice_report",
+   "text": "取引先ごとに雛形を使って領収書を出して",
+   "expect": {
+    "op": "REPORT_PER_ROW",
+    "template_sheet": "雛形",
+    "name_col": "取引先"
+   }
+  },
+  {
+   "id": 904,
+   "book": "invoice_report",
+   "text": "売上の行ごとに雛形シートへ転記して帳票を作って（取引先名でシートを分ける）",
+   "expect": {
+    "op": "REPORT_PER_ROW",
+    "template_sheet": "雛形",
+    "name_col": "取引先"
+   }
+  }
+ ],
+ "items_v10": [
+  {
+   "id": 1001,
+   "book": "format_map_book",
+   "text": "出納帳を様式シートの形に写して",
+   "expect": {
+    "op": "FORMAT_MAP",
+    "template_sheet": "様式"
+   }
+  },
+  {
+   "id": 1002,
+   "book": "format_map_book",
+   "text": "様式シートの形式に合わせて、出納帳のデータを変換して",
+   "expect": {
+    "op": "FORMAT_MAP",
+    "template_sheet": "様式"
+   }
+  },
+  {
+   "id": 1003,
+   "book": "format_map_book",
+   "text": "出納帳の内容を、様式の決まったフォーマットで書き出して",
+   "expect": {
+    "op": "FORMAT_MAP",
+    "template_sheet": "様式"
+   }
+  },
+  {
+   "id": 1004,
+   "book": "format_map_book",
+   "text": "様式を使って出納帳のデータを別の様式に変換して",
+   "expect": {
+    "op": "FORMAT_MAP",
+    "template_sheet": "様式"
+   }
+  }
+ ],
+ "items_v11": [
+  {
+   "id": 1101,
+   "book": "split_book",
+   "text": "URL列を改行ごとに別のセルに分けて",
+   "expect": {
+    "op": "SPLIT_CELL",
+    "col": "URL",
+    "sep": "改行"
+   }
+  },
+  {
+   "id": 1102,
+   "book": "split_book",
+   "text": "備考に詰まっている値をカンマで区切って別の列に分けて",
+   "expect": {
+    "op": "SPLIT_CELL",
+    "col": "備考",
+    "sep": ","
+   }
+  },
+  {
+   "id": 1103,
+   "book": "split_book",
+   "text": "1セルにまとめて入っているURLを1件ずつ別セルにして",
+   "expect": {
+    "op": "SPLIT_CELL",
+    "col": "URL",
+    "sep": "改行"
+   }
+  }
+ ]
 }

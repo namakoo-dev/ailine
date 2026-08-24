@@ -843,3 +843,43 @@ Sub FillFormatMapSheet(oDoc As Object, templateSheet As String, srcSheet As Stri
         Next c
     Next ri
 End Sub
+
+' SplitColumn ── 1セルに詰まった複数値を、区切りで右の新しい列へ割る（SPLIT_CELL）。
+'  ★ 新しい見出し名は Python 側が全部決めて namesCsv で渡す（Basic 側で名前を作らない）。
+'  ★ 元の列は残す ── 消すと『繋ぎ直して元と一致する』検算ができなくなる。
+'  ★ On Error / Collection は使わない（例外駆動の制御は LO を固める。DedupRows のコメント参照）。
+Sub SplitColumn(oDoc As Object, headerRow As Integer, colIdx As Integer, sep As String, namesCsv As String)
+    Dim oSheet As Object, oCell As Object
+    Dim lastRow As Long, lastCol As Integer, i As Long, k As Integer
+    Dim names() As String, parts() As String
+    Dim baseCol As Integer
+    oSheet = oDoc.Sheets.getByIndex(0)
+    names = Split(namesCsv, ",")
+
+    lastRow = headerRow + 1
+    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
+        lastRow = lastRow + 1
+    Loop
+    lastRow = lastRow - 1
+    lastCol = 0
+    Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
+        lastCol = lastCol + 1
+    Loop
+    If lastRow < headerRow + 1 Then Exit Sub
+    baseCol = lastCol   ' データの右端の次から新しい列を作る
+
+    For k = 0 To UBound(names)
+        oSheet.getCellByPosition(baseCol + k, headerRow).setString(names(k))
+    Next k
+
+    For i = headerRow + 1 To lastRow
+        parts = Split(oSheet.getCellByPosition(colIdx, i).getString(), sep)
+        For k = 0 To UBound(names)
+            If k <= UBound(parts) Then
+                oSheet.getCellByPosition(baseCol + k, i).setString(Trim(parts(k)))
+            Else
+                oSheet.getCellByPosition(baseCol + k, i).setString("")
+            End If
+        Next k
+    Next i
+End Sub

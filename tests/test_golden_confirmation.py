@@ -58,6 +58,10 @@ _add("dedup", "DEDUP", {"keys": ["商品"]})
 _add("dedup_multi_key", "DEDUP", {"keys": ["商品", "金額"]})
 _add("report_per_row", "REPORT_PER_ROW", {"template_sheet": "雛形", "name_col": "取引先"})
 _add("format_map", "FORMAT_MAP", {"template_sheet": "様式"})
+_add("split_cell_newline", "SPLIT_CELL", {"col": "URL", "sep": chr(10),
+                                           "_new_cols": ["URL_1", "URL_2"]})
+_add("split_cell_comma", "SPLIT_CELL", {"col": "備考", "sep": ",",
+                                         "_new_cols": ["備考_1", "備考_2"]})
 
 
 def _case_ids():

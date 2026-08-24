@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "金額",
+    "sep": ",",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "列『金額』に区切り『カンマ』が見つからないため、分けられません"
+}
