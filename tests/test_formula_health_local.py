@@ -85,7 +85,13 @@ def test_set_column_value_nonnumeric_breaks_formula_via_real_basrun(tmp_path, mo
 
         assert rc == 0, captured.out
         # ★ C9: 単発の ✓ バナーも読み戻し後の1行に統合された。
-        assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out, captured.out
+        # ★ 2026-08-24（決裁③・✓ の絶対性）: 疑わしい ⚠ が 1 件でも在れば ✓ は名乗らず
+        #   △ に降りる。この試験はまさに ⚠（数式が壊れた疑い）を出す検体なので、
+        #   期待は ✓ ではなく **△ と、⚠ を先に見ろという誘導**になった。
+        #   ★ 契約を緩めたのではなく付け替えた ── ✓ を名乗らないことを明示で縛る。
+        assert "✓" not in captured.out, f"⚠ が在るのに ✓ を名乗った: {captured.out}"
+        assert "宣言どおりの変化を確認しました（適用後に読み戻して確認: " in captured.out, captured.out
+        assert "ただし ⚠" in captured.out, captured.out
         assert "★ 疑わしい: 適用後にエラー値のセルが増えました" in captured.out, captured.out
         assert "#VALUE!" in captured.out, captured.out
         assert "（確認）列『原価』は元は数値でしたが" in captured.out, captured.out

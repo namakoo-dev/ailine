@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import openpyxl
 
-from ailine_core import inspection, multifile, total_row
+from ailine_core import compare_blocked, inspection, multifile, total_row
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 
 # ★ 書き手の印。stack.py の CREATOR_MARKS が「将来の extract を先取りして凍結」した
@@ -138,6 +138,9 @@ class FileExtractResult:
     mismatches: list = field(default_factory=list)
     sheet_fallback: tuple | None = None   # (wanted, used) ── 基準名のシートが無く1枚目へ落ちた時だけ
     findings: list = field(default_factory=list)   # list[inspection.Finding]（M2.5・stack と同じ線）
+    # ★ 2026-08-24 第三波 H3: 数値比較から落ちた「数字に見える文字列」の件数と例。
+    #   判定には一度も使わない（compare_blocked の docstring）── 開示のためだけ。
+    blocked: dict | None = None
 
 
 def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: int,
@@ -199,9 +202,16 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
 
         match_fn = predicate(cmp, value)
         matched_rows, unmatched_rows = [], []
+        unmatched_cells = []
         for r in candidate_rows:
             cell = ws.cell(row=r, column=value_col).value if value_col else None
-            (matched_rows if match_fn(cell) else unmatched_rows).append(r)
+            if match_fn(cell):
+                matched_rows.append(r)
+            else:
+                unmatched_rows.append(r)
+                unmatched_cells.append(cell)
+        # ★ 開示専用（判定は上で既に終わっている・ここで結果は 1 ビットも変えない）。
+        blocked = compare_blocked.scan_column(unmatched_cells, cmp)
 
         rows = []
         for r in matched_rows:
@@ -246,6 +256,7 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
                                   rows=rows, rows_matched=len(matched_rows),
                                   rows_unmatched=len(unmatched_rows),
                                   excluded=verdict.excluded, mismatches=verdict.mismatches,
-                                  sheet_fallback=sheet_fallback, findings=findings)
+                                  sheet_fallback=sheet_fallback, findings=findings,
+                                  blocked=blocked)
     finally:
         wb.close()

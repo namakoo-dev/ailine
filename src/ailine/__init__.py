@@ -119,6 +119,7 @@ from ailine_core.date_compare import (   # noqa: F401  ← 試験と呼び出し
 )
 from ailine_core.chart_check import check_chart_series, charts_by_sheet   # ★ グラフ段: 事後条件②（種別+参照の検証）+ operator10 ②（シート別グラフ数）
 from ailine_core.chart_range import chart_data_last_row   # ★ operator10 ①: グラフ範囲から合計行を除く
+from ailine_core import compare_blocked
 from ailine_core.column_type import column_is_all_numeric, value_parses_as_number   # ★ operator10 ④: 型の機械決定
 from ailine_core.xml_readback import numeric_cells_became_strings   # ★ operator10 ⑤: 数式セルの偽アラーム防止
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
@@ -2526,6 +2527,13 @@ def chain_target_sheet(op: str, task: str, derived_sheets, sheets, headers) -> s
     return derived_sheets[-1]["sheet"]
 
 
+# ★ 道具自身の構造語 ── 依頼者がこれを言っても「列を名指しした」ことにはならない
+#   （2026-08-24: 『集計シートで』の『シート』を捏造列と誤断した実測から）。
+STRUCTURAL_NOUNS = frozenset({
+    "シート", "列", "行", "表", "セル", "ブック", "ファイル", "タブ", "見出し", "項目",
+})
+
+
 def fabricated_subject_refusal(op: str, resolved: dict, book_meta: dict, task: str,
                                 sheet: str | None) -> str | None:
     """依頼者が名指しした列がブックに無いのに、機械が**別の実在列で実行しようとして**
@@ -2577,8 +2585,24 @@ def fabricated_subject_refusal(op: str, resolved: dict, book_meta: dict, task: s
     #   実際に起きた事故の形だけに絞る: **「〜で」で名指しされた語**。
     #   ★ 正直に残す穴: 「金額を並べ替えて」（を）は掴めない ── 「合計を出して」と
     #   同じ形になり、機械では区別できないため。同じ事故が『を』で再来したら測り直す。
+    # ★ 2026-08-24 第三波の実測（実機 CHART が赤くなって発覚）: この関所は**列しか
+    #   知らなかった**。「集計シートで部門ごとの棒グラフを作って」の『シート』を
+    #   捏造列として掴み、正しい依頼を断っていた（判定に要る三項のうち『実体』が
+    #   列だけで、シート名と道具自身の構造語が入っていなかった）。
+    #   ★ 実体の第三項を足す ── ① 道具の構造語（列でも捏造でもない）
+    #   ② ブックに実在するシート名（『集計シート』のように接尾辞つきで言われる）。
+    sheet_names = set(book_meta.get("sheets") or [])
+    def _is_real_elsewhere(w: str) -> bool:
+        if w in STRUCTURAL_NOUNS:
+            return True
+        if w in sheet_names:
+            return True
+        for suffix in ("シート", "表", "タブ"):
+            if w.endswith(suffix) and w[: -len(suffix)] in sheet_names:
+                return True
+        return False
     ghosts = [w for w in left
-               if w not in headers and (w + "で") in task]
+               if w not in headers and (w + "で") in task and not _is_real_elsewhere(w)]
     if not ghosts:
         return None      # 無指定・修飾語だけ（②のまま・従来どおり通す）
     ghost = "・".join(f"『{w}』" for w in ghosts)
@@ -5659,12 +5683,19 @@ def check_extract(path: Path, args: dict, header_row: int = 1,
 
         total = 0
         expected_rows = []
+        unmatched_cells = []
         r = header_row + 1
         while src.cell(row=r, column=1).value not in (None, ""):
             total += 1
-            if match(src.cell(row=r, column=col_idx).value):
+            cell_v = src.cell(row=r, column=col_idx).value
+            if match(cell_v):
                 expected_rows.append([src.cell(row=r, column=c).value for c in range(1, last_col + 1)])
+            else:
+                unmatched_cells.append(cell_v)
             r += 1
+        # ★ 第三波 H3（2026-08-24）: 開示専用 ── 判定は上で終わっており 1 ビットも変えない。
+        #   フォルダ経路（extract_multi）と**同じ器官**を呼ぶ（片配線への備え）。
+        blocked = compare_blocked.scan_column(unmatched_cells, cmp)
         if total == 0:
             return "fail", _ZERO_TARGET_REASON
 
@@ -5676,6 +5707,7 @@ def check_extract(path: Path, args: dict, header_row: int = 1,
             r += 1
 
     denom = f"{total}行中{len(expected_rows)}行が一致"
+    denom += compare_blocked.disclosure_inline(blocked, col_name)
     if len(out_rows) != len(expected_rows):
         return "fail", f"{denom} → 出力は{len(out_rows)}行（行数が期待と不一致）"
     for i, (want, got) in enumerate(zip(expected_rows, out_rows), start=1):
@@ -9721,6 +9753,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     # ⑥ ファイルごとの評価（★ 一括検出: 欠陥が出ても止めず全部集める）。
     skipped, files_json, excluded_detail, mismatches = [], [], [], []
     sheet_fallbacks, matched_rows_all = [], []
+    blocked_total, blocked_samples = 0, []   # ★ 第三波 H3: 数字に見える文字列（開示専用）
     all_findings = []   # ★ M2.5: 検分シートの所見（inspection.Finding）
     file_sheet_map = []   # ★ M2.5: [(ファイル名, 使ったシート, 備考), ...]
     for p in candidates:
@@ -9736,6 +9769,11 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             file_sheet_map.append((r.name, sheet_used, f"取れなかった（{r.reason}）"))
             continue
         file_sheet_map.append((r.name, sheet_used, "並べ替えて照合" if r.reordered else ""))
+        if r.blocked:
+            blocked_total += r.blocked["count"]
+            for sm in r.blocked["samples"]:
+                if sm not in blocked_samples:
+                    blocked_samples.append(sm)
         for values, formats, src_row in r.rows:
             matched_rows_all.append((values, formats, r.name, src_row))
         files_json.append({"name": r.name, "rows_matched": r.rows_matched,
@@ -9806,6 +9844,17 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 print(json.dumps({"out": str(out), "postcondition": post,
                                   "written": False}, ensure_ascii=False))
             else:
+                # ★ 2026-08-24（第三波 H1）: 数字の差だけを出して**どのファイルが原因か
+                #   一言も言わない**のが盲検の致命だった（scan/stack は名指しするのに）。
+                #   名前と理由は skipped に既に在る ── 在るのに使っていなかった。
+                #   ★ 理由を**結論より先に**出す（読む順序が原因→結果になるように）。
+                for sk in skipped[:5]:
+                    print(f"  ⚠ {sk['name']}: 照合できませんでした（{sk['reason']}）")
+                if len(skipped) > 5:
+                    print(f"  … 他 {len(skipped) - 5} 件")
+                if skipped:
+                    print("  → この冊の行が『元』に数えられ、出力には現れないため差が出ます")
+                    print("     見出しの行や列名を揃えるか、この冊を別フォルダへ移してお試しください")
                 print(f"⚠ 事後条件が破れた: {where}  元 {multifile_stack.fmt_num(m['source'])} / "
                       f"出力(書いた直後) {multifile_stack.fmt_num(m['output'])}")
                 print(f"（{out.name} は書き込んでいません。元フォルダも変更していません）")
@@ -9848,7 +9897,9 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
           "files": files_json, "skipped": skipped, "self_excluded": self_excluded,
           "sheet_fallbacks": sheet_fallbacks, "excluded_detail": excluded_detail,
           "mismatches": mismatches, "total_word_warnings": total_word_warnings,
-          "rebuilt_own_output": rebuilt_own_output}
+          "rebuilt_own_output": rebuilt_own_output,
+          "blocked_stringy": ({"count": blocked_total, "samples": blocked_samples[:3]}
+                               if blocked_total else None)}
     if as_json:
         print(json.dumps({"out": str(out), "written": True,
                           "condition": {"column": col, "cmp": cmp, "value": value},
@@ -9861,6 +9912,12 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         say(line)
     say(f"{denominator} ファイル中 {matched_files} 照合 → "
         f"{matched_files} 中 {contributing_files} ファイルで計 {total_matched} 行一致")
+    # ★ 第三波 H3（盲検）: 金額が文字列（"1,000" / △1,500 / 全角）の実物で『計 0 行一致』と
+    #   だけ言って終わっていた。判定は変えない ── 理由を言う口が無かっただけ。
+    for line in compare_blocked.disclosure_lines(
+            {"count": blocked_total, "samples": blocked_samples[:3]} if blocked_total else None,
+            col, total_matched):
+        say(line)
     # ★ D6 差し戻し（実弾検分・2026-08-21）: 正常なファイルは名指ししない ── 名指しは
     #   異常のあるファイル（取れなかった／閉じる検査の不一致／シート fallback）だけ。
     #   正常分（並べ替え・合計行の除外・行の完全会計）は 1 行の集計に畳む。

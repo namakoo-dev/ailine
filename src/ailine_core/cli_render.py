@@ -391,6 +391,20 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
             lines.append(f"⚠ {m.get('name')} の行が出力に 1 行もありません"
                          "（フォルダには在るのに積まれていない ── 見出しの綴りや"
                          "列の欠けを確認してください）")
+        elif kind == "row_count":
+            # ★ 2026-08-24 第三波: 分母を入力側から作るようにした時に生まれた kind。
+            #   枝の追加を忘れていて、生の dict がそのまま人に出ていた（下の
+            #   フォールバックが設計どおり拾った ── 黙る不合格にはならなかった）。
+            #   ★ 原因（missing_source）が既に名指し済みなら、それが差の説明だと繋ぐ。
+            gap = abs((m.get("source") or 0) - (m.get("output") or 0))
+            named = [x.get("name") for x in mismatches
+                     if x.get("kind") == "missing_source" and x.get("name")]
+            if named:
+                lines.append(f"→ 行数の差 {gap} 行は、上で名指しした {len(named)} 冊が"
+                             "積まれていないためです")
+            else:
+                lines.append(f"⚠ 行数が合いません: 元 {m.get('source')} / "
+                             f"出力 {m.get('output')}（差 {gap} 行・原因は特定できていません）")
         elif kind == "total_word":
             # ★ operator 盲検7度目 修正2（第二の独立検出器）: 再演検分の直し ── この分岐が
             #   無いと exit 5 なのに理由が1行も出ない「黙る不合格」になっていた（憲法1違反）。
