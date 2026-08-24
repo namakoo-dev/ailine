@@ -1756,9 +1756,11 @@ def test_check_excel_lock_detects_tilde_dollar_lock_file(tmp_path):
     book = tmp_path / "book.xlsx"
     book.write_bytes(b"x")
     (tmp_path / "~$book.xlsx").write_bytes(b"lock")
-    reason = ailine.check_excel_lock(book)
-    assert reason is not None
-    assert "ロックファイル" in reason
+    # ★ 2026-08-24: 戻り値を (種別, 説明) にした ── 「見たもの」と「解釈」を分けるため
+    #   （旧版はどちらの兆候でも「Excel で開かれています」と原因を断定していた）。
+    kind, detail = ailine.check_excel_lock(book)
+    assert kind == "excel", "ロックファイルは Excel と断定してよい唯一の兆候"
+    assert "ロックファイル" in detail
 
 def test_check_excel_lock_detects_exclusively_opened_file(tmp_path):
     # ★ 実際の Excel の排他 open を模す。Python の open() 二重呼び出しは Windows
@@ -1779,8 +1781,12 @@ def test_check_excel_lock_detects_exclusively_opened_file(tmp_path):
     assert handle not in (0, -1)
     try:
         reason = ailine.check_excel_lock(book)
-        assert reason is not None
-        assert "ロック" in reason
+        # ★ 2026-08-24: 排他 open は「書けない」ことしか示さない ── Excel かどうかは
+        #   一度も見ていないので、原因を断定してはいけない（実測: ACL で書き込みを
+        #   拒否しただけのファイルに「Excel で開かれています」と言っていた）。
+        kind, detail = reason
+        assert kind == "unwritable", "排他 open を Excel と断定した"
+        assert "書き込めません" in detail
     finally:
         ctypes.windll.kernel32.CloseHandle(handle)
 
@@ -1802,7 +1808,10 @@ def test_cmd_run_exits_5_when_excel_lock_detected(tmp_path, monkeypatch, capsys)
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 5
-    assert "Excel で開かれています" in captured.out
+    # ★ 2026-08-24: ロックファイルが在る時は Excel と断定してよい（唯一の兆候）。
+    #   ただし文言は「見たもの」から始める ── 断定は次の行に分ける。
+    assert "ロックファイル" in captured.out
+    assert "Excel で開いています" in captured.out
     assert called["n"] == 0   # LO 起動・翻訳より前に止まっている
 
 
@@ -2163,35 +2172,77 @@ def test_acquire_and_release_run_lock_roundtrip(tmp_path):
     ailine.release_run_lock(lock)
     assert not lock.exists()
 
-def test_acquire_run_lock_fails_when_held_by_live_other_process(tmp_path, monkeypatch):
-    lock = tmp_path / "run.lock"
-    other_pid = 999999   # 実在しないふりをする pid（_pid_alive を差し替えて『生きている』にする）
-    lock.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
-                                 .isoformat(timespec="seconds")}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: pid == other_pid)
-    acquired, msg = ailine.acquire_run_lock(lock)
-    assert acquired is False
-    assert "別の ailine が実行中です" in msg
-    assert lock.exists()   # 奪取していない
+def _hold_lock_in_child(lock_path):
+    """別プロセスに OS ロックを持たせる（生きている持ち主を本物で作る）。"""
+    import subprocess
+    src = str(Path(__file__).resolve().parent.parent / "src")
+    parts = [
+        "import sys",
+        "sys.path.insert(0, r%r)" % src,
+        "import ailine, time",
+        "from pathlib import Path",
+        "ok, _ = ailine.acquire_run_lock(Path(r%r))" % str(lock_path),
+        "print(chr(79)+chr(75) if ok else chr(78)+chr(71), flush=True)",
+        "time.sleep(120)",
+    ]
+    code = chr(10).join(parts)
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                             text=True, encoding="utf-8")
+    assert proc.stdout.readline().strip() == "OK", "子がロックを取れていない"
+    return proc
 
-def test_acquire_run_lock_reclaims_when_pid_is_dead(tmp_path, monkeypatch):
-    lock = tmp_path / "run.lock"
-    lock.write_text(json.dumps({"pid": 999999, "ts": ailine.datetime.now(ailine.timezone.utc)
-                                 .isoformat(timespec="seconds")}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: False)
-    acquired, msg = ailine.acquire_run_lock(lock)
-    assert acquired is True
-    info = json.loads(lock.read_text(encoding="utf-8"))
-    assert info["pid"] == os.getpid()
 
-def test_acquire_run_lock_reclaims_when_stale_by_age(tmp_path, monkeypatch):
-    import datetime as _dt
+def test_acquire_run_lock_fails_when_held_by_live_other_process(tmp_path):
+    """★ 2026-08-24: 判定を OS の排他ロックに置き換えた。持ち主は**本物のプロセス**で作る
+       （旧版は _pid_alive を差し替えて『生きているふり』をさせていたが、その偽物が
+       本物の欠陥を隠していた ── 記録した image が python.exe で、あらゆる python に
+       一致するため PID の使い回しで死んだロックが生きて見えていた）。"""
     lock = tmp_path / "run.lock"
-    old_ts = (ailine.datetime.now(ailine.timezone.utc) - _dt.timedelta(hours=1)).isoformat(timespec="seconds")
-    lock.write_text(json.dumps({"pid": 999999, "ts": old_ts}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: True)   # pid 自体は生きている
+    child = _hold_lock_in_child(lock)
+    try:
+        acquired, msg = ailine.acquire_run_lock(lock)
+        assert acquired is False
+        assert "別の ailine が実行中です" in msg
+        assert "待って" in msg, f"次の一手が無い: {msg}"
+    finally:
+        child.kill(); child.wait(timeout=10)
+        ailine.release_run_lock(lock)
+
+
+def test_acquire_run_lock_reclaims_when_holder_dies(tmp_path):
+    """★ 居座りの根治: 持ち主が死んだら OS が解放する ── 推測が要らない。
+       実測（盲検の使い手が 2 回踏んだ）: 死んだ PID のロックで exit 6 に止められていた。"""
+    lock = tmp_path / "run.lock"
+    child = _hold_lock_in_child(lock)
+    child.kill(); child.wait(timeout=10)
+    import time
+    time.sleep(0.5)
     acquired, msg = ailine.acquire_run_lock(lock)
-    assert acquired is True   # 30分超の age で stale 判定・奪取できる
+    assert acquired is True, f"死んだ持ち主のロックが居座った: {msg}"
+    ailine.release_run_lock(lock)
+
+
+def test_lock_is_released_on_release_and_reusable(tmp_path):
+    lock = tmp_path / "run.lock"
+    assert ailine.acquire_run_lock(lock)[0] is True
+    ailine.release_run_lock(lock)
+    assert lock.exists() is False
+    assert ailine.acquire_run_lock(lock)[0] is True
+    ailine.release_run_lock(lock)
+
+
+def test_same_process_can_reacquire(tmp_path):
+    """同一プロセス内の二度取りは自分自身なので通す（テスト等で頻出）。"""
+    lock = tmp_path / "run.lock"
+    assert ailine.acquire_run_lock(lock)[0] is True
+    assert ailine.acquire_run_lock(lock)[0] is True
+    ailine.release_run_lock(lock)
+
+
+# ★ 廃止した契約（2026-08-24・意図的）: 「30 分を超えたロックは期限切れとみなして奪う」。
+#   OS ロックなら死んだプロセスの分は必ず解放されるので、時間による奪取は
+#   **長く走っている正当な run のロックを奪う**危険だけが残る。だから消した。
+
 
 def test_acquire_run_lock_reclaims_own_leftover_lock_same_pid(tmp_path):
     # ★ 同一プロセス内で前回の呼び出しが解放し損ねた場合も自己修復する
@@ -2215,10 +2266,10 @@ def test_cmd_run_exits_6_when_run_lock_busy(tmp_path, monkeypatch, capsys):
     book = _book(tmp_path, [["a", 1], ["b", 2]])
     lock_path = tmp_path / "run.lock"
     monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
-    other_pid = 999999
-    lock_path.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
-                                     .isoformat(timespec="seconds")}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: pid == other_pid)
+    # ★ 2026-08-24: 偽の PID を書いて _pid_alive を差し替える手は**もう通じない**
+    #   （判定を OS の排他ロックに移したため）── それがこの直しの証拠でもある。
+    #   本物の持ち主を別プロセスで立てる。
+    child = _hold_lock_in_child(lock_path)
     called = {"n": 0}
     monkeypatch.setattr(ailine, "check_excel_lock", lambda b: called.__setitem__("n", called["n"] + 1) or None)
     argv = run_argv(
@@ -2227,6 +2278,7 @@ def test_cmd_run_exits_6_when_run_lock_busy(tmp_path, monkeypatch, capsys):
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
     rc = ailine.main(argv)
     captured = capsys.readouterr()
+    child.kill(); child.wait(timeout=10)
     assert rc == 6
     assert "別の ailine が実行中です" in captured.out
     assert called["n"] == 0   # ロックで止まった＝本体は一切呼ばれていない

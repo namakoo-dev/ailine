@@ -77,7 +77,10 @@ def test_translate_task_transport_failure_is_recorded_as_translate_error(tmp_pat
     monkeypatch.setattr(ailine, "ollama_generate_json", boom)
     rc, entries = _run(tmp_path, monkeypatch, task="何かして")
     capsys.readouterr()
-    assert rc == 3
+    # ★ 2026-08-24（初回体験の盲検）: ollama 不通・モデル未取得は
+    #   「語彙の問題」ではなく「環境の問題」── 3(CLARIFY) から
+    #   9(実行の前提が無い) へ移した。README の表とも食い違っていた。
+    assert rc == ailine.EXIT_ENVIRONMENT
     assert entries[0]["failure_kind"] == "語彙外/translate_error", entries[0]
 
 
@@ -90,7 +93,14 @@ def test_translate_error_refusal_does_not_claim_vocab_mismatch(tmp_path, monkeyp
     monkeypatch.setattr(ailine, "ollama_generate_json", boom)
     rc, _entries = _run(tmp_path, monkeypatch, task="何かして")
     out = capsys.readouterr().out
-    assert rc == 3
+    # ★ 2026-08-24（初回体験の盲検）: ollama 不通・モデル未取得は
+    #   「語彙の問題」ではなく「環境の問題」── 3(CLARIFY) から
+    #   9(実行の前提が無い) へ移した。README の表とも食い違っていた。
+    assert rc == ailine.EXIT_ENVIRONMENT
     assert "語彙外" not in out, f"translate_error なのに語彙外と表示した: {out}"
     assert "照合できませんでした" not in out, f"照合を試みていないのに照合失敗と言った: {out}"
-    assert "翻訳に失敗" in out, f"翻訳失敗の理由が出ていない: {out}"
+    # ★ 文言も変えた: 「翻訳に失敗」は道具の内側の言葉で、使う側の次の手にならない。
+    #   原因が環境なら、環境の直し方だけを言う（ops も言い換えも出さない）。
+    assert "ollama" in out, f"何が起きたか分からない: {out}"
+    assert "ailine doctor" in out, f"次の一手が無い: {out}"
+    assert "言い換え" not in out, f"環境の問題に「言い換えろ」と案内した: {out}"

@@ -73,6 +73,10 @@ from pathlib import Path
 #   既存の 3(CLARIFY)/4(忠実度)/5(verify)/6(ロック)/7(上書き関所)/8(自由生成の関所) と
 #   argparse の 2 を避けて 9 を割り当てる。
 EXIT_ENVIRONMENT = 9
+# ★ 2026-08-24（初回体験の盲検・致命②）: 5 は golden 表と検体で「書き込めない」に
+#   凍結済み。README の表が verify 専用の意味（検算の不一致）しか書いておらず、
+#   同じ番号に 2 つの意味が同居していた ── 番号でなく**表**を実態に合わせた。
+EXIT_WRITE_BLOCKED = 5
 
 
 def exit_environment(message: str):
@@ -6674,14 +6678,20 @@ def check_excel_lock(book: Path) -> str | None:
        ＝どちらかに該当したら『開かれている可能性』として止める。誤検知より、
        書き込み中の文書を壊さない方を優先する）。run の最初（LO 起動・翻訳より前）
        に呼ぶ（--copy 時も含め常に同じ判定にする＝整合性の観点で経路を分けない）。"""
+    # ★ 2026-08-24（初回体験の盲検・致命②）: 旧版はどちらの兆候でも
+    #   「Excel で開かれています」と**原因を断定**していた。実測: Windows の ACL で
+    #   書き込みを拒否しただけのファイル（Excel は 1 つも動いていない）に対して
+    #   「Excel で開かれています。閉じてから実行してください」と言った。
+    #   使う側はタスクマネージャを開いて Excel を探し、見つからず、次の手を失う。
+    #   ★ 見たものと、その解釈を分ける ── 断定できるのはロックファイルが在る時だけ。
     lock_file = book.parent / f"~${book.name}"
     if lock_file.exists():
-        return f"ロックファイル {lock_file.name} が存在します"
+        return ("excel", f"Excel のロックファイル {lock_file.name} が在ります")
     try:
         with open(book, "r+b"):
             pass
     except PermissionError:
-        return "書き込みロックされています（他のアプリが開いている可能性）"
+        return ("unwritable", "このファイルに書き込めません")
     except OSError:
         return None   # その他の I/O エラーはここでは判定しない（保守的・誤検知回避）
     return None
@@ -6950,8 +6960,15 @@ def _pid_alive(pid: int, expect_image: str | None = None) -> bool:
 
 
 def _read_lock_info(path: Path) -> dict | None:
+    """ロックファイルの**説明**（誰が持っているか）を読む。判定には使わない。
+
+    ★ 2026-08-24: ファイル全体を読むと、末尾に掛けた OS の範囲ロックを跨いで
+    PermissionError になる（Windows は自分からも読めなくする）。実測では、
+    盲検の画面に `pid=?・?` と出て**説明が説明になっていなかった**。
+    説明が書かれている範囲だけを読む。
+    """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(_lock_info_path(path).read_text(encoding="utf-8")) or None
     except Exception:
         return None
 
@@ -6979,50 +6996,130 @@ def _lock_is_stale(info: dict | None) -> bool:
     return False
 
 
-def acquire_run_lock(path: Path | None = None) -> tuple:
-    """(acquired: bool, message: str|None)。O_EXCL でグローバル実行ロックを取る。
-       ★ W8b 項目6: 基盤の LibreOffice は単一インスタンス(port 2002)前提のため、
-       ブック単位でなく ailine run 全体で1本にする。stale（pid が既に無い/自分自身/
-       30分超）なら奪取して新規取得する。"""
-    p = path or RUN_LOCK_FILE
-    p.parent.mkdir(parents=True, exist_ok=True)
-    # ★ 2026-08-24: 「誰のロックか」を焼く（PID の使い回しで居座るのを防ぐ第三項）。
-    info = {"pid": os.getpid(), "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "image": own_image_name()}
+# ★ 2026-08-24（初回体験の盲検・致命③）: ロックの持ち主判定を **OS に持たせる**。
+#
+# 経緯: 旧版は「PID が生きているか」で判定していた。同じ日の夕方に
+#   「誰のロックか（実行ファイル名）」を焼く三項化をしたが、**まだ足りなかった** ──
+#   記録したのは `python.exe` で、それはこの機械で走る**あらゆる python** に一致する。
+#   テストで python を大量に起動するので PID の使い回しが日常的に起き、
+#   死んだ ailine のロックが「生きている」と誤判定されて exit 6 で人を止めた
+#   （盲検の使い手が 2 回踏んだ・どちらも PID は実在しなかった）。
+#
+# ★ 根治: 生死を**推測しない**。ロックファイルに OS の排他ロックを掛け、
+#   プロセスが死んだら OS が必ず解放する。掛けられれば空き、掛けられなければ誰かが居る。
+#   pid/ts/image は今も書くが、それは**人へ見せる説明**専用で、判定には一切使わない。
+_RUN_LOCK_HANDLE = None   # プロセスの生存期間ずっと開いておく（閉じると解放される）
+# ★ 鍵と説明書きを**別ファイル**にする。同じファイルでロックと読み書きを両立させようと
+#   すると、Windows の msvcrt.locking が掛けた範囲を自分からも読めなくするため、
+#   バイト位置の細工が要って複雑になった（真夜中に一度そこへ迷い込んだ）。
+#   run.lock = OS の鍵だけ / run.lock.info = 人が読む説明だけ。どちらも素直になる。
+def _lock_info_path(lock_path) -> Path:
+    return Path(str(lock_path) + ".info")
 
-    def _try_create() -> bool:
-        try:
-            fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            return False
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(info))
-        return True
 
-    if _try_create():
-        return True, None
-
-    existing = _read_lock_info(p)
-    if not _lock_is_stale(existing):
-        pid = existing.get("pid") if existing else "?"
-        ts = existing.get("ts") if existing else "?"
-        return False, f"別の ailine が実行中です（pid={pid}・{ts}）"
-
+def _try_os_lock(fd) -> bool:
+    """fd に排他ロックを掛けられたか。掛けられなければ誰かが持っている。"""
     try:
-        p.unlink()
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _release_os_lock(fd) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
     except OSError:
         pass
-    if _try_create():
-        return True, None
-    return False, "別の ailine が実行中です（ロック取得の競合）"
+
+
+def acquire_run_lock(path: Path | None = None) -> tuple:
+    """(acquired: bool, message: str|None)。ailine run 全体で 1 本の実行ロック。
+
+    ★ 基盤の LibreOffice は単一インスタンス(port 2002)前提なので、ブック単位でなく
+    プロセス全体で 1 本にする。
+
+    ★ 2026-08-24: 判定を **OS の排他ロック**に置き換えた（PID の生死を推測しない）。
+    プロセスが死ねば OS が必ず解放するので、居座りが原理的に起きない。
+    ファイルの中身（pid/ts）は**人へ見せる説明**にだけ使う ── 判定には使わない。
+    """
+    global _RUN_LOCK_HANDLE
+    p = path or RUN_LOCK_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if _RUN_LOCK_HANDLE is not None:
+        # ★ 2026-08-24 の自分の穴: 「非 None なら持っている」とだけ見ていたので、
+        #   **別のパスのロックを持っていても通していた**（検体を並べて走らせて発覚）。
+        #   同一プロセスの二度取りを許すのは、同じ鍵に対してだけ。
+        if Path(_RUN_LOCK_HANDLE[1]) == Path(p):
+            return True, None
+        return False, f"このプロセスは既に別の実行ロックを持っています（{_RUN_LOCK_HANDLE[1]}）"
+
+    try:
+        fd = os.open(str(p), os.O_CREAT | os.O_RDWR)
+    except OSError as e:
+        return False, f"実行ロックを作れません（{p}）: {e}"
+
+    # 空ファイルには範囲ロックを掛けられないので 1 バイト用意する
+    try:
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b" ")
+    except OSError:
+        pass
+
+    if not _try_os_lock(fd):
+        holder = _read_lock_info(p) or {}
+        os.close(fd)
+        pid = holder.get("pid", "?")
+        ts = holder.get("ts", "?")
+        return False, (f"別の ailine が実行中です（pid={pid}・{ts}）。"
+                       "終わるのを待ってから、もう一度実行してください")
+
+    # 取れた ── 誰の物かを書き直す（説明用）
+    try:
+        info = {"pid": os.getpid(),
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "image": own_image_name()}
+        _lock_info_path(p).write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    _RUN_LOCK_HANDLE = (fd, p)
+    return True, None
 
 
 def release_run_lock(path: Path | None = None) -> None:
-    p = path or RUN_LOCK_FILE
+    """ロックを解放してファイルを消す。★ 解放し忘れてもプロセスの終了で OS が外す。"""
+    global _RUN_LOCK_HANDLE
+    if _RUN_LOCK_HANDLE is None:
+        return
+    fd, p = _RUN_LOCK_HANDLE
+    _RUN_LOCK_HANDLE = None
     try:
-        p.unlink()
+        os.lseek(fd, 0, os.SEEK_SET)
     except OSError:
         pass
+    _release_os_lock(fd)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    for target in (p, _lock_info_path(p)):
+        try:
+            target.unlink()
+        except OSError:
+            pass
+
 
 
 def maybe_show_notice_v2(path: Path | None = None) -> bool:
@@ -7691,8 +7788,17 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
 
     lock_reason = check_excel_lock(book)
     if lock_reason:
-        print(f"× Excel で開かれています。閉じてから実行してください。（{lock_reason}）")
-        return 5
+        kind, detail = lock_reason
+        print(f"× {detail}。")
+        if kind == "excel":
+            print("  → Excel で開いています。閉じてから実行してください")
+        else:
+            # ★ 原因を断定しない ── 見たのは「書けない」ことだけ。心当たりを並べる。
+            print("  → 心当たり: Excel などで開いている / 読み取り専用 / "
+                  "書き込み権限が無い / 同期中（OneDrive 等）")
+            print("  → 開いていないのに出る場合は、ファイルのプロパティで"
+                  "「読み取り専用」と権限を確認してください")
+        return EXIT_WRITE_BLOCKED
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
@@ -8967,7 +9073,12 @@ def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None =
               "path": "vocab_miss", "command": None, "postcondition": None,
               "changes": [], "out": str(book)}
     _finish_run(a, book, result, failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/{reason}")
-    return 3
+    # ★ 2026-08-24（初回体験の盲検・致命①）: translate_error（ollama 不通・モデル未取得・
+    #   空応答）は**語彙の問題ではなく環境の問題**なのに、語彙外と同じ exit 3 を返していた。
+    #   README の終了コード表は「9 = 実行の前提が無い（ollama 不通・モデル未取得）」と
+    #   書いており、道具と文書が食い違っていた。
+    #   ★ 実害: 使う側に「言い換えてください」と案内する ── 直し方が言い回しでは無いのに。
+    return EXIT_ENVIRONMENT if reason == "translate_error" else 3
 
 
 # ---------------------------------------------------------------------------

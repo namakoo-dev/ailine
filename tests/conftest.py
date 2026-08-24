@@ -99,3 +99,19 @@ def _no_real_ollama(request, monkeypatch):
     monkeypatch.setattr(ailine, "ollama_generate_json", _boom, raising=False)
     monkeypatch.setattr(ailine, "ollama_generate", _boom, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _release_run_lock_after_each_test():
+    """★ 2026-08-24: 実行ロックを OS の排他ロックに移した。持ち主はプロセス単位なので、
+    ある検体が解放し忘れると**次の検体が壊れる**（実測: 単独では通るのに並べると落ちた）。
+    後始末を検体の善意に任せず、ここで必ず外す。
+    """
+    yield
+    import ailine as _al
+    handle = getattr(_al, '_RUN_LOCK_HANDLE', None)
+    if handle is not None:
+        try:
+            _al.release_run_lock(handle[1])
+        except Exception:
+            _al._RUN_LOCK_HANDLE = None

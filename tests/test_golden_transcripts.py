@@ -349,17 +349,31 @@ def _t_excel_lock(tmp_path, monkeypatch, capsys):
 
 
 def _t_run_lock_busy(tmp_path, monkeypatch, capsys):
+    # ★ 2026-08-24: 判定を OS の排他ロックに移したので、偽の PID を書いて _pid_alive を
+    #   差し替える手はもう通じない。★ 危なかった実測: そのまま golden を再生成したら
+    #   「exit 6 のロック拒否」が「exit 9 の ollama 失敗」に化けて保存されかけた
+    #   ── 検体が別の場面を撮っていることに、再生成は気づかない。
+    #   本物の持ち主を別プロセスで立てる。
+    import subprocess
     book = _book(tmp_path, [["商品", "金額"], ["a", 1]])
     lock_path = tmp_path / "run.lock"
-    other_pid = 999999
-    # ★ ts は「30分以内」でないと _lock_is_stale が奪取可能と判定してしまう
-    #   （固定の過去日時だと実測で stale 扱いされ、ロック無視で先へ進んでしまった実測
-    #   バグをここで踏んだ）。実行時刻を使いつつ、golden 側では <TS> に正規化して
-    #   時刻依存性を消す（下の test_transcript_golden の redaction 参照）。
-    ts = ailine.datetime.now(ailine.timezone.utc).isoformat(timespec="seconds")
-    lock_path.write_text(json.dumps({"pid": other_pid, "ts": ts}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: pid == other_pid)
-    return _run_main(["run", str(book), "何か変更して", "--copy"], capsys)
+    monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
+    parts = [
+        "import sys",
+        "sys.path.insert(0, r%r)" % str(Path(__file__).resolve().parent.parent / "src"),
+        "import ailine, time",
+        "from pathlib import Path",
+        "ok, _ = ailine.acquire_run_lock(Path(r%r))" % str(lock_path),
+        "print(chr(79) + chr(75) if ok else chr(78) + chr(71), flush=True)",
+        "time.sleep(120)",
+    ]
+    child = subprocess.Popen([sys.executable, "-c", chr(10).join(parts)],
+                              stdout=subprocess.PIPE, text=True, encoding="utf-8")
+    assert child.stdout.readline().strip() == "OK", "子がロックを取れていない"
+    try:
+        return _run_main(["run", str(book), "何か変更して", "--copy"], capsys)
+    finally:
+        child.kill(); child.wait(timeout=10)
 
 
 # ===========================================================================
@@ -634,6 +648,9 @@ def test_transcript_golden(tmp_path, monkeypatch, capsys, name):
     #   （_lock_is_stale が30分超で奪取可能と判定するため、固定の過去日時は使えない）。
     #   golden の再現性のため ISO タイムスタンプを一律 <TS> に正規化してから比較する。
     out = _ISO_TS_RE.sub("<TS>", out)
+    # ★ 2026-08-24: ロックの持ち主を本物のプロセスにしたので pid が毎回変わる。
+    #   時刻と同じく伏せる（撮りたいのは「誰か」でなく「拒否の形」）。
+    out = re.sub(r"pid=\d+", "pid=<PID>", out)
     # ★ CI の長期赤の一因（2026-08-21 実測）: freeform バナーの 参照ライブラリ/ヘルパ 行が
     #   repo の絶対パスを含み、golden に生成マシンのパス（C:\Dev\ailine）が焼き込まれて
     #   CI（D:\a\ailine\ailine）で必ず不一致になった。repo root を <REPO> に正規化する。

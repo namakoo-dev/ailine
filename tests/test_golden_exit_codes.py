@@ -197,15 +197,27 @@ def test_exit_6_run_lock_busy(tmp_path, monkeypatch):
     book = _book(tmp_path, [["a", 1], ["b", 2]])
     lock_path = tmp_path / "run.lock"
     monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
-    other_pid = 999999
-    lock_path.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
-                                     .isoformat(timespec="seconds")}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: pid == other_pid)
+    # ★ 2026-08-24: 判定を OS の排他ロックに移したので、偽 PID の手はもう通じない。
+    #   本物の持ち主を別プロセスで立てる（tests/test_ailine.py と同じ作法）。
+    import subprocess
+    parts = [
+        "import sys",
+        "sys.path.insert(0, r%r)" % str(Path(__file__).resolve().parent.parent / "src"),
+        "import ailine, time",
+        "from pathlib import Path",
+        "ok, _ = ailine.acquire_run_lock(Path(r%r))" % str(lock_path),
+        "print(chr(79) + chr(75) if ok else chr(78) + chr(71), flush=True)",
+        "time.sleep(120)",
+    ]
+    child = subprocess.Popen([sys.executable, "-c", chr(10).join(parts)],
+                              stdout=subprocess.PIPE, text=True, encoding="utf-8")
+    assert child.stdout.readline().strip() == "OK", "子がロックを取れていない"
     argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
     rc = ailine.main(argv)
+    child.kill(); child.wait(timeout=10)
     assert rc == 6
 
 

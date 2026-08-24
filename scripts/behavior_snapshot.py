@@ -23,7 +23,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -106,12 +105,21 @@ def _scenarios(c: dict) -> list:
         ("history", ["history"]),
         ("missing_file", ["run", str(c["folder"].parent / "nope.xlsx"), "並べ替えて", "--copy"]),
         ("bad_subcommand", ["nosuchcmd"]),
+        # ★ 2026-08-24 の追補: 初回体験の盲検で見つかった致命 3 件は**全部エラー経路**
+        #   だったのに、初版の 17 場面はどれも通常系だった ── 直した所を写真が
+        #   覆っていなかった。「変化なし」が信号にならない穴。異常系を足す。
+        ("ollama_down", ["run", str(c["plain"]), "並べ替えて", "--copy"],
+         {"OLLAMA_HOST": "http://127.0.0.1:1"}),
+        ("lock_held", ["run", str(c["plain"]), "並べ替えて", "--copy"], "HOLD_LOCK"),
+        ("doctor", ["doctor"]),
     ]
 
 
-def _run_one(argv, cwd, home):
+def _run_one(argv, cwd, home, extra_env=None):
     env = dict(os.environ)
     env["AILINE_HOME"] = str(home)
+    if extra_env:
+        env.update(extra_env)
     env["PYTHONPATH"] = str(ROOT / "src")
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     r = subprocess.run([sys.executable, "-m", "ailine", *argv], cwd=str(cwd), env=env,
@@ -137,8 +145,25 @@ def capture() -> dict:
     home = work / "home"; home.mkdir()
     corpus = _build_corpus(work)
     out = {}
-    for name, argv in _scenarios(corpus):
-        r = _run_one(argv, work, home)
+    for item in _scenarios(corpus):
+        name, argv = item[0], item[1]
+        extra = item[2] if len(item) > 2 else None
+        held = None
+        if extra == "HOLD_LOCK":
+            # ★ 別プロセスにロックを持たせたまま run を打つ（居座り経路の写真）
+            held = subprocess.Popen(
+                [sys.executable, "-c",
+                 "import sys;sys.path.insert(0,r'" + str(ROOT / "src") + "');"
+                 "import ailine,time;from pathlib import Path;"
+                 "ailine.acquire_run_lock(Path(r'" + str(home / "run.lock") + "'));"
+                 "time.sleep(120)"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            import time as _t
+            _t.sleep(1.5)
+            extra = None
+        r = _run_one(argv, work, home, extra)
+        if held is not None:
+            held.kill(); held.wait(timeout=10)
         out[name] = {
             "exit": r.returncode,
             "stdout": _normalize(r.stdout, work),
