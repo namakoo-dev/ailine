@@ -134,3 +134,35 @@ def test_numeric_column_still_compares_numerically(tmp_path):
         task="売上が100以上を抽出して")
     assert ok, err
     assert res["value"] == 100.0
+
+
+# --- ★ 片配線の追補（2026-08-24 夕・盲検の使い勝手レビューで捕獲）---------------------
+#
+# verify と codegen だけ日付に対応させて、**事後条件を忘れていた**（俺の落とし物）。
+# 実測: 「3月26日から4月25日までの分だけ集計して」で抽出は正しく 5 行を出しているのに
+#   「× 未対応: 6行中0行が一致 → 出力は5行（行数が期待と不一致）」
+# という**自己矛盾**を出して run 全体が exit 1 で失敗していた。ユーザーには手の打ちようがない。
+
+@needs_impl
+def test_extract_postcondition_counts_date_matches(tmp_path):
+    """事後条件も日付で数える（シリアル値の閾値と、日付セルの数値化の両方が要る）。"""
+    import openpyxl as _op
+    book = _daybook(tmp_path)
+    meta = ailine.build_book_meta(book)
+    ok, res, _i, err = ailine.verify_dsl_args(
+        "EXTRACT", {"col": "日付", "cmp": "gte", "value": "2026/3/26"}, meta,
+        task="2026/3/26以降を抽出して")
+    assert ok, err
+    # 期待: 3/26・3/27・4/25・5/1 の 4 行が一致する
+    wb = _op.load_workbook(book)
+    src = wb["日報"]
+    out = wb.create_sheet(res["_new_sheet"])
+    out.append(["日付", "現場", "売上"])
+    for r in range(2, src.max_row + 1):
+        if src.cell(r, 1).value and src.cell(r, 1).value >= dt.datetime(2026, 3, 26):
+            out.append([src.cell(r, c).value for c in (1, 2, 3)])
+    wb.save(book)
+    res["_target_sheet"] = "日報"
+    status, reason = ailine.check_extract(book, res, header_row=1)
+    assert status == "pass", f"日付の抽出を事後条件が数えられない（自己矛盾の再現）: {reason}"
+    assert "0行が一致" not in (reason or ""), reason

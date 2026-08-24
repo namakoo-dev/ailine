@@ -635,8 +635,8 @@ def test_transcript_golden(tmp_path, monkeypatch, capsys, name):
     #   golden の再現性のため ISO タイムスタンプを一律 <TS> に正規化してから比較する。
     out = _ISO_TS_RE.sub("<TS>", out)
     # ★ CI の長期赤の一因（2026-08-21 実測）: freeform バナーの 参照ライブラリ/ヘルパ 行が
-    #   repo の絶対パスを含み、golden に生成マシンのパス（C:\Deviline）が焼き込まれて
-    #   CI（D:ilineiline）で必ず不一致になった。repo root を <REPO> に正規化する。
+    #   repo の絶対パスを含み、golden に生成マシンのパス（C:\Dev\ailine）が焼き込まれて
+    #   CI（D:\a\ailine\ailine）で必ず不一致になった。repo root を <REPO> に正規化する。
     out = out.replace(str(Path(__file__).resolve().parent.parent), "<REPO>")
     # rc をトランスクリプトの先頭に埋め込む（終了コードの回帰もこの1ファイルで拾える）。
     text = f"[exit code: {rc}]\n{out}"

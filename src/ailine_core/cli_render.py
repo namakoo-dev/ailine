@@ -308,8 +308,12 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
             lines.append(f"  ⚠ {entry['name']}: 合計行({m['row']}行目) の値 "
                          f"{_fmt_num(m['excluded_value'])} ≠ 明細の和 {_fmt_num(m['adopted_sum'])}")
     for w in result.get("col_a_warnings", ()):
-        lines.append(f"  ⚠ {w['name']}: A列走査 {w['col_a']} 行 / used range {w['used_range']} 行"
-                     "（分母の食い違い・根1には触れない可視化）")
+        # ★ 2026-08-24: 文言を買い手の言葉に直した。盲検の査定者に
+        #   「『根1』は開発者用語で読めない」「正常系で 100% 鳴る」と名指しされた
+        #   （原因は自分で正しく除外した合計行）。何が起きたかと、どうすればよいかを言う。
+        lines.append(f"  ⚠ {w['name']}: 1列目から数えると {w['col_a']} 行ですが、"
+                     f"表の範囲は {w['used_range']} 行あります"
+                     "（1列目に空欄があるか、合計行を除いた差です）")
     # ★ 第二の独立検出器（operator 盲検7度目 修正2）: 列解決に依存しない語のトリップワイヤ。
     #   除外はしない（検出のみ）── 検出器1が沈黙しても黙って倍額にはならない、の開示。
     for w in result.get("total_word_warnings", ()):

@@ -73,8 +73,15 @@ def _fake_apply_extract_then_agg(out_book, code, workdir, helper_files=(), timeo
     return True, None, "ok"
 
 
+# ★ 契約の変更（2026-08-24 夕・理由つき）: この検体は初版で「連鎖しない・⚠ を出して降格する」
+#   を凍結していた。同日、盲検の 3 人が全員この形で詰まり（台帳の最頻の形＝期間で絞って集計が
+#   一度も完遂しない）、Namakoo の指示「問題点があれば修正か**機能追加**で対応」に沿って
+#   **連鎖を実装した**。よってこの段は今は成功する ── 検体は「⚠ で止まる」から
+#   「連鎖して、連鎖したことを人に見せる」へ、理由を書いた上で差し替える。
+#   ★ 連鎖**しない**場合の番人（人がシート名を明示した時）は下に残してある。
+
 @needs_impl
-def test_later_step_reading_the_original_sheet_is_named_and_demotes(tmp_path, monkeypatch, capsys):
+def test_later_step_chains_and_discloses(tmp_path, monkeypatch, capsys):
     _isolate(monkeypatch, tmp_path)
     book = _sales(tmp_path)
     monkeypatch.setattr(
@@ -85,8 +92,8 @@ def test_later_step_reading_the_original_sheet_is_named_and_demotes(tmp_path, mo
         ]})
     monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_extract_then_agg)
     rc, out = _run_main(["run", str(book), "売上が60以上の行だけ現場ごとに集計して", "--copy"], capsys)
-    assert "✓" not in out, f"段と段の間の嘘に ✓ が出た（実測の再現）: {out}"
-    assert "売上60以上" in out and "⚠" in out, f"派生シートを名指しした ⚠ が無い: {out}"
+    assert "売上60以上" in out, f"連鎖したことを人に見せていない: {out}"
+    assert "前段が作った" not in out, f"連鎖したのに「元の表を見ています」の ⚠ が残った: {out}"
 
 
 # ★ 治具の訂正（封印者ナギ・2026-08-24）: 初版の誤爆検体は AGGREGATE の args に
@@ -134,3 +141,85 @@ def test_no_warning_when_the_derived_step_is_last(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_extract_then_agg)
     rc, out = _run_main(["run", str(book), "売上の降順に並べ替えて60以上を抽出して", "--copy"], capsys)
     assert "前段が作った" not in out, f"最終段の抽出で ⚠ が出た（誤爆）: {out}"
+
+
+# --- 連鎖そのものを実装する（2026-08-24 夕）------------------------------------------
+#
+# ★ なぜ ⚠ で止めるだけにしなかったか: 台帳の最頻の形（期間で絞って集計）が、
+#   ⚠ だけでは**一度も完遂しない**。盲検の 3 人が全員ここで詰まり、うち 1 人は
+#   「期間を無視した数字を、ツール自身が作業結果として案内する」と書いた。
+#   Namakoo の指示は「問題点があれば修正か**機能追加**で対応」── 連鎖はその機能追加。
+#
+# ★ 安全のための条件（3 つ全部が揃った時だけ連鎖する）:
+#   ① 直前までの段が派生シート（EXTRACT/DEDUP の出力＝絞り込んだ同じ表）を作っている
+#   ② その段が表の行を読む op である
+#   ③ 依頼文が**シート名を明示していない**（明示があれば人の指定が勝つ）
+#   そして連鎖したことは必ず解釈行に出す（黙って対象を変えない）。
+#   連鎖**しなかった**場合の ⚠ は今までどおり残す。
+
+def test_extract_then_aggregate_chains_onto_the_derived_sheet(tmp_path, monkeypatch, capsys):
+    _isolate(monkeypatch, tmp_path)
+    book = _sales(tmp_path)
+    monkeypatch.setattr(
+        ailine, "translate_task",
+        lambda model, task, book_meta, temperature=0.1: {"plan": [
+            {"op": "EXTRACT", "args": {"col": "売上", "cmp": "gte", "value": 60}},
+            {"op": "AGGREGATE", "args": {"group_col": "現場", "value_col": "売上"}},
+        ]})
+    seen = []
+
+    def fake(out_book, code, workdir, helper_files=(), timeout=None):
+        seen.append(code)
+        wb = openpyxl.load_workbook(out_book)
+        if "ExtractRows" in code:
+            if "売上60以上" in wb.sheetnames:
+                del wb["売上60以上"]
+            sh = wb.create_sheet("売上60以上")
+            sh.append(["現場", "売上"])
+            for row in wb["売上"].iter_rows(min_row=2, values_only=True):
+                if row[1] is not None and row[1] >= 60:
+                    sh.append(list(row))
+        else:
+            if "集計" in wb.sheetnames:
+                del wb["集計"]
+            sh = wb.create_sheet("集計")
+            sh.append(["現場", "合計 - 売上"]); sh.append(["A", 100]); sh.append(["B", 270])
+        wb.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake)
+    rc, out = _run_main(["run", str(book), "売上が60以上の行だけ現場ごとに集計して", "--copy"], capsys)
+    assert len(seen) == 2, out
+    # ★ 2段目の Basic が、派生シートを対象にしていること（wrap_basic_for_sheet が先頭へ動かす）
+    assert "売上60以上" in seen[1], f"2段目が派生シートを対象にしていない: {seen[1]}"
+    assert "売上60以上" in out, f"連鎖したことを人に見せていない: {out}"
+    assert "前段が作った" not in out, f"連鎖したのに ⚠ が残っている: {out}"
+
+
+def test_explicitly_named_sheet_beats_the_chain(tmp_path, monkeypatch, capsys):
+    """③ 人がシート名を書いたら、その指定が連鎖より勝つ（黙って上書きしない）。"""
+    _isolate(monkeypatch, tmp_path)
+    book = _sales(tmp_path)
+    monkeypatch.setattr(
+        ailine, "translate_task",
+        lambda model, task, book_meta, temperature=0.1: {"plan": [
+            {"op": "EXTRACT", "args": {"col": "売上", "cmp": "gte", "value": 60}},
+            {"op": "AGGREGATE", "args": {"group_col": "現場", "value_col": "売上"}},
+        ]})
+    seen = []
+
+    def fake(out_book, code, workdir, helper_files=(), timeout=None):
+        seen.append(code)
+        wb = openpyxl.load_workbook(out_book)
+        if "ExtractRows" in code:
+            sh = wb.create_sheet("売上60以上")
+            sh.append(["現場", "売上"]); sh.append(["A", 100])
+        else:
+            sh = wb.create_sheet("集計")
+            sh.append(["現場", "合計 - 売上"]); sh.append(["A", 150])
+        wb.save(out_book)
+        return True, None, "ok"
+    monkeypatch.setattr(ailine, "basrun_apply", fake)
+    rc, out = _run_main(["run", str(book), "60以上を抜き出してから売上シートを現場ごとに集計して",
+                          "--copy"], capsys)
+    assert len(seen) == 2, out
+    assert "売上60以上" not in seen[1], "人が『売上シート』と指定したのに連鎖で上書きした"

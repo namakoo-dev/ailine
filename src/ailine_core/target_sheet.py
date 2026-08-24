@@ -97,6 +97,21 @@ def _is_also_a_column_name(name: str, headers: dict | None) -> bool:
     return False
 
 
+def sheets_named_explicitly(task: str, sheets: list) -> list:
+    """依頼文が**はっきりシートとして**名指ししているシート名（「〜シート/タブ」or「N枚目」）。
+
+    ★ なぜ「裸の言及」を含めないか（2026-08-24 の実測）: 「売上が60以上の行だけ現場ごとに
+      集計して」の『売上』は**列名**であって、同名のシートを指してはいない。裸の言及まで
+      「人が指定した」と読むと、複合計画の連鎖が一度も効かなくなる。
+      挙動変更#3 の「裸の言及は列名と衝突しうるので曖昧」と同じ線。
+    """
+    out = []
+    for name in sheets or ():
+        if name and _mentioned_with_marker(task or "", name):
+            out.append(name)
+    return out
+
+
 def drop_names_covered_by_longer(task: str, names: list) -> list:
     """依頼文の中で、**出現位置がすべて別の長い名前の内側にある**名前を落とす。
 

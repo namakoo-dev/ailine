@@ -127,7 +127,7 @@ from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領�
 )
 from ailine_core.sum_identity import rows_matching_sum_above   # ★ 算術恒等の検算（二重計上）
 from ailine_core.target_sheet import (
-    drop_names_covered_by_longer,   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
+    drop_names_covered_by_longer, sheets_named_explicitly,   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
     format_sheet_field, sheet_conflict_choice_lines, conflict_excluded_sheets,
     sheet_names_mentioned_in,   # ★ 単位E: シート名照合の素材（決定側と助言側が共有する）
@@ -226,7 +226,7 @@ def _find_basrun_path() -> Path | None:
         return p if p.exists() else None
     # ★ wheel 化（2026-08-23）で HERE は src/ailine（install 後は site-packages/ailine）に
     #   なった。「並びの checkout」は repo から動かす場合の便宜なので、祖先を数段さかのぼって
-    #   探す（src/ailine → src → <repo> → <repo の親> の順で C:\Devasrun 等に届く）。
+    #   探す（src/ailine → src → <repo> → <repo の親> の順で C:\Dev\basrun 等に届く）。
     #   install した利用者にとっての正規の指定は環境変数 BASRUN（上で処理済み）。
     for base in (HERE, *HERE.parents[:3]):
         for name in ("basrun", "nagi-bas"):  # 公開 repo 名 / 作者ローカルの旧ディレクトリ名
@@ -2496,6 +2496,33 @@ def _subject_slots(op: str, resolved: dict, sheets: list) -> list:
     if target_sheet and len(sheets or []) > 1:
         slots.append(Slot(key="_target_sheet", value=str(target_sheet), kind=SUBJ_SHEET))
     return slots
+
+
+# ★ 表の行を読む op（連鎖の対象）。書式だけを触る op は元表に掛けたい場合も多いので外す。
+PLAN_CHAIN_CONSUMER_OPS = frozenset({
+    "AGGREGATE", "PIVOT", "APPEND_TOTAL", "SORT", "COMPUTE_COLUMN", "CHART",
+    "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP", "SPLIT_CELL", "LOOKUP_FILL",
+})
+
+
+def chain_target_sheet(op: str, task: str, derived_sheets, sheets, headers) -> str | None:
+    """複合計画の後段が、前段の作った派生シートを対象にすべきならその名前を返す。
+
+    ★ 3 条件が全部揃った時だけ連鎖する（2026-08-24）:
+      ① 直前までの段が派生シート（EXTRACT/DEDUP の出力＝絞り込んだ**同じ表**）を作った
+      ② この段が表の行を読む op である
+      ③ 依頼文が**シート名を明示していない**（明示があれば人の指定が勝つ）
+    ★ 連鎖したことは必ず解釈行に出す ── 黙って対象を変えない。
+    ★ なぜ実装したか: ⚠ で止めるだけでは、台帳の最頻の形（期間で絞って集計）が
+      一度も完遂しなかった。盲検の 3 人が全員ここで詰まった。
+    """
+    if not derived_sheets or op not in PLAN_CHAIN_CONSUMER_OPS:
+        return None
+    # ★ 「はっきりシートとして」名指ししている時だけ人の指定が勝つ。裸の言及
+    #   （「売上が60以上」の『売上』＝列名）まで拾うと連鎖が一度も効かない（実測）。
+    if sheets_named_explicitly(task or "", list(sheets or [])):
+        return None      # ③ 人がシート名を書いている ── その指定が勝つ
+    return derived_sheets[-1]["sheet"]
 
 
 def fabricated_subject_refusal(op: str, resolved: dict, book_meta: dict, task: str,
@@ -5451,7 +5478,7 @@ def check_set_column_value(path: Path, args: dict, header_row: int = 1) -> tuple
     return "pass", f"{len(vals)} 行を『{value}』に統一"
 
 
-def _extract_predicate(cmp: str, threshold):
+def _extract_predicate(cmp: str, threshold, date_mode: bool = False):
     """EXTRACT の判定を Basic 側(ExtractRows/helpers/AiLineHelpers.bas)とは別実装で
        もう一度書く（同じ勘定を2箇所が違う実装で書いて一致を見る・独立測定）。
        ★ M2（2026-08-21・宣言済みの挙動変更）: 意味論を tests/test_predicate_truth_table.py
@@ -5468,9 +5495,15 @@ def _extract_predicate(cmp: str, threshold):
                 return (_is_number(cell_value)
                         and abs(float(cell_value) - float(threshold)) <= 1e-6)
             return str(cell_value) == str(threshold)
-        if not _is_number(cell_value):   # gte/lte/gt/lt は数値比較のみ
+        # ★ 2026-08-24: 日付として比較するのは **閾値が日付リテラルだった時だけ**
+        #   （date_mode）。凍結した真理値表が正しく縛っているとおり、素の数値 40000 に
+        #   日付セル（シリアル値 46235）が当たってはいけない ── 「金額が40000以上」で
+        #   日付列を選んでしまった時に全行一致する事故になる。
+        v = _numeric_value(cell_value) if date_mode else (
+            float(cell_value) if _is_number(cell_value) else None)
+        if v is None:   # gte/lte/gt/lt は数値比較のみ
             return False
-        v, t = float(cell_value), float(threshold)
+        t = float(threshold)
         if cmp == "gte":
             return v >= t
         if cmp == "lte":
@@ -5497,10 +5530,14 @@ def check_extract(path: Path, args: dict, header_row: int = 1,
     dst_name = args.get("_new_sheet")
     col_name = args.get("col")
     cmp = args.get("cmp")
-    threshold = args.get("value")
+    # ★ 2026-08-24 の片配線の追補: 日付比較のとき value は**表示用の文字列**で、
+    #   閾値の実体は _value_serial（verify_dsl_args が積む）。ここが見ていなかったせいで
+    #   正しい抽出が「6行中0行が一致 → 出力は5行」という自己矛盾で失敗していた。
+    threshold = args.get("_value_serial", args.get("value"))
+    date_mode = bool(args.get("_date_compare"))
     if not dst_name:
         return "fail", "出力シート名が決まっていません（verify_dsl_args を経由していない可能性）"
-    match = _extract_predicate(cmp, threshold)
+    match = _extract_predicate(cmp, threshold, date_mode=date_mode)
 
     with BookView(path) as bv:
         src = bv.sheet(args.get("_target_sheet"))
@@ -8917,6 +8954,12 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
        印字済み）。✓→△ 降格の判定材料としてだけ、呼び出し側 cmd_run_plan が集計する。"""
     step_prefix = f"  {i}段目: "
     deps = _make_dsl_step_deps()
+    # ★ 連鎖: 前段の派生シートを対象にすべきならここで差し替える（決めるのは 1 箇所）。
+    chained = chain_target_sheet(op, task, derived_sheets,
+                                  current_meta.get("sheets") or [],
+                                  current_meta.get("headers") or {})
+    if chained:
+        first_sheet = chained
     # 依存つき連鎖: 直前までの段の適用後の実列構成(current_meta)で接地する（新規列フォールバック込み）
     ground = resolve_dsl_step_args(op, raw_args, task, current_meta, vocab,
                                     original_headers=original_headers, first_sheet=first_sheet, deps=deps)
@@ -8960,7 +9003,11 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     step_target_sheet = resolved.get("_target_sheet") or first_sheet
     # ★ 連鎖の番人: 前段が派生シートを作ったのに、この段が別のシート（＝元表）を見ていたら
     #   名指しする。★ 付きなので count_suspicious_advisories が拾い、決裁③の降格に乗る。
-    if derived_sheets:
+    if chained and step_target_sheet == chained:
+        src_step = next((d["step"] for d in derived_sheets if d["sheet"] == chained), None)
+        step_advisories.append(
+            f"（{src_step}段目の出力『{chained}』を対象にしました）")
+    elif derived_sheets:
         derived_names = [d["sheet"] for d in derived_sheets]
         if step_target_sheet not in derived_names:
             made = "・".join(f"{d['step']}段目の『{d['sheet']}』" for d in derived_sheets)
