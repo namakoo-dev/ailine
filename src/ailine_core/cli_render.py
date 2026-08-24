@@ -174,6 +174,33 @@ def render_alias_listing(aliases: dict, order: list, aliases_file: Path) -> list
 
 # --- 対応操作の一覧（★ 査定 2 本が独立に「無い」と指摘した唯一のもの） ------------------
 
+def render_folder_routes(subcommands) -> list:
+    """★ 2026-08-24（第三波 S6）: 複数ファイルの入口（棚卸し・縦積み・2冊照合）に
+    **たどり着く道が無かった** ── ops の表にも README にも出ておらず、知らなければ
+    一生使われない機能だった。表と同じ作法で **argparse の登録簿から生成**する
+    （手書きの一覧は必ずずれる）。
+
+    subcommands: [(名前, help 文字列), ...]。表示するのは複数ファイル系だけ。
+    """
+    wanted = ("scan", "stack", "verify")
+    rows = [(n, h, u) for n, h, u in subcommands if n in wanted]
+    if not rows:
+        return []
+    # ★ 引数の形も argparse に言わせる ── ここを雛形（"<フォルダ>" 決め打ち）で書いたら
+    #   即座にずれた（verify はフォルダを取らない）。自分で「手書きはずれる」と書いた
+    #   直後にずらしたので、実物として残す。
+    lines = ["", "── 複数のファイルをまとめて扱う ──"]
+    for name, help_text, usage in rows:
+        lines.append(f"  ailine {name} {usage}".rstrip() + f"   {help_text}")
+    # ★ この 2 行だけは生成できない（run は位置引数の数で分岐するので argparse の
+    #   登録簿には「フォルダ 1 個」「ブック 2 冊」の区別が無い）。手書きだと明示する。
+    lines.append('  ailine run <folder> "<依頼>"   '
+                 "フォルダ内の全ブックから条件で抜き出す")
+    lines.append('  ailine run <a.xlsx> <b.xlsx> "<依頼>"   '
+                 "2 冊をキーで突き合わせて差額を出す")
+    return lines
+
+
 def render_ops_table(op_meta: dict, op_schema: dict, confirm_fields: dict) -> list:
     """「こう頼めばこれができる」の一覧を**登録簿から生成**する。
 
@@ -238,6 +265,11 @@ def render_scan_report(folder_label: str, result: dict) -> list:
     lines = [f"■ ailine scan  folder={folder_label}"]
     lines.append(f"基準: {result['base']}" if result["base"] else "基準: 見つかりません（読める .xlsx が無い）")
     lines.append(f"{result['denominator']} ファイル中 {matched} 照合できた")
+    # ★ 第三波 S1: 自分の出力を外したことを、stack と同じ文言で言う（黙って減らさない）。
+    self_excluded = result.get("self_excluded") or []
+    if self_excluded:
+        names = "、".join(f"『{n}』" for n in self_excluded)
+        lines.append(f"（自分の出力 {names} を入力から除外しました）")
     excluded = result["excluded"]
     lines.extend(render_excluded_lines(excluded))
     for f in files:
@@ -349,11 +381,29 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
         lines.append(f"  ⚠ {w['file']} の{w['row']}行目に合計語『{w['word']}』を含む行が"
                      "積まれています（除外していません・確認してください）")
     lines.append(f"出力データ行数: {result['rows_written']}")
+    # ★ 2026-08-24（第三波 S2）: 見出しに out=<path> と**宣言**しておいて、積むものが
+    #   0 件だとファイルを作らずに exit 0 で終わっていた（宣言と実体の食い違い ──
+    #   今日の「判定には三項が要る」の穴）。作らなかったなら、そう言う。
+    if not result.get("file_written", True):
+        lines.append("（ファイルは作っていません ── 積む対象が 0 件のため。"
+                     "上の除外の内訳を確認してください）")
+    n_excluded = sum(len(e.get("rows", ())) for e in result.get("excluded_detail", ()))
     for col, both in result.get("sums", {}).items():
-        lines.append(f"Σ{col}: 元 {_fmt_num(both['source'])} / 出力 {_fmt_num(both['output'])}")
+        lines.append(sum_line(col, both, n_excluded))
     if result.get("rebuilt_own_output"):
         lines.append(f"（前回の縦積み出力『{out_label}』を作り直しました）")
     return lines
+
+
+def sum_line(col: str, both: dict, excluded_rows: int = 0) -> str:
+    """Σ の 1 行。★ 2026-08-24（第三波 S4）: 『元』が**合計行を除いた後**の値なのに、
+    そう読めなかった（元 100 / 出力 100 が一致していても、除外が間違っていれば
+    間違い同士で合う ── 数字は合っているのに事実は間違っている、という形）。
+    意味は変えず、何を『元』と呼んだかを書く。★ 実装は 1 つ（呼ぶのは 2 経路）。"""
+    line = f"Σ{col}: 元 {_fmt_num(both['source'])} / 出力 {_fmt_num(both['output'])}"
+    if excluded_rows:
+        line += f"（『元』は合計行 {excluded_rows} 件を除いた後の値です）"
+    return line
 
 
 def render_verify_report(out_label: str, folder_label: str, result: dict) -> list:
@@ -370,7 +420,7 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
         return lines
     lines.append(f"行数: 元 {result['row_count']['source']} / 出力 {result['row_count']['output']}")
     for col, both in result.get("sums", {}).items():
-        lines.append(f"Σ{col}: 元 {_fmt_num(both['source'])} / 出力 {_fmt_num(both['output'])}")
+        lines.append(sum_line(col, both, result.get("excluded_rows", 0)))
     mismatches = result.get("mismatches")
     if mismatches is None:   # ★ 後方互換: 複数形を持たない呼び出し元（無いはずだが fail closed）
         mismatches = [mismatch] if mismatch else []

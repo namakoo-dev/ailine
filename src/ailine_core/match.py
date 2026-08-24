@@ -188,6 +188,17 @@ def _state(a_count: int, b_count: int, diff: float) -> str:
     return f"−{inspection.fmt_num(abs(diff))}"
 
 
+def side_pair(g) -> str:
+    """『A 186300 / B 0』の 0 が **金額 0** なのか **1 行も無い** のか読めなかった
+    （2026-08-24 第三波 S5）。片側が 0 行なら『なし』と書いて区別する
+    ── 出ないことは信号でないので、出ていないと書く。★ 実装は 1 つ（2 箇所が呼ぶ）。"""
+    def one(label, count, total):
+        if count == 0:
+            return f"{label} なし（0 行）"
+        return f"{label} {inspection.fmt_num(total)}"
+    return f"{one('A', g.a_count, g.a_sum)} / {one('B', g.b_count, g.b_sum)}"
+
+
 def _clean_num(v):
     """整数値は int で書く（650.0 でなく 650）。"""
     if isinstance(v, float) and v.is_integer():
@@ -451,17 +462,16 @@ def build_findings(groups: list, key_to_detail_row: dict, total_notes: list,
                 kind=KIND_UNKNOWN_KEY, file=f"{book_a_name} / {book_b_name}",
                 sheet=DETAIL_SHEET_NAME, cell=cell_ref,
                 source_value=_clean_num(g.a_sum), output_value=_clean_num(g.b_sum),
-                next_step=f"キー不明 {g.a_count + g.b_count}行（A {inspection.fmt_num(g.a_sum)} / "
-                          f"B {inspection.fmt_num(g.b_sum)}）。名義不明の入金・請求が無いか、"
-                          "明細シートで確認してください。",
+                next_step=f"キー不明 {g.a_count + g.b_count}行（{side_pair(g)}）。"
+                          "名義不明の入金・請求が無いか、明細シートで確認してください。",
                 link=link))
         elif abs(g.diff) > TOLERANCE:
             findings.append(inspection.finding(
                 kind=KIND_DIFF, file=f"{book_a_name} / {book_b_name}",
                 sheet=DETAIL_SHEET_NAME, cell=cell_ref,
                 source_value=_clean_num(g.a_sum), output_value=_clean_num(g.b_sum),
-                next_step=f"{g.key_display}: {g.state}（A {inspection.fmt_num(g.a_sum)} / "
-                          f"B {inspection.fmt_num(g.b_sum)}）。明細シートで内訳を確認してください。",
+                next_step=f"{g.key_display}: {g.state}（{side_pair(g)}）。"
+                          "明細シートで内訳を確認してください。",
                 link=link))
     unknown_detail_row = key_to_detail_row.get(UNKNOWN_KEY_LABEL)
     unknown_link = ((None, inspection.hyperlink_location(

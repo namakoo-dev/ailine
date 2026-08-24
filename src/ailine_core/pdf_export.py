@@ -119,3 +119,61 @@ def verify_values_in_pdf(pdf_path, values) -> PdfCheck:
         if not any(c.replace(" ", "") in flat for c in cands):
             r.missing.append(cands[0])
     return r
+
+
+# --- openpyxl の往復で落ちる図形の検出（2026-08-24・第三波 #9）--------------------
+#
+# ★ 実測（この repo の中で測った）: openpyxl の load→save は
+#     画像（xdr:pic / xl/media）      → **残る**
+#     画像でない図形（xdr:sp・テキストボックス・オートシェイプ） → **消える**
+#   `ailine export-pdf` は指定シートの抽出とページ設定のために原本を openpyxl で
+#   一度書き直すので、**描かれた角印・社判が PDF から消える**。しかも出来上がった
+#   PDF は完成品に見える ── 消えたものは差分に出ない、の最悪の形。
+#   ここでは判定も変換も変えない。**消えるものを、消える前に名指しする**。
+
+import re as _re
+import zipfile as _zipfile
+
+_SHAPE_RE = _re.compile(r"<(?:\w+:)?sp[ >]")
+_NAME_RE = _re.compile(r'<(?:\w+:)?cNvPr[^>]*\bname="([^"]*)"')
+
+
+def vanishing_shapes(path) -> list:
+    """openpyxl の往復で落ちる図形の名前を返す（画像は落ちないので数えない）。
+
+    戻り値は名前のリスト（名前が無ければ "(名前なし)"）。読めない/図形が無ければ空。
+    ★ 判定は zip の中の drawing XML を直接読む ── openpyxl に聞くと、
+    openpyxl が読めない図形は最初から見えないので恒真になる（別実装で測る）。
+    """
+    names = []
+    try:
+        with _zipfile.ZipFile(path) as z:
+            for entry in z.namelist():
+                if not (entry.startswith("xl/drawings/") and entry.endswith(".xml")):
+                    continue
+                text = z.read(entry).decode("utf-8", errors="replace")
+                if not _SHAPE_RE.search(text):
+                    continue
+                # 図形が在る drawing の中から、sp を持つアンカーの名前だけを拾う
+                for anchor in _re.split(r"(?=<(?:\w+:)?(?:one|two)CellAnchor)", text):
+                    if not _SHAPE_RE.search(anchor):
+                        continue
+                    m = _NAME_RE.search(anchor)
+                    names.append(m.group(1) if m and m.group(1) else "(名前なし)")
+    except (_zipfile.BadZipFile, KeyError, OSError):
+        return []
+    return names
+
+
+def vanishing_shapes_warning(names) -> list:
+    """人へ見せる行（空なら空リスト）。"""
+    if not names:
+        return []
+    shown = "、".join(f"『{n}』" for n in names[:3])
+    more = f"（ほか {len(names) - 3} 件）" if len(names) > 3 else ""
+    return [
+        f"⚠ この冊には、PDF に写せない図形が {len(names)} 件あります: {shown}{more}",
+        "  → 角印・社判・テキストボックスなどが PDF から消えます"
+        "（写真として貼られた印は消えません）。",
+        "  → 印が要る書類なら、LibreOffice や Excel で直接 PDF 保存してください。",
+    ]

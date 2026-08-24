@@ -94,6 +94,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_vocab_miss_refusal,   # ★ freeform 最終決定: 単発の語彙外の断り
     render_scan_report,   # ★ M1読み: `ailine scan`
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
+    render_folder_routes,
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
 )
 from ailine_core.filetypes import BOOKLIKE_SUFFIXES, CSV_SUFFIX   # ★ 拡張子判定の登録簿（単発の定数のみ import）
@@ -7036,6 +7037,20 @@ def cmd_ops(a: argparse.Namespace) -> int:
        「こう頼めばこれができる」の対応表。中身は登録簿から生成する（手書きしない）。"""
     for line in render_ops_table(OP_META, OP_SCHEMA, _CONFIRM_FIELDS):
         print(line)
+    # ★ 第三波 S6: 複数ファイルの入口も見せる（argparse の登録簿から生成・手書きしない）。
+    sub_actions = [ac for ac in build_parser()._actions
+                    if isinstance(ac, argparse._SubParsersAction)]
+    #   引数の形（位置引数の並び）も argparse 本体から取る ── 雛形で書くとずれる。
+    def _positional_shape(name: str) -> str:
+        sp = sub_actions[0].choices.get(name) if sub_actions else None
+        if sp is None:
+            return ""
+        return " ".join(f"<{ac.metavar or ac.dest}>" for ac in sp._actions
+                        if not ac.option_strings and ac.dest != "help")
+    pairs = [(ch.dest, ch.help or "", _positional_shape(ch.dest))
+              for ac in sub_actions for ch in ac._choices_actions]
+    for line in render_folder_routes(pairs):
+        print(line)
     return 0
 
 
@@ -9468,6 +9483,9 @@ def cmd_scan(a: argparse.Namespace) -> int:
        だけ呼ぶ（このモジュールが持つ元々の機能をそのまま流用・LO 往復は無い）。"""
     folder = Path(a.folder).resolve()
     candidates, excluded = multifile.classify_folder_contents(folder)
+    # ★ 2026-08-24 第三波 S1: scan にだけこの配線が無く、自分の出力（2冊照合の結果等）を
+    #   棚卸しの分母に数えて「取れなかった」と ⚠ で名指ししていた（stack/run には在った）。
+    candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     base_path, base_wb = multifile.open_base_workbook(candidates)
     base_headers, base_sheet, header_row, value_col_name = [], None, 1, None
     if base_wb is not None:
@@ -9484,7 +9502,7 @@ def cmd_scan(a: argparse.Namespace) -> int:
     files = [multifile.evaluate_file(p, base_headers, base_sheet, header_row, value_col_name)
              for p in candidates]
     result = {"denominator": len(candidates), "base": base_path.name if base_path else None,
-              "files": files, "excluded": excluded}
+              "files": files, "excluded": excluded, "self_excluded": self_excluded}
     if a.json:
         print(json.dumps(result, ensure_ascii=False))
         return 0
@@ -9615,13 +9633,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
 
     # ① 分母と自己参照除外（V6）── cmd_stack と同じ判定（ailine 産は種類を問わず入力から外す）。
     candidates, folder_excluded = multifile.classify_folder_contents(folder)
-    self_excluded, filtered = [], []
-    for p in candidates:
-        if multifile_stack.is_own_output(p):
-            self_excluded.append(p.name)
-            continue
-        filtered.append(p)
-    candidates = filtered
+    candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     denominator = len(candidates)
 
     base_path, base_wb = multifile.open_base_workbook(candidates)
@@ -10207,7 +10219,11 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
     #   は next_step 側の書式変更（build_findings）で解消済み。
     mismatched = [g for g in groups if abs(g.diff) > multifile_match.TOLERANCE]
     ok_count = len(groups) - len(mismatched)
-    say(f"{len(groups)} キー中 {ok_count} キーが差額 0")
+    # ★ 2026-08-24（第三波 S5）: 「12 キー中 0 キーが差額 0」は、二重の否定めいて読めず
+    #   何件ずれているのかが一目で分からなかった。両側の数字を素直に並べる。
+    key_label = key_a if key_a == key_b else f"{key_a}/{key_b}"
+    say(f"『{key_label}』{len(groups)} 件: 差額なし {ok_count} 件 / "
+        f"差額あり {len(mismatched)} 件")
     for f in findings:
         say(f"  ⚠ {f.next_step}")
     if rebuilt_own_output:
@@ -10793,6 +10809,12 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
     #   --fit-to-width / --orientation は原本を触らず**一時コピー**に効かせる。
     # ★ 2026-08-24: シート指定は**必ず**一時コピーで効かせる（soffice にシート指定が無い）。
     #   初版は --sheet を受け取って無視しており、他社の請求書を同封する事故になっていた。
+    # ★ 2026-08-24（第三波 #9・実測）: この一時コピーは openpyxl の往復なので、
+    #   **画像でない図形（描かれた角印・社判・テキストボックス）が落ちる**
+    #   （画像として貼られた印は残る ── repo 内で両方を測って確かめた）。
+    #   出来上がった PDF は完成品に見えるので、消える前に名指しする
+    #   （「消えたものは差分に出ない」への処置）。
+    vanishing = pdf_export.vanishing_shapes(book_path)
     source = book_path
     tmp_holder = tempfile.TemporaryDirectory(prefix="ailine_pdf_")
     source = Path(tmp_holder.name) / book_path.name
@@ -10809,6 +10831,7 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
     if tmp_holder is not None:
         tmp_holder.cleanup()
     lines = [f"■ ailine export-pdf  file={book_path}  sheet={sheet}"]
+    lines.extend(pdf_export.vanishing_shapes_warning(vanishing))
     if not ok:
         lines.append(f"× {why}")
         for ln in lines:
@@ -10837,6 +10860,14 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
         for ln in lines:
             print(ln)
         return 3
+    # ★ 決裁③（✓ の絶対性）: 疑わしい ⚠ が 1 件でも在れば ✓ を名乗らない。
+    #   値は載っていても、消えた角印は「宣言どおり」ではない。
+    if vanishing:
+        lines.append(f"△ シートの {check.checked} 個の値が PDF に載っていることは"
+                     "確認しました ── ただし上の図形は消えています")
+        for ln in lines:
+            print(ln)
+        return 0
     lines.append(f"✓ シートの {check.checked} 個の値が PDF に載っていることを"
                   f"読み戻して確認しました（欠落 0）")
     for ln in lines:
@@ -10928,14 +10959,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
     # ★ 自己参照除外（V6・architect 致命2 で拡張）: 入力フォルダ内の ailine 産の出力
     #   （out と同じパスに限らず、種類（stack/extract 等）も問わない）は二重計上を防ぐため
     #   入力から除外 + 開示。判定は marks 集合（is_own_output）── 印が違っても ailine 産なら除外。
-    self_excluded = []
-    filtered = []
-    for p in candidates:
-        if multifile_stack.is_own_output(p):
-            self_excluded.append(p.name)
-            continue
-        filtered.append(p)
-    candidates = filtered
+    candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     denominator = len(candidates)
 
     base_path, base_wb = multifile.open_base_workbook(candidates)
@@ -10945,7 +10969,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
                                             for p in candidates],
                   "sums": {}, "excluded_detail": [], "mismatches": [], "col_a_warnings": [],
                   "sheet_fallbacks": [], "self_excluded": self_excluded, "rebuilt_own_output": False,
-                  "excluded": excluded}
+                  "excluded": excluded, "file_written": False}
         if a.json:
             print(json.dumps(_stack_json(result), ensure_ascii=False))
         else:

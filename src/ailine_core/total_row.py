@@ -81,6 +81,19 @@ def _label_is_total_word(label) -> bool:
     return any(w in norm for w in _LABEL_SUBSTRINGS)
 
 
+def closes_as_total(value: float, adopted: list, last_excluded_row) -> bool:
+    """『この値は、それまでの採用行の和として説明がつくか』── 累積和 OR 区間和。
+
+    ★ 2026-08-24（第三波 S4）: トリガ c（直上が空行）の**裏取り**に使う。
+    adopted は [(行番号, float), ...]。単一列版と複数列版が**同じ実装**を呼ぶ
+    （片配線の禁止 ── 実測で単一列版だけ直して複数列版が素通りしかけた）。
+    """
+    cum = sum(v for _r, v in adopted)
+    lower = last_excluded_row if last_excluded_row is not None else -1
+    seg = sum(v for r, v in adopted if r > lower)
+    return abs(value - cum) <= TOLERANCE or abs(value - seg) <= TOLERANCE
+
+
 def split_total_rows(rows) -> TotalRowVerdict:
     """rows: (行番号, ラベルセル値, 数値セル値) の列（上から順）。
 
@@ -100,6 +113,7 @@ def split_total_rows(rows) -> TotalRowVerdict:
     adopted_rows = []
     adopted_numeric = []       # (row, float value) — 閉じる検査の分母
     prev_row_is_blank = False  # 直上行が「ラベルも値も無い」か（先頭行の上は存在しないので False）
+    last_excluded_row = None   # ★ S4: トリガ c の裏取り（区間和）に要る
 
     for row_num, label, value in rows:
         label_blank = _is_blank_cell(label)
@@ -112,9 +126,20 @@ def split_total_rows(rows) -> TotalRowVerdict:
         elif has_number and label_blank:
             reason = "ラベル空白"
         elif has_number and prev_row_is_blank:
-            reason = "直上空行"
+            # ★ 2026-08-24（第三波 S4・実測で本物の行が消えた）: 「直上が空行」は
+            #   三つのトリガのうち**最も弱い証拠**で、ラベルが本物の行にも当たる。
+            #   実測: [a,100] / [空白だけの行] / [b,200] で b が合計行として除外され、
+            #   200 が黙って消えた（しかも Σ は除外後の値を『元』にしていたので
+            #   元 100 / 出力 100 で恒真に合った）。
+            #   ★ 絞り: 弱い証拠は**裏取りを要求する** ── 算術が閉じる時だけ除外する。
+            #   （a/b は構造そのものが「合計」と言っているので従来どおり無条件。
+            #   閉じる検査を『除外を取り消す検査には使わない』という設計は、証拠が
+            #   強い a/b に対する取り決めであって、c には及ばない。）
+            if closes_as_total(float(value), adopted_numeric, last_excluded_row):
+                reason = "直上空行"
 
         if reason:
+            last_excluded_row = row_num
             excluded_raw.append((row_num, label, value, reason))
         elif has_number:
             adopted_rows.append(row_num)
@@ -184,6 +209,7 @@ def split_total_rows_multi(rows) -> TotalRowVerdict:
     adopted_rows = []
     adopted_numeric: dict = {}  # {col: [(row, float value), ...]}
     prev_row_is_blank = False
+    last_excluded_row_m = None   # ★ S4: トリガ c の裏取り（区間和）に要る
 
     col_order: list = []
     for _r, _l, values in rows:
@@ -207,9 +233,16 @@ def split_total_rows_multi(rows) -> TotalRowVerdict:
         elif has_number_any and label_blank:
             reason = "ラベル空白"
         elif has_number_any and prev_row_is_blank:
-            reason = "直上空行"
+            # ★ S4 の絞り（単一列版と同じ線・同じ関数）: 最も弱い証拠なので裏取りを要求。
+            #   複数列版では **その行が数字を持つ全ての列**が閉じた時だけ除外する
+            #   ── 1 列でも説明がつかなければ「合計」という話は崩れており、
+            #   本物のデータ行を黙って消す側の危険のほうが大きい。
+            if all(closes_as_total(float(v), adopted_numeric[c], last_excluded_row_m)
+                    for c, v in numeric_here):
+                reason = "直上空行"
 
         if reason:
+            last_excluded_row_m = row_num
             excluded_raw.append((row_num, label, dict(numeric_here), reason))
         elif has_number_any:
             adopted_rows.append(row_num)

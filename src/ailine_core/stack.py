@@ -361,3 +361,20 @@ def fmt_num(v) -> str:
     except (TypeError, ValueError):
         return str(v)
     return str(int(f)) if f.is_integer() else str(f)
+
+def split_own_outputs(candidates):
+    """入力候補から **ailine 産の出力**を外し、(残った候補, 外した名前) を返す。
+
+    ★ 2026-08-24（第三波 S1）: この 5 行が cmd_stack と cmd_run_folder に**書き写されて**
+    いて、cmd_scan にだけ無かった。実測: 2 冊照合の出力が入力フォルダに残ったまま
+    `ailine scan` を掛けると「3 ファイル中 2 照合できた」と分母が汚れ、自分の出力を
+    「取れなかった」ファイルとして ⚠ で名指ししていた（stack は正しく除外していた）。
+    ★ 三度目の書き写しをせず 1 箇所にする ── 同じ形のバグを何度も直さないために。
+    """
+    kept, excluded_names = [], []
+    for path in candidates:
+        if is_own_output(path):
+            excluded_names.append(path.name)
+        else:
+            kept.append(path)
+    return kept, excluded_names
