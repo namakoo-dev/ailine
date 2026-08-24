@@ -85,6 +85,7 @@ from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 
     is_transient_lo_error, TRANSIENT_LO_RETRY_NOTICE,   # ★ 摩擦⑥: LO 一時不調の凍結マーカーと開示文言の唯一の出どころ
 )
 from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手書きしていた表示の純関数化
+    render_excluded_lines,
     render_code_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
     render_alias_listing,   # ★ W10 便A: `ailine alias list`
@@ -9543,7 +9544,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     say = (lambda *args, **kw: None) if as_json else print
 
     # ① 分母と自己参照除外（V6）── cmd_stack と同じ判定（ailine 産は種類を問わず入力から外す）。
-    candidates, _folder_excluded = multifile.classify_folder_contents(folder)
+    candidates, folder_excluded = multifile.classify_folder_contents(folder)
     self_excluded, filtered = [], []
     for p in candidates:
         if multifile_stack.is_own_output(p):
@@ -9559,6 +9560,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         if self_excluded:
             names = "、".join(f"『{n}』" for n in self_excluded)
             say(f"（自分の出力 {names} を入力から除外しました）")
+        for line in render_excluded_lines(folder_excluded):
+            say(line)
         say(f"{denominator} ファイル中 0 照合 → 読める .xlsx が無いので抽出できません")
         if as_json:
             print(json.dumps({"out": None, "condition": None, "multifile": {
@@ -9816,6 +9819,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     if self_excluded:
         names = "、".join(f"『{n}』" for n in self_excluded)
         say(f"（自分の出力 {names} を入力から除外しました）")
+    for line in render_excluded_lines(folder_excluded):
+        say(line)
     say(f"{denominator} ファイル中 {matched_files} 照合 → "
         f"{matched_files} 中 {contributing_files} ファイルで計 {total_matched} 行一致")
     # ★ D6 差し戻し（実弾検分・2026-08-21）: 正常なファイルは名指ししない ── 名指しは
@@ -11024,12 +11029,21 @@ def cmd_stack(a: argparse.Namespace) -> int:
               "self_excluded": self_excluded, "total_word_warnings": total_word_warnings,
               "rebuilt_own_output": rebuilt_own_output, "collision_notice": collision_notice,
               "excluded": excluded}
+    # ★ 2026-08-24（盲検の使い勝手レビュー）: 積めなかった冊が在るのに exit 0 だった。
+    #   しかも Σ の「元」は積めた冊だけの和なので**必ず一致する（恒真）**。
+    #   得意先 1 社 283,500 円が消えても、スクリプトからは「成功・Σ 一致」に見えていた。
+    #   ★ 出力は作る（人が続きを決められるように）。だが **0 では終わらない**。
+    left_behind = len(skipped) + int((excluded or {}).get("other_format", 0) or 0)
+    stack_exit = 0 if left_behind == 0 else 5
     if a.json:
         print(json.dumps(_stack_json(result), ensure_ascii=False))
-        return 0
+        return stack_exit
     for ln in render_stack_report(str(folder), str(out), result):
         print(ln)
-    return 0
+    if left_behind:
+        print(f"× 取り込めなかったものが {left_behind} 件あります"
+              f"（出力は作りました ── 上の名指しを確認してください）")
+    return stack_exit
 
 
 def cmd_verify(a: argparse.Namespace) -> int:

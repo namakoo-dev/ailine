@@ -42,7 +42,12 @@ def _made(tmp_path):
     _book(folder / "c.xlsx", ["注文ID", "取引先"], [("J-9", "戊")])              # 取れなかった
     out = tmp_path / "out.xlsx"
     p = _stack(folder, out)
-    assert p.returncode == 0, p.stdout + p.stderr[-300:]
+    # ★ 契約の変更（2026-08-24・理由つき）: この治具は c.xlsx を**意図的に取れない冊**として
+    #   置いている。積めなかった冊が在れば `stack` は exit 5 を返すようになった
+    #   （盲検の実測: 名指しはするのに exit 0 で、しかも Σ の元は積めた冊だけなので
+    #   必ず一致する恒真だった ── 得意先 1 社 283,500 円が消えても成功に見えていた）。
+    #   ★ ここは「取れない冊が在る」ことが**検体の前提**なので 5 が正。出力は作られる。
+    assert p.returncode == 5, p.stdout + p.stderr[-300:]
     return folder, out
 
 
@@ -100,14 +105,25 @@ def test_legend_disclaims_color_is_not_verification(tmp_path):
 
 
 def test_verify_and_determinism_survive_inspection_sheet(tmp_path):
-    """検分シートを足しても verify は緑のまま・2 回実行でセル内容（検分込み）が一致。"""
+    """検分シートを足しても verify の判定が変わらない・2 回実行でセル内容が一致。
+
+    ★ 契約の変更（2026-08-24・理由つき）: 初版は「verify は**緑のまま**」を凍結していた。
+      だがこの治具は c.xlsx を**意図的に積めない冊**として置いている ── 冊が丸ごと
+      落ちているのだから、**緑であってはいけなかった**。旧版の verify は元側の一覧を
+      出力自身の出所列から作っていたので、落ちた冊が元側にも現れず気づけなかった
+      （＝出力を出力自身と比べていた）。今日それを根治したので、ここは 5 が正。
+      ★ この検体が守りたかったのは「検分シートを足しても判定が壊れない」であって
+      「常に緑」ではない。意図を残して期待値だけ直す。
+    """
     folder, out = _made(tmp_path)
     assert "検分" in openpyxl.load_workbook(out).sheetnames, "前提: 検分シートが存在すること"
     p = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
                        capture_output=True, text=True, timeout=120, encoding="utf-8")
-    assert p.returncode == 0, f"検分シートで verify が壊れた:\n{p.stdout}"
+    assert p.returncode == 5, "検分シートで verify の判定が変わった:" + p.stdout
+    assert "c.xlsx" in p.stdout, "落ちた冊を名指ししていない:" + p.stdout
     out2 = tmp_path / "out2.xlsx"
-    assert _stack(folder, out2).returncode == 0
+    # ★ 同じ治具（c.xlsx が意図的に積めない）なので 2 回目も 5。見ているのは決定性であって終了コードではない。
+    assert _stack(folder, out2).returncode == 5
     def cells(path):
         wb = openpyxl.load_workbook(path)
         return [(ws.title, c.coordinate, str(c.value)) for ws in wb.worksheets

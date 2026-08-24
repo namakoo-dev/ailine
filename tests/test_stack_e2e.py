@@ -99,12 +99,21 @@ def test_report_shows_both_sides_of_row_and_sum_reconciliation(tmp_path):
 
 
 def test_unmatched_file_is_skipped_named_and_counted(tmp_path):
-    """列が欠けたファイルは積まず、名指し + 分母に現れる。exit は 0（黙る失敗だけが罪）。"""
+    """列が欠けたファイルは積まず、名指し + 分母に現れる。
+
+    ★ 契約の変更（2026-08-24・理由つき）: 初版はここに「exit は 0（黙る失敗だけが罪）」と
+      書いていた。**名指ししているのだから黙ってはいない**、という当時の判断。
+      盲検の使い勝手レビューがそれを実測で覆した ── 名指しは端末に出るが、
+      **スクリプトからは exit 0 にしか見えない**。しかも Σ の「元」は積めた冊だけの和なので
+      **必ず一致する（恒真）**。得意先 1 社 283,500 円が消えても「成功・Σ 一致」に見えた。
+      ★ 人に見える形で言うことと、機械に見える形で言うことは別。両方要る。
+      出力は作る（人が続きを決められるように）── 変えたのは終了コードだけ。
+    """
     folder = _folder3(tmp_path)
     _book(folder / "d.xlsx", ["注文ID", "取引先"], [("J-9", "戊")])
     out = tmp_path / "out.xlsx"
     p = _stack(folder, out)
-    assert p.returncode == 0
+    assert p.returncode == 5, p.stdout
     assert "4 ファイル中 3 積んだ" in p.stdout
     assert "d.xlsx" in p.stdout and "金額" in p.stdout
 

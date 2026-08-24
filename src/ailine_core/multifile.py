@@ -18,6 +18,13 @@ _TEMP_PREFIX = "~$"                      # Excel の一時ファイル（開い�
 _MAX_HEADER_COLS = 200                   # 見出し行を読む安全上限（ailine.py の MAX_COLS とは独立）
 
 
+# ★ ailine 自身が置く作業ファイル（分母に数えない ── 人の資料ではない）。
+_AILINE_WORKFILES = frozenset({
+    "history.jsonl", "run.lock", "vocab.json", "aliases.json",
+    "misclass.jsonl", "notice_v2_shown",
+})
+_AILINE_WORKFILE_SUFFIXES = frozenset({".lock", ".jsonl"})
+
 def classify_folder_contents(folder: Path):
     """folder 直下（サブフォルダの中は見ない）を分類する。
        戻り値: (candidates: 名前順の Path リスト, excluded: {"temp": n, "subdirs": n, "csv": n})。
@@ -26,10 +33,19 @@ def classify_folder_contents(folder: Path):
        ★ CSV 検疫接続（2026-08-22・設計 v2「フォルダ実行」節）: .csv は候補にしない点は
        変わらない（1本ずつ `ailine csv` で扱う対象）が、以前は「その他の拡張子は黙って
        無視してよい」に紛れて数えてすらいなかった ── 名指しで断れるよう分母だけ数える
-       （挙動の本体は変えない・報告の材料が増えるだけ）。それ以外の拡張子は引き続き
-       黙って無視してよい。"""
+       （挙動の本体は変えない・報告の材料が増えるだけ）。
+
+       ★★ 2026-08-24 の訂正: 旧版はここで「それ以外の拡張子は引き続き黙って無視してよい」と
+       **宣言していた**。盲検 2 者が独立に、それが誤りだと実測で示した ── `.xlsm` を混ぜた
+       6 冊のフォルダで「3 ファイル中 3 照合できた」「Σ金額 元 4500 / 出力 4500 ✓」と出る。
+       **3 冊が無かったことになる。** マクロ入りの請求書テンプレは実際の経理フォルダで
+       最も在りうる非 .xlsx で、「黙って無視してよい」対象ではなかった。
+       ★ 根は 1 つ ── **分母を「処理できたもの」から作っていた**。分母は
+       **フォルダに実際に在るもの**から作る。処理できなかったものは 0 件ではなく
+       **名前つきの件数**として分母に残す。"""
     candidates = []
-    excluded = {"temp": 0, "subdirs": 0, "csv": 0}
+    excluded = {"temp": 0, "subdirs": 0, "csv": 0, "other_format": 0,
+                 "other_format_names": []}
     for item in sorted(folder.iterdir(), key=lambda p: p.name):
         if item.is_dir():
             excluded["subdirs"] += 1
@@ -44,6 +60,18 @@ def classify_folder_contents(folder: Path):
             candidates.append(item)
         elif suffix == CSV_SUFFIX:
             excluded["csv"] += 1
+        elif item.name in _AILINE_WORKFILES or item.suffix.lower() in _AILINE_WORKFILE_SUFFIXES:
+            # ★ 2026-08-24: ailine 自身の作業ファイル（history.jsonl / run.lock 等）を
+            #   「読めない形式」に数えない。実測で `history.jsonl` が
+            #   「.xlsx に保存し直すと扱えます」と案内されていた ── **自分が置いたものを
+            #   他人の資料と同じに扱っていた**。分母に入れるのは
+            #   「人が置いた、扱えなかったもの」だけ。
+            pass
+        else:
+            # ★ 候補にしなかった拡張子は**名前つきで**分母に残す（.xlsm/.xlsb/.ods 等）。
+            #   件数だけでは人は動けないので、どのファイルかを言えるようにする。
+            excluded["other_format"] += 1
+            excluded["other_format_names"].append(item.name)
     return candidates, excluded
 
 

@@ -21,6 +21,10 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
+
 import json
 
 from ailine_core import extract_multi, match, total_row, xml_readback
@@ -405,6 +409,15 @@ def _verify_stack(out_path, src_folder) -> dict:
        （帰属は出力の各行を自分の申告する元セルと突き合わせるだけ・Σ の合否に依存しない）
        ── 最初の不一致で打ち切らず両方走らせる。行数だけは別（行が消えていれば Σ も帰属も
        意味を成さないため、従来どおり単独で早期に返す）。
+
+       ★★ 2026-08-24 の根治（盲検の契約レビュー）: 旧版は元側のファイル一覧を
+       **出力自身の出所列**から作っていた。だからフォルダに在るのに積まれなかった冊は
+       元側にも現れず、**出力を出力自身と比べていた** ── 「道具を信じる代わりに使う
+       独立チェック」が、一番肝心な「冊が丸ごと落ちた」を原理的に見られなかった。
+       実測: 3 冊のうち 1 冊が見出しの綴り違いで積まれず、それでも
+       「行数 元3/出力3・Σ 元600/出力600・exit 0」。
+       → **分母はフォルダの実ファイルから作る**。出所列に現れない冊は
+       `kind: "missing_source"` として名指しする。
     """
     out_data = xml_readback.read_grid(out_path)
     base_sheet_name = out_data.get("sheet_name")   # ★ P2: 各ソースをこの名前で引き当てる
@@ -426,6 +439,21 @@ def _verify_stack(out_path, src_folder) -> dict:
     label_col_name = base_headers[0] if base_headers else None
     # ★ operator 盲検7度目の直し: 合計行検出は数値列すべて（旧: 最初の1本だけ）。
 
+    # ★★ 分母は**フォルダの実ファイル**から作る（出力の出所列からではない）。
+    #   出所列に一度も現れない冊＝丸ごと落ちた冊を、ここで初めて見られるようになる。
+    missing_sources = []
+    if src_folder is not None and Path(src_folder).is_dir():
+        from ailine_core import multifile as _mf, stack as _st
+        folder_files, _exc = _mf.classify_folder_contents(Path(src_folder))
+        for q in folder_files:
+            if q.suffix.lower() != OPENPYXL_READABLE_SUFFIX:
+                continue
+            if _st.is_own_output(q):
+                continue          # 自分の出力は入力ではない（cmd_stack と同じ判定）
+            if q.name not in refs:
+                refs.setdefault(q.name, [])   # 分母に入れる（行は 0 件）
+                missing_sources.append(q.name)
+
     expected_total = 0
     sums_source = {name: 0.0 for name in numeric_cols}
     for fname in sorted(refs):
@@ -443,11 +471,21 @@ def _verify_stack(out_path, src_folder) -> dict:
 
     actual_total = len(out_rows)
     row_count = {"source": expected_total, "output": actual_total}
+    # ★ 冊が丸ごと落ちているなら、**行数の差より先にその事実を名指しする**。
+    #   「元 5 / 出力 3」だけでは、どの冊が落ちたのか人には分からない
+    #   （盲検の使い勝手レビューでも「どのファイルが原因か一言も言わない」が致命だった）。
+    ms_mismatches = [{"kind": "missing_source", "column": None, "name": n,
+                       "source": n, "output": None} for n in sorted(missing_sources)]
     if expected_total != actual_total:
         rc_mismatch = {"kind": "row_count", "column": None,
                        "source": expected_total, "output": actual_total}
-        return {"row_count": row_count, "sums": {}, "mismatch": rc_mismatch,
-                "mismatches": [rc_mismatch]}
+        first = ms_mismatches[0] if ms_mismatches else rc_mismatch
+        return {"row_count": row_count, "sums": {}, "mismatch": first,
+                "mismatches": ms_mismatches + [rc_mismatch]}
+    if ms_mismatches:
+        # 行数が偶然一致していても、積まれていない冊が在るなら通さない
+        return {"row_count": row_count, "sums": {}, "mismatch": ms_mismatches[0],
+                "mismatches": ms_mismatches}
 
     sums_output = {name: 0.0 for name in numeric_cols}
     for i, name in enumerate(base_headers, start=1):

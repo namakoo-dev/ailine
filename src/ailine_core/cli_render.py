@@ -239,12 +239,7 @@ def render_scan_report(folder_label: str, result: dict) -> list:
     lines.append(f"基準: {result['base']}" if result["base"] else "基準: 見つかりません（読める .xlsx が無い）")
     lines.append(f"{result['denominator']} ファイル中 {matched} 照合できた")
     excluded = result["excluded"]
-    if excluded.get("temp"):
-        lines.append(f"対象外: 一時ファイル {excluded['temp']} 件（~$ で除外）")
-    if excluded.get("subdirs"):
-        lines.append(f"対象外: サブフォルダ {excluded['subdirs']} 件（中は見ていません）")
-    if excluded.get("csv"):
-        lines.append(f"対象外: .csv {excluded['csv']} 件（1本ずつなら `ailine csv` で扱ってください）")
+    lines.extend(render_excluded_lines(excluded))
     for f in files:
         lines.append(_render_scan_file_line(f))
     return lines
@@ -278,6 +273,31 @@ def _fmt_num(v) -> str:
     return str(int(f)) if f.is_integer() else str(f)
 
 
+def render_excluded_lines(excluded: dict) -> list:
+    """フォルダから外したものの開示。**scan / stack / run<folder> が同じ文を使う。**
+
+    ★ なぜ切り出したか（2026-08-24）: 同じ規則を 3 箇所が別々に書いていたので、
+      scan だけが .csv を開示し、`run <folder>` は除外を丸ごと捨て、stack は一部だけ、
+      という**片配線**になっていた（盲検で 2 者が独立に指摘）。
+      分母は入力側から作る ── そして**開示も 1 箇所から出す**。
+    """
+    excluded = excluded or {}
+    lines = []
+    if excluded.get("temp"):
+        lines.append(f"対象外: 一時ファイル {excluded['temp']} 件（~$ で除外）")
+    if excluded.get("subdirs"):
+        lines.append(f"対象外: サブフォルダ {excluded['subdirs']} 件（中は見ていません）")
+    if excluded.get("csv"):
+        lines.append(f"対象外: .csv {excluded['csv']} 件（1本ずつなら `ailine csv` で扱ってください）")
+    if excluded.get("other_format"):
+        names = list(excluded.get("other_format_names") or [])
+        head = "・".join(names[:3])
+        more = f" ほか {len(names) - 3} 件" if len(names) > 3 else ""
+        detail = f"（{head}{more}）" if head else ""
+        lines.append(f"対象外: 読めない形式 {excluded['other_format']} 件{detail}"
+                     f" ── .xlsx に保存し直すと扱えます")
+    return lines
+
 def render_stack_report(folder_label: str, out_label: str, result: dict) -> list:
     """M1書き `ailine stack` の人間向け報告。分母つき + 除外の名指し + Σ の両側表示。
        ★ ⚠ は異常のあるファイルだけ（合計行の不一致・A列/used range の食い違い）。"""
@@ -289,9 +309,7 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
         lines.append(f"（自分の出力 {names} を入力から除外しました）")
     if result.get("collision_notice"):
         lines.append(f"（{result['collision_notice']}）")
-    csv_excluded = (result.get("excluded") or {}).get("csv")
-    if csv_excluded:
-        lines.append(f"対象外: .csv {csv_excluded} 件（1本ずつなら `ailine csv` で扱ってください）")
+    lines.extend(render_excluded_lines(result.get("excluded")))
     lines.append(f"{result['denominator']} ファイル中 {result['stacked_files']} 積んだ")
     for f in result.get("skipped", ()):
         lines.append(f"  ⚠ {f['name']}: 積めなかった（{f['reason']}）")
@@ -355,6 +373,13 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
             lines.append(f"⚠ 帰属が一致しません: {m['file']} の {m['src_row']}行目 "
                          f"列『{m['column']}』 元 {_fmt_num(m['source'])} / "
                          f"出力 {_fmt_num(m['output'])}")
+        elif kind == "missing_source":
+            # ★ 2026-08-24: 元フォルダに在るのに出力の出所列に一度も現れない冊。
+            #   旧版は元側の一覧を**出力自身の出所列**から作っていたので、この不一致は
+            #   原理的に発生しえなかった（＝冊が丸ごと落ちても exit 0 だった）。
+            lines.append(f"⚠ {m.get('name')} の行が出力に 1 行もありません"
+                         "（フォルダには在るのに積まれていない ── 見出しの綴りや"
+                         "列の欠けを確認してください）")
         elif kind == "total_word":
             # ★ operator 盲検7度目 修正2（第二の独立検出器）: 再演検分の直し ── この分岐が
             #   無いと exit 5 なのに理由が1行も出ない「黙る不合格」になっていた（憲法1違反）。
