@@ -1,0 +1,20 @@
+{
+  "_about": "台帳（MARKET-20260823-lancers.md）の実案件から起こした依頼者の言い回し。凍結セット w10_suggest_frozen_set.json とは別出所（自己汚染を避けるため、こちらは提案の穴を測る側・あちらは退行を守る側）。2026-08-24 に、語彙を足す前に凍結した。",
+  "should_hit": [
+    {"id": "L01", "text": "複数列の一括入れ替え", "expect_op": "FORMAT_MAP", "src": "2852253"},
+    {"id": "L02", "text": "列の並び替え", "expect_op": "FORMAT_MAP", "src": "2852253"},
+    {"id": "L03", "text": "指定のレイアウトに変更したい", "expect_op": "FORMAT_MAP", "src": "4139068"},
+    {"id": "L04", "text": "アップロード用のフォーマットに変換", "expect_op": "FORMAT_MAP", "src": "4701331"},
+    {"id": "L05", "text": "金額の大きい順に並び替え", "expect_op": "SORT", "src": "母集団B ①2件"},
+    {"id": "L06", "text": "売上表から請求書を自動生成", "expect_op": "REPORT_PER_ROW", "src": "5258428"},
+    {"id": "L07", "text": "マスタから該当データを追記", "expect_op": "LOOKUP_FILL", "src": "4956361"}
+  ],
+  "should_not_hit": [
+    {"id": "N01", "text": "共通キーで4ファイルを横結合", "why": "JOIN_BY_KEY は無い", "src": "757395"},
+    {"id": "N02", "text": "1セルのURLを1件ずつ別セルに分ける", "why": "SPLIT_CELL は無い", "src": "3203975"},
+    {"id": "N03", "text": "印刷ボタンを直したい", "why": "PRINT / MODIFY_EXISTING_MACRO は無い", "src": "4260741"},
+    {"id": "N04", "text": "次回巡回予定日を出す", "why": "DATE_CALC は無い", "src": "504084"},
+    {"id": "N05", "text": "ランダムに割り付けてグループ分け", "why": "RANDOM_ASSIGN は無い", "src": "4889514"},
+    {"id": "N06", "text": "ボタン一つで回せるツールを納品してほしい", "why": "TOOL_DELIVERY は op ではない", "src": "5498025"}
+  ]
+}
