@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "template_sheet": "Sheet",
+    "name_col": "商品",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "雛形シートとデータシートが同じ『Sheet』です。雛形は別のシートに用意してください"
+}

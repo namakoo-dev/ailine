@@ -429,12 +429,56 @@ def run_v7(model: str) -> None:
         print(f"  #{iid}[{kind}]: {msg}")
 
 
-RUNNERS = {"v2": run_v2, "v3": run_v3, "v4": run_v4, "v5": run_v5, "v6": run_v6, "v7": run_v7}
+# ===========================================================================
+# v9 — 帳票段 REPORT_PER_ROW battery: v6(EXTRACT) と同じ薄いランナー（単一依頼スコアリング）。
+#   OPS_DOC への追記が既存 op の分類精度を退行させていないかは v1(translation_dsl_battery_run.py)
+#   側で別途確認する ── ここで測るのは REPORT_PER_ROW 自身の翻訳精度（新語彙の初回実測）。
+# ===========================================================================
+def run_v9(model: str) -> None:
+    """items_v9 は books_extra が v9 専用（invoice_report）── _books() は v1+v2 の合成
+       までしか対応していないため、ここだけ v9 分を追加で足す。"""
+    books = _books()
+    books.update(BATTERY["_meta"]["v9"]["books_extra"])
+
+    op_ok = op_n = slot_ok = slot_n = 0
+    fails = []
+
+    for item in BATTERY["items_v9"]:
+        headers = books[item["book"]]["sheets"]
+        book_meta = {"sheets": list(headers.keys()), "headers": headers}
+        plan_result = ailine.translate_task(model, item["text"], book_meta, temperature=0.1)
+        got = (plan_result.get("plan") or [{"op": "FREEFORM", "args": {}}])[0]
+        got_op = str(got.get("op", "")).upper()
+        exp = item["expect"]
+
+        op_n += 1
+        if got_op == exp["op"]:
+            op_ok += 1
+            h, t = score_slots(exp, got)
+            slot_ok += h
+            slot_n += t
+            if h < t:
+                fails.append((item["id"], f"slot {h}/{t}: {got}"))
+        else:
+            fails.append((item["id"], f"op {got_op} ← 期待 {exp['op']} (got={got})"))
+
+    bar = BATTERY["_meta"]["v9"]["bar"]
+    print(f"model: {model}  (ailine.translate_task 経由・本番プロンプト・帳票段 items_v9・"
+          f"暫定バー op{bar['op_accuracy']:.0%}/slot{bar['slot_accuracy']:.0%})")
+    print(f"op 分類: {op_ok}/{op_n} = {op_ok/max(op_n,1):.1%}  (合格線 {bar['op_accuracy']:.0%})")
+    print(f"必須 slot: {slot_ok}/{max(slot_n,1)} = {slot_ok/max(slot_n,1):.1%}  (合格線 {bar['slot_accuracy']:.0%})")
+    print("\n-- 不一致の明細:")
+    for fid, msg in fails:
+        print(f"  #{fid}: {msg}")
+
+
+RUNNERS = {"v2": run_v2, "v3": run_v3, "v4": run_v4, "v5": run_v5, "v6": run_v6, "v7": run_v7,
+           "v9": run_v9}
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in RUNNERS:
-        print(f"使い方: python {Path(__file__).name} <v2|v3|v4|v5> [model]", file=sys.stderr)
+        print(f"使い方: python {Path(__file__).name} <v2|v3|v4|v5|v6|v7|v9> [model]", file=sys.stderr)
         sys.exit(1)
     _battery_id = sys.argv[1]
     _model = sys.argv[2] if len(sys.argv) > 2 else "qwen2.5-coder:7b"

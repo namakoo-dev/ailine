@@ -1,0 +1,49 @@
+{
+  "ok": true,
+  "resolved": {
+    "template_sheet": "雛形",
+    "name_col": "商品",
+    "_target_sheet": "Sheet",
+    "_placeholders": [
+      {
+        "cell": "B1",
+        "row": 1,
+        "col": 2,
+        "column_name": "商品",
+        "whole": true,
+        "raw": "{{商品}}",
+        "col_idx": 1
+      },
+      {
+        "cell": "B2",
+        "row": 2,
+        "col": 2,
+        "column_name": "金額",
+        "whole": true,
+        "raw": "{{金額}}",
+        "col_idx": 2
+      }
+    ],
+    "_report_rows": [
+      {
+        "row": 2,
+        "sheet": "a"
+      },
+      {
+        "row": 3,
+        "sheet": "b"
+      }
+    ],
+    "_report_sheet_names": [
+      "a",
+      "b"
+    ],
+    "_inspection_sheet": "検分",
+    "_source_headers": [
+      "商品",
+      "金額"
+    ]
+  },
+  "inferred": [],
+  "err": null
+}

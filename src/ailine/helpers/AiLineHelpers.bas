@@ -668,3 +668,81 @@ Sub DedupRows(oDoc As Object, headerRow As Integer, keyIdxCsv As String, dstName
         End If
     Next i
 End Sub
+
+
+' 帳票段: REPORT_PER_ROW（DESIGN-20260823-report-per-row.md）。
+' 雛形シート(templateSheet)を1枚複製して newSheetName にし、複製したシートの中の
+' 印({{列名}})を、参照シート(srcSheet)の srcRow 行の対応列の値で埋める。
+' ★ 憲法の適用: 機械が触ってよいのは印のあるセルだけ ── ここでは印を含まないセルには
+'   一切書き込まない（複製の時点で雛形の書式・値がそのまま残る）。
+' ★ 訂正2: newSheetName は Python 側(verify_dsl_args の unique_sheet_name)が
+'   呼ぶ前に一意・31文字以内・禁止文字なしを確定済み ── copyByName が失敗する余地は無い
+'   （失敗したら別名で再試行、はしない。孤児シートが積み上がるため）。
+' ★ 訂正3: 型は元データ列で決める。丸ごと一致(セル全体が"{{列名}}")の印だけ
+'   setValue/setString を型で出し分ける。部分一致（他の文字と同居する印）は文字列置換の
+'   み（Python 側の verify_dsl_args が部分一致+数値列の組を事前に拒むため、ここに来る
+'   部分一致は常に文字列でよい）。雛形側の数値書式（NumberFormat）には一切触れない。
+' ★ 印の探索は実行時に雛形の複製そのものを走査する（Python からセル位置ごとの写像を
+'   渡さない）── VLookupFromTable と同じ「シートを見出しで引く」作法の踏襲。
+'   used range は createCursor().gotoEndOfUsedArea で求める（AutoFitColumns 等の
+'   単純な「列0が空になるまで」走査だと、雛形の飛び飛びの空白行で取り逃がすため）。
+'   headerRow/srcRow は 0 起点（Python 側 codegen_dsl が Excel の1起点から変換して渡す）。
+Sub FillReportSheet(oDoc As Object, templateSheet As String, newSheetName As String, srcSheet As String, srcRow As Long, headerRow As Long)
+    Dim oNew As Object, oSrc As Object
+    Dim oCursor As Object, oAddr As Object
+    Dim r As Long, c As Long, lastRow As Long, lastCol As Long
+    Dim srcLastCol As Long, hc As Long
+    Dim s As String, inner As String
+    Dim p1 As Long, p2 As Long
+    Dim oCellNew As Object, oCellSrc As Object
+
+    oDoc.Sheets.copyByName(templateSheet, newSheetName, oDoc.Sheets.Count)
+    oNew = oDoc.Sheets.getByName(newSheetName)
+    oSrc = oDoc.Sheets.getByName(srcSheet)
+
+    oCursor = oNew.createCursor()
+    oCursor.gotoEndOfUsedArea(True)
+    oAddr = oCursor.RangeAddress
+    lastRow = oAddr.EndRow
+    lastCol = oAddr.EndColumn
+
+    ' 参照シートの見出し列数（見出し行を左から走査）。
+    srcLastCol = 0
+    Do While oSrc.getCellByPosition(srcLastCol, headerRow).getString() <> ""
+        srcLastCol = srcLastCol + 1
+    Loop
+    srcLastCol = srcLastCol - 1
+
+    For r = 0 To lastRow
+        For c = 0 To lastCol
+            oCellNew = oNew.getCellByPosition(c, r)
+            s = oCellNew.getString()
+            p1 = InStr(s, "{{")
+            If p1 > 0 Then
+                p2 = InStr(p1, s, "}}")
+                If p2 > 0 Then
+                    inner = Mid(s, p1 + 2, p2 - p1 - 2)
+                    For hc = 0 To srcLastCol
+                        If oSrc.getCellByPosition(hc, headerRow).getString() = inner Then
+                            oCellSrc = oSrc.getCellByPosition(hc, srcRow)
+                            If s = "{{" & inner & "}}" Then
+                                ' 丸ごと一致 ── 元データ列の型で出し分ける（数値書式は触らない）。
+                                If oCellSrc.getType() = com.sun.star.table.CellContentType.TEXT Then
+                                    oCellNew.setString(oCellSrc.getString())
+                                ElseIf oCellSrc.getType() = com.sun.star.table.CellContentType.EMPTY Then
+                                    oCellNew.setString("")
+                                Else
+                                    oCellNew.setValue(oCellSrc.getValue())
+                                End If
+                            Else
+                                ' 部分一致 ── 文字列置換のみ（数値列は Python 側が事前に拒む）。
+                                oCellNew.setString(Left(s, p1 - 1) & oCellSrc.getString() & Mid(s, p2 + 2))
+                            End If
+                            Exit For
+                        End If
+                    Next hc
+                End If
+            End If
+        Next c
+    Next r
+End Sub

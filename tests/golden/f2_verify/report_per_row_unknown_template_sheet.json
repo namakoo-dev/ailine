@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "template_sheet": "存在しない",
+    "name_col": "商品",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "シート『存在しない』がありません。あるシート: Sheet, 単価表"
+}

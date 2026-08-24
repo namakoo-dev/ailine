@@ -102,6 +102,9 @@ from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine ver
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
+from ailine_core.report_per_row import (   # ★ 帳票段: REPORT_PER_ROW の純ロジック部品
+    sanitize_sheet_name, unique_sheet_name, scan_placeholders, compare_report_cells,
+)
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
 from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
@@ -1283,6 +1286,12 @@ def unrequested_new_sheet_advisory(task: str, before: dict, after: dict, *,
     new_sheets = _new_sheets(before, after)
     if not new_sheets or _NEW_SHEET_MENTION_RE.search(task):
         return []
+    # ★ 帳票段: REPORT_PER_ROW はデータ行数ぶん（N枚・N は依頼のたび変わる）+検分シートを
+    #   作るのが定義そのもの ── 「ちょうど1枚」を前提にする他 op の中立化条件をそのまま
+    #   当てると、2枚目以降がすべて「依頼にない」と誤爆する。op の宣言(WRITE_NEW_SHEET)が
+    #   立っている限り、枚数を問わず中立表示にする。
+    if op == "REPORT_PER_ROW" and _op_writes(op, WRITE_NEW_SHEET):
+        return [f"（新規シート {len(new_sheets)} 枚の作成は意図どおりです）"]
     if _op_writes(op, WRITE_NEW_SHEET) and len(new_sheets) == 1:
         return [f"（新規シート『{new_sheets[0]}』の作成は意図どおりです）"]
     return [f"★ 依頼にない新しいシートが作成されました（{s}）" for s in new_sheets]
@@ -1921,6 +1930,14 @@ OP_META = {
     "DEDUP": {"category": "表を編集する", "label": "重複除去", "folder": False,
                "synonyms": ["重複を除く", "重複除去", "重複行を消す", "ユニークにする"],
                "match_phrases": ["ダブりを消す", "重複行を削除"]},
+    # ★ 帳票段: 実需 MARKET-20260823-lancers.md 財務書類系7件中5件がこの形
+    #   （表の1行を、人が作った定型フォーマットの1枚に転写してN枚出す）。
+    #   ★ folder は False（第一波はフォルダ集約に対応しない・単一ブックのみ）。
+    "REPORT_PER_ROW": {"category": "表を編集する", "label": "帳票作成", "folder": False,
+                         "synonyms": ["請求書を作る", "1件ずつ帳票にする", "雛形に転記"],
+                         "match_phrases": ["請求書", "見積書", "領収書", "帳票を作る",
+                                            "定型フォーマットに転記", "1行ずつ書類にする",
+                                            "行ごとに書類を作る"]},
 }
 
 OP_LABELS = {op: meta["label"] for op, meta in OP_META.items()}
@@ -2123,6 +2140,11 @@ OP_SCHEMA = {
     # ★ DEDUP: keys(判定キー列名のリスト)。無ければ CLARIFY（全列一致を既定にしない）。
     #   出力シート名は verify_dsl_args が機械で決め打ちする（EXTRACT と同じ A' 原則）。
     "DEDUP": ("keys",),
+    # ★ 帳票段: REPORT_PER_ROW。template_sheet(人が作った雛形シート)・name_col
+    #   (シート名に使う列＝データ行の見出し役)。印({{列名}})の実在検証・出力シート名
+    #   （行の値から機械で決め打ち・sanitize_sheet_name/unique_sheet_name）は
+    #   verify_dsl_args が行う（EXTRACT/DEDUP と同じ A' 原則 ── LLM に名前を決めさせない）。
+    "REPORT_PER_ROW": ("template_sheet", "name_col"),
 }
 
 # ★ W10c 致命1: 「破壊の関所」（既存列への上書き検知・下の _maybe_warn_target_overwrite）が
@@ -2206,6 +2228,12 @@ OP_WRITE_TARGET = {
     "EXTRACT": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
     # ★ DEDUP: EXTRACT と同じ形（新規シートを作るだけ・入力シートは読むだけ）。
     "DEDUP": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
+    # ★ 帳票段: REPORT_PER_ROW は N 枚の新規シート＋検分シートを作るだけ（新規シートの
+    #   前提検査 _check_new_sheet は before に存在しないシートを一切対象にしないので、
+    #   1 枚固定を前提にする既存の宣言をそのまま流用できる）。データシート(_target_sheet)と
+    #   雛形(template_sheet)はどちらも読むだけ＝助言側の「変更されていません」を抑える。
+    "REPORT_PER_ROW": WriteTarget(writes=(WRITE_NEW_SHEET,),
+                                    reads_only=("_target_sheet", "template_sheet")),
 }
 
 
@@ -2279,6 +2307,10 @@ OP_SUBJECT_SLOTS = {
     #   COMPUTE_COLUMN の operands と同じ仕組み）。SUBJ_COLUMN にする理由: keys は
     #   「計算の入力」ではなく依頼文が直接名指す対象そのもの（EXTRACT の col と同じ扱い）。
     "DEDUP": (("keys", SUBJ_COLUMN),),
+    # ★ 帳票段: name_col は依頼文が名指しうる「対象」そのもの（AGGREGATE の group_col と
+    #   同じ扱い）。template_sheet は「対象」ではなく、依頼文がその名で言及していれば
+    #   消費するだけの入力（LOOKUP_FILL の source_sheet と同じ SHEET_INPUT）。
+    "REPORT_PER_ROW": (("name_col", SUBJ_COLUMN), ("template_sheet", SUBJ_SHEET_INPUT)),
 }
 
 
@@ -2388,7 +2420,15 @@ DEDUP: 判定キー列（1つ以上）の値の組が同じ行のうち、最初
   依頼文で名指しされた列だけを入れる)
   ★ keys は依頼文に無い列を推測で入れない。どの列が同じなら重複とみなすか依頼文に
   無ければ CLARIFY で確認する（「全列が一致したら重複」を黙った既定にしない）。
-  出力シート名は機械が決める（LLM は考えなくてよい）"""
+  出力シート名は機械が決める（LLM は考えなくてよい）
+REPORT_PER_ROW: 表の1行を、人が作った雛形（定型フォーマット）の1枚に転写してN枚出す
+  （請求書・見積書・領収書等）。args: template_sheet(雛形のシート名), name_col(出力シート名の
+  元になる列。取引先名等)
+  ★ 雛形は依頼文または対象ブックの構成から実在するシート名を選ぶ（LLM が新しく作らない・
+  レイアウトを設計しない）。雛形のセルに書かれた {{列名}} が印で、機械が実在検証してから
+  値を埋める。印以外のセルには一切触れない
+  ★ N枚出す・別ファイルには分けない語彙（第一波）。CSVの書き出し・Word/PDF出力・
+  印刷は語彙に無い（OUT_OF_VOCAB にする）"""
 
 # ★ M2c: battery(v1) が実測で取り違えた基本パターンに加え、複合依頼(battery v2)を few-shot で
 #   教える。同じ混同/構造を別の言い回しで示す（battery の項目文そのままは使わない＝暗記でなく
@@ -3325,6 +3365,112 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
         resolved["_new_sheet"] = _dedup_output_sheet_name(resolved_keys)
 
+    # ★ 帳票段: REPORT_PER_ROW（DESIGN-20260823-report-per-row.md）。表の1行を、人が作った
+    #   雛形シートの1枚に転写してN枚出す。憲法の適用: 機械が触ってよいのは雛形の中の
+    #   印({{列名}})が置かれたセルだけ ── ここで印を実在検証し、印以外は一切触らない前提を
+    #   固める（型の出し分け・出力シート名・合計行の除外まで、すべて機械が決め切る）。
+    elif op == "REPORT_PER_ROW":
+        if (err := check_sheet("template_sheet")):
+            return False, resolved, inferred, err
+        template_sheet = resolved["template_sheet"]
+        if template_sheet == first_sheet:
+            return False, resolved, inferred, (
+                f"雛形シートとデータシートが同じ『{template_sheet}』です。"
+                "雛形は別のシートに用意してください")
+        if (err := resolve_in("name_col", first_sheet)):
+            return False, resolved, inferred, err
+
+        book_path = book_meta.get("path")
+        if book_path is None:
+            return False, resolved, inferred, (
+                "帳票段はファイルの実体が無いと検証できません（book_meta に path が無い）")
+        data_headers = headers.get(first_sheet, [])
+        header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
+
+        try:
+            wb_tpl = openpyxl.load_workbook(book_path)
+        except Exception as e:
+            return False, resolved, inferred, f"雛形の読み込みに失敗しました: {e}"
+        try:
+            tpl_ws = wb_tpl[template_sheet]
+            placeholders = scan_placeholders(tpl_ws, tpl_ws.max_row or 1, tpl_ws.max_column or 1)
+        finally:
+            wb_tpl.close()
+
+        if not placeholders:
+            return False, resolved, inferred, (
+                f"雛形『{template_sheet}』に印（{{{{列名}}}}）が見つかりません。"
+                "転記したいセルに {{列名}} の形で印を置いてください")
+
+        resolved_placeholders = []
+        for ph in placeholders:
+            if ph.column_name not in data_headers:
+                return False, resolved, inferred, (
+                    f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
+                    f"（{ph.cell}）が指す列『{ph.column_name}』は、データシート"
+                    f"『{first_sheet}』に見つかりません。実在する列名を印にしてください"
+                )
+            col_idx = data_headers.index(ph.column_name) + 1
+            if not ph.whole:
+                # ★ 訂正3: 部分一致の印は原理的に文字列にしかなれない ── 数値列には使わせない
+                #   （検体には無いが自分の検体で固定する境界。設計文書の指示どおり）。
+                try:
+                    is_numeric = column_is_all_numeric(book_path, first_sheet, col_idx,
+                                                        header_row_here)
+                except Exception:
+                    is_numeric = False
+                if is_numeric:
+                    return False, resolved, inferred, (
+                        f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
+                        f"（{ph.cell}）はセルの一部分（部分一致）ですが、列『{ph.column_name}』は"
+                        "数値です。数値列には部分一致の印を使えません"
+                        "（セル全体を印にしてください: 例 " + "{{" + ph.column_name + "}}）"
+                    )
+            resolved_placeholders.append({
+                "cell": ph.cell, "row": ph.row, "col": ph.col,
+                "column_name": ph.column_name, "whole": ph.whole, "raw": ph.raw,
+                "col_idx": col_idx,
+            })
+        resolved["_placeholders"] = resolved_placeholders
+
+        try:
+            wb_data = openpyxl.load_workbook(book_path, data_only=True)
+        except Exception as e:
+            return False, resolved, inferred, f"データシートの読み込みに失敗しました: {e}"
+        try:
+            src_ws = wb_data[first_sheet]
+            last_row = _scan_last_row(src_ws, header_row=header_row_here)
+            rows_in = []
+            for r in range(header_row_here + 1, last_row + 1):
+                label_val = src_ws.cell(row=r, column=1).value
+                vals = {h: src_ws.cell(row=r, column=i + 1).value
+                        for i, h in enumerate(data_headers)}
+                rows_in.append((r, label_val, vals))
+        finally:
+            wb_data.close()
+        verdict = total_row.split_total_rows_multi(rows_in) if rows_in else total_row.TotalRowVerdict(
+            excluded=[], adopted_rows=[], mismatches=[])
+        row_values = {r: v for r, _l, v in rows_in}
+
+        used = set(sheets) | {template_sheet}
+        report_rows = []
+        for r in verdict.adopted_rows:
+            raw_name = row_values[r].get(resolved["name_col"])
+            sheet_name = unique_sheet_name(str(raw_name), used)
+            used.add(sheet_name)
+            report_rows.append({"row": r, "sheet": sheet_name})
+        if not report_rows:
+            return False, resolved, inferred, (
+                "帳票にするデータ行がありません（表が空か、全行が合計行と判定されました）"
+            )
+        inspection_sheet = unique_sheet_name(inspection.SHEET_NAME, used)
+        used.add(inspection_sheet)
+
+        resolved["_report_rows"] = report_rows
+        resolved["_report_sheet_names"] = [rr["sheet"] for rr in report_rows]
+        resolved["_inspection_sheet"] = inspection_sheet
+        resolved["_source_headers"] = tuple(data_headers)
+
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
 
@@ -3363,6 +3509,7 @@ _CONFIRM_FIELDS = {
     "EXTRACT": (("対象列", "col", None), ("条件", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
                  ("値", "value", lambda v: _format_extract_value(v))),
     "DEDUP": (("判定キー", "keys", lambda v: "・".join(v)),),
+    "REPORT_PER_ROW": (("雛形", "template_sheet", None), ("シート名の元列", "name_col", None)),
 }
 
 # ★ EXTRACT: 比較の語彙（設計書どおり6種）。gte/lte/gt/lt は数値比較・eq は値の型に応じて
@@ -3862,6 +4009,23 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         key_idx_csv = ",".join(str(i) for i in key_idxs)
         dst_name = str(resolved_args["_new_sheet"]).replace('"', '""')
         return wrap(f'    Call DedupRows(oDoc, {hr0}, "{key_idx_csv}", "{dst_name}")\n')
+
+    if op == "REPORT_PER_ROW":
+        # ★ ヘルパへの Call を行数ぶん（helpers/AiLineHelpers.bas:FillReportSheet）。
+        #   ★ B: 呼ぶ前に一意名を解決済み（verify_dsl_args の unique_sheet_name）── 失敗
+        #   しうる名前を copyByName に渡さない。ループは Python 側（Basic 側でシート名を
+        #   作らない・設計文書の指示どおり「名前は Python 側が全部決めてから渡す」）。
+        template_sheet = str(resolved_args["template_sheet"]).replace('"', '""')
+        src_sheet = str(first_sheet).replace('"', '""')
+        lines = []
+        for rr in resolved_args.get("_report_rows", []):
+            new_name = str(rr["sheet"]).replace('"', '""')
+            src_row0 = int(rr["row"]) - 1   # Excel(1起点) → Basic(0起点)
+            lines.append(
+                f'    Call FillReportSheet(oDoc, "{template_sheet}", "{new_name}", '
+                f'"{src_sheet}", {src_row0}, {hr0})\n'
+            )
+        return wrap("".join(lines))
 
     raise ValueError(f"未対応の op: {op}")
 
@@ -4988,6 +5152,105 @@ def check_dedup(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{denom}（値・型とも保存。元シートとの突き合わせ無し）"
 
 
+def check_report_per_row(path: Path, args: dict, header_row: int = 1,
+                          source_book: Path | None = None) -> tuple:
+    """REPORT_PER_ROW の事後条件。設計文書の4本柱を機械で確かめる:
+       ①枚数の完全会計（データ行 N＝出力 N 枚。合計行は total_row の既存機構で独立に
+        再判定する ── verify_dsl_args の勘定を信じ切らず、ここで recount する）
+       ②値の3計数（compare_report_cells・印セルだけに絞る・欠落0/不一致0/余剰0）
+       ③出所（検分シートの実在）
+       ④雛形+データシートの不変（source_book が渡された時だけ突き合わせる）"""
+    report_rows = args.get("_report_rows") or []
+    placeholders = args.get("_placeholders") or []
+    inspection_sheet = args.get("_inspection_sheet")
+    template_sheet = args.get("template_sheet")
+    src_sheet_name = args.get("_target_sheet")
+    if not report_rows:
+        return "fail", "出力する行が決まっていません（verify_dsl_args を経由していない可能性）"
+    if not placeholders:
+        return "fail", "印の一覧が決まっていません（verify_dsl_args を経由していない可能性）"
+    if not inspection_sheet:
+        return "fail", "検分シート名が決まっていません（verify_dsl_args を経由していない可能性）"
+
+    with BookView(path) as bv:
+        if src_sheet_name not in bv.sheetnames:
+            return "fail", f"データシート『{src_sheet_name}』がありません"
+        src = bv.sheet(src_sheet_name)
+        last_col = _scan_last_col(src, header_row=header_row)
+        if last_col < 1:
+            return "fail", _ZERO_TARGET_REASON
+
+        # ①枚数の完全会計: 合計行の除外を total_row.py で独立に recount する
+        #   （verify_dsl_args が決めた _report_rows を鵜呑みにしない）。
+        last_row = _scan_last_row(src, header_row=header_row)
+        rows_in = []
+        for r in range(header_row + 1, last_row + 1):
+            label_val = src.cell(row=r, column=1).value
+            vals = {c: src.cell(row=r, column=c).value for c in range(2, last_col + 1)}
+            rows_in.append((r, label_val, vals))
+        verdict = total_row.split_total_rows_multi(rows_in) if rows_in else \
+            total_row.TotalRowVerdict(excluded=[], adopted_rows=[], mismatches=[])
+        expected_rows = set(verdict.adopted_rows)
+        got_rows = [rr["row"] for rr in report_rows]
+        if len(got_rows) != len(set(got_rows)):
+            return "fail", "報告シートに同じ元行が重複しています"
+        got_row_set = set(got_rows)
+        if expected_rows != got_row_set:
+            missing = sorted(expected_rows - got_row_set)
+            extra = sorted(got_row_set - expected_rows)
+            return "fail", (f"データ{len(expected_rows)}行のうち出力は{len(got_row_set)}枚"
+                             f"（欠落行 {missing}・余剰行 {extra}）")
+
+        declared_sheet_names = {rr["sheet"] for rr in report_rows}
+        actual_extra_sheets = {s for s in bv.sheetnames
+                                if s not in (src_sheet_name, template_sheet, inspection_sheet)}
+        if actual_extra_sheets != declared_sheet_names:
+            missing_sheets = sorted(declared_sheet_names - actual_extra_sheets)
+            surplus_sheets = sorted(actual_extra_sheets - declared_sheet_names)
+            return "fail", (f"報告シートの枚数が合いません（欠落 {missing_sheets}・"
+                             f"余剰(孤児シートの疑い) {surplus_sheets}）")
+        if inspection_sheet not in bv.sheetnames:
+            return "fail", f"検分シート『{inspection_sheet}』がありません"
+
+        # ②値の3計数: 印セルだけに絞って、各枚を元の行と突き合わせる（型込み等値）。
+        for rr in report_rows:
+            declared = {}
+            for ph in placeholders:
+                src_val = src.cell(row=rr["row"], column=ph["col_idx"]).value
+                if ph["whole"]:
+                    declared[ph["cell"]] = src_val
+                else:
+                    filler = "" if src_val is None else str(src_val)
+                    declared[ph["cell"]] = ph["raw"].replace(
+                        "{{" + ph["column_name"] + "}}", filler)
+            result = compare_report_cells(path, rr["sheet"], declared)
+            if not result.ok:
+                return "fail", (
+                    f"報告シート『{rr['sheet']}』（元{rr['row']}行目）の印が元の行と"
+                    f"一致しません（欠落{len(result.missing)}・不一致{len(result.mismatched)}"
+                    f"・余剰{len(result.surplus)}）"
+                )
+
+    denom = f"データ{len(report_rows)}行 → 出力{len(report_rows)}枚（印{len(placeholders)}箇所/枚）"
+
+    if source_book is not None and Path(source_book).exists():
+        with BookView(source_book) as bv_before, BookView(path) as bv_after:
+            for sheet_name in (template_sheet, src_sheet_name):
+                sb = bv_before.sheet(sheet_name)
+                sa = bv_after.sheet(sheet_name)
+                lr = max(_scan_last_row(sb, header_row=1), _scan_last_row(sa, header_row=1))
+                lc = max(_scan_last_col(sb, header_row=1), _scan_last_col(sa, header_row=1))
+                mismatches = sum(
+                    1 for r in range(1, lr + 1) for c in range(1, lc + 1)
+                    if sb.cell(row=r, column=c).value != sa.cell(row=r, column=c).value)
+                if mismatches:
+                    return "fail", (f"{denom} でしたが、シート『{sheet_name}』が {mismatches}"
+                                     " セル変更されています（雛形・データシートは読むだけのはず）")
+        return "pass", f"{denom}（印の値・型とも保存・雛形/データシート無変更）"
+
+    return "pass", f"{denom}（印の値・型とも保存。雛形/データシートとの突き合わせ無し）"
+
+
 POSTCONDITIONS = {
     "SORT": check_sort, "COMPUTE_COLUMN": check_compute_column,
     "LOOKUP_FILL": check_lookup_fill, "AGGREGATE": check_aggregate,
@@ -5001,6 +5264,8 @@ POSTCONDITIONS = {
     "SET_COLUMN_VALUE": check_set_column_value,
     "EXTRACT": check_extract,
     "DEDUP": check_dedup,
+    # ★ 帳票段:
+    "REPORT_PER_ROW": check_report_per_row,
 }
 
 
@@ -5058,7 +5323,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
                        source_book=source_book)
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
-        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP"):
+        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -6415,6 +6680,31 @@ def _announce_lookup_fill_target_sheet(a: argparse.Namespace, sheets: list, args
         _flush_pending_sheet_announce(a)
 
 
+def _announce_report_per_row_target_sheet(a: argparse.Namespace, sheets: list, args: dict) -> None:
+    """★ 帳票段: operator8①（LOOKUP_FILL の source_sheet 混同）と同型のバグへの対処。
+       実機で再現: 依頼文が『雛形を使って請求書を作って』のように雛形シートを名指しすると、
+       op 判明**前**の一般解決(resolve_target_sheet)が「依頼文が言及した唯一のシート」＝
+       雛形をデータシートと誤認する（雛形は必ずデータシートと別、という事実を一般解決は
+       知らない）。REPORT_PER_ROW の raw args には LOOKUP_FILL の target_sheet に相当する
+       『データシート名』の直接申告が無い（template_sheet だけが分かる）ため、
+       _announce_lookup_fill_target_sheet と同じ食い違い判定はできない ── 代わりに
+       「推測が template_sheet と一致し、かつ残りのシートがちょうど1枚」という
+       曖昧さの無い場合に限って、その1枚へ訂正する（3枚以上のブックは無理に当てず、
+       verify_dsl_args の『雛形とデータシートが同じ』エラーで正直に止める）。"""
+    pending = getattr(a, "_pending_sheet_announce", None)
+    template = args.get("template_sheet") if isinstance(args, dict) else None
+    if isinstance(template, str) and template == a._target_sheet:
+        others = [s for s in sheets if s != template]
+        if len(others) == 1:
+            a._pending_sheet_announce = None
+            a._target_sheet = others[0]
+            announce = describe_target_sheet(sheets, others[0], "default")
+            if announce:
+                print(announce)
+            return
+    _flush_pending_sheet_announce(a)
+
+
 def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path,
                              struct_dump: dict, sheets: list) -> int:
     """対象シートが決まった後の残り（見出し行 → 翻訳 → 計画の振り分け）。
@@ -6480,6 +6770,8 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         #   訂正の要否を判断する。それ以外は推測どおりに出す（従来と同じ文言・タイミング差のみ）。
         if op == "LOOKUP_FILL":
             _announce_lookup_fill_target_sheet(a, sheets, step.get("args") or {})
+        elif op == "REPORT_PER_ROW":
+            _announce_report_per_row_target_sheet(a, sheets, step.get("args") or {})
         else:
             _flush_pending_sheet_announce(a)
         if op == "CLARIFY":
@@ -6491,6 +6783,15 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             #   区別できない ── 区別する手段を毎回そえる。
             print("  （頼める操作の一覧: ailine ops）")
             return 3
+        # ★ 帳票段: REPORT_PER_ROW は「データ行 N＝出力 N 枚」という op の形が
+        #   cmd_run_dsl/dsl_step.py の共有エンジン（1シートへの書き込み前提）と構造的に
+        #   違う（検分シートを LO 適用の直後・事後条件チェックの直前に足す必要があり、
+        #   apply_dsl_step は basrun_apply→run_postcondition を1呼び出しの中で行うため
+        #   割り込めない）── ②検証・③確認は共有するが④〜⑥は専用の cmd_run_report_per_row
+        #   を通す（cmd_run_folder 等、構造が違う op が独自のトップレベル関数を持つのと同じ
+        #   作法）。OP_SCHEMA には登録したままにする（他の宣言駆動の番人がそのまま効くため）。
+        if op == "REPORT_PER_ROW":
+            return cmd_run_report_per_row(a, book, source_book, book_meta, step.get("args", {}))
         if op in OP_SCHEMA:
             return cmd_run_dsl(a, book, source_book, book_meta, op, step.get("args", {}))
         return _maybe_suggest_or_refuse(a, book, source_book, book_meta, sheets, step)
@@ -6931,6 +7232,187 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     #   resolved["_warnings"]（LLM 由来の値と機械抽出の食い違い ── 片配線の追補 2026-08-22:
     #   advisories にも前提破れにも入らないため、ここで明示的に数える。素の文字列は印を
     #   持たないので len で数える）。0 なら従来どおり ✓。
+    warning_count = (count_suspicious_advisories(advisories) + (1 if warn_precondition else 0)
+                      + len(resolved.get("_warnings", [])))
+    _finish_apply(a, book, out_book, workdir, result,
+                   machine_verified=(status != "warn" and not confirm.subject_warnings),
+                   scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
+                   warning_count=warning_count)
+
+    _finish_run(a, book, result, "none")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# ★ 帳票段: REPORT_PER_ROW 専用の実行経路（DESIGN-20260823-report-per-row.md）。
+#   ②検証(resolve_dsl_step_args)・③確認(print_dsl_confirmation) は cmd_run_dsl と共有する
+#   が、④codegen〜⑥事後条件は専用に組む ── 検分シート（③出所の置き場）を basrun_apply の
+#   直後・run_postcondition の直前に Python 側で足す必要があり、共有エンジン
+#   (dsl_step.apply_dsl_step) は basrun_apply→run_postcondition を1呼び出しの中で行うため
+#   割り込めない。
+# ---------------------------------------------------------------------------
+
+def _add_report_inspection_sheet(out_book: Path, resolved: dict) -> None:
+    """★ 訂正4: 出所は stack の出所列でなく検分シートに置く（1行=1シートには構造的に
+       合わないため）。basrun_apply が N 枚の報告シートを作った直後・事後条件チェックの
+       直前に、Python 側で直接シート/元行/埋めた印の数の一覧を足す（inspection.py の
+       作法に乗る ── 見出し太字・列幅自動算出は同じ部品を使う。findings 形の build_sheet
+       は「宣言=シート全体」の1シート出力を前提にしており 1行=1シートに合わないため、
+       ここでは専用の簡易版を組む）。"""
+    inspection_sheet = resolved.get("_inspection_sheet")
+    report_rows = resolved.get("_report_rows") or []
+    if not inspection_sheet or not report_rows:
+        return
+    n_placeholders = len(resolved.get("_placeholders") or [])
+    wb = openpyxl.load_workbook(out_book)
+    try:
+        ws = wb.create_sheet(title=inspection_sheet)
+        header = ["シート名", "元の行", "埋めた印の数"]
+        for c, h in enumerate(header, start=1):
+            ws.cell(row=1, column=c, value=h)
+        inspection.bold_row(ws, 1, len(header))
+        for i, rr in enumerate(report_rows, start=2):
+            ws.cell(row=i, column=1, value=rr["sheet"])
+            ws.cell(row=i, column=2, value=rr["row"])
+            ws.cell(row=i, column=3, value=n_placeholders)
+        inspection.autosize_columns(ws)
+        wb.save(out_book)
+    finally:
+        wb.close()
+
+
+def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
+                            book_meta: dict, raw_args: dict) -> int:
+    """REPORT_PER_ROW 専用の実行経路。②③は cmd_run_dsl と同じ器官を呼ぶ（DslStepDeps 経由）。
+       ④codegen〜⑥事後条件は cmd_run_dsl と同じ手順を踏むが、apply_dsl_step は使わず
+       basrun_apply→検分シート追加→事後条件、の順で自分で呼ぶ（検分シートを間に挟むため）。
+       ★ ASSUMED: 摩擦⑥（LO 一時的な不調の1回リトライ）は本経路には持ち込まない
+       （第一波・他 op と違い据え置き。発火したら通常の実行時エラーとして正直に失敗する）。"""
+    op = "REPORT_PER_ROW"
+    vocab = load_vocab()
+    deps = _make_dsl_step_deps()
+    first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
+    ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, first_sheet=first_sheet, deps=deps)
+    if not ground.ok:
+        print(f"？ {ground.err}")
+        return 3
+    resolved, inferred = ground.resolved, ground.inferred
+
+    first_sheet = resolved.get("_target_sheet") or first_sheet
+    header_row = book_meta.get("header_rows", {}).get(first_sheet, 1)
+    use_formula = not getattr(a, "values", False)
+
+    print(render_run_header("DSL 経路", a.model, book.name))
+    confirm = print_dsl_confirmation(op, resolved, inferred, a.task, meta=book_meta, warn_book=book,
+                                      new_cols=None, a=a, deps=deps)
+    if confirm.gate_exit is not None:   # ★ W10a 項目1: 破壊の関所
+        return confirm.gate_exit
+
+    if a.ask:
+        try:
+            ans = input("続行しますか？ [y/N]: ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans not in ("y", "yes"):
+            print(render_aborted())
+            return 1
+
+    workdir = book.parent / f".ailine_{book.stem}"
+    workdir.mkdir(exist_ok=True)
+    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    apply_timeout = a.timeout if a.timeout else None
+    helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
+    _helper_catalog, helper_files = load_helpers(helpers_dir)
+
+    code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
+    (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
+    for ln in render_code_block(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
+        print(ln)
+
+    interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
+    result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
+              "path": "dsl", "command": confirm.line, "postcondition": None,
+              "interpretation": interpretation, "provenance": provenance}
+
+    if a.dry:
+        if not getattr(a, "_preview_only", False):
+            print("（--dry: 適用しない。レビュー後に --dry を外して実行）")
+        result["ok"] = True
+        result["dry"] = True
+        _finish_run(a, book, result, "none")
+        return 0
+
+    before = snapshot(source_book)
+    before_chart_paths = _chart_paths(source_book)
+    shutil.copy2(source_book, out_book)
+
+    t0 = progress_start("⏳ LibreOffice で適用中…")
+    okrun, err_apply, _raw = basrun_apply(out_book, code, workdir, helper_files, timeout=apply_timeout)
+    progress_end(t0)
+    if not okrun:
+        print(f"× 実行時エラー: {short_error_summary(err_apply)}（詳細は履歴に記録）。")
+        print(_untouched_original_line(book, out_book))
+        result["last_error_full"] = err_apply
+        _finish_run(a, book, result, "runtime_error", error_detail=err_apply)
+        return 1
+
+    # ★ 検分シート（③出所の置き場）は LO を経由せず Python 側で直接足す（basrun_apply と
+    #   run_postcondition の間に割り込める唯一の場所）。
+    _add_report_inspection_sheet(out_book, resolved)
+
+    after = snapshot(out_book)
+    changed, lines = diff_snapshots(before, after)
+    print("\n変更点:" if changed else "\n（文書に変化は検出されなかった）")
+    for ln in lines:
+        print(ln)
+
+    notice = _truncation_notice(before, after, exhaustive_postcondition=True)
+    if notice:
+        print(notice)
+
+    precondition = _maybe_warn_write_precondition(op, before, after, resolved)
+    precondition_broken = precondition[0] if precondition else None
+    for own_notice in _maybe_own_prior_output_notice(op, before, after, resolved):
+        print(own_notice)
+    advisories = compose_dsl_step_advisories(
+        "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
+        sheet_conflict=getattr(a, "_sheet_conflict", None),
+        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(
+            source_book, out_book, cell_ref=_cell_ref)
+    for adv in advisories:
+        print(adv)
+    result["changes"] = lines
+    result["advisories"] = advisories
+
+    status, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"],
+                                        header_row=header_row, use_formula=use_formula,
+                                        source_book=source_book, before_chart_paths=before_chart_paths)
+    result["postcondition"] = "fail" if status == "error" else status
+    if status == "error":
+        print(f"\n× {reason}")
+        print(_untouched_original_line(book, out_book))
+        result["out"] = str(out_book)
+        _finish_run(a, book, result, "postcondition_error")
+        return 1
+    if status == "fail":
+        print(f"\n× 適用されたが事後条件を満たさない: {reason}")
+        print(_untouched_original_line(book, out_book))
+        result["out"] = str(out_book)
+        _finish_run(a, book, result, "postcondition_fail")
+        return 1
+    if status == "warn":
+        print(f"\n⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
+    else:
+        print(f"\n事後条件を確認（操作:{OP_LABELS.get(op, op)}）: {reason}")
+    result["ok"] = True
+
+    warn_precondition = precondition[1] if precondition else None
+    if warn_precondition:
+        print(warn_precondition)
+        gate_exit = _confirm_overwrite_or_gate(a, warn_precondition)
+        if gate_exit is not None:
+            return gate_exit
+
     warning_count = (count_suspicious_advisories(advisories) + (1 if warn_precondition else 0)
                       + len(resolved.get("_warnings", [])))
     _finish_apply(a, book, out_book, workdir, result,

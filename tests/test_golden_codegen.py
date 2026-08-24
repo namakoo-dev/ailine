@@ -168,6 +168,17 @@ _add("dedup_multi_key_hr1", "DEDUP",
 _add("dedup_single_key_hr3", "DEDUP", {"keys": ["商品"], "_new_sheet": "商品の重複除去"},
      book_meta=BM_HR3)
 
+# --- REPORT_PER_ROW（帳票段）--------------------------------------------------
+# ★ _target_sheet/_report_rows は verify_dsl_args が積む値（unique_sheet_name で
+#   一意名を決め切ってから渡す ── Basic 側で名前を作らない・設計文書の指示どおり）。
+_add("report_per_row_two_rows_hr1", "REPORT_PER_ROW",
+     {"template_sheet": "単価表", "name_col": "商品", "_target_sheet": "Sheet",
+      "_report_rows": [{"row": 2, "sheet": "甲社"}, {"row": 3, "sheet": "乙社"}]})
+_add("report_per_row_two_rows_hr3", "REPORT_PER_ROW",
+     {"template_sheet": "単価表", "name_col": "商品", "_target_sheet": "Sheet",
+      "_report_rows": [{"row": 4, "sheet": "甲社"}, {"row": 5, "sheet": "乙社"}]},
+     book_meta=BM_HR3)
+
 # --- 後方互換: header_rows キーが book_meta に無い旧テスト値 ------------------
 _add("sort_legacy_no_header_rows_key", "SORT", {"col": "金額", "order": "asc"},
      book_meta=BM_LEGACY_NO_HEADER_ROWS)

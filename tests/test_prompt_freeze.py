@@ -27,7 +27,13 @@ _FROZEN = {
     # ★ 2026-08-23: グラフ段（kind/category_col の語彙拡張）で OPS_DOC の CHART 行を更新。
     #   bench/translation_dsl_battery_run.py 実 7B（qwen2.5-coder:7b）で凍結バーを確認済み:
     #   op 98.1%→98.1%・slot 98.6%→98.6%・曖昧誤断定 0%→0%（合格線90%/80%/20%以下・変化なし）。
-    "OPS_DOC": "310108602de1b75b",
+    # ★ 2026-08-24: 帳票段（REPORT_PER_ROW）の語彙昇格で OPS_DOC に op 説明を追加。
+    #   bench/translation_dsl_battery_run.py 実 7B（qwen2.5-coder:7b・items v1・52件）で
+    #   既存語彙への退行が無いことを確認済み: op 98.1%(51/52)・slot 98.6%(71/72)・
+    #   曖昧誤断定 0%(0/11)（合格線90%/80%/20%以下・すべてクリア）。
+    #   帳票段専用 battery（bench/translation_battery_run.py v9・items_v9・4件・暫定バー
+    #   op75%/slot80%）は op 100%(4/4)・slot 100%(8/8)。
+    "OPS_DOC": "610a347e66a69e6d",
     "TRANSLATION_SYSTEM": "8dd5cd3a43d833fe",
     "TRANSLATION_FEWSHOT": "c10a9b45e6cada35",
     # ★ 2026-08-22: W10 便B（二段目翻訳・op 固定で args だけ埋めさせる）で追加した第4の定数。

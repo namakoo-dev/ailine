@@ -555,6 +555,75 @@ _DEDUP_ARGS = {"keys": ["取引先"], "_target_sheet": "Sheet", "_new_sheet": "�
 _add("dedup_pass", "DEDUP", _DEDUP_ARGS, _b_dedup_pass)
 _add("dedup_fail_missing_sheet", "DEDUP", _DEDUP_ARGS, _b_dedup_fail_missing_sheet)
 
+# --- REPORT_PER_ROW（帳票段）--------------------------------------------------
+_REPORT_ARGS = {
+    "template_sheet": "雛形", "name_col": "取引先", "_target_sheet": "売上",
+    "_inspection_sheet": "検分",
+    "_report_rows": [{"row": 2, "sheet": "甲社"}, {"row": 3, "sheet": "乙社"}],
+    "_placeholders": [
+        {"cell": "B1", "row": 1, "col": 2, "column_name": "取引先", "whole": True,
+         "raw": "{{取引先}}", "col_idx": 1},
+        {"cell": "B2", "row": 2, "col": 2, "column_name": "金額", "whole": True,
+         "raw": "{{金額}}", "col_idx": 2},
+    ],
+}
+
+
+def _b_report_pass(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "売上"
+    for row in [["取引先", "金額"], ["甲社", 100], ["乙社", 200]]:
+        ws.append(row)
+    tpl = wb.create_sheet("雛形")
+    tpl["B1"] = "{{取引先}}"
+    tpl["B2"] = "{{金額}}"
+    sh1 = wb.copy_worksheet(tpl)
+    sh1.title = "甲社"
+    sh1["B1"] = "甲社"
+    sh1["B2"] = 100
+    sh2 = wb.copy_worksheet(tpl)
+    sh2.title = "乙社"
+    sh2["B1"] = "乙社"
+    sh2["B2"] = 200
+    insp = wb.create_sheet("検分")
+    insp.append(["シート名", "元の行", "埋めた印の数"])
+    insp.append(["甲社", 2, 2])
+    insp.append(["乙社", 3, 2])
+    wb.save(p)
+    return p, None
+
+
+def _b_report_fail_mismatch(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "売上"
+    for row in [["取引先", "金額"], ["甲社", 100], ["乙社", 200]]:
+        ws.append(row)
+    tpl = wb.create_sheet("雛形")
+    tpl["B1"] = "{{取引先}}"
+    tpl["B2"] = "{{金額}}"
+    sh1 = wb.copy_worksheet(tpl)
+    sh1.title = "甲社"
+    sh1["B1"] = "甲社"
+    sh1["B2"] = 999   # ★ 元の行(100)と不一致
+    sh2 = wb.copy_worksheet(tpl)
+    sh2.title = "乙社"
+    sh2["B1"] = "乙社"
+    sh2["B2"] = 200
+    insp = wb.create_sheet("検分")
+    insp.append(["シート名", "元の行", "埋めた印の数"])
+    insp.append(["甲社", 2, 2])
+    insp.append(["乙社", 3, 2])
+    wb.save(p)
+    return p, None
+
+
+_add("report_per_row_pass", "REPORT_PER_ROW", _REPORT_ARGS, _b_report_pass)
+_add("report_per_row_fail_mismatch", "REPORT_PER_ROW", _REPORT_ARGS, _b_report_fail_mismatch)
+
 # --- error 状態（事後条件チェッカー自身の例外をキャッチして "error" に変換する境界） -----
 _add("error_missing_required_arg_key", "SORT", {}, _b_sort_pass)   # args["col"] で KeyError
 

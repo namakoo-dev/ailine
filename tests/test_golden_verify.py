@@ -13,8 +13,10 @@ CLARIFY/OUT_OF_VOCAB は verify_dsl_args 自身の分岐ではない（_normaliz
 tests/golden/_harness.py の docstring 参照。
 """
 import sys
+import tempfile
 from pathlib import Path
 
+import openpyxl
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -206,6 +208,43 @@ _add("dedup_ok_multi_key", "DEDUP", {"keys": ["商品", "単価"]})
 _add("dedup_unknown_key_column", "DEDUP", {"keys": ["不明"]})
 _add("dedup_missing_keys_empty_list", "DEDUP", {"keys": []})
 _add("dedup_missing_keys_absent", "DEDUP", {})
+
+# --- REPORT_PER_ROW（帳票段）--------------------------------------------------
+# ★ 印の実在検証・行の会計は本物のファイルを読む（book_meta["path"]）ため、この golden
+#   だけは実ファイルを持つ専用の book_meta を使う（他 op は列名の実在照合だけで足りるため
+#   静的な BM で済んでいる）。
+_REPORT_DIR = Path(tempfile.mkdtemp(prefix="ailine_golden_f2_report_"))
+_REPORT_BOOK_PATH = _REPORT_DIR / "report_src.xlsx"
+
+
+def _build_report_book() -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    for row in [["商品", "金額"], ["a", 100], ["b", 200]]:
+        ws.append(row)
+    tpl = wb.create_sheet("雛形")
+    tpl["B1"] = "{{商品}}"
+    tpl["B2"] = "{{金額}}"
+    wb.save(_REPORT_BOOK_PATH)
+
+
+_build_report_book()
+BM_REPORT = {"sheets": ["Sheet", "雛形"],
+             "headers": {"Sheet": ["商品", "金額"], "雛形": []},
+             "header_rows": {"Sheet": 1, "雛形": 1},
+             "path": _REPORT_BOOK_PATH}
+
+_add("report_per_row_ok", "REPORT_PER_ROW",
+     {"template_sheet": "雛形", "name_col": "商品"}, book_meta=BM_REPORT)
+_add("report_per_row_unknown_template_sheet", "REPORT_PER_ROW",
+     {"template_sheet": "存在しない", "name_col": "商品"})
+_add("report_per_row_template_same_as_data_sheet", "REPORT_PER_ROW",
+     {"template_sheet": "Sheet", "name_col": "商品"})
+_add("report_per_row_unknown_name_col", "REPORT_PER_ROW",
+     {"template_sheet": "単価表", "name_col": "不明"})
+_add("report_per_row_missing_book_path", "REPORT_PER_ROW",
+     {"template_sheet": "単価表", "name_col": "商品"})
 
 # --- 境界: verify_dsl_args 自体の全体ガード ----------------------------------
 _add("no_sheets_in_book", "SORT", {"col": "金額", "order": "asc"}, book_meta=BM_NO_SHEETS)
