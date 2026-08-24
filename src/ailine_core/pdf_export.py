@@ -61,6 +61,11 @@ def _renderable(value) -> str:
 class PdfCheck:
     checked: int = 0
     missing: list = field(default_factory=list)   # PDF の中に見つからなかった値
+    # ★ 2026-08-24: 「見なかったセル」を分母から**黙って消さない**ための枠。
+    #   数式セル（キャッシュ値なし）は data_only=True で None になり、照合の対象から
+    #   静かに落ちていた ── 金額列が全部数式の見積書で「✓ 3 個の値が載っている（欠落 0）」
+    #   が出る（金額を 1 個も見ていない）。分母は開示しなければ主張にならない。
+    uncheckable: int = 0
     text_chars: int = 0
     available: bool = True
 

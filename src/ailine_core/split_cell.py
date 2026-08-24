@@ -71,11 +71,16 @@ def verify_rejoin(originals, parts_by_row, sep: str) -> SplitCheck:
             r.empty_rows += 1
             continue
         r.rows_checked += 1
-        used = [p for p in parts if p not in (None, "")]
-        rejoined = sep.join(str(p) for p in used)
-        expected = sep.join(part for part in split_value(orig, sep) if part != "")
-        if rejoined != expected:
-            r.mismatched.append((i, str(orig), rejoined))
+        # ★ 2026-08-24 の訂正: 初版は両辺から空断片を落として繋ぎ直していた。そのせいで
+        #   `a,,b` の 2 つ目を列 2 に**詰めて**書いた（列がずれた）ケースが一致扱いになり、
+        #   列ずれした納品物に ✓ が出ていた（盲検レビューで名指し）。
+        #   位置ごとに突き合わせる ── 断片は「どの列に入ったか」まで含めて契約。
+        expected = split_value(orig, sep)
+        actual = [("" if p is None else str(p)) for p in parts]
+        actual = actual[:len(expected)] + [""] * max(0, len(expected) - len(actual))
+        trailing = [p for p in parts[len(expected):] if p not in (None, "")]
+        if actual != expected or trailing:
+            r.mismatched.append((i, str(orig), sep.join(actual)))
     return r
 
 

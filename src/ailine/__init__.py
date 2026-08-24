@@ -10366,6 +10366,23 @@ def _record_csv_export_history(book_path: Path, out_path: Path, sheet: str, ok: 
         pass
 
 
+def _export_csv_out_path(a: argparse.Namespace, book_path: Path) -> tuple:
+    """`export-csv` の出力先と、上書きの関所。戻り値 (出力先, 断る理由 or None)。
+
+    ★ なぜ在るか（盲検レビュー・2026-08-24）: 出力先は book.with_suffix(".csv") 固定で
+      --out が無く、出納帳の 4 月分を出した後に 5 月分を出すと**同じ名前で黙って上書き**
+      していた。元 CSV から作った xlsx なら、人が置いた元ファイルを潰す。
+      export-pdf には --out が在ったので、同じ道具の中で非対称でもあった。
+    ★ 関所の形と exit 7 は既存の出力先の関所に合わせる（同じ意味の旗を 2 通り作らない）。
+    """
+    raw = getattr(a, "out", None)
+    out_path = Path(raw).resolve() if raw else book_path.with_suffix(".csv")
+    if out_path.exists() and not getattr(a, "overwrite", False):
+        return out_path, (f"× 出力先 {out_path} が既にあります。"
+                           f"別名にするなら --out、上書きしてよければ --overwrite を付けてください")
+    return out_path, None
+
+
 def cmd_export_csv(a: argparse.Namespace) -> int:
     """`ailine export-csv <book> --sheet <name> [--encoding utf-8|cp932]`: CSV_EXPORT の
        明示入口（DESIGN-20260824-format-map.md「CSV_EXPORT の憲法」）。★ csv_quarantine
@@ -10389,7 +10406,11 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
         print(f"× シート『{a.sheet}』がありません")
         return 1
 
-    out_path = book_path.with_suffix(".csv")
+    out_path, refuse = _export_csv_out_path(a, book_path)
+    if refuse:
+        print(f"■ ailine export-csv  file={book_path}  sheet={a.sheet}")
+        print(refuse)
+        return 7
     try:
         write_result = csv_export.build_csv(grid, enc)
     except csv_export.EncodingWriteError as e:
@@ -10434,7 +10455,13 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
 def _soffice_to_pdf(book_path, out_path, sheet=None, orientation=None, fit_to_width=False) -> tuple:
     """LibreOffice を headless で呼んで PDF を作る（実 LO を呼ぶ唯一の門＝窒息点）。
        戻り値 (ok, 理由)。★ basrun と同じ office_dir() で soffice を探す ── 探し方を
-       2 通り持つと片方だけ直る（片配線）ので、既にある入口を使う。"""
+       2 通り持つと片方だけ直る（片配線）ので、既にある入口を使う。
+
+       ★ sheet_index（2026-08-24）: soffice の `--convert-to pdf` にシート指定は無い。
+         初版は sheet 引数を受け取りながら**一切使っておらず、ブック全体が PDF になっていた**
+         ── 帳票段で 50 社分のシートを作った後に 1 社を指定すると、全 50 社分と元データが
+         1 つの PDF に入るのに ✓ が出た（**他人の売上を同封して顧客に送る事故**）。
+         呼び出し側が「指定シートだけを残した一時コピー」を作って渡す形にした。"""
     basrun = _find_basrun_path()
     if basrun is None:
         return False, "LibreOffice の場所が分からない（basrun.py が見つかりません）"
@@ -10463,12 +10490,17 @@ def _soffice_to_pdf(book_path, out_path, sheet=None, orientation=None, fit_to_wi
 
 
 def _prepare_book_for_print(src: Path, dst: Path, sheet: str,
-                             orientation=None, fit_to_width: bool = False) -> None:
+                             orientation=None, fit_to_width: bool = False,
+                             keep_only_sheet: bool = False) -> None:
     """印刷用の調整をした**コピー**を作る（原本には一切触らない）。
        ★ 列幅は中身の長さから決める ── 全角を 2 文字ぶんとして数える
        （日本語の帳票で「あかつき商事」が切れて PDF から消えた実測への対応）。"""
     wb = openpyxl.load_workbook(src)
     ws = wb[sheet] if sheet in wb.sheetnames else wb.active
+    if keep_only_sheet:
+        # ★ 指定シート以外を落とす ── これが「--sheet が効く」の実体。
+        for name in [n for n in wb.sheetnames if n != ws.title]:
+            del wb[name]
     if fit_to_width:
         widths = {}
         for row in ws.iter_rows():
@@ -10518,18 +10550,19 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
     # ★ 実測（2026-08-24）: 既定のまま出すと**列幅で文字が切れて PDF から消える**
     #   （「あかつき商事」が落ちた）。Excel 印刷の古典的な事故で、読み戻しが掴んだ。
     #   --fit-to-width / --orientation は原本を触らず**一時コピー**に効かせる。
+    # ★ 2026-08-24: シート指定は**必ず**一時コピーで効かせる（soffice にシート指定が無い）。
+    #   初版は --sheet を受け取って無視しており、他社の請求書を同封する事故になっていた。
     source = book_path
-    tmp_holder = None
-    if a.fit_to_width or a.orientation:
-        tmp_holder = tempfile.TemporaryDirectory(prefix="ailine_pdf_")
-        source = Path(tmp_holder.name) / book_path.name
-        try:
-            _prepare_book_for_print(book_path, source, sheet,
-                                     orientation=a.orientation, fit_to_width=a.fit_to_width)
-        except Exception as e:
-            print(f"× 印刷用の調整に失敗しました: {e}")
-            tmp_holder.cleanup()
-            return 1
+    tmp_holder = tempfile.TemporaryDirectory(prefix="ailine_pdf_")
+    source = Path(tmp_holder.name) / book_path.name
+    try:
+        _prepare_book_for_print(book_path, source, sheet,
+                                 orientation=a.orientation, fit_to_width=a.fit_to_width,
+                                 keep_only_sheet=True)
+    except Exception as e:
+        print(f"× 印刷用の調整に失敗しました: {e}")
+        tmp_holder.cleanup()
+        return 1
     ok, why = _soffice_to_pdf(source, out_path, sheet=sheet,
                                orientation=a.orientation, fit_to_width=a.fit_to_width)
     if tmp_holder is not None:
@@ -10911,6 +10944,8 @@ def build_parser() -> argparse.ArgumentParser:
     ec.add_argument("--sheet", required=True, help="書き出すシート名")
     ec.add_argument("--encoding", default=None,
                     help="出力の文字コード（既定 utf-8・BOM付き。会計ソフト向けに cp932 も選べる）")
+    ec.add_argument("--out", default=None, help="出力先の .csv（既定 同名 .csv）")
+    ec.add_argument("--overwrite", action="store_true", help="出力先が既にあっても上書きする（関所 exit 7）")
     ec.set_defaults(func=cmd_export_csv)
 
     ep = sub.add_parser("export-pdf", help="xlsx を PDF へ書き出す（出した PDF を読み戻して確かめる）")
