@@ -109,6 +109,10 @@ from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
 from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
 from ailine_core import csv_export   # ★ CSV_EXPORT: `ailine export-csv`（検疫の逆方向）の本体
+from ailine_core import date_compare   # ★ EXTRACT の日付範囲比較（台帳 DATE_RANGE_AGG の正体）
+from ailine_core.date_compare import (   # noqa: F401  ← 試験と呼び出し側が ailine. で引く
+    parse_date_literal, date_to_serial, classify_date_column,
+)
 from ailine_core.chart_check import check_chart_series, charts_by_sheet   # ★ グラフ段: 事後条件②（種別+参照の検証）+ operator10 ②（シート別グラフ数）
 from ailine_core.chart_range import chart_data_last_row   # ★ operator10 ①: グラフ範囲から合計行を除く
 from ailine_core.column_type import column_is_all_numeric, value_parses_as_number   # ★ operator10 ④: 型の機械決定
@@ -119,7 +123,8 @@ from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領�
     own_prior_output_notice_lines,   # ★ 単位H 開示: 関所が黙った理由を1行で見せる
 )
 from ailine_core.sum_identity import rows_matching_sum_above   # ★ 算術恒等の検算（二重計上）
-from ailine_core.target_sheet import (   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
+from ailine_core.target_sheet import (
+    drop_names_covered_by_longer,   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
     format_sheet_field, sheet_conflict_choice_lines, conflict_excluded_sheets,
     sheet_names_mentioned_in,   # ★ 単位E: シート名照合の素材（決定側と助言側が共有する）
@@ -1213,7 +1218,10 @@ def extract_task_mentions(task: str, sheet_names: list) -> dict:
     # ★ 単位E: 「このシート名は依頼文に含まれるか」の照合は、決定側(resolve_target_sheet)と
     #   ここ（助言側）が独立に同じ文字列照合を書いていた。素材を1つに寄せ、決定側は1つに
     #   絞る／助言側は全部使う、という役割の違いだけを残す（判定規則も戻り値も不変）。
-    sheets = set(sheet_names_mentioned_in(task, list(sheet_names or ())))
+    # ★ 片配線の解消（2026-08-24）: 対象シートの決定は部分文字列を畳むのに、言及の
+    #   抽出は畳んでいなかった。同じ規則（位置で見る）を ailine_core 側の 1 箇所から使う。
+    sheets = set(drop_names_covered_by_longer(
+        task, sheet_names_mentioned_in(task, list(sheet_names or ()))))
     return {"cols": cols, "digit_cols": digit_cols, "rows": rows, "sheets": sheets}
 
 
@@ -3361,11 +3369,36 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             try:
                 resolved["value"] = float(raw_value)
             except (TypeError, ValueError):
-                if cmp != "eq":
+                # ★ 日付の範囲比較（台帳 DATE_RANGE_AGG 2件の正体・2026-08-24）。
+                #   「2026/3/26 以降」は数値ではないが、対象列が日付列なら
+                #   シリアル値に直せば既存の数値比較でそのまま通る（Basic 側は無改造）。
+                #   ★ resolved["value"] は**元の文字列のまま**残す ── 表示（解釈行・出力
+                #   シート名）が 46107 になるのを防ぐ。codegen だけが _value_serial を見る。
+                parsed_date = parse_date_literal(raw_value)
+                col_kind, col_has_time = _extract_column_date_kind(
+                    book_meta, first_sheet, resolved["col"])
+                if parsed_date is not None and col_kind == "date":
+                    resolved["value"] = str(raw_value)
+                    resolved["_value_serial"] = date_compare.threshold_for(cmp, parsed_date)
+                    resolved["_date_compare"] = True
+                    if cmp == "eq" and col_has_time:
+                        resolved["_warnings"] = resolved.get("_warnings", []) + [
+                            f"『{raw_value}』と一致で抽出しますが、列『{resolved['col']}』には"
+                            f"時刻が入っています（0時ちょうどの行しか当たりません）"
+                        ]
+                elif parsed_date is not None and col_kind == "text_date":
+                    # ★ 辞書順で黙って比べない ── "2026/3/26" > "2026/12/1" になる。
+                    return False, resolved, inferred, (
+                        f"列『{resolved['col']}』は日付が**文字列**で入っているため、"
+                        f"『{raw_value}』との日付比較ができません"
+                        f"（日付の書式に直してから、もう一度お試しください）"
+                    )
+                elif cmp != "eq":
                     return False, resolved, inferred, (
                         f"比較『{cmp}』には数値の値が必要ですが『{raw_value}』は数値に変換できません"
                     )
-                resolved["value"] = str(raw_value)
+                else:
+                    resolved["value"] = str(raw_value)
         # ★ 単位H: 出力シートの見出し署名(= 元シートの見出し行そのもの)を _own_output_headers
         #   が組めるよう、決めた材料をここで resolved に積む（他 op の _target_sheet と同じ作法）。
         resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
@@ -3654,6 +3687,17 @@ _CONFIRM_FIELDS = {
     "FORMAT_MAP": (("雛形", "template_sheet", None),),
 }
 
+# ★ 複合計画の連鎖の番人（2026-08-24・実測した致命）。
+#   「売上が60以上の行だけ現場ごとに集計して」で 1段目 EXTRACT が『売上60以上』を作り、
+#   2段目 AGGREGATE が**元の『売上』**を集計して、それでも ✓ が出ていた。
+#   各段の事後条件はどちらも真 ── 嘘は段の中でなく**段と段の間**にあった。
+#   ★ 自動で連鎖させない理由: 「抽出して、元表に合計を追加して」も正当な計画で、
+#   どちらの意図かは機械に決まらない。決まらないものを黙って決めたのが事故そのもの。
+#   だから名指しして人に返す（★ 付き助言 → 決裁③ で ✓→△ に降格）。
+#   派生シートを作る op（＝出力が「絞り込んだ同じ表」であるもの）だけを対象にする。
+PLAN_CHAIN_WARNING_OPS = ("EXTRACT", "DEDUP")
+
+
 # ★ EXTRACT: 比較の語彙（設計書どおり6種）。gte/lte/gt/lt は数値比較・eq は値の型に応じて
 #   数値/文字列どちらでも・contains は常に文字列の部分一致。
 _EXTRACT_CMPS = ("gte", "lte", "gt", "lt", "eq", "contains")
@@ -3749,6 +3793,38 @@ def _format_extract_value(value) -> str:
     if isinstance(value, float):
         return str(int(value)) if value.is_integer() else f"{value:g}"
     return str(value)
+
+
+def _extract_column_date_kind(meta: dict, sheet: str, col: str) -> tuple:
+    """対象列の中身を実際に見て、日付として比較できるかを返す（("date"|"text_date"|
+       "other"|"empty", 時刻を含むか)）。
+
+    ★ 宣言でなく実体を見る: 「日付」という見出しでも中身が文字列なら比較してはいけない
+      （辞書順で "2026/3/26" > "2026/12/1" になる）。判定は ailine_core.date_compare が
+      持ち、ここは**読み出しの配線だけ**（本体を ailine.py に書かない規約）。
+    ★ 読めない時は ("other", False) を返して従来の断り文に落とす ── ここで例外を
+      投げると、日付と無関係な入力まで巻き添えで壊れる。
+    """
+    try:
+        book_path = meta.get("path")
+        if not book_path:
+            return "other", False
+        headers = meta.get("headers", {}).get(sheet) or []
+        if col not in headers:
+            return "other", False
+        col_idx1 = headers.index(col) + 1
+        header_row = int(meta.get("header_rows", {}).get(sheet, 1))
+        wb = openpyxl.load_workbook(book_path, read_only=True, data_only=True)
+        try:
+            ws = wb[sheet]
+            values = [row[0] for row in ws.iter_rows(
+                min_row=header_row + 1, min_col=col_idx1, max_col=col_idx1,
+                max_row=header_row + 500, values_only=True)]
+        finally:
+            wb.close()
+        return classify_date_column(values)
+    except Exception:
+        return "other", False
 
 
 def _extract_output_sheet_name(col: str, cmp: str, value) -> str:
@@ -4135,7 +4211,9 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         #   型を保つコピー（getValue/setValue・getString/setString の分岐）は helper 側。
         col_idx = headers[first_sheet].index(resolved_args["col"])
         cmp_code = _EXTRACT_CMP_CODE[resolved_args["cmp"]]
-        value = resolved_args["value"]
+        # ★ 日付比較のときだけ、表示用の文字列でなくシリアル値を Basic へ渡す
+        #   （resolved["value"] は解釈行と出力シート名のために元の文字列で残してある）。
+        value = resolved_args.get("_value_serial", resolved_args["value"])
         if isinstance(value, str):
             value_lit = '"' + value.replace('"', '""') + '"'
         else:
@@ -8479,6 +8557,7 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
                         use_formula: bool, header_rows: dict, before_charts: int, a: argparse.Namespace, vocab: dict,
                         book_name: str, subject_sink: dict | None = None,
                         suspicion_sink: list | None = None,
+                        derived_sheets: list | None = None,
                         before_chart_paths: frozenset | None = None) -> tuple:
     """★ C7: cmd_run_plan の DSL 語彙段の1段分。cmd_run_dsl と同じ ailine_core.dsl_step の共有エンジンを通る
        （非対称は dsl_step.py 参照）。この分離で stage_organs の dsl_plan_step 代表関数はここになる（DoD7）。
@@ -8536,6 +8615,17 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     #   (resolved["_target_sheet"]) を優先する（LOOKUP_FILL 段が計画全体の対象シートと
     #   異なる参照シートを持つ場合の header_row 取り違えを避ける）。
     step_target_sheet = resolved.get("_target_sheet") or first_sheet
+    # ★ 連鎖の番人: 前段が派生シートを作ったのに、この段が別のシート（＝元表）を見ていたら
+    #   名指しする。★ 付きなので count_suspicious_advisories が拾い、決裁③の降格に乗る。
+    if derived_sheets:
+        derived_names = [d["sheet"] for d in derived_sheets]
+        if step_target_sheet not in derived_names:
+            made = "・".join(f"{d['step']}段目の『{d['sheet']}』" for d in derived_sheets)
+            step_advisories.append(
+                f"★ 前段が作った{made}ではなく『{step_target_sheet}』"
+                f"（元の表）を見ています ── 絞り込んだ結果に対する操作を意図していたなら、"
+                f"シート名を依頼文に書いて実行し直してください"
+            )
     step_header_row = current_meta.get("header_rows", {}).get(step_target_sheet, 1) if step_target_sheet else 1
     code = codegen_dsl(op, resolved, current_meta, use_formula=use_formula)
     (workdir / f"plan_step{i}.bas").write_text(code, encoding="utf-8")
@@ -8598,6 +8688,10 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
                  "interpretation": interpretation},
                 step_advisories, provenance_entry, mention_exclude_sheets, current_meta)
     item_status = "warn" if status == "warn" else "ok"
+    # ★ 連鎖の番人: この段が派生シートを作ったことを、後段のために記録する
+    #   （失敗した段は記録しない ── 作られていないシートを後段に突き付けない）。
+    if derived_sheets is not None and op in PLAN_CHAIN_WARNING_OPS and resolved.get("_new_sheet"):
+        derived_sheets.append({"step": i, "op": op, "sheet": resolved["_new_sheet"]})
     warn_precondition = _precondition[1] if _precondition else None   # ★ 単位G: 上で 1 度だけ検査済み
     if warn_precondition:
         print(f"{step_prefix}{warn_precondition}")
@@ -8706,6 +8800,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     mention_exclude_sheets: set = set()   # ★ W10d/単位C: 参照専用シート（reads_only 宣言・全段分の合算）
     subject_sink: dict = {"warnings": [], "unspoken": []}   # ★ 単位E: 対象スロットの出所（全段分）
     suspicion_sink: list = []   # ★ 決裁③: 印字済みだが advisories に入らない疑わしい ⚠
+    derived_sheets: list = []   # ★ 連鎖の番人: 前段が作った派生シート（EXTRACT/DEDUP の出力）
     #   （単位F/G の前提破れ + LLM/機械抽出の食い違い・全段分・✓→△ 降格の材料）
 
     for i, step in enumerate(plan, 1):
@@ -8746,7 +8841,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
                 use_formula=use_formula, header_rows=header_rows, before_charts=before_charts, a=a, vocab=vocab,
                 book_name=book.name, subject_sink=subject_sink, suspicion_sink=suspicion_sink,
-                before_chart_paths=before_chart_paths)
+                derived_sheets=derived_sheets, before_chart_paths=before_chart_paths)
         if gate_exit is not None:
             return gate_exit
         if item is not None:

@@ -97,6 +97,41 @@ def _is_also_a_column_name(name: str, headers: dict | None) -> bool:
     return False
 
 
+def drop_names_covered_by_longer(task: str, names: list) -> list:
+    """依頼文の中で、**出現位置がすべて別の長い名前の内側にある**名前を落とす。
+
+    ★ なぜ位置で見るのか（2026-08-24 の実測）: 集合だけで「短い方を落とす」と、
+      「売上シートと売上60以上シートを見比べて」のように**独立して書かれた短い名前**まで
+      消える。逆に畳まないと、「売上60以上シートを集計して」で『売上』を言及と数えて
+      「『売上』は変更されていません」という誤った ⚠ が出て、正しくできた仕事が △ に降格する。
+      どちらも実測した事故なので、位置で判定する以外に両立しない。
+    """
+    spans = {}
+    for n in names:
+        found, start = [], 0
+        while True:
+            i = task.find(n, start)
+            if i < 0:
+                break
+            found.append((i, i + len(n)))
+            start = i + 1
+        spans[n] = found
+    kept = []
+    for n in names:
+        mine = spans.get(n) or []
+        longer = [o for o in names if o != n and len(o) > len(n)]
+        # ★ 落とすのは「出現が1つ以上あり、その**すべて**が、より長い名前の出現の内側に
+        #   収まっている」場合だけ。長い候補が無ければ落とさない（all() が空で真になる罠）。
+        covered = bool(mine) and bool(longer) and all(
+            any(o_s <= a and b <= o_e
+                 for o in longer for (o_s, o_e) in spans.get(o, ()))
+            for (a, b) in mine
+        )
+        if not covered:
+            kept.append(n)
+    return kept or list(names)
+
+
 def resolve_target_sheet(task: str, sheets: list, cli_sheet: str | None = None,
                           headers: dict | None = None) -> tuple:
     """★ 挙動変更#2: 対象シートの決定はここ1箇所だけで行う（呼び出し側 [_cmd_run_dispatch]
@@ -124,6 +159,18 @@ def resolve_target_sheet(task: str, sheets: list, cli_sheet: str | None = None,
     task = task or ""
     named = sheet_names_mentioned_in(task, sheets)   # ★ 単位E: 照合の素材は1箇所（上記）
     named = [s for s in named if not any(s != t and s in t for t in named)]   # 部分文字列は長い方だけ残す
+    # ★★ 明示マーカーは裸の言及に勝つ（2026-08-24 の実測）: ブックに『集計』シートが在ると、
+    #   依頼文の**動詞**「集計して」がシート名と一致して言及が 2 つになり、はっきり
+    #   「売上60以上シートを」と書いた指定まで曖昧扱いで既定へ落ちていた。
+    #   裸の言及は一般語との偶然の一致でありうるが、「〜シート/タブ」と書かれた言及は
+    #   人が意図して書いたものなので、こちらを優先する（挙動変更#3 の「明示マーカー付きは
+    #   無条件に採用」を、単数のときだけでなく**絞り込みの段階**にも効かせる）。
+    #   ★ マーカー付きが 2 つ以上あるときは今までどおり曖昧のまま（LOOKUP_FILL の
+    #   転記先/参照元のように両方が正当な場面で、勝手に片方へ寄せない）。
+    if len(named) > 1:
+        marked = [s for s in named if _mentioned_with_marker(task, s)]
+        if len(marked) == 1:
+            named = marked
     if len(named) == 1:
         name = named[0]
         # ★ 挙動変更#3: 明示マーカー付きの言及は無条件に採用（衝突チェックを免除）。
