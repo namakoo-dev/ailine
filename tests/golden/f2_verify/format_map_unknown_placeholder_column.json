@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "resolved": {
+    "template_sheet": "様式",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "雛形『様式』の印『{{存在しない}}』（A2）が指す列『存在しない』は、データシート『Sheet』に見つかりません。実在する列名を印にしてください"
+}

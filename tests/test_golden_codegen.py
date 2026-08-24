@@ -179,6 +179,17 @@ _add("report_per_row_two_rows_hr3", "REPORT_PER_ROW",
       "_report_rows": [{"row": 4, "sheet": "甲社"}, {"row": 5, "sheet": "乙社"}]},
      book_meta=BM_HR3)
 
+# --- FORMAT_MAP（様式写像段。REPORT_PER_ROW の兄弟・縦の展開）------------------
+# ★ _target_sheet/_output_sheet/_header_tpl_row/_placeholder_tpl_row/_data_rows は
+#   verify_dsl_args が積む値（unique_sheet_name で一意名を決め切ってから渡す）。
+_add("format_map_two_rows_hr1", "FORMAT_MAP",
+     {"template_sheet": "単価表", "_target_sheet": "Sheet", "_output_sheet": "単価表_出力",
+      "_header_tpl_row": 1, "_placeholder_tpl_row": 2, "_data_rows": [2, 3]})
+_add("format_map_two_rows_hr3", "FORMAT_MAP",
+     {"template_sheet": "単価表", "_target_sheet": "Sheet", "_output_sheet": "単価表_出力",
+      "_header_tpl_row": 1, "_placeholder_tpl_row": 2, "_data_rows": [4, 5]},
+     book_meta=BM_HR3)
+
 # --- 後方互換: header_rows キーが book_meta に無い旧テスト値 ------------------
 _add("sort_legacy_no_header_rows_key", "SORT", {"col": "金額", "order": "asc"},
      book_meta=BM_LEGACY_NO_HEADER_ROWS)

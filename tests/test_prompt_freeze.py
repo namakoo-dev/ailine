@@ -33,7 +33,20 @@ _FROZEN = {
     #   曖昧誤断定 0%(0/11)（合格線90%/80%/20%以下・すべてクリア）。
     #   帳票段専用 battery（bench/translation_battery_run.py v9・items_v9・4件・暫定バー
     #   op75%/slot80%）は op 100%(4/4)・slot 100%(8/8)。
-    "OPS_DOC": "610a347e66a69e6d",
+    # ★ 2026-08-24: 様式写像段（FORMAT_MAP）の語彙昇格で OPS_DOC に op 説明を追加。
+    #   bench/translation_dsl_battery_run.py 実 7B（qwen2.5-coder:7b・items v1・52件）で
+    #   既存語彙への退行が合格線内であることを確認済み: op 94.2%(49/52)・slot 98.5%(67/68)・
+    #   曖昧誤断定 0%(0/11)（合格線90%/80%/20%以下・すべてクリア。LLM サンプリングの揺れで
+    #   帳票段追加直後の98.1%からは下がったが合格線は割っていない）。
+    #   様式写像段専用 battery（bench/translation_battery_run.py v10・items_v10・4件・
+    #   暫定バー op75%/slot80%）は op 75%(3/4)・slot 100%(3/3)。
+    # ★ 2026-08-24 の検分で退行を捕獲: 新 op（REPORT_PER_ROW/FORMAT_MAP）の記述を
+    #   16 行書いたら v1 が 98.1%→94.2% に落ちた（FILL_COLOR/NUMBER_FORMAT が新たに崩れ、
+    #   2 回再現・git stash で帰属も確認）。★ W9 の「few-shot 1 例で誤断定 27.3%」の再演。
+    #   機械が必ず強制する規則（実在検証・印以外に触らない・出力名の決定）を OPS_DOC から
+    #   外して 4 行に削り、98.1%/98.6% に復帰。代償は v9 が 4/4→3/4（合格線 75% ちょうど）。
+    #   ★ これ以上は同じ検体で調整しない（自己汚染）── 実運用の誤分類が出たら測り直す。
+    "OPS_DOC": "4e7ebfb24413d822",
     "TRANSLATION_SYSTEM": "8dd5cd3a43d833fe",
     "TRANSLATION_FEWSHOT": "c10a9b45e6cada35",
     # ★ 2026-08-22: W10 便B（二段目翻訳・op 固定で args だけ埋めさせる）で追加した第4の定数。

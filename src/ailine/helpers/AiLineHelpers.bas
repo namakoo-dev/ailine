@@ -746,3 +746,100 @@ Sub FillReportSheet(oDoc As Object, templateSheet As String, newSheetName As Str
         Next c
     Next r
 End Sub
+
+
+' 様式写像段: FORMAT_MAP（DESIGN-20260824-format-map.md）。REPORT_PER_ROW の兄弟
+' （縦の展開）── 雛形シート(templateSheet)の1行（見出し行の直下・印({{列名}})の行）を、
+' 参照シート(srcSheet)の複数行それぞれで埋め、新シート(dstSheetName)へ1行ずつ積む。
+' ★ 憲法の適用: 雛形には一切書き込まない（読むだけ）。機械が触るのは新シートのセルだけ。
+' ★ dstSheetName は Python 側(verify_dsl_args の unique_sheet_name)が呼ぶ前に一意・
+'   31文字以内・禁止文字なしを確定済み（ExtractRows/DedupRows と同じ作法）。
+' ★ 型は元データ列で決める（丸ごと一致の印だけ setValue/setString を型で出し分ける・
+'   部分一致は文字列置換のみ ── Python 側が部分一致+数値列の組を事前に拒む）。
+' headerTplRow/phTplRow: 雛形シートの見出し行/印行（0起点）。srcHeaderRow: 参照シートの
+' 見出し行（0起点）。srcRowsCsv: 出力する参照シートの行（0起点）をカンマ区切りにした文字列
+' （DedupRows の keyIdxCsv と同じ作法。Python 側が総合計行の除外まで決め切って渡す）。
+Sub FillFormatMapSheet(oDoc As Object, templateSheet As String, srcSheet As String, dstSheetName As String, _
+                       headerTplRow As Long, phTplRow As Long, srcHeaderRow As Long, srcRowsCsv As String)
+    Dim oTpl As Object, oSrc As Object, oOut As Object
+    Dim oCursor As Object, oAddr As Object
+    Dim tplLastCol As Long, srcLastCol As Long
+    Dim c As Long, outCol As Long, outRow As Long
+    Dim s As String, inner As String
+    Dim p1 As Long, p2 As Long
+    Dim srcRowsStrs() As String
+    Dim ri As Long, srcRow As Long
+    Dim hc As Long
+    Dim oCellOut As Object, oCellSrc As Object
+
+    oTpl = oDoc.Sheets.getByName(templateSheet)
+    oSrc = oDoc.Sheets.getByName(srcSheet)
+
+    If oDoc.Sheets.hasByName(dstSheetName) Then oDoc.Sheets.removeByName(dstSheetName)
+    oDoc.Sheets.insertNewByName(dstSheetName, oDoc.Sheets.Count)
+    oOut = oDoc.Sheets.getByName(dstSheetName)
+
+    oCursor = oTpl.createCursor()
+    oCursor.gotoEndOfUsedArea(True)
+    oAddr = oCursor.RangeAddress
+    tplLastCol = oAddr.EndColumn
+
+    ' 参照シートの見出し列数（見出し行を左から走査）。
+    srcLastCol = 0
+    Do While oSrc.getCellByPosition(srcLastCol, srcHeaderRow).getString() <> ""
+        srcLastCol = srcLastCol + 1
+    Loop
+    srcLastCol = srcLastCol - 1
+
+    ' 見出し行（雛形の印行にある列だけを左から詰めて1回だけ出力する）。
+    outCol = 0
+    For c = 0 To tplLastCol
+        s = oTpl.getCellByPosition(c, phTplRow).getString()
+        p1 = InStr(s, "{{")
+        If p1 > 0 Then
+            If InStr(p1, s, "}}") > 0 Then
+                oOut.getCellByPosition(outCol, 0).setString(oTpl.getCellByPosition(c, headerTplRow).getString())
+                outCol = outCol + 1
+            End If
+        End If
+    Next c
+
+    srcRowsStrs = Split(srcRowsCsv, ",")
+    For ri = LBound(srcRowsStrs) To UBound(srcRowsStrs)
+        srcRow = CLng(srcRowsStrs(ri))
+        outRow = ri - LBound(srcRowsStrs) + 1
+        outCol = 0
+        For c = 0 To tplLastCol
+            s = oTpl.getCellByPosition(c, phTplRow).getString()
+            p1 = InStr(s, "{{")
+            If p1 > 0 Then
+                p2 = InStr(p1, s, "}}")
+                If p2 > 0 Then
+                    inner = Mid(s, p1 + 2, p2 - p1 - 2)
+                    oCellOut = oOut.getCellByPosition(outCol, outRow)
+                    For hc = 0 To srcLastCol
+                        If oSrc.getCellByPosition(hc, srcHeaderRow).getString() = inner Then
+                            oCellSrc = oSrc.getCellByPosition(hc, srcRow)
+                            If s = "{{" & inner & "}}" Then
+                                ' 丸ごと一致 ── 元データ列の型で出し分ける（数値書式も運ぶ）。
+                                If oCellSrc.getType() = com.sun.star.table.CellContentType.TEXT Then
+                                    oCellOut.setString(oCellSrc.getString())
+                                ElseIf oCellSrc.getType() = com.sun.star.table.CellContentType.EMPTY Then
+                                    oCellOut.setString("")
+                                Else
+                                    oCellOut.setValue(oCellSrc.getValue())
+                                    oCellOut.NumberFormat = oCellSrc.NumberFormat
+                                End If
+                            Else
+                                ' 部分一致 ── 文字列置換のみ（数値列は Python 側が事前に拒む）。
+                                oCellOut.setString(Left(s, p1 - 1) & oCellSrc.getString() & Mid(s, p2 + 2))
+                            End If
+                            Exit For
+                        End If
+                    Next hc
+                    outCol = outCol + 1
+                End If
+            End If
+        Next c
+    Next ri
+End Sub

@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "resolved": {
+    "template_sheet": "単価表",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "様式写像段はファイルの実体が無いと検証できません（book_meta に path が無い）"
+}

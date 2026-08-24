@@ -1,16 +1,17 @@
 usage: ailine [-h]
-              {run,stop,doctor,ops,csv,scan,stack,verify,history,restore,undo,vocab,alias}
+              {run,stop,doctor,ops,csv,export-csv,scan,stack,verify,history,restore,undo,vocab,alias}
               ...
 
 自然言語 → LibreOffice Basic → 適用 → 検証
 
 positional arguments:
-  {run,stop,doctor,ops,csv,scan,stack,verify,history,restore,undo,vocab,alias}
+  {run,stop,doctor,ops,csv,export-csv,scan,stack,verify,history,restore,undo,vocab,alias}
     run                 タスクを生成・適用・検証する
     stop                起動した LibreOffice を落とす
     doctor              セットアップを診断する
     ops                 頼める操作の一覧を表示する（何ができるか）
     csv                 CSV を検疫して隣に xlsx を作る（0落ち等を守って壊さず開ける形に）
+    export-csv          xlsx のシートを CSV へ書き出す（検疫の逆方向・0落ちを作らない）
     scan                フォルダ内の複数ブックを棚卸しする（書き込みゼロ）
     stack               フォルダ内の複数ブックを縦積みする（新ブック + 出所列）
     verify              stack/extract/match の出力を検算だけ独立に再実行する（読むだけ）

@@ -624,6 +624,72 @@ def _b_report_fail_mismatch(tmp_path):
 _add("report_per_row_pass", "REPORT_PER_ROW", _REPORT_ARGS, _b_report_pass)
 _add("report_per_row_fail_mismatch", "REPORT_PER_ROW", _REPORT_ARGS, _b_report_fail_mismatch)
 
+# --- FORMAT_MAP（様式写像段。REPORT_PER_ROW の兄弟・縦の展開）------------------
+_FORMAT_MAP_ARGS = {
+    "template_sheet": "様式", "_target_sheet": "売上", "_output_sheet": "様式_出力",
+    "_inspection_sheet": "検分",
+    "_data_rows": [2, 3],
+    "_placeholders": [
+        {"cell": "A2", "row": 2, "col": 1, "column_name": "取引先", "whole": True,
+         "raw": "{{取引先}}", "col_idx": 1, "out_col": 1},
+        {"cell": "B2", "row": 2, "col": 2, "column_name": "金額", "whole": True,
+         "raw": "{{金額}}", "col_idx": 2, "out_col": 2},
+    ],
+    "_header_texts": ["取引先名", "金額"],
+}
+
+
+def _b_format_map_pass(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "売上"
+    for row in [["取引先", "金額"], ["甲社", 100], ["乙社", 200]]:
+        ws.append(row)
+    tpl = wb.create_sheet("様式")
+    tpl["A1"] = "取引先名"
+    tpl["B1"] = "金額"
+    tpl["A2"] = "{{取引先}}"
+    tpl["B2"] = "{{金額}}"
+    out = wb.create_sheet("様式_出力")
+    out.append(["取引先名", "金額"])
+    out.append(["甲社", 100])
+    out.append(["乙社", 200])
+    insp = wb.create_sheet("検分")
+    insp.append(["出力シート", "出力行", "元の行", "埋めた印の数"])
+    insp.append(["様式_出力", 2, 2, 2])
+    insp.append(["様式_出力", 3, 3, 2])
+    wb.save(p)
+    return p, None
+
+
+def _b_format_map_fail_mismatch(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "売上"
+    for row in [["取引先", "金額"], ["甲社", 100], ["乙社", 200]]:
+        ws.append(row)
+    tpl = wb.create_sheet("様式")
+    tpl["A1"] = "取引先名"
+    tpl["B1"] = "金額"
+    tpl["A2"] = "{{取引先}}"
+    tpl["B2"] = "{{金額}}"
+    out = wb.create_sheet("様式_出力")
+    out.append(["取引先名", "金額"])
+    out.append(["甲社", 999])   # ★ 元の行(100)と不一致
+    out.append(["乙社", 200])
+    insp = wb.create_sheet("検分")
+    insp.append(["出力シート", "出力行", "元の行", "埋めた印の数"])
+    insp.append(["様式_出力", 2, 2, 2])
+    insp.append(["様式_出力", 3, 3, 2])
+    wb.save(p)
+    return p, None
+
+
+_add("format_map_pass", "FORMAT_MAP", _FORMAT_MAP_ARGS, _b_format_map_pass)
+_add("format_map_fail_mismatch", "FORMAT_MAP", _FORMAT_MAP_ARGS, _b_format_map_fail_mismatch)
+
 # --- error 状態（事後条件チェッカー自身の例外をキャッチして "error" に変換する境界） -----
 _add("error_missing_required_arg_key", "SORT", {}, _b_sort_pass)   # args["col"] で KeyError
 

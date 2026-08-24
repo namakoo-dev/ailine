@@ -57,6 +57,7 @@ _add("extract", "EXTRACT", {"col": "金額", "cmp": "gte", "value": 40000.0})
 _add("dedup", "DEDUP", {"keys": ["商品"]})
 _add("dedup_multi_key", "DEDUP", {"keys": ["商品", "金額"]})
 _add("report_per_row", "REPORT_PER_ROW", {"template_sheet": "雛形", "name_col": "取引先"})
+_add("format_map", "FORMAT_MAP", {"template_sheet": "様式"})
 
 
 def _case_ids():

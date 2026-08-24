@@ -246,6 +246,57 @@ _add("report_per_row_unknown_name_col", "REPORT_PER_ROW",
 _add("report_per_row_missing_book_path", "REPORT_PER_ROW",
      {"template_sheet": "単価表", "name_col": "商品"})
 
+# --- FORMAT_MAP（様式写像段。REPORT_PER_ROW の兄弟・縦の展開）----------------
+# ★ REPORT_PER_ROW と同じ理由でこの golden だけ実ファイルを持つ専用 book_meta を使う。
+_FORMAT_MAP_DIR = Path(tempfile.mkdtemp(prefix="ailine_golden_f2_format_map_"))
+_FORMAT_MAP_BOOK_PATH = _FORMAT_MAP_DIR / "format_map_src.xlsx"
+_FORMAT_MAP_BAD_BOOK_PATH = _FORMAT_MAP_DIR / "format_map_bad.xlsx"
+
+
+def _build_format_map_book() -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    for row in [["商品", "金額"], ["a", 100], ["b", 200]]:
+        ws.append(row)
+    tpl = wb.create_sheet("様式")
+    tpl["A1"] = "品名"
+    tpl["B1"] = "価格"
+    tpl["A2"] = "{{商品}}"
+    tpl["B2"] = "{{金額}}"
+    wb.save(_FORMAT_MAP_BOOK_PATH)
+
+
+def _build_format_map_bad_book() -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    for row in [["商品", "金額"], ["a", 100]]:
+        ws.append(row)
+    tpl = wb.create_sheet("様式")
+    tpl["A1"] = "品名"
+    tpl["A2"] = "{{存在しない}}"
+    wb.save(_FORMAT_MAP_BAD_BOOK_PATH)
+
+
+_build_format_map_book()
+_build_format_map_bad_book()
+BM_FORMAT_MAP = {"sheets": ["Sheet", "様式"],
+                  "headers": {"Sheet": ["商品", "金額"], "様式": []},
+                  "header_rows": {"Sheet": 1, "様式": 1},
+                  "path": _FORMAT_MAP_BOOK_PATH}
+BM_FORMAT_MAP_BAD = {"sheets": ["Sheet", "様式"],
+                      "headers": {"Sheet": ["商品", "金額"], "様式": []},
+                      "header_rows": {"Sheet": 1, "様式": 1},
+                      "path": _FORMAT_MAP_BAD_BOOK_PATH}
+
+_add("format_map_ok", "FORMAT_MAP", {"template_sheet": "様式"}, book_meta=BM_FORMAT_MAP)
+_add("format_map_unknown_template_sheet", "FORMAT_MAP", {"template_sheet": "存在しない"})
+_add("format_map_template_same_as_data_sheet", "FORMAT_MAP", {"template_sheet": "Sheet"})
+_add("format_map_unknown_placeholder_column", "FORMAT_MAP", {"template_sheet": "様式"},
+     book_meta=BM_FORMAT_MAP_BAD)
+_add("format_map_missing_book_path", "FORMAT_MAP", {"template_sheet": "単価表"})
+
 # --- 境界: verify_dsl_args 自体の全体ガード ----------------------------------
 _add("no_sheets_in_book", "SORT", {"col": "金額", "order": "asc"}, book_meta=BM_NO_SHEETS)
 _add("unsupported_op", "FOOBAR", {})

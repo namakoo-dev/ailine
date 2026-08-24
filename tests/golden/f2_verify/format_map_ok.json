@@ -1,0 +1,47 @@
+{
+  "ok": true,
+  "resolved": {
+    "template_sheet": "様式",
+    "_target_sheet": "Sheet",
+    "_placeholders": [
+      {
+        "cell": "A2",
+        "row": 2,
+        "col": 1,
+        "column_name": "商品",
+        "whole": true,
+        "raw": "{{商品}}",
+        "col_idx": 1,
+        "out_col": 1
+      },
+      {
+        "cell": "B2",
+        "row": 2,
+        "col": 2,
+        "column_name": "金額",
+        "whole": true,
+        "raw": "{{金額}}",
+        "col_idx": 2,
+        "out_col": 2
+      }
+    ],
+    "_header_texts": [
+      "品名",
+      "価格"
+    ],
+    "_header_tpl_row": 1,
+    "_placeholder_tpl_row": 2,
+    "_data_rows": [
+      2,
+      3
+    ],
+    "_output_sheet": "様式_出力",
+    "_inspection_sheet": "検分",
+    "_source_headers": [
+      "商品",
+      "金額"
+    ]
+  },
+  "inferred": [],
+  "err": null
+}

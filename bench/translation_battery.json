@@ -183,6 +183,27 @@
           }
         }
       }
+    },
+    "v10": {
+      "frozen": "2026-08-24 (様式写像段 FORMAT_MAP 実行前凍結)",
+      "bar": {
+        "op_accuracy": 0.75,
+        "slot_accuracy": 0.8,
+        "note": "様式写像段(FORMAT_MAP)の翻訳精度。REPORT_PER_ROW(v9)と同じ新語彙・同じ暫定バー 3/4=75%+ を採用する（n が小さいうちは比率でなく件数も併記して報告する）。"
+      },
+      "books_extra": {
+        "format_map_book": {
+          "sheets": {
+            "出納帳": [
+              "日付",
+              "摘要",
+              "入金",
+              "出金"
+            ],
+            "様式": []
+          }
+        }
+      }
     }
   },
   "items": [
@@ -1286,6 +1307,44 @@
         "op": "REPORT_PER_ROW",
         "template_sheet": "雛形",
         "name_col": "取引先"
+      }
+    }
+  ],
+  "items_v10": [
+    {
+      "id": 1001,
+      "book": "format_map_book",
+      "text": "出納帳を様式シートの形に写して",
+      "expect": {
+        "op": "FORMAT_MAP",
+        "template_sheet": "様式"
+      }
+    },
+    {
+      "id": 1002,
+      "book": "format_map_book",
+      "text": "様式シートの形式に合わせて、出納帳のデータを変換して",
+      "expect": {
+        "op": "FORMAT_MAP",
+        "template_sheet": "様式"
+      }
+    },
+    {
+      "id": 1003,
+      "book": "format_map_book",
+      "text": "出納帳の内容を、様式の決まったフォーマットで書き出して",
+      "expect": {
+        "op": "FORMAT_MAP",
+        "template_sheet": "様式"
+      }
+    },
+    {
+      "id": 1004,
+      "book": "format_map_book",
+      "text": "様式を使って出納帳のデータを別の様式に変換して",
+      "expect": {
+        "op": "FORMAT_MAP",
+        "template_sheet": "様式"
       }
     }
   ]
