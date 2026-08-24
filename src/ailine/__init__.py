@@ -2480,6 +2480,67 @@ def _subject_slots(op: str, resolved: dict, sheets: list) -> list:
     return slots
 
 
+def fabricated_subject_refusal(op: str, resolved: dict, book_meta: dict, task: str,
+                                sheet: str | None) -> str | None:
+    """依頼者が名指しした列がブックに無いのに、機械が**別の実在列で実行しようとして**
+       いるなら、適用する前に断る理由を返す（無ければ None）。
+
+    ★ 実測した事故（盲検の査定・2026-08-24）: 日付/取引先/商品/数量/単価 の表に
+      「金額で降順に並べ替えて」と頼むと、7B が args を col="数量" に差し替え、
+      機械は実在列なので通し、**✓ 機械検証済み**を出して並べ替えた。
+      査定者の言葉:「人間なら『金額って列、ありませんけど？』と聞き返す。この道具は
+      聞き返さず、原本を書き換え、緑のチェックを付ける。」
+
+    ★ 既存の 3 段階（①照合できた ②無言 ③矛盾）ではこれが ② に落ちていた。② は注記だけで
+      ✓ を保つ設計だが、**依頼者は名指ししている**ので無言ではない。無言と捏造を分ける
+      材料は既にあった ── 残差（どの引数にも使われなかった依頼文の語）。実測:
+        「金額で降順に並べ替えて」(col=数量) → 残差 [金額]  ← 捏造
+        「数量で降順に並べ替えて」(col=数量) → 残差 []      ← 正しい
+        「降順に並べ替えて」    (col=数量) → 残差 []      ← 無指定（②のまま）
+      誤爆しない形で切り分けられる。
+    """
+    if not task:
+        return None
+    if resolved.get("_chained_new_column"):
+        # ★ 依存つき連鎖の書き換え ── 依頼者の言った名前は、前段が作った列を指している。
+        #   捏造ではないので関所の対象外（実測: 「利益で降順に並べ替えて」で前段が
+        #   『売上-原価』を自動命名した場合）。
+        return None
+    slots = [k for k, kind in OP_SUBJECT_SLOTS.get(op, ()) if kind == SUBJ_COLUMN]
+    if not slots:
+        return None
+    headers = list((book_meta.get("headers") or {}).get(sheet, []))
+    if not headers:
+        return None
+    # ① 決まった対象列が、依頼文に語として現れているか
+    named = []
+    for key in slots:
+        value = resolved.get(key)
+        for one in (value if isinstance(value, list) else [value]):
+            if isinstance(one, str) and one:
+                named.append(one)
+    if not named or any(n in task for n in named):
+        return None      # ① 照合できた ── 関所の対象外
+    # ② 依頼文に、どの引数にも使われなかった語が残っているか
+    pool = tuple(ph for meta_ in OP_META.values() for ph in meta_.get("match_phrases", ()))
+    left = suggest_residue.find_unconsumed_words(task, resolved_args=resolved, pool_phrases=pool) or []
+    # ③ その残差のうち、ブックの列名でないもの＝依頼者が言ったのに存在しない列
+    # ★ 絞り込み（2026-08-24 の実測で決めた）: 残差が空でないだけでは広すぎた
+    #   （既存 1,805 件のうち 24 件が誤爆 ── 「税込み合計を出して」の『税込』『合計』、
+    #   「売上高の列を作って」の『売上高』のような**修飾語や新しい列名**まで掴んでいた）。
+    #   実際に起きた事故の形だけに絞る: **「〜で」で名指しされた語**。
+    #   ★ 正直に残す穴: 「金額を並べ替えて」（を）は掴めない ── 「合計を出して」と
+    #   同じ形になり、機械では区別できないため。同じ事故が『を』で再来したら測り直す。
+    ghosts = [w for w in left
+               if w not in headers and (w + "で") in task]
+    if not ghosts:
+        return None      # 無指定・修飾語だけ（②のまま・従来どおり通す）
+    ghost = "・".join(f"『{w}』" for w in ghosts)
+    return (f"依頼文の{ghost}は、シート『{sheet}』の列にありません"
+             f"（{named[0]}で実行しようとしていました）。"
+             f"ある列: {chr(12289).join(headers)}")
+
+
 def classify_subject_provenance(op: str, resolved: dict, meta: dict, task: str, a=None) -> list:
     """★ 単位E の入口: この段の対象スロットを①②③に仕分ける（SubjectVerdict のリスト）。
        照合の材料は実在物だけ ―― 対象シートの実在列名・ブックの実在シート名・見出し行。
@@ -3766,6 +3827,12 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
 
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
+
+    # ★ 捏造列の関所（2026-08-24・盲検の査定者が値段を決めた一点）。
+    #   ここは全経路（単発・複合計画・--dry プレビュー）が通る唯一の場所なので、
+    #   ここに置けば片配線にならない。適用より前なので原本には触れない。
+    if (fab := fabricated_subject_refusal(op, resolved, book_meta, task, first_sheet)):
+        return False, resolved, inferred, fab
 
     return True, resolved, inferred, None
 
@@ -8594,6 +8661,11 @@ def _apply_new_column_fallback(op: str, args: dict, headers: list, new_cols: lis
             name = t[4:]
             if name not in headers and not re.fullmatch(r"\d+", name):
                 patched["target"] = f"col:{only}"
+    if patched != args:
+        # ★ 2026-08-24: 捏造列の関所（fabricated_subject_refusal）に、この書き換えは
+        #   「依頼者の言った名前が前段の作った列を指している」正当な連鎖だと知らせる。
+        #   これが無いと「利益で並べ替えて」（前段が『売上-原価』を作った）まで断ってしまう。
+        patched["_chained_new_column"] = only
     return patched
 
 
