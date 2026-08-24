@@ -326,7 +326,7 @@ def verify_extract(out_path, src_folder, col, cmp, value, sheet_name: str | None
     grid = out_data["grid"]
 
     if sources is None:
-        file_col, row_col = len(out_headers) - 1, len(out_headers)
+        file_col = len(out_headers) - 1   # ★ row_col は使っていないので持たない
         names = {str(grid[(r, file_col)]) for r in out_rows if (r, file_col) in grid}
         paths = [src_folder / n for n in sorted(names)]
     else:

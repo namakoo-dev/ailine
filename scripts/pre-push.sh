@@ -12,6 +12,17 @@ if [ "$AILINE_SKIP_LOCAL" = "1" ]; then
     echo "⚠ pre-push: 実機テスト(-m local)を **明示的に飛ばして** 押しています" >&2
     exit 0
 fi
+# ★ 2026-08-24（盲検査定の指摘）: リンタが CI にも pre-push にも入っていなかった。
+# 製品コードに死んだ変数・未使用 import が 12 件溜まっていた ── 動作は壊さないが
+# 「11,653 行の 1 ファイルが道具で手入れされていない」と読まれる。事実だった。
+echo "▶ pre-push: 製品コードのリンタ…"
+python scripts/lint_product.py
+if [ $? -ne 0 ]; then
+    echo "" >&2
+    echo "✗ pre-push: リンタの指摘が残っています。" >&2
+    exit 1
+fi
+
 echo "▶ pre-push: 実機テスト(-m local)を走らせます（CI では走らない分）…"
 PYTHONPATH=src python -m pytest tests -q -m local
 rc=$?

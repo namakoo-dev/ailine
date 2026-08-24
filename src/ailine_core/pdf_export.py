@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import datetime as _dt
 from dataclasses import dataclass, field
-from pathlib import Path
 
 
 def readback_available() -> bool:

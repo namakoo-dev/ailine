@@ -61,6 +61,26 @@ from dataclasses import dataclass
 from datetime import date as _date_cls, datetime, timezone
 from pathlib import Path
 
+# ★ 2026-08-24（盲検の査定で最も痛い指摘・第 1 位）: この 2 つは openpyxl の import
+#   ガードより**後ろ**に置かれていて、openpyxl が無い環境では
+#   `NameError: name 'exit_environment' is not defined` という生の traceback が出ていた。
+#   ── 「足りないものを名指しする」ための ailine doctor すら到達できない。
+#   初日・素の環境という、開発機では絶対に踏まない道。定義を利用点の前へ移す。
+# ★ 終了コードの分離（2026-08-23 の取り込みで見つかった穴・実測）: 依存の欠落・外部
+#   プログラムに繋がらない・入力が無い、といった「実行の前提が満たされていない」状態は、
+#   検証の失敗（適用したが事後条件を満たさない = 1）と意味が違う。旧実装は exit_environment("...") が
+#   全部 1 に潰れており、CI や自動化から「⚠ が出た」と「道具が壊れた」を区別できなかった。
+#   既存の 3(CLARIFY)/4(忠実度)/5(verify)/6(ロック)/7(上書き関所)/8(自由生成の関所) と
+#   argparse の 2 を避けて 9 を割り当てる。
+EXIT_ENVIRONMENT = 9
+
+
+def exit_environment(message: str):
+    """実行の前提が満たされていない旨を述べて EXIT_ENVIRONMENT で落ちる。
+       ★ sys.exit(文字列) は必ず 1 になる ── 意味を持つ番号で落ちる唯一の入口にする。"""
+    print(message, file=sys.stderr)
+    raise SystemExit(EXIT_ENVIRONMENT)
+
 try:
     import openpyxl
     from openpyxl.utils import get_column_letter, column_index_from_string
@@ -104,9 +124,11 @@ from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine ver
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
-from ailine_core.report_per_row import (
+# ★ 2026-08-24: 一部は**意図した再輸出**（検体が ailine.sanitize_sheet_name の形で
+#   見ている）。未使用に見えても消さない ── リンタには noqa で伝える。
+from ailine_core.report_per_row import (  # noqa: F401
     cells_with_multiple_placeholders,   # ★ 帳票段: REPORT_PER_ROW の純ロジック部品
-    sanitize_sheet_name, unique_sheet_name, scan_placeholders, compare_report_cells,
+    sanitize_sheet_name, unique_sheet_name, scan_placeholders, compare_report_cells,   # noqa: F401 ── 再輸出/在否確認のため残す
 )
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
@@ -122,9 +144,9 @@ from ailine_core.chart_check import check_chart_series, charts_by_sheet   # ★ 
 from ailine_core.chart_range import chart_data_last_row   # ★ operator10 ①: グラフ範囲から合計行を除く
 from ailine_core import compare_blocked
 from ailine_core.column_type import column_is_all_numeric, value_parses_as_number   # ★ operator10 ④: 型の機械決定
-from ailine_core.xml_readback import numeric_cells_became_strings   # ★ operator10 ⑤: 数式セルの偽アラーム防止
+from ailine_core.xml_readback import numeric_cells_became_strings   # ★ operator10 ⑤: 数式セルの偽アラーム防止   # noqa: F401 ── 再輸出/在否確認のため残す
 from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
-from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）
+from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）   # noqa: F401 ── 再輸出/在否確認のため残す
     check_write_preconditions_detail,
     own_prior_output_notice_lines,   # ★ 単位H 開示: 関所が黙った理由を1行で見せる
 )
@@ -206,20 +228,6 @@ ALIASES_FILE = HISTORY_DIR / "aliases.json"
 MISCLASS_FILE = HISTORY_DIR / "misclass.jsonl"
 
 
-# ★ 終了コードの分離（2026-08-23 の取り込みで見つかった穴・実測）: 依存の欠落・外部
-#   プログラムに繋がらない・入力が無い、といった「実行の前提が満たされていない」状態は、
-#   検証の失敗（適用したが事後条件を満たさない = 1）と意味が違う。旧実装は exit_environment("...") が
-#   全部 1 に潰れており、CI や自動化から「⚠ が出た」と「道具が壊れた」を区別できなかった。
-#   既存の 3(CLARIFY)/4(忠実度)/5(verify)/6(ロック)/7(上書き関所)/8(自由生成の関所) と
-#   argparse の 2 を避けて 9 を割り当てる。
-EXIT_ENVIRONMENT = 9
-
-
-def exit_environment(message: str):
-    """実行の前提が満たされていない旨を述べて EXIT_ENVIRONMENT で落ちる。
-       ★ sys.exit(文字列) は必ず 1 になる ── 意味を持つ番号で落ちる唯一の入口にする。"""
-    print(message, file=sys.stderr)
-    raise SystemExit(EXIT_ENVIRONMENT)
 
 
 def _find_basrun_path() -> Path | None:
@@ -7061,7 +7069,7 @@ def _check_openpyxl() -> tuple:
     try:
         import openpyxl as _op  # noqa: F401 — 到達確認のみ
         return True, ""
-    except ImportError:
+    except ImportError:   # noqa: F401 ── 再輸出/在否確認のため残す
         return False, "pip install openpyxl"
 
 
@@ -7809,7 +7817,6 @@ def _announce_report_per_row_target_sheet(a: argparse.Namespace, sheets: list, a
        「推測が template_sheet と一致し、かつ残りのシートがちょうど1枚」という
        曖昧さの無い場合に限って、その1枚へ訂正する（3枚以上のブックは無理に当てず、
        verify_dsl_args の『雛形とデータシートが同じ』エラーで正直に止める）。"""
-    pending = getattr(a, "_pending_sheet_announce", None)
     template = args.get("template_sheet") if isinstance(args, dict) else None
     if isinstance(template, str) and template == a._target_sheet:
         others = [s for s in sheets if s != template]
@@ -7827,7 +7834,6 @@ def _announce_format_map_target_sheet(a: argparse.Namespace, sheets: list, args:
     """★ 様式写像段: _announce_report_per_row_target_sheet と全く同じ理由・同じ形
        （template_sheet しか申告されないため LOOKUP_FILL 型の食い違い判定はできない ──
        推測が template_sheet と一致し、残りのシートがちょうど1枚の時だけ訂正する）。"""
-    pending = getattr(a, "_pending_sheet_announce", None)
     template = args.get("template_sheet") if isinstance(args, dict) else None
     if isinstance(template, str) and template == a._target_sheet:
         others = [s for s in sheets if s != template]
@@ -8292,7 +8298,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
     # ★ W8a 項目5: 「決定論」はユーザー向け文字列から排除（内部名・関数名は不変）。
-    for ln in render_code_block(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
+    for ln in render_code_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
         print(ln)
 
     # ★ 段1: interpretation/provenance は1箇所（build_interpretation）で組む
@@ -8483,7 +8489,7 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
 
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
-    for ln in render_code_block(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
+    for ln in render_code_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
         print(ln)
 
     interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
@@ -8641,7 +8647,7 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
 
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
-    for ln in render_code_block(f"\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
+    for ln in render_code_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
         print(ln)
 
     interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
@@ -11612,7 +11618,7 @@ def build_parser() -> argparse.ArgumentParser:
     va = vsub.add_parser("add", help="語を登録する（例: ailine vocab add 消費税 1.1）")
     va.add_argument("term", help="語（例: 消費税）")
     va.add_argument("value", help="値（倍率。例: 1.1）")
-    vl = vsub.add_parser("list", help="登録済みの語を一覧表示する")
+    vsub.add_parser("list", help="登録済みの語を一覧表示する")
     v.set_defaults(func=cmd_vocab)
 
     al = sub.add_parser("alias", help="別名（言い回し → 操作名）を編集・表示する")
