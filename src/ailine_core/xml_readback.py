@@ -58,7 +58,14 @@ def _load_shared_strings(z: zipfile.ZipFile) -> list:
     root = ET.fromstring(z.read("xl/sharedStrings.xml"))
     out = []
     for si in root.findall("main:si", _NS):
-        texts = [t.text or "" for t in si.findall(".//main:t", _NS)]
+        # ★ 2026-08-24: `.//main:t` は **rPh（ふりがな）の <t> まで拾っていた**。
+        #   日本語版 Excel は IME 入力した文字列に読み仮名を自動で埋めるので、
+        #   「山田太郎」が「山田太郎ヤマダタロウ」になっていた（実測）。
+        #   しかも export-csv の照合は declared 側も同じ read_grid 由来なので**恒真**で、
+        #   誤った値を書いて ✓ を出していた。本文は <si> 直下の <t> と
+        #   リッチテキストの <r>/<t> だけ ── rPh は本文ではない。
+        texts = [t.text or "" for t in si.findall("main:t", _NS)]
+        texts += [t.text or "" for t in si.findall("main:r/main:t", _NS)]
         out.append("".join(texts))
     return out
 

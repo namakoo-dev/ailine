@@ -102,7 +102,8 @@ from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine ver
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
-from ailine_core.report_per_row import (   # ★ 帳票段: REPORT_PER_ROW の純ロジック部品
+from ailine_core.report_per_row import (
+    cells_with_multiple_placeholders,   # ★ 帳票段: REPORT_PER_ROW の純ロジック部品
     sanitize_sheet_name, unique_sheet_name, scan_placeholders, compare_report_cells,
 )
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
@@ -1551,6 +1552,23 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
     recon = count_reconciliation(before, after)
     if recon:
         lines.append(recon)
+    # ★ 2026-08-24: 1列目の空欄で分母が縮んだ事実を必ず言う（黙って少なく処理しない）。
+    #   ★ 付きなので count_suspicious_advisories が拾い、決裁③で ✓→△ に降格する。
+    #   ここ（全 op が通る助言の組み立て）に置くので、op ごとの配線漏れが起きない。
+    if meta and (path := meta.get("path")):
+        sheet = (resolved or {}).get("_target_sheet") or (meta.get("sheets") or [None])[0]
+        header_row = (meta.get("header_rows") or {}).get(sheet, 1) if sheet else 1
+        try:
+            wb_gap = openpyxl.load_workbook(path, read_only=False, data_only=True)
+            try:
+                if sheet in wb_gap.sheetnames:
+                    gap = detect_first_column_gap(wb_gap[sheet], header_row=header_row)
+                    if gap:
+                        lines.append(gap)
+            finally:
+                wb_gap.close()
+        except Exception:
+            pass   # 読めない時は黙る（無関係な入力を巻き添えにしない）
     lines.extend(new_sheet_advisories(before, after))
     lines.extend(existing_sheet_replaced_advisory(before, after, op=op, precondition_broken=precondition_broken) + [m for m in [detect_write_target_type_change(before, after, op=op, resolved=resolved, meta=meta, op_write_target=OP_WRITE_TARGET, is_number=_is_number, after_path=after_path)] if m])   # ★ 致命2(W10e) + 挙動変更#1(b)
     return lines
@@ -3644,6 +3662,16 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 f"雛形『{template_sheet}』に印（{{{{列名}}}}）が見つかりません。"
                 "転記したいセルに {{列名}} の形で印を置いてください")
 
+        # ★ 2026-08-24: 1 セルに印が 2 つ以上あるなら、埋めずに断る。埋めると 1 セルに
+        #   2 回書くことになり後の値が前を消す ── 「それらしく埋まって片方が生で残る」
+        #   （盲検の査定で名指しされた事故）より、雛形を直してくださいと言う方が正しい。
+        if (dupes := cells_with_multiple_placeholders(placeholders)):
+            cell, names = dupes[0]
+            return False, resolved, inferred, (
+                f"雛形『{template_sheet}』の {cell} に印が {len(names)} つあります"
+                f"（{chr(12539).join(names)}）。1 つのセルに置ける印は 1 つまでです ── "
+                f"別々のセルに分けてください")
+
         resolved_placeholders = []
         for ph in placeholders:
             if ph.column_name not in data_headers:
@@ -3743,6 +3771,16 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 return False, resolved, inferred, (
                     f"雛形『{template_sheet}』に印（{{{{列名}}}}）が見つかりません。"
                     "出力したい列の直下のセルに {{列名}} の形で印を置いてください")
+
+            # ★ 2026-08-24: 1 セルに印が 2 つ以上あるなら、埋めずに断る。埋めると 1 セルに
+            #   2 回書くことになり後の値が前を消す ── 「それらしく埋まって片方が生で残る」
+            #   （盲検の査定で名指しされた事故）より、雛形を直してくださいと言う方が正しい。
+            if (dupes := cells_with_multiple_placeholders(placeholders)):
+                cell, names = dupes[0]
+                return False, resolved, inferred, (
+                    f"雛形『{template_sheet}』の {cell} に印が {len(names)} つあります"
+                    f"（{chr(12539).join(names)}）。1 つのセルに置ける印は 1 つまでです ── "
+                    f"別々のセルに分けてください")
 
             # ★ 第一波: 印は全部1つの行に置かれている前提（設計文書「見出し行 + 直下1行に印」）。
             #   最初に見つかった印の行を「印行」、その直上を「見出し行」とみなす。
@@ -4542,6 +4580,34 @@ def _apply_operator(a, b, operator: str):
 def _is_number(v) -> bool:
     """★ 止血2: bool は int のサブクラスだが数値セルとしては扱わない（True/False混入対策）。"""
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def detect_first_column_gap(ws, header_row: int = 1, look_ahead: int = 200) -> str | None:
+    """A 列（1列目）を上から走査して止まった位置より**下にまだ中身がある**なら、その事実を
+       名指しする 1 文を返す（無ければ None）。
+
+    ★ なぜ在るか（盲検レビュー・2026-08-24）: データ行の数え方（_scan_last_row）は
+      1 列目を上から見て最初の空セルで打ち切る。ところが**計画側も検証側も同じ関数**を
+      使うので、「データ N 行 → 出力 N 枚」の完全会計が**恒真**になっていた。
+      実測: 5 行の表が 3 行と数えられる。30 社の一覧で 12 行目の顧客名が空（結合セルの
+      2 行目・月の区切りの空行は普通の書き方）なら、10 枚しか出ないのに ✓ が出る。
+    ★ 直し方の選択: 数え方そのものを変えると、合計行の除外など既存の全機構の前提が動く。
+      ここでは**縮んだ事実を必ず言う**に留める（★ 付きなので決裁③で ✓→△ に降格する）。
+      「黙って少なく処理する」から「少なく処理したと言う」へ ── これが最小の正直さ。
+    """
+    stop = header_row
+    while ws.cell(row=stop + 1, column=1).value not in (None, ""):
+        stop += 1
+    counted = stop - header_row
+    last_seen = None
+    for r in range(stop + 1, stop + 1 + look_ahead):
+        if ws.cell(row=r, column=1).value not in (None, ""):
+            last_seen = r
+    if last_seen is None:
+        return None
+    return (f"★ 疑わしい: 1列目が {stop + 1} 行目で空いているため、データ行を {counted} 行と数えました"
+            f"（{last_seen} 行目にはまだ中身があります）。"
+            f"1列目に空欄がある表は、その手前までしか処理されません")
 
 
 def _numeric_value(v):

@@ -85,7 +85,9 @@ class Placeholder:
 
 def scan_placeholders(ws, max_row: int, max_col: int) -> list:
     """ws（openpyxl の worksheet）の 1..max_row × 1..max_col を走査し、文字列セルに
-       含まれる最初の {{...}} を印として集める（1セルにつき印は1個まで・v1 の割り切り）。
+       含まれる {{...}} を**すべて**印として集める。★ 2026-08-24 まで「最初の 1 個だけ」
+       だったため、2 つ目が生のまま顧客の紙に印字され、しかも事後条件の declared も
+       同じ規則で作るので原理的に検出不能だった。
        見つかった順（上から・各行は左から）。"""
     out = []
     for r in range(1, max_row + 1):
@@ -93,14 +95,32 @@ def scan_placeholders(ws, max_row: int, max_col: int) -> list:
             v = ws.cell(row=r, column=c).value
             if not isinstance(v, str):
                 continue
-            m = _PLACEHOLDER_RE.search(v)
-            if not m:
+            # ★ 2026-08-24: 初版は search（1 セル 1 個・v1 の割り切り）だった。
+            #   `{{取引先}} 様（担当: {{担当者}}）` の 2 つ目が生のまま顧客の紙に印字され、
+            #   しかも事後条件の declared も同じ規則で作るので**原理的に検出不能**だった。
+            #   全部拾う ── 拾えば埋められるし、埋められなければ列名照合で断れる。
+            matches = list(_PLACEHOLDER_RE.finditer(v))
+            if not matches:
                 continue
-            name = m.group(1)
-            whole = v == "{{" + name + "}}"
-            out.append(Placeholder(cell=f"{get_column_letter(c)}{r}", row=r, col=c,
-                                    column_name=name, whole=whole, raw=v))
+            for m in matches:
+                name = m.group(1)
+                whole = v == "{{" + name + "}}"
+                out.append(Placeholder(cell=f"{get_column_letter(c)}{r}", row=r, col=c,
+                                        column_name=name, whole=whole, raw=v))
     return out
+
+
+def cells_with_multiple_placeholders(placeholders) -> list:
+    """同じセルに印が 2 つ以上ある箇所 [(セル参照, [列名, ...]), ...]。
+
+    ★ なぜ埋めずに断るのか（2026-08-24）: 1 セルに 2 つあると、埋める側は 1 セルに
+      2 回書くことになり**後の値が前を消す**。「それらしく埋まって片方が生で残る」より、
+      **雛形を直してくださいと言う方が正しい**（雛形は人が作る、という帳票段の憲法）。
+    """
+    by_cell = {}
+    for ph in placeholders:
+        by_cell.setdefault(ph.cell, []).append(ph.column_name)
+    return [(cell, names) for cell, names in by_cell.items() if len(names) > 1]
 
 
 # --- ②値の3計数（印セルだけに絞る・訂正5） --------------------------------------
