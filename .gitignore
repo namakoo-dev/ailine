@@ -10,3 +10,6 @@ __pycache__/
 dist/
 *.egg-info/
 .venv-check/
+
+# 挙動の写真（scripts/behavior_snapshot.py）── 手元の作業用で共有しない
+.ailine_snapshots/
