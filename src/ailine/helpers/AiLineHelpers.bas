@@ -883,3 +883,51 @@ Sub SplitColumn(oDoc As Object, headerRow As Integer, colIdx As Integer, sep As 
         Next k
     Next i
 End Sub
+
+' ★ 2026-08-24（土台固め）: 検分シートを **LibreOffice 側で**作る。
+'   なぜ: 旧実装は openpyxl でブックを開き直して検分シートを足していた。openpyxl の
+'   往復は xl/drawings の中の**図形（描かれた角印・社判・テキストボックス）を捨てる**。
+'   実測: 雛形に角印のある請求書ブックで、LO が正しく N 枚へ複製した角印を、最後の
+'   openpyxl 往復が全部消したうえで ✓ を出していた（帳票段の主用途そのもの）。
+'   LO 経路は図形を保つと実測済みなので、書き手を LO へ寄せて往復ごと無くす。
+'
+'   payload の形: レコード = Chr(30) 区切り / フィールド = Chr(31) 区切り。
+'   types は 1 文字ずつ列に対応（"s"=文字列 / "n"=数値）。Excel のシート名もセル値も
+'   制御文字を含めないので、この 2 文字は区切りとして安全。
+Sub WriteInspectionSheet(oDoc As Object, sheetName As String, payload As String, types As String)
+    Dim oSheet As Object, oCell As Object
+    Dim recs() As String, flds() As String
+    Dim r As Long, c As Long
+    Dim nCols As Long
+
+    If oDoc.Sheets.hasByName(sheetName) Then
+        oDoc.Sheets.removeByName(sheetName)
+    End If
+    oDoc.Sheets.insertNewByName(sheetName, oDoc.Sheets.Count)
+    oSheet = oDoc.Sheets.getByName(sheetName)
+
+    recs = Split(payload, Chr(30))
+    nCols = 0
+    For r = 0 To UBound(recs)
+        If recs(r) <> "" Then
+            flds = Split(recs(r), Chr(31))
+            If UBound(flds) + 1 > nCols Then nCols = UBound(flds) + 1
+            For c = 0 To UBound(flds)
+                oCell = oSheet.getCellByPosition(c, r)
+                If r > 0 And c < Len(types) And Mid(types, c + 1, 1) = "n" Then
+                    oCell.setValue(CDbl(flds(c)))
+                Else
+                    oCell.setString(flds(c))
+                End If
+            Next c
+        End If
+    Next r
+
+    ' 見出し行を太字に（既存の BoldRange と同じ作法）。
+    If nCols > 0 Then
+        Call BoldRange(oSheet, 0, 0, nCols - 1, 0)
+        For c = 0 To nCols - 1
+            oSheet.Columns.getByIndex(c).OptimalWidth = True
+        Next c
+    End If
+End Sub

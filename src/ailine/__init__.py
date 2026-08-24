@@ -4600,6 +4600,17 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                 f'    Call FillReportSheet(oDoc, "{template_sheet}", "{new_name}", '
                 f'"{src_sheet}", {src_row0}, {hr0})\n'
             )
+        # ★ 2026-08-24（土台固め）: 検分シートも**同じ Basic の中で**書く。
+        #   旧実装は生成後に openpyxl でブックを開き直して足しており、その往復が
+        #   xl/drawings の中の図形（描かれた角印・社判）を全部捨てていた（実測）。
+        #   LO 側で書けば往復そのものが無くなる ── 追加の LO 起動も要らない。
+        insp = resolved_args.get("_inspection_sheet")
+        report_rows = resolved_args.get("_report_rows") or []
+        if insp and report_rows:
+            n_ph = len(resolved_args.get("_placeholders") or [])
+            lines.append(inspection_sheet_basic_call(
+                insp, ["シート名", "元の行", "埋めた印の数"],
+                [[rr["sheet"], rr["row"], n_ph] for rr in report_rows], "snn"))
         return wrap("".join(lines))
 
     if op == "FORMAT_MAP":
@@ -4613,10 +4624,21 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         header_tpl_row0 = int(resolved_args["_header_tpl_row"]) - 1
         ph_tpl_row0 = int(resolved_args["_placeholder_tpl_row"]) - 1
         src_rows_csv = ",".join(str(int(r) - 1) for r in resolved_args.get("_data_rows", []))
-        return wrap(
+        # ★ 2026-08-24（土台固め）: 検分シートも同じ Basic の中で書く（帳票段と同じ処置・
+        #   同じ関数）。openpyxl の往復が図形を捨てるので、往復自体を無くす。
+        fm_calls = (
             f'    Call FillFormatMapSheet(oDoc, "{template_sheet}", "{src_sheet}", "{dst_sheet}", '
-            f'{header_tpl_row0}, {ph_tpl_row0}, {hr0}, "{src_rows_csv}")\n'
-        )
+            f'{header_tpl_row0}, {ph_tpl_row0}, {hr0}, "{src_rows_csv}")' + chr(10))
+        insp = resolved_args.get("_inspection_sheet")
+        data_rows = resolved_args.get("_data_rows") or []
+        if insp and data_rows:
+            n_ph = len(resolved_args.get("_placeholders") or [])
+            out_sheet = resolved_args.get("_output_sheet")
+            fm_calls += inspection_sheet_basic_call(
+                insp, ["出力シート", "出力行", "元の行", "埋めた印の数"],
+                [[out_sheet, k + 1, src_row, n_ph]
+                 for k, src_row in enumerate(data_rows, start=1)], "snnn")
+        return wrap(fm_calls)
 
     raise ValueError(f"未対応の op: {op}")
 
@@ -5903,6 +5925,36 @@ def check_dedup(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{denom}（値・型とも保存。元シートとの突き合わせ無し）"
 
 
+def inspection_sheet_basic_call(sheet_name: str, header: list, rows: list,
+                                 types: str) -> str:
+    """検分シートを LibreOffice 側で書く Basic の 1 行を組む。
+
+    ★ 2026-08-24（土台固め）: 旧実装は openpyxl でブックを開き直して検分シートを足して
+    いた。openpyxl の往復は xl/drawings の**中身の図形**（描かれた角印・社判・
+    テキストボックス）を捨てる ── ファイル名は残るので、忠実度ゲートの
+    ファイル名比較にも掛からなかった。実測: 雛形に角印のある請求書で、LO が正しく
+    N 枚へ複製した角印を最後の openpyxl 往復が全部消し、✓ が出ていた。
+    ★ LO 経路は図形を保つと実測済みなので、書き手を LO へ寄せて往復ごと無くす。
+    ★ 実装は 1 つ（帳票段と様式写像段が同じ関数を呼ぶ ── 書き写さない）。
+
+    types は列ごとの型（"s"=文字列 / "n"=数値）。Excel のシート名・セル値は制御文字を
+    含めないので、レコード Chr(30) / フィールド Chr(31) の区切りは安全。
+    """
+    # ★ 区切りは **Basic の Chr(30)/Chr(31) 式**として書く ── 生の制御文字を .bas に
+    #   埋めない（この repo は生成物に混ざった制御文字で一度事故を起こしている）。
+    def q(v):
+        return '"' + ("" if v is None else str(v)).replace('"', '""') + '"'
+
+    def rec(values):
+        return " & Chr(31) & ".join(q(v) for v in values)
+
+    parts = [rec(header)] + [rec(r) for r in rows]
+    payload_expr = " & Chr(30) & ".join(parts) if parts else '""'
+    name = str(sheet_name).replace('"', '""')
+    return (f'    Call WriteInspectionSheet(oDoc, "{name}", '
+            f'{payload_expr}, "{types}")' + chr(10))
+
+
 def check_report_per_row(path: Path, args: dict, header_row: int = 1,
                           source_book: Path | None = None) -> tuple:
     """REPORT_PER_ROW の事後条件。設計文書の4本柱を機械で確かめる:
@@ -6660,6 +6712,53 @@ def _classify_fidelity_member(name: str) -> str | None:
     return None
 
 
+def count_drawing_objects(path) -> dict:
+    """xlsx の中の描画オブジェクトを**中身まで数える**。
+
+    ★ 2026-08-24（土台固め）の実測で開いた穴: 忠実度ゲートは zip の**ファイル名**だけを
+    比べていた。openpyxl の往復は xl/drawings/drawing1.xml を**残したまま中の図形だけ**
+    捨てるので、ファイル名の集合は 1 つも変わらず、喪失 0 件と報告された（実測: 帳票段が
+    雛形の角印を消して ✓ を出した）。★ ファイルが在ることは、中身が在ることではない。
+
+    戻り値: {カテゴリ: 個数}。sp(図形/テキストボックス) と pic(画像) を分けて数える。
+    """
+    import re as _r
+    sp_re = _r.compile("<(?:[a-zA-Z]+:)?sp[ >]")
+    pic_re = _r.compile("<(?:[a-zA-Z]+:)?pic[ >]")
+    counts = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            for name in z.namelist():
+                if not (name.startswith("xl/drawings/") and name.endswith(".xml")):
+                    continue
+                text = z.read(name).decode("utf-8", errors="replace")
+                n_sp = len(sp_re.findall(text))
+                n_pic = len(pic_re.findall(text))
+                if n_sp:
+                    counts["図形/描画"] = counts.get("図形/描画", 0) + n_sp
+                if n_pic:
+                    counts["画像"] = counts.get("画像", 0) + n_pic
+    except Exception:
+        return {}
+    return counts
+
+
+def check_drawing_content_loss(original, produced) -> list:
+    """描画オブジェクトが**減った**分をカテゴリ別に返す（増えた分は数えない ──
+       帳票段が雛形を N 枚に複製して図形が増えるのは正常）。
+       戻り値: [(カテゴリ, 減った数, 元の数, 今の数), ...]。"""
+    before = count_drawing_objects(original)
+    if not before:
+        return []
+    after = count_drawing_objects(produced)
+    out = []
+    for cat, n_before in sorted(before.items()):
+        n_after = after.get(cat, 0)
+        if n_after < n_before:
+            out.append((cat, n_before - n_after, n_before, n_after))
+    return out
+
+
 def check_zip_fidelity_loss(original: Path, normalized: Path) -> list:
     """(a) original の zip 構成要素のうち normalized で消えたものをカテゴリ別に集計する。
        戻り値: [(カテゴリ, 消えた件数), ...]（件数0のカテゴリは含めない・カテゴリ名順）。
@@ -6717,11 +6816,31 @@ def check_round_trip_fidelity(original: Path, normalized: Path) -> dict:
     """往復忠実度ゲート本体。{"lost": bool, "items": [{"label":str,"count":int}, ...]}。
        ★ history.jsonl の fidelity フィールドにそのまま記録する形（機械可読）。"""
     items = []
+    seen_labels = set()
     for cat, n in check_zip_fidelity_loss(original, normalized):
         items.append({"label": cat, "count": n})
+        seen_labels.add(cat)
+    # ★ 2026-08-24: ファイル名の集合だけでは、**部品が残ったまま中身だけ抜ける**形を
+    #   取り逃がす（実測: 帳票段が drawing1.xml を残して中の角印だけ捨て、喪失 0 件で
+    #   ✓ が出た）。中の個数も数える。ファイル名側で既に数えたカテゴリは重複させない。
+    for cat, n, b, a in check_drawing_content_loss(original, normalized):
+        if cat in seen_labels:
+            continue
+        items.append({"label": cat, "count": n, "before": b, "after": a})
     for cat, b, a in check_openpyxl_fidelity_loss(original, normalized):
         items.append({"label": cat, "count": b - a, "before": b, "after": a})
     return {"lost": bool(items), "items": items}
+
+
+def format_output_fidelity_warning(fidelity: dict, name: str) -> str:
+    """★ 2026-08-24: 「これから失う」予告（format_fidelity_warning）ではなく、
+       **もう失った**の報告。人に渡す最終ファイルに対して回す。
+       ★ ⚠ で始めるので、決裁③の count_suspicious_advisories が拾って ✓ を △ に降ろす。"""
+    parts = "・".join(f"{it['label']} {it['count']} 件"
+                      for it in fidelity.get("items", []))
+    return (f"⚠ {name} では、元のファイルにあった飾りが失われています（{parts}）"
+            f"{chr(10)}  → この処理では保てません。飾りが要る書類は、元のファイルを"
+            " LibreOffice や Excel で直接編集してください")
 
 
 def format_fidelity_warning(fidelity: dict) -> str:
@@ -7376,6 +7495,9 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
        （★ 付きだけ数える）は claim.py 側に1箇所で持つ）。1件でもあれば ✓ を出さず△にする
        （machine_verified=False の ⚠ 経路には影響しない ── そちらは元から ✓ を名乗らない）。
        戻り値: 置換が成功した(または --copy で置換不要だった)か。"""
+    # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。
+    #   --copy でも --inplace でも成果物は out_book なので、1 本の測定で両経路を覆う。
+    _output_fidelity = check_round_trip_fidelity(book, out_book)
     if a.inplace:
         ok_ip, err_ip = atomic_replace_inplace(
             book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
@@ -7389,6 +7511,34 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
     else:
         final, trailer = out_book, f"（原本 {book.name} は変更していません）"
         result["out"] = str(out_book)
+
+    # ★ 2026-08-24（土台固め）: 忠実度ゲートを **人に渡す最終ファイル**にも回す。
+    #   旧: 正規化の直後（原本 vs LO を通した直後）だけを見ていた。しかも --inplace の
+    #   時だけ。実測した穴は 3 つとも同じ根だった:
+    #     ① 帳票段が検分シートを openpyxl で足す往復で、雛形の角印を全枚から消す
+    #     ② 様式写像段が同じ形（コード同一）
+    #     ③ --copy はゲートを素通りし、出力から VBA が消えたまま ✓ を出す
+    #        ── しかも --copy は**ゲート自身が案内する逃げ道**だった
+    #   ★ ここは ✓ を出す唯一の choke point なので、ここで見れば経路を問わず塞がる
+    #     （新しい op を足しても自動で守られる ── 個別に配線しない）。
+    #   ★ 見るのは「消えたもの」だけ（増えた分は数えない）── 帳票段が N 枚足すのは正常。
+    # ★ 恒真を切る: --inplace では atomic_replace_inplace の後、book は**結果そのもの**に
+    #   なる（自分と自分を比べれば喪失は永遠に 0）。だから測定はこの関数の入口
+    #   （置換前）で済ませてある ── ここでは結果を読むだけ。
+    lost_in_output = _output_fidelity
+    if lost_in_output.get("lost"):
+        result["output_fidelity"] = lost_in_output
+        # ★ --accept-loss は「失ってよい」と**利用者が先に選んだ**場合。事実は必ず言うが、
+        #   選んだ人を ⚠ で責め直して ✓ を降ろすのは筋が違う ── 中立の報告にする。
+        #   選んでいない経路（--copy 等・ゲートが走らないまま失う）は従来どおり ⚠。
+        if getattr(a, "accept_loss", False):
+            parts = "・".join(f"{it['label']} {it['count']} 件"
+                               for it in lost_in_output.get("items", []))
+            print(f"（承知のうえで飾りを失いました: {parts}）")
+        else:
+            msg = format_output_fidelity_warning(lost_in_output, final.name)
+            print(msg)
+            warning_count += count_suspicious_advisories([msg])
 
     evidence, err = observe_book_state(final)
     if err is not None:
@@ -7413,6 +7563,36 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             print(ln)
     print(trailer)
     return True
+
+
+def likely_cause_of_no_change(book_path, sheet_name=None) -> list:
+    """事後条件が破れたとき、**なぜ効かなかったか**の心当たりを述べる行を返す。
+
+    ★ 2026-08-24（土台固め）: 飾りの生存表を作っている最中に、対照実験で確定した ──
+    表の範囲に**結合セル**があると LibreOffice の並べ替えが黙って何もしない
+    （同じブックから結合セルだけ外すと ✓ になる）。ailine は嘘の ✓ を出さずに
+    exit 1 で落ちるので「壊さない」は守れているが、**理由を言わない**ので使う側は
+    そこで詰まる ── 今日ずっと直してきた「判定は正しいが理由を言う口が無い」の形。
+
+    ★ 断定しない: 「効かなかった原因はこれ」ではなく「心当たり」として出す
+    （結合セルが在っても効く操作はある）。
+    """
+    lines = []
+    try:
+        with BookView(book_path) as bv:
+            ws = bv.sheet(sheet_name)
+            merged = list(ws.merged_cells.ranges)
+    except Exception:
+        return []
+    if merged:
+        shown = "・".join(str(m) for m in merged[:3])
+        more = f"（ほか {len(merged) - 3} 件）" if len(merged) > 3 else ""
+        lines.append(f"  心当たり: シート『{sheet_name or ""}』に結合セルが "
+                      f"{len(merged)} 件あります（{shown}{more}）")
+        lines.append("  → 表の中に結合セルがあると、並べ替えなどの操作が"
+                     "何もせずに終わることがあります（実測）。"
+                     "結合を解除してからお試しください")
+    return lines
 
 
 def _untouched_original_line(book: Path, out_book: Path) -> str:
@@ -8200,6 +8380,10 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         return 1
     if status == "fail":
         print(f"\n× 適用されたが事後条件を満たさない: {reason}")
+        # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
+        for _ln in likely_cause_of_no_change(
+                out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
+            print(_ln)
         print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
         result["out"] = str(out_book)
         _finish_run(a, book, result, "postcondition_fail")
@@ -8252,33 +8436,6 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 #   割り込めない。
 # ---------------------------------------------------------------------------
 
-def _add_report_inspection_sheet(out_book: Path, resolved: dict) -> None:
-    """★ 訂正4: 出所は stack の出所列でなく検分シートに置く（1行=1シートには構造的に
-       合わないため）。basrun_apply が N 枚の報告シートを作った直後・事後条件チェックの
-       直前に、Python 側で直接シート/元行/埋めた印の数の一覧を足す（inspection.py の
-       作法に乗る ── 見出し太字・列幅自動算出は同じ部品を使う。findings 形の build_sheet
-       は「宣言=シート全体」の1シート出力を前提にしており 1行=1シートに合わないため、
-       ここでは専用の簡易版を組む）。"""
-    inspection_sheet = resolved.get("_inspection_sheet")
-    report_rows = resolved.get("_report_rows") or []
-    if not inspection_sheet or not report_rows:
-        return
-    n_placeholders = len(resolved.get("_placeholders") or [])
-    wb = openpyxl.load_workbook(out_book)
-    try:
-        ws = wb.create_sheet(title=inspection_sheet)
-        header = ["シート名", "元の行", "埋めた印の数"]
-        for c, h in enumerate(header, start=1):
-            ws.cell(row=1, column=c, value=h)
-        inspection.bold_row(ws, 1, len(header))
-        for i, rr in enumerate(report_rows, start=2):
-            ws.cell(row=i, column=1, value=rr["sheet"])
-            ws.cell(row=i, column=2, value=rr["row"])
-            ws.cell(row=i, column=3, value=n_placeholders)
-        inspection.autosize_columns(ws)
-        wb.save(out_book)
-    finally:
-        wb.close()
 
 
 def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
@@ -8359,9 +8516,9 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
         _finish_run(a, book, result, "runtime_error", error_detail=err_apply)
         return 1
 
-    # ★ 検分シート（③出所の置き場）は LO を経由せず Python 側で直接足す（basrun_apply と
-    #   run_postcondition の間に割り込める唯一の場所）。
-    _add_report_inspection_sheet(out_book, resolved)
+    # ★ 2026-08-24（土台固め）: 検分シートは **Basic の中で**書くようになった
+    #   （_dsl_to_basic の REPORT_PER_ROW 節）。ここで openpyxl で開き直していた旧経路は
+    #   xl/drawings の中の図形を捨てるので撤去した ── 二重に書かないためでもある。
 
     after = snapshot(out_book)
     changed, lines = diff_snapshots(before, after)
@@ -8399,6 +8556,10 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
         return 1
     if status == "fail":
         print(f"\n× 適用されたが事後条件を満たさない: {reason}")
+        # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
+        for _ln in likely_cause_of_no_change(
+                out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
+            print(_ln)
         print(_untouched_original_line(book, out_book))
         result["out"] = str(out_book)
         _finish_run(a, book, result, "postcondition_fail")
@@ -8434,33 +8595,6 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
 #   basrun_apply の直後・run_postcondition の直前に Python 側で足す）で組む。
 # ---------------------------------------------------------------------------
 
-def _add_format_map_inspection_sheet(out_book: Path, resolved: dict) -> None:
-    """★ 訂正4と同じ理由（REPORT_PER_ROW の _add_report_inspection_sheet 参照）: 出所は
-       検分シートに置く。ここは「出力行 → 元行」の対応が1シート内の行同士の対応なので、
-       REPORT_PER_ROW（シート単位の対応）より単純な表になる。"""
-    inspection_sheet = resolved.get("_inspection_sheet")
-    data_rows = resolved.get("_data_rows") or []
-    output_sheet = resolved.get("_output_sheet")
-    if not inspection_sheet or not data_rows or not output_sheet:
-        return
-    n_placeholders = len(resolved.get("_placeholders") or [])
-    wb = openpyxl.load_workbook(out_book)
-    try:
-        ws = wb.create_sheet(title=inspection_sheet)
-        header = ["出力シート", "出力行", "元の行", "埋めた印の数"]
-        for c, h in enumerate(header, start=1):
-            ws.cell(row=1, column=c, value=h)
-        inspection.bold_row(ws, 1, len(header))
-        for i, src_row in enumerate(data_rows, start=2):
-            out_row = i - 1   # 出力シートの何行目（見出しを除く・1起点）
-            ws.cell(row=i, column=1, value=output_sheet)
-            ws.cell(row=i, column=2, value=out_row + 1)   # 出力シート上の物理行（見出し込み）
-            ws.cell(row=i, column=3, value=src_row)
-            ws.cell(row=i, column=4, value=n_placeholders)
-        inspection.autosize_columns(ws)
-        wb.save(out_book)
-    finally:
-        wb.close()
 
 
 def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
@@ -8540,9 +8674,8 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
         _finish_run(a, book, result, "runtime_error", error_detail=err_apply)
         return 1
 
-    # ★ 検分シート（③出所の置き場）は LO を経由せず Python 側で直接足す（basrun_apply と
-    #   run_postcondition の間に割り込める唯一の場所）。
-    _add_format_map_inspection_sheet(out_book, resolved)
+    # ★ 2026-08-24（土台固め）: 検分シートは Basic の中で書くようになった
+    #   （_dsl_to_basic の FORMAT_MAP 節）。openpyxl で開き直す旧経路は図形を捨てるので撤去。
 
     after = snapshot(out_book)
     changed, lines = diff_snapshots(before, after)
@@ -8580,6 +8713,10 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
         return 1
     if status == "fail":
         print(f"\n× 適用されたが事後条件を満たさない: {reason}")
+        # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
+        for _ln in likely_cause_of_no_change(
+                out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
+            print(_ln)
         print(_untouched_original_line(book, out_book))
         result["out"] = str(out_book)
         _finish_run(a, book, result, "postcondition_fail")

@@ -26,6 +26,7 @@ import ailine  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
+from lo_fake import apply_inspection_sheets  # noqa: E402
 
 needs_impl = pytest.mark.xfail(
     not hasattr(ailine, "check_format_map"),
@@ -71,6 +72,9 @@ def test_format_map_end_to_end(tmp_path, monkeypatch, capsys):
         out.append(["取引日", "内容", "金額"])
         for r in range(2, 4):                      # 合計行(4 行目)は含めない
             out.append([src.cell(r, 1).value, src.cell(r, 2).value, src.cell(r, 3).value])
+        # ★ 2026-08-24: 検分シートの書き手が Basic（LO 側）へ移ったので、偽物も
+        #   生成された Basic を読んで同じものを作る（tests/lo_fake.py・実装は 1 つ）。
+        apply_inspection_sheets(wb, code)
         wb.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)

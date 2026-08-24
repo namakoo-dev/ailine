@@ -22,6 +22,7 @@ import ailine  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
+from lo_fake import apply_inspection_sheets  # noqa: E402
 
 
 # --- ① 部分一致の印 × 数値列は断る ---------------------------------------------
@@ -75,6 +76,9 @@ def test_whole_cell_placeholder_on_numeric_column_is_fine(tmp_path, monkeypatch,
         sh.title = "あかつき商事"
         sh["B3"] = "あかつき商事"
         sh["B5"] = 12000
+        # ★ 2026-08-24: 検分シートの書き手が Basic（LO 側）へ移った ── 偽物も
+        #   生成された Basic を読んで同じものを作る（tests/lo_fake.py・実装は 1 つ）。
+        apply_inspection_sheets(wb2, code)
         wb2.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
