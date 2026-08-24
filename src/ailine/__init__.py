@@ -10743,6 +10743,78 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
         print(ln)
     return 0
 
+def bundled_demo_dir() -> Path:
+    """同梱サンプルの置き場所（パッケージの中）。
+
+    ★ repo からでも install 後でも同じ場所を指す ── `__file__` の隣を見るので、
+      site-packages に入っても壊れない（refs/helpers と同じ作法）。
+    """
+    return Path(__file__).resolve().parent / "demo"
+
+
+def cmd_demo(a: argparse.Namespace) -> int:
+    """`ailine demo`: 同梱サンプルを手元に出して、**次に打つ行**まで見せる。
+
+    ★ なぜ在るか（盲検の査定・2026-08-24）: README の最初のコマンドが落ちていた
+      （`demo/sample.xlsx` は repo に無く、実体は `src/ailine/demo/`）。
+      しかも **install した人はどちらのパスも持っていない**ので、README を直すだけでは
+      install 経路が救われない。査定者の言葉:
+      「値段を止めているのは製品の能力ではなく、**能力に到達するまでの距離**だ」。
+    ★ だから「置き場所を教える」ではなく「手元に出して次の一手を見せる」にした。
+    """
+    src_dir = bundled_demo_dir()
+    if not src_dir.exists():
+        print(f"× 同梱サンプルが見つかりません（{src_dir}）")
+        return EXIT_ENVIRONMENT
+    dest_dir = Path(a.out).resolve() if getattr(a, "out", None) else Path.cwd()
+    wanted = ["sample.xlsx", "lookup.xlsx", "sales.xlsx"]
+    available = [n for n in wanted if (src_dir / n).exists()]
+    if not available:
+        print(f"× 同梱サンプルが空です（{src_dir}）")
+        return EXIT_ENVIRONMENT
+    clashes = [n for n in available if (dest_dir / n).exists()]
+    if clashes and not getattr(a, "overwrite", False):
+        print(f"■ ailine demo  出力先={dest_dir}")
+        print(f"× {chr(12289).join(clashes)} が既にあります。"
+              f"別の場所に出すなら --out、上書きしてよければ --overwrite を付けてください")
+        return 7
+    copied = []
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for name in available:
+            shutil.copy2(src_dir / name, dest_dir / name)
+            copied.append(name)
+    except OSError as e:
+        print(f"× サンプルを置けませんでした: {e}")
+        return EXIT_ENVIRONMENT
+    print(f"■ ailine demo  出力先={dest_dir}")
+    for name in copied:
+        print(f"  置いた: {name}")
+    print()
+    # ★ 2026-08-24 の実測: サンプルを置いて「次にこれを打って」と勧めたら、
+    #   install した人の環境では basrun.py が無くてその一手が落ちた。
+    #   **置いただけでは距離は縮まらない。** 前提が欠けているなら、勧める前に言う。
+    try:
+        missing = [(name, hint) for name, ok, hint in doctor_checks(getattr(a, "model", None)
+                                                                     or "qwen2.5-coder:7b")
+                    if not ok]
+    except Exception:
+        missing = []
+    if missing:
+        print("先に足りないものがあります:")
+        for name, hint in missing:
+            print(f"  × {name}" + (f" ── {hint}" if hint else ""))
+        print()
+        print("揃ったら `ailine doctor` で全部 ○ になることを確かめてから、もう一度ここへ。")
+        return 0
+    print("次にこれを打ってみてください:")
+    print(f'  ailine run {copied[0]} "売上から原価を引いた利益の列を作って"')
+    print()
+    print("★ 原本は自動でバックアップされ、`ailine undo` で戻せます。")
+    print("★ うまく動かないときは `ailine doctor` が在否を名指しで教えます。")
+    return 0
+
+
 def cmd_stack(a: argparse.Namespace) -> int:
     """`ailine stack <folder> --out <path>`: M1書き ── 縦積み（UNION ALL）+ 出所列。
        DESIGN-20260821-multifile.md v2 §1(M1書き)・v2.1(単位L)。列挙・照合・合計行の識別は
@@ -11088,6 +11160,11 @@ def build_parser() -> argparse.ArgumentParser:
     ec.add_argument("--out", default=None, help="出力先の .csv（既定 同名 .csv）")
     ec.add_argument("--overwrite", action="store_true", help="出力先が既にあっても上書きする（関所 exit 7）")
     ec.set_defaults(func=cmd_export_csv)
+
+    dm = sub.add_parser("demo", help="同梱のサンプルを手元に出す（最初の 1 回はこれ）")
+    dm.add_argument("--out", default=None, help="出力先のフォルダ（既定 今いる場所）")
+    dm.add_argument("--overwrite", action="store_true", help="同名のファイルがあっても上書きする")
+    dm.set_defaults(func=cmd_demo)
 
     ep = sub.add_parser("export-pdf", help="xlsx を PDF へ書き出す（出した PDF を読み戻して確かめる）")
     ep.add_argument("book", help="対象の .xlsx ファイル")

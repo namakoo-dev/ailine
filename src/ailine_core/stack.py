@@ -45,6 +45,23 @@ _CORE_NS = {"cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-
            "dc": "http://purl.org/dc/elements/1.1/"}
 
 
+def col_a_mismatch_is_explained(col_a_count: int, used_range_count: int,
+                                 excluded_blank_label_rows: int) -> bool:
+    """1列目の非空行数と表の範囲の差が、**合計行として除外した行**で説明できるか。
+
+    ★ なぜ在るか（盲検の査定・2026-08-24）: 小計行のある請求書 3 冊すべてに
+      「1列目から数えると 2 行ですが、表の範囲は 3 行あります」が出た。原因は
+      **自分が正しく除外した小計行**。日本の請求書は「小計」を金額の隣（右寄せ）に書き、
+      1 列目は空にするのが最も普通の形なので、**普通の請求書で必ず鳴る**警告だった。
+      オオカミ少年防止を謳う道具が、自分でオオカミ少年になっていた。
+    ★ 説明に使えるのは**1列目が空の**除外行だけ ── ラベルが 1 列目に在る合計行は
+      col_a_count に既に数えられているので、差の説明にならない（恒真にしない）。
+    """
+    gap = used_range_count - col_a_count
+    if gap <= 0:
+        return True
+    return gap <= excluded_blank_label_rows
+
 def _is_blank(v) -> bool:
     return total_row._is_blank_cell(v)
 
@@ -282,8 +299,14 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
 
         col_a_count = sum(1 for r in all_rows if not _is_blank(ws.cell(row=r, column=1).value))
         used_range_count = len(all_rows)
+        # ★ 2026-08-24: 差が**合計行として除外した行**で説明できるなら黙る。
+        #   1 列目が空の合計行（「小計」を金額の隣に右寄せで書く、日本の請求書で最も普通の形）で
+        #   毎回鳴っていた ── オオカミ少年防止を謳う道具が自分でオオカミ少年になっていた。
+        excluded_blank_label = sum(
+            1 for e in verdict.excluded
+            if _is_blank(ws.cell(row=getattr(e, "row", 0) or 0, column=1).value))
         col_a_mismatch = None
-        if col_a_count != used_range_count:
+        if not col_a_mismatch_is_explained(col_a_count, used_range_count, excluded_blank_label):
             col_a_mismatch = (col_a_count, used_range_count)
 
         # ★ M2.5: 所見の組み立て（ws がまだ開いているこの関数の内側でだけ、列位置まで

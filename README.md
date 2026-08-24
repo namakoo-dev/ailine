@@ -73,49 +73,59 @@ repo から直接動かす場合は install 不要で `python -m ailine ...`（�
 
 ## 使い方
 
-以下の例の `demo/*.xlsx` は repo 直下（`src/ailine/demo/`）の同梱サンプル。install した場合はパッケージ内に入るので、自分のファイルで読み替えてほしい。
+### まずこれを打つ
+
+```bash
+ailine demo
+```
+
+同梱のサンプルを**今いる場所に置いて**、次に打つ行まで見せる。
+★ 足りないもの（LibreOffice / basrun / ollama / モデル）があれば、**落ちるコマンドを勧めずに**
+何が無いかと直し方を先に言う。repo から動かす場合も install した場合も同じに動く。
+
+以下の例の `sample.xlsx` は `ailine demo` が置いたファイル。自分のファイルで読み替えてよい。
 
 ```bash
 # 生成 → 検品ゲート → 原本に反映 → 変化を検証 → 差分を表示（既定=原本直接・自動バックアップ+undo つき）
-ailine run demo/sample.xlsx "売上から原価を引いた利益の列を作って"
+ailine run sample.xlsx "売上から原価を引いた利益の列を作って"
 
 # 生成して見せるだけ（レビュー用。適用しない）
-ailine run demo/sample.xlsx "..." --dry
+ailine run sample.xlsx "..." --dry
 
 # ★ W8b-2: 既定で原本に直接反映する（反映前に自動でバックアップを作る）。
 # 何もつけなくてよい
-ailine run demo/sample.xlsx "..."
+ailine run sample.xlsx "..."
 
 # 原本には触らず <book>.out に結果を作りたいとき（旧既定・原本は無変更）
-ailine run demo/sample.xlsx "..." --copy
+ailine run sample.xlsx "..." --copy
 
 # LibreOffice 往復だけで失われる飾り（条件付き書式・図形・ピボット・VBA 等）を
 # 検出したら、原本に触る前に申告して止まる（exit 4）。承知の上で続けるか
 # （バックアップから ailine undo で戻せる）、.out に切り替えるか選ぶ
-ailine run demo/sample.xlsx "..." --accept-loss
-ailine run demo/sample.xlsx "..." --copy   # ゲートも走らせず原本に触らない
+ailine run sample.xlsx "..." --accept-loss
+ailine run sample.xlsx "..." --copy   # ゲートも走らせず原本に触らない
 
 # ★ W10a: 既存データを持つ列への上書きが起きる場合（列名の数字誤解決を含む）は
 # --ask 無指定でも確認を挟む（対話可なら y/N・非対話なら exit 7）。承知の上で続ける
-ailine run demo/sample.xlsx "..." --overwrite
+ailine run sample.xlsx "..." --overwrite
 
 # ★ freeform 最終決定（2026-08-21）: 単発の依頼が DSL 語彙に分類できない場合、以前は
 # ここで AI が直接生成（自由生成）していたが今は生成に入らず即座に断る。--allow-freeform は
 # 後方互換のため受理するだけ（廃止告知 1 行が足されるだけで断り自体は変わらない）
-ailine run demo/sample.xlsx "..." --allow-freeform
+ailine run sample.xlsx "..." --allow-freeform
 
 # 別のモデルに載せ替える（天井を上げたいとき）
-ailine run demo/sample.xlsx "..." --model qwen2.5-coder:32b
+ailine run sample.xlsx "..." --model qwen2.5-coder:32b
 
 # 参照ライブラリ / ヘルパのディレクトリを差し替える（既定は ./refs, ./helpers）
-ailine run demo/sample.xlsx "..." --refs my_refs --helpers my_helpers
+ailine run sample.xlsx "..." --refs my_refs --helpers my_helpers
 
 # 生成の温度・修復の最大回数・適用タイムアウト秒を調整する
-ailine run demo/sample.xlsx "..." --temperature 0.1 --repair 3 --timeout 60
+ailine run sample.xlsx "..." --temperature 0.1 --repair 3 --timeout 60
 
 # 見出しが何行目か機械が確信を持てず「？ 見出しが何行目か分かりません」で止まったとき、
 # 見出し行(1起点)を明示して自動検出をスキップする
-ailine run demo/sample.xlsx "..." --header-row 3
+ailine run sample.xlsx "..." --header-row 3
 
 # ★ 対象シートをシート名で明示指定する（省略時は依頼文中のシート名の言及 → 1枚目。
 # 複数シートのブックで「〇〇シートで」「N枚目のシートで」と依頼文に書けば、指定しなくても
@@ -125,7 +135,7 @@ ailine run demo/請求書.xlsx "工事台帳シートで取引先ごとの売上
 ailine run demo/請求書.xlsx "取引先ごとの売上を集計して" --sheet 工事台帳
 
 # 結果を JSON でも出す（changes/advisories/out などを機械可読で受け取る）
-ailine run demo/sample.xlsx "..." --json
+ailine run sample.xlsx "..." --json
 
 # 起動した LibreOffice を落とす
 ailine stop
@@ -140,8 +150,8 @@ ailine history --max 20
 # 退避先は backups/<フォルダのハッシュ>/undo/ で、遡りの段数には数えない）。
 # ailine undo が restore の昇格版（あと何段遡れるかを表示・restore は互換のため残す）。
 # 最も古い世代まで戻ると「これ以上は戻せません」と言って止まる（終了コード 1）
-ailine undo demo/sample.xlsx
-ailine undo demo/sample.xlsx --list   # 一覧だけ表示（復元しない）
+ailine undo sample.xlsx
+ailine undo sample.xlsx --list   # 一覧だけ表示（復元しない）
 
 # 用語集（税率等の取り決め値）に語を登録する。「税込み合計」等で率が本文にも
 # 用語集にも無い場合、この形のコピペ可能な1行が CLARIFY のメッセージに出る
