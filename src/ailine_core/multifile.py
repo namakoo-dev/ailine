@@ -91,14 +91,40 @@ def open_base_workbook(candidates):
 
 
 def read_row_headers(ws, header_row: int) -> list:
-    """header_row（1起点）の先頭列から連続する非空セルを見出し名として読む
-       （第一波は単純に ── 列の間に空白を挟む見出しは扱わない・DESIGN §2骨）。"""
+    """header_row（1起点）の見出し名を読む。
+
+    ★★ 2026-08-24 の根治（盲検の実データ耐性レビュー）: 旧版は「先頭列から**連続する**
+    非空セル」で切っていた（docstring に「第一波は単純に ── 列の間に空白を挟む見出しは
+    扱わない」と当時の割り切りが在った）。結合セルは 2 つ目以降が None なので、
+    **`A1:B1` を結合した請求書で見出しがそこで途切れ、その先の列が丸ごと消えていた**。
+    実測: `商品情報`(A1:B1 結合) / `数量` / `金額` の表を stack すると
+    出力が `('品名','規格','元ファイル','元行')` になり、**数量と金額が列ごと消え、
+    しかも exit 0・⚠ なし・Σ金額 の行も出ない**（消えたこと自体が画面に現れない）。
+    日本の請求書で結合見出しはほぼ普遍なので、「扱わない」で済む形ではなかった。
+
+    ★ 直し方: **末尾の余白では止まり、途中の空セルでは止まらない。**
+      ① 使われている最終列まで見る（`ws.max_column`・上限は _MAX_HEADER_COLS）
+      ② 結合セルの中は**左上の値を引き継ぐ**（Excel の見た目と一致させる）
+      ③ 引き継ぎ元も無い空セルは、位置を保つために空文字で埋める
+         （列位置がずれると、やる側と見る側で別の列を指す事故になる）
+      ④ 末尾の空は落とす（無限に伸ばさない）
+    """
+    merged_value = {}
+    for rng in getattr(ws, "merged_cells", None).ranges if getattr(ws, "merged_cells", None) else []:
+        if rng.min_row <= header_row <= rng.max_row:
+            top_left = ws.cell(row=rng.min_row, column=rng.min_col).value
+            if top_left not in (None, ""):
+                for c in range(rng.min_col, rng.max_col + 1):
+                    merged_value[c] = str(top_left)
+    last = min(int(getattr(ws, "max_column", 0) or 0), _MAX_HEADER_COLS)
     headers = []
-    for c in range(1, _MAX_HEADER_COLS + 1):
+    for c in range(1, last + 1):
         v = ws.cell(row=header_row, column=c).value
         if v in (None, ""):
-            break
+            v = merged_value.get(c, "")
         headers.append(str(v))
+    while headers and headers[-1] == "":
+        headers.pop()
     return headers
 
 

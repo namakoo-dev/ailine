@@ -4065,6 +4065,44 @@ def _format_extract_value(value) -> str:
     return str(value)
 
 
+def header_row_drops_columns(ws, chosen_row: int) -> str | None:
+    """採用した見出し行より**上**の行に、採用行より多くの見出しが在るなら、
+       落ちる列を名指しする 1 文を返す（無ければ None）。
+
+    ★ なぜ在るか（盲検の実データ耐性レビュー・2026-08-24 に実物で再現）:
+      `商品情報`(A1:B1 結合) / `数量` / `金額` の請求書で `detect_header_row` は
+      **2 行目を confident で返す**（1 行目は結合のせいで非空セルが 1 つに見える）。
+      2 行目は `品名`/`規格` の 2 列しかないので**数量と金額が列ごと落ち**、
+      それでも exit 0・⚠ なし・**Σ金額 の行も出ない** ── 消えたこと自体が画面に現れない。
+      日本の請求書で結合見出しはほぼ普遍なので、黙っていてよい形ではなかった。
+    ★ 判定そのものは変えない: 2 行目を選ぶのが正しい表も実在する（多段見出し）。
+      ここでやるのは「選ばなかった行に**まだ見出しが在る**なら、それを言う」だけ。
+    """
+    try:
+        from ailine_core.multifile import read_row_headers
+        chosen = [h for h in read_row_headers(ws, chosen_row) if h != ""]
+        lost = []
+        for r in range(1, max(1, chosen_row)):
+            above = [h for h in read_row_headers(ws, r) if h != ""]
+            # ★ 誤爆の線（実測で決めた）: 上の行が**採用行より広い**時だけ見る。
+            #   表題やタイトル（「請 求 書」など 1 セルだけの行）は見出しではないので、
+            #   ここで拾うと普通の請求書すべてで鳴る（オオカミ少年）。
+            if len(above) <= len(chosen):
+                continue
+            for h in above:
+                if h not in chosen and h not in lost:
+                    lost.append(h)
+        if not lost:
+            return None
+        head = "・".join(f"『{h}』" for h in lost[:5])
+        more = f" ほか {len(lost) - 5} 列" if len(lost) > 5 else ""
+        return (f"★ 疑わしい: 見出しを {chosen_row} 行目と判断したため、"
+                f"{head}{more} は取り込まれません"
+                f"（結合された見出しがあると起きます ── 見出しを 1 行にまとめると取り込めます）")
+    except Exception:
+        return None
+
+
 def _column_values(meta: dict, sheet: str, col: str, limit: int = 500) -> list:
     """対象列の中身を実際に読む（宣言でなく実体を見る側の共通の入口）。
        読めない時は空リスト ── ここで例外を投げると無関係な入力まで巻き添えで壊れる。"""
@@ -10865,6 +10903,10 @@ def cmd_stack(a: argparse.Namespace) -> int:
     row, confident = detect_header_row({"rows": rows_stats})
     header_row = row if confident else 1
     base_headers = multifile.read_row_headers(ws, header_row)
+    # ★ 2026-08-24: 見出し行の選び方で**列が丸ごと落ちる**なら、それを言う。
+    #   結合見出しの請求書で数量・金額が消えても exit 0・⚠ なし・Σ 行も出ない、という
+    #   実測（盲検の実データ耐性レビュー）への処置。判定そのものは変えていない。
+    header_drop_warning = header_row_drops_columns(ws, header_row)
     # ★ operator 盲検7度目の直し（2026-08-21）: 合計行検出は基準の数値列すべてを見る
     #   （旧 value_col_name の『最初の数値列』1本だけを keyed 列にする形は廃止 ── 実務標準形
     #   （数量・単価つき請求書）で合計の数字が金額列にしか無く、全トリガが沈黙していた）。
@@ -11025,7 +11067,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
     result = {"denominator": denominator, "stacked_files": stacked_files,
               "rows_written": len(stacked_rows), "files": files_json, "skipped": skipped,
               "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,
-              "col_a_warnings": col_a_warnings, "sheet_fallbacks": sheet_fallbacks,
+              "col_a_warnings": col_a_warnings, "header_drop_warning": header_drop_warning, "sheet_fallbacks": sheet_fallbacks,
               "self_excluded": self_excluded, "total_word_warnings": total_word_warnings,
               "rebuilt_own_output": rebuilt_own_output, "collision_notice": collision_notice,
               "excluded": excluded}

@@ -325,6 +325,10 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
         for m in entry["rows"]:
             lines.append(f"  ⚠ {entry['name']}: 合計行({m['row']}行目) の値 "
                          f"{_fmt_num(m['excluded_value'])} ≠ 明細の和 {_fmt_num(m['adopted_sum'])}")
+    if result.get("header_drop_warning"):
+        # ★ 2026-08-24: 見出し行の選び方で列が丸ごと落ちる時の名指し。
+        #   col_a_warnings とは意味が違うので混ぜない（別の警告を同じ器に入れない）。
+        lines.append(f"  {result['header_drop_warning']}")
     for w in result.get("col_a_warnings", ()):
         # ★ 2026-08-24: 文言を買い手の言葉に直した。盲検の査定者に
         #   「『根1』は開発者用語で読めない」「正常系で 100% 鳴る」と名指しされた

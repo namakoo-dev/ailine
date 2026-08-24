@@ -42,7 +42,15 @@ def test_demo_copies_the_bundled_sample_here(tmp_path, monkeypatch, capsys):
 
 @needs_impl
 def test_demo_shows_the_next_command_to_type(tmp_path, monkeypatch, capsys):
-    """★ 出すだけでは「距離」は縮まらない。**次に打つ行**を見せる。"""
+    """★ 出すだけでは「距離」は縮まらない。**次に打つ行**を見せる。
+
+    ★ 「居るから見えない」の実演（2026-08-24・CI が赤で教えた）: 初版は前提を差し替えずに
+      書いたので、**開発機（ollama も LibreOffice も在る）では緑・CI では赤**になった。
+      CI には ollama が無いので、正しく「先に足りないものがあります」に分岐していた。
+      ── 検体が俺の環境に依存していた。**居ない側を既定にする**（明示的に揃った状態を作る）。
+    """
+    monkeypatch.setattr(ailine, "doctor_checks",
+                         lambda model="qwen2.5-coder:7b": [["python 3.10+", True, ""]])
     _isolate(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     rc, out = _run_main(["demo"], capsys)
