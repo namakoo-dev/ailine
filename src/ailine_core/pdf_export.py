@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,18 +44,44 @@ def read_pdf_text(path) -> str:
         return ""
 
 
-def _renderable(value) -> str:
-    """セルの値を、PDF の上に出るはずの文字列にする。
+def renderings(value) -> list:
+    """1 つのセルの値が PDF 上に現れうる**表示のゆれ**を全部返す。
 
-    ★ 正直な限界: 表示は**セルの書式**で決まる（1000 → 「1,000」、日付 → 「2026/07/31」）。
-      ここでは書式を再現しない。だから照合は「見つかった/見つからない」の弱い主張に留め、
-      見つからなかった値は**嘘をつかずに数える**（欠落として名指しする）。
+    ★ なぜ在るか（盲検レビュー・2026-08-24）: 初版は `str(value)` 一本で照合していた。
+      1000 は PDF 上では「1,000」や「¥1,000」、日付は「2026/07/31」と出るので、
+      **正しく出来ている PDF に × が出て exit 3** になっていた（カンマ書式のある請求書は
+      ほぼ全滅）。番人が誤爆すると、人は番人を見なくなる。
+    ★ ただし何でも通す作りにはしない ── 候補は**その値から機械的に導ける表記だけ**。
+      別の値（9999）が混ざる余地は無い。
     """
     if value is None:
-        return ""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
+        return []
+    out = []
+    if isinstance(value, _dt.datetime) or isinstance(value, _dt.date):
+        d = value.date() if isinstance(value, _dt.datetime) else value
+        out += [f"{d.year}/{d.month:02d}/{d.day:02d}", f"{d.year}/{d.month}/{d.day}",
+                f"{d.year}-{d.month:02d}-{d.day:02d}",
+                f"{d.year}年{d.month}月{d.day}日"]
+        return out
+    if isinstance(value, bool):
+        return [str(value)]
+    if isinstance(value, (int, float)):
+        n = int(value) if float(value).is_integer() else value
+        plain = str(n)
+        out.append(plain)
+        if isinstance(n, int):
+            grouped = f"{n:,}"
+            out.append(grouped)
+            out.append("¥" + grouped)
+            out.append("¥" + grouped)
+        return out
+    return [str(value)]
+
+
+def _renderable(value) -> str:
+    """互換のための 1 本目の表記（表示ゆれの先頭）。"""
+    cands = renderings(value)
+    return cands[0] if cands else ""
 
 
 @dataclass
@@ -84,10 +111,11 @@ def verify_values_in_pdf(pdf_path, values) -> PdfCheck:
     r.text_chars = len(text)
     flat = text.replace(" ", "").replace(chr(160), "")
     for v in values:
-        rendered = _renderable(v)
-        if rendered == "":
+        cands = [c for c in renderings(v) if c != ""]
+        if not cands:
             continue
         r.checked += 1
-        if rendered.replace(" ", "") not in flat:
-            r.missing.append(rendered)
+        # ★ 表示ゆれのどれか 1 つでも載っていれば「載っている」。
+        if not any(c.replace(" ", "") in flat for c in cands):
+            r.missing.append(cands[0])
     return r

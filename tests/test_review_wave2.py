@@ -100,3 +100,36 @@ def test_export_csv_refuses_to_overwrite_silently(tmp_path, monkeypatch, capsys)
     assert rc != 0, f"既存の CSV を黙って上書きした: {out}"
     assert existing.read_text(encoding="utf-8") == "先に人が置いたファイル", "中身が消えた"
     assert "--out" in out or "上書き" in out, f"逃げ道を案内していない: {out}"
+
+
+# --- ⑤ export-csv は**ディスク上のファイル**を読み戻す（2026-08-24）------------------
+#
+# ★ 実測（盲検の契約レビュー）: 読み戻していたのはメモリ上の raw_bytes で、
+#   `売上.csv` 自体は一度も読んでいなかった。「1 セルも変えずに書いた」は
+#   **バイト列についての主張**で、書き込みが途中で切れても ✓ が出る形だった。
+
+def test_export_csv_reads_the_file_back_from_disk(tmp_path, monkeypatch, capsys):
+    _isolate(monkeypatch, tmp_path)
+    p = tmp_path / "s.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "出納"
+    ws.append(["日付", "金額"]); ws.append(["2026-04-01", 100])
+    wb.save(p)
+    out = p.with_suffix(".csv")
+    real_open = open
+    state = {"written": False}
+
+    def truncating_open(file, mode="r", *a, **k):
+        f = real_open(file, mode, *a, **k)
+        if str(file) == str(out) and "w" in mode:
+            state["written"] = True
+            class _Half:
+                def write(self, data):
+                    return f.write(data[:len(data) // 2])   # ★ 途中で切れた書き込みを模す
+                def __enter__(self): return self
+                def __exit__(self, *e): f.close(); return False
+            return _Half()
+        return f
+    monkeypatch.setattr("builtins.open", truncating_open)
+    rc, txt = _run_main(["export-csv", str(p), "--sheet", "出納"], capsys)
+    assert state["written"], "前提: 書き込みが起きること"
+    assert "✓" not in txt, f"中身が半分しか書けていないのに ✓ を名乗った: {txt}"

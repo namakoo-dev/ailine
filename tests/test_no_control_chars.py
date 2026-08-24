@@ -61,7 +61,14 @@ def test_the_guardian_can_actually_see_one(tmp_path):
 #   きれいな checkout では自明に緑・手元の事故だけを捕まえる。
 
 
+CRLF_BYTES = (chr(13) + chr(10)).encode("ascii")   # ★ ヒアドキュメントで消える escape を避ける
+
+
 def test_line_endings_are_not_rewritten():
+    """★ 2026-08-24（2 度目）: 初版は **LF→CRLF の一方向**しか見ておらず、
+       同じ日に自分で **CRLF→LF** を踏んで 176 行の変更が **11,334 行**に膨れた。
+       番人に変異試験が足りていなかった ── 両方向を見る。
+       縛るのは「変えたこと」だけ（repo 全体の統一はしない）。"""
     import subprocess
     changed = subprocess.run(["git", "diff", "--name-only"],
                               cwd=REPO, capture_output=True, text=True).stdout.split()
@@ -70,11 +77,25 @@ def test_line_endings_are_not_rewritten():
         f = REPO / name
         if not f.exists():
             continue
-        head = subprocess.run(["git", "show", f"HEAD:{name}"],
+        head = subprocess.run(["git", "show", "HEAD:" + name],
                                cwd=REPO, capture_output=True).stdout
-        if b"\r\n" not in head and b"\r\n" in f.read_bytes():
-            offenders.append(name)
+        head_crlf = head.count(CRLF_BYTES)
+        now_crlf = f.read_bytes().count(CRLF_BYTES)
+        if (head_crlf == 0) != (now_crlf == 0):
+            offenders.append(f"{name}(HEAD {head_crlf} / 現 {now_crlf})")
     assert not offenders, (
-        "git には LF で入っているのに作業ツリーが CRLF になっている"
-        "（Windows の write_text が改行を書き換えた痕・中身の差分が沈む）: "
-        + " / ".join(offenders))
+        "改行コードが git の中身と食い違っている（write_text が書き換えた痕・"
+        "中身の差分が改行の海に沈む）: " + " / ".join(offenders))
+
+
+def test_the_eol_guardian_sees_both_directions():
+    """★ 変異試験（両向き）: LF→CRLF と CRLF→LF の**どちらも**検出できること。"""
+    lf = ("a" + chr(10) + "b" + chr(10)).encode()
+    crlf = ("a" + chr(13) + chr(10) + "b" + chr(13) + chr(10)).encode()
+
+    def differs(head: bytes, now: bytes) -> bool:
+        return (head.count(CRLF_BYTES) == 0) != (now.count(CRLF_BYTES) == 0)
+
+    assert differs(lf, crlf), "LF→CRLF が見えない"
+    assert differs(crlf, lf), "CRLF→LF が見えない（初版が見逃した向き）"
+    assert not differs(lf, lf) and not differs(crlf, crlf), "同じなのに鳴る（誤爆）"

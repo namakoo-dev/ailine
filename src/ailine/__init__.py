@@ -3580,6 +3580,15 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 #   ★ resolved["value"] は**元の文字列のまま**残す ── 表示（解釈行・出力
                 #   シート名）が 46107 になるのを防ぐ。codegen だけが _value_serial を見る。
                 parsed_date = parse_date_literal(raw_value)
+                # ★ 2026-08-24（盲検の使い勝手レビュー）: 依頼文が「3月26日から4月25日まで」と
+                #   年を言っていないのに、LLM が **2023 年**を入れてきた（データは全部 2026 年）。
+                #   A' 原則 ── 依頼文に無い年は機械が受け取らない。年は人が決めることで、
+                #   LLM が埋めてよい空白ではない。
+                if parsed_date is not None and str(parsed_date.year) not in (task or ""):
+                    return False, resolved, inferred, (
+                        f"依頼文に年が書かれていないため、『{raw_value}』の"
+                        f"{parsed_date.year} 年は使えません"
+                        f"（何年かを書いて、もう一度お試しください）")
                 col_kind, col_has_time = _extract_column_date_kind(
                     book_meta, first_sheet, resolved["col"])
                 if parsed_date is not None and col_kind == "date":
@@ -3763,6 +3772,13 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         inspection_sheet = unique_sheet_name(inspection.SHEET_NAME, used)
         used.add(inspection_sheet)
 
+        # ★ 2026-08-24: 重複を知った瞬間に言う（`_2` を付けたのがその瞬間）。
+        #   実測: 3 社の売上表（4 行）で請求書 4 枚・同じ取引先が 2 枚に分かれて ✓ が出た。
+        #   ★ 付きなので count_suspicious_advisories が拾い、決裁③で ✓→△ に降格する。
+        if (dup := duplicate_name_warning(
+                resolved["name_col"],
+                [row_values[r].get(resolved["name_col"]) for r in verdict.adopted_rows])):
+            resolved["_warnings"] = resolved.get("_warnings", []) + [dup]
         resolved["_report_rows"] = report_rows
         resolved["_report_sheet_names"] = [rr["sheet"] for rr in report_rows]
         resolved["_inspection_sheet"] = inspection_sheet
@@ -4572,6 +4588,28 @@ def _scan_last_row(ws, key_col: int = 1, header_row: int = 1) -> int:
     return r - 1
 
 
+def _used_extent(ws) -> tuple:
+    """シートの**使用範囲**（行数, 列数）。中身のあるセルが 1 つも無ければ (0, 0)。
+
+    ★ なぜ在るか（盲検の契約レビュー・2026-08-24）: 「雛形は 1 セルも変わっていない」を
+      走査（A 列・1 行目を上/左から見て最初の空で打ち切り）で測っていたため、
+      **A 列を余白にした典型的な請求書雛形**（B2 に「請 求 書」）では比較セル数が 0 になり、
+      雛形が何セル壊れても pass していた。**分母ゼロの主張は主張ではない。**
+    ★ 雛形は「表」ではなく「紙の見た目」なので、走査でなく使用範囲で測るのが正しい。
+      openpyxl の max_row/max_column は書式だけのセルも含んで大きく出ることがあるので、
+      値のあるセルの最大位置を自分で取る。
+    """
+    last_r = last_c = 0
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value not in (None, ""):
+                if cell.row > last_r:
+                    last_r = cell.row
+                if cell.column > last_c:
+                    last_c = cell.column
+    return last_r, last_c
+
+
 def _scan_last_col(ws, header_row: int = 1) -> int:
     """見出し行(既定は物理1行目)を左から走査した最終列（1起点）。
        ★ W3: _col_index_by_header と同じ規則で、子見出し行(header_row>1)の空欄列は
@@ -4607,6 +4645,35 @@ def _apply_operator(a, b, operator: str):
 def _is_number(v) -> bool:
     """★ 止血2: bool は int のサブクラスだが数値セルとしては扱わない（True/False混入対策）。"""
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def duplicate_name_warning(col: str, values) -> str | None:
+    """シート名の元になる列に同じ値が複数あるなら、その事実を名指しする 1 文（無ければ None）。
+
+    ★ 実測（盲検の使い勝手レビュー・2026-08-24）: 取引先 3 社の売上表（4 行）に
+      「取引先ごとに請求書を作って」と頼むと**請求書が 4 枚**でき、同じ取引先が
+      『あかつき商事』(120,000) と『あかつき商事_2』(64,000) の 2 枚に分かれた。
+      それでも「データ4行 → 出力4枚」で ✓ が出る。帳票段は **1 行 1 枚**の op なので
+      機械としては正しいが、依頼者の「ごとに」は**まとめて 1 枚**を指している。
+    ★ 機械は `_2` を付けたその瞬間に重複を知っている。知っていて黙るのが一番悪い。
+      1 枚にまとめるかどうかは人が決めることなので、**名指しして人に返す**
+      （★ 付き → 決裁③で ✓→△）。
+    """
+    seen = {}
+    for v in values:
+        if v is None or str(v).strip() == "":
+            continue
+        key = str(v).strip()
+        seen[key] = seen.get(key, 0) + 1
+    dupes = sorted(((k, n) for k, n in seen.items() if n > 1), key=lambda t: (-t[1], t[0]))
+    if not dupes:
+        return None
+    head = "・".join(f"『{k}』{n} 行" for k, n in dupes[:3])
+    more = f" ほか {len(dupes) - 3} 件" if len(dupes) > 3 else ""
+    # ★ 印（⚠）は _warnings を印字する側が付ける ── ここで ★ を足すと「⚠ ★」と二重になる。
+    return (f"列『{col}』に同じ値が複数あります（{head}{more}）。"
+             f"1 行につき 1 枚ずつ作るので、同じ相手の書類が別々の枚に分かれます"
+             f"（1 枚にまとめたい場合は、先に集計してからお試しください）")
 
 
 def detect_first_column_gap(ws, header_row: int = 1, look_ahead: int = 200) -> str | None:
@@ -5848,8 +5915,11 @@ def check_report_per_row(path: Path, args: dict, header_row: int = 1,
             for sheet_name in (template_sheet, src_sheet_name):
                 sb = bv_before.sheet(sheet_name)
                 sa = bv_after.sheet(sheet_name)
-                lr = max(_scan_last_row(sb, header_row=1), _scan_last_row(sa, header_row=1))
-                lc = max(_scan_last_col(sb, header_row=1), _scan_last_col(sa, header_row=1))
+                # ★ 2026-08-24: 走査でなく**使用範囲**で測る（A 列が余白の雛形で
+                #   比較セル数が 0 になり「無変更」を分母ゼロで宣言していた）。
+                br, bc = _used_extent(sb)
+                ar, ac = _used_extent(sa)
+                lr, lc = max(br, ar), max(bc, ac)
                 mismatches = sum(
                     1 for r in range(1, lr + 1) for c in range(1, lc + 1)
                     if sb.cell(row=r, column=c).value != sa.cell(row=r, column=c).value)
@@ -5948,8 +6018,11 @@ def check_format_map(path: Path, args: dict, header_row: int = 1,
             for sheet_name in (template_sheet, src_sheet_name):
                 sb = bv_before.sheet(sheet_name)
                 sa = bv_after.sheet(sheet_name)
-                lr = max(_scan_last_row(sb, header_row=1), _scan_last_row(sa, header_row=1))
-                lc = max(_scan_last_col(sb, header_row=1), _scan_last_col(sa, header_row=1))
+                # ★ 2026-08-24: 走査でなく**使用範囲**で測る（A 列が余白の雛形で
+                #   比較セル数が 0 になり「無変更」を分母ゼロで宣言していた）。
+                br, bc = _used_extent(sb)
+                ar, ac = _used_extent(sa)
+                lr, lc = max(br, ar), max(bc, ac)
                 mismatches = sum(
                     1 for r in range(1, lr + 1) for c in range(1, lc + 1)
                     if sb.cell(row=r, column=c).value != sa.cell(row=r, column=c).value)
@@ -10464,10 +10537,31 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
         print(f"× {e}")
         return 3
 
-    with open(out_path, "wb") as f:
-        f.write(write_result.raw_bytes)
+    try:
+        with open(out_path, "wb") as f:
+            f.write(write_result.raw_bytes)
+    except OSError as e:
+        print(f"■ ailine export-csv  file={book_path}  sheet={a.sheet}")
+        print(f"× 書き出しに失敗しました: {e}"
+              "（別のアプリが開いている可能性があります）")
+        return 1
 
-    roundtrip = csv_export.verify_roundtrip(write_result.declared, write_result.raw_bytes, enc)
+    # ★ 2026-08-24（盲検の契約レビュー）: 読み戻すのは**ディスク上のファイル**。
+    #   初版はメモリ上の raw_bytes を読み直しており、「1 セルも変えずに書いた」は
+    #   バイト列についての主張で、`売上.csv` 自体は一度も読んでいなかった
+    #   ── 書き込みが途中で切れても、別のアプリが握っていても、✓ が出る形だった。
+    try:
+        written = out_path.read_bytes()
+    except OSError as e:
+        print(f"■ ailine export-csv  file={book_path}  sheet={a.sheet}")
+        print(f"× 書き出したファイルを読み戻せませんでした: {e}")
+        return 1
+    if written != write_result.raw_bytes:
+        print(f"■ ailine export-csv  file={book_path}  sheet={a.sheet}")
+        print(f"× 書き出したファイルの中身が、書いたはずの内容と違います"
+              f"（{len(write_result.raw_bytes)} バイトのつもりが {len(written)} バイト）")
+        return 3
+    roundtrip = csv_export.verify_roundtrip(write_result.declared, written, enc)
 
     bom_note = "（BOM 付き）" if enc.bom else "（BOM 無し）"
     lines = [f"■ ailine export-csv  file={book_path}  sheet={a.sheet}",
