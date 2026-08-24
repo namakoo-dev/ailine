@@ -211,13 +211,25 @@ def f_frozen(path):
         wb.close()
 
 
+def f_number_format(path):
+    """★ 2026-08-24 の見落としの入口: この列が無かったせいで「stack は書式を全滅させる」と
+    誤って一般化し、その嘘を製品の表示文に書いた（実際は #,##0 も yyyy-mm-dd も運んでいる）。
+    測っていない列は、無いのではなく**見えていない**。"""
+    wb = _wb(path)
+    try:
+        return sum(1 for s_ in wb.sheetnames for row in wb[s_].iter_rows()
+                    for c in row if c.number_format not in (None, "General"))
+    finally:
+        wb.close()
+
+
 FEATURES = [
     ("図形(角印)", f_shapes), ("画像", f_images), ("VBA", f_vba),
     ("結合セル", f_merged), ("数式", f_formulas), ("数式のキャッシュ値", f_formula_cache),
     ("条件付き書式", f_conditional), ("入力規則", f_validation),
     ("コメント", f_comments), ("ハイパーリンク", f_hyperlinks),
     ("名前定義", f_defined_names), ("オートフィルタ", f_autofilter),
-    ("印刷範囲", f_print_area), ("罫線", f_borders), ("塗りつぶし", f_fills),
+    ("印刷範囲", f_print_area), ("罫線", f_borders), ("塗りつぶし", f_fills), ("数値書式", f_number_format),
     ("ウィンドウ枠固定", f_frozen),
 ]
 
@@ -329,6 +341,12 @@ def build_specimen(path: Path) -> Path:
                                        f"{ws.max_row + 1}*"
                                        f"{openpyxl.utils.get_column_letter(3)}"
                                        f"{ws.max_row + 1}", ""])
+    # 数値書式（桁区切りと日付）── ★ 初版はこれを仕込み忘れ、列が空のまま
+    #   「stack は書式を全滅させる」と誤って一般化した。
+    import datetime
+    for r in range(2, 5):
+        ws.cell(row=r, column=2).number_format = "#,##0"
+        ws.cell(row=r, column=5, value=datetime.date(2026, 7, 31)).number_format = "yyyy-mm-dd"
     ws.merge_cells("A5:B5")
     ws["A5"] = "合計欄（結合）"
     ws["E2"].comment = Comment("要確認", "ailine")

@@ -9993,6 +9993,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     skipped, files_json, excluded_detail, mismatches = [], [], [], []
     sheet_fallbacks, matched_rows_all = [], []
     blocked_total, blocked_samples = 0, []   # ★ 第三波 H3: 数字に見える文字列（開示専用）
+    extract_dropped = {}   # ★ 2026-08-24: 値として運べない中身（コメント/リンク）
     all_findings = []   # ★ M2.5: 検分シートの所見（inspection.Finding）
     file_sheet_map = []   # ★ M2.5: [(ファイル名, 使ったシート, 備考), ...]
     for p in candidates:
@@ -10008,6 +10009,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             file_sheet_map.append((r.name, sheet_used, f"取れなかった（{r.reason}）"))
             continue
         file_sheet_map.append((r.name, sheet_used, "並べ替えて照合" if r.reordered else ""))
+        for _row, _kind in getattr(r, "dropped_notes", ()) or ():
+            extract_dropped[_kind] = extract_dropped.get(_kind, 0) + 1
         if r.blocked:
             blocked_total += r.blocked["count"]
             for sm in r.blocked["samples"]:
@@ -10153,6 +10156,11 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         f"{matched_files} 中 {contributing_files} ファイルで計 {total_matched} 行一致")
     # ★ 第三波 H3（盲検）: 金額が文字列（"1,000" / △1,500 / 全角）の実物で『計 0 行一致』と
     #   だけ言って終わっていた。判定は変えない ── 理由を言う口が無かっただけ。
+    # ★ 2026-08-24: コメント/リンクは飾りでなく中身 ── 消えたと言う（stack と同じ線）。
+    if extract_dropped:
+        _parts = "・".join(f"{k} {n} 件" for k, n in sorted(extract_dropped.items()))
+        say(f"  ⚠ 元のセルにあった{_parts}は運んでいません"
+            "（値でないため）。元のブックで確認してください")
     for line in compare_blocked.disclosure_lines(
             {"count": blocked_total, "samples": blocked_samples[:3]} if blocked_total else None,
             col, total_matched):
@@ -11249,9 +11257,12 @@ def cmd_stack(a: argparse.Namespace) -> int:
     all_findings = []   # ★ M2.5: 検分シートの所見（inspection.Finding・ファイルごとに ws 側で組立済み）
     file_sheet_map = []   # ★ M2.5: [(ファイル名, 使ったシート, 備考), ...]（fallback 開示込み）
 
+    dropped_notes_total = {}   # ★ 2026-08-24: 値として運べない「中身」の集計
     for p in candidates:
         r = multifile_stack.evaluate_and_stack(p, base_headers, base_sheet, header_row, numeric_cols)
         all_findings.extend(r.findings)
+        for _row, kind in getattr(r, "dropped_notes", ()) or ():
+            dropped_notes_total[kind] = dropped_notes_total.get(kind, 0) + 1
         sheet_used = r.sheet_fallback[1] if r.sheet_fallback else base_sheet
         if r.sheet_fallback:
             sheet_fallbacks.append({"name": r.name, "wanted": r.sheet_fallback[0],
@@ -11395,6 +11406,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
 
     result = {"denominator": denominator, "stacked_files": stacked_files,
               "rows_written": len(stacked_rows), "files": files_json, "skipped": skipped,
+              "dropped_notes": dropped_notes_total,
               "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,
               "col_a_warnings": col_a_warnings, "header_drop_warning": header_drop_warning, "unverified_cols": unverified_cols, "sheet_fallbacks": sheet_fallbacks,
               "self_excluded": self_excluded, "total_word_warnings": total_word_warnings,

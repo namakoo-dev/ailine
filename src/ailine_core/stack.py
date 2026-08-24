@@ -231,6 +231,10 @@ class FileStackResult:
     rows: list = field(default_factory=list)
     excluded: list = field(default_factory=list)
     mismatches: list = field(default_factory=list)
+    # ★ 2026-08-24: 値として運べない「中身」（コメント/ハイパーリンク）の件数。
+    #   飾り（罫線・塗り）とは分けて数える ── あちらは持ち越さなくて当然だが、
+    #   人が打ったメモやリンクは消えたと言わないと気づけない。
+    dropped_notes: list = field(default_factory=list)
     col_a_mismatch: tuple | None = None
     sheet_fallback: tuple | None = None   # (wanted, used) ── 基準名のシートが無く1枚目へ落ちた時だけ
     findings: list = field(default_factory=list)   # list[inspection.Finding]（M2.5）
@@ -288,6 +292,7 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
         stack_rows = [r for r in data_rows if r not in excluded_rows]
 
         rows = []
+        dropped_notes = []   # ★ 値として運べない「中身」（コメント/リンク）の記録
         for r in stack_rows:
             cells = [ws.cell(row=r, column=col_for_base[bh]) for bh in base_headers]
             values = [c.value for c in cells]
@@ -296,6 +301,14 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
             #   ── 元の書式文字列をそのまま運ぶだけ（乱数・時刻は使わない）。
             formats = [c.number_format for c in cells]
             rows.append((values, formats, r))
+            # ★ 2026-08-24: コメントとハイパーリンクは**飾りでなく中身**（「要確認: 入金待ち」
+            #   のような、人が打った情報）。縦積みは値と数値書式しか運ばないので黙って
+            #   消える ── 消したこと自体は変えずに、消したと言えるように数える。
+            for c in cells:
+                if c.comment is not None:
+                    dropped_notes.append((r, "コメント"))
+                if c.hyperlink is not None:
+                    dropped_notes.append((r, "ハイパーリンク"))
 
         col_a_count = sum(1 for r in all_rows if not _is_blank(ws.cell(row=r, column=1).value))
         used_range_count = len(all_rows)
@@ -349,7 +362,8 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
         return FileStackResult(name=path.name, status="積んだ", reordered=reordered, rows=rows,
                                 excluded=verdict.excluded, mismatches=verdict.mismatches,
                                 col_a_mismatch=col_a_mismatch, sheet_fallback=sheet_fallback,
-                                findings=findings)
+                                findings=findings,
+                                 dropped_notes=dropped_notes)
     finally:
         wb.close()
 

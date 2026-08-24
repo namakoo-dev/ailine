@@ -141,6 +141,8 @@ class FileExtractResult:
     # ★ 2026-08-24 第三波 H3: 数値比較から落ちた「数字に見える文字列」の件数と例。
     #   判定には一度も使わない（compare_blocked の docstring）── 開示のためだけ。
     blocked: dict | None = None
+    # ★ 2026-08-24: 値として運べない「中身」（コメント/ハイパーリンク）。stack と同じ。
+    dropped_notes: list = field(default_factory=list)
 
 
 def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: int,
@@ -214,6 +216,7 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
         blocked = compare_blocked.scan_column(unmatched_cells, cmp)
 
         rows = []
+        dropped_notes = []
         for r in matched_rows:
             cells = [ws.cell(row=r, column=col_for_base[bh]) for bh in base_headers]
             values = [c.value for c in cells]
@@ -222,6 +225,14 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
             #   ── 元の書式文字列をそのまま運ぶだけ（乱数・時刻は使わない）。
             formats = [c.number_format for c in cells]
             rows.append((values, formats, r))
+            # ★ 2026-08-24: コメント/ハイパーリンクは飾りでなく**中身**（人が打った情報）。
+            #   値しか運ばないので黙って消える ── stack と同じ形なので同じように数える
+            #   （片配線の実測: stack だけ直しかけて、こちらが一言も言わなかった）。
+            for c in cells:
+                if c.comment is not None:
+                    dropped_notes.append((r, "コメント"))
+                if c.hyperlink is not None:
+                    dropped_notes.append((r, "ハイパーリンク"))
 
         # ★ M2.5: 所見の組み立て（stack.evaluate_and_stack と同じ線 ── ws がまだ開いている
         #   この関数の内側でだけ列位置まで正確な3座標が引ける）。
@@ -257,6 +268,6 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
                                   rows_unmatched=len(unmatched_rows),
                                   excluded=verdict.excluded, mismatches=verdict.mismatches,
                                   sheet_fallback=sheet_fallback, findings=findings,
-                                  blocked=blocked)
+                                  blocked=blocked, dropped_notes=dropped_notes)
     finally:
         wb.close()
