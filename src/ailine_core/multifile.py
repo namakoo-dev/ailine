@@ -174,12 +174,100 @@ def numeric_value_column(ws, header_row: int, num_cols: int) -> int | None:
     return None
 
 
+def duplicate_header_names(headers: list) -> list:
+    """同じ名前が 2 回以上現れる見出し名（出現順・空文字は数えない）。
+
+    ★ なぜ在るか（盲検 2 者が独立に再現・2026-08-24）: 見出し `品番/備考/金額/備考`
+      （社内用メモ と 客先提出用）を stack すると、**客先提出用が社内用に化けた**
+      ── 出力 `('0012','社内用メモ',1000,'社内用メモ',…)`・exit 0・Σ 一致 ✓。
+      しかも**やる側（stack）と見る側（verify）が同じ「名前→列」の辞書を別々に組む**ので、
+      照合も同じように潰れて**恒真**になり、誰も気づけない。
+    ★ 根は「列を**名前**で引いている」こと。名前は表示のためのラベルであって、
+      同一性の担保ではない（同じ名前の列は実在する）。
+    ★ 空文字は数えない ── 結合見出しの直しで位置保持のために入れた埋め草であり、
+      「同じ名前の列」ではない。
+    """
+    seen, dupes = {}, []
+    for h in headers or ():
+        name = str(h)
+        if name == "":
+            continue
+        seen[name] = seen.get(name, 0) + 1
+        if seen[name] == 2:
+            dupes.append(name)
+    return dupes
+
+
 def _column_index(headers: list, name: str) -> int | None:
-    """headers（そのファイル自身の並び）の中で name と同名の列位置（1起点）。無ければ None。"""
+    """headers（そのファイル自身の並び）の中で name と同名の列位置（1起点）。無ければ None。
+
+    ★ 同名が複数あるときの扱いは**呼び出し側が先に断る**（duplicate_header_names）。
+      ここで最初の 1 本を返す挙動そのものは変えない ── 変えると位置の意味が経路ごとに
+      食い違い、やる側と見る側でまた別の嘘が生まれる。
+    """
     try:
         return headers.index(name) + 1
     except ValueError:
         return None
+
+
+def formula_columns_without_cache(path, header_row: int, headers: list,
+                                   sheet_name=None, limit: int = 200) -> list:
+    """データ行に**数式は在るのに値が無い**列の名前。
+
+    ★ なぜ要るか（2026-08-24）: `=B2*C2` の金額列は data_only=True で None になり、
+      数値列と見なされないので **Σ金額 の行がそもそも出ない**。
+      「Σ が出ない」＝「検算していない」なのに、出ないことが唯一の信号だった。
+    ★ 引数が **ws でなくパス**なのは実測の結果: `data_only=True` で開いた ws では
+      数式そのものが見えず（値も式も無い空欄に見える）、検出が常に空になった。
+      式を見るには data_only=False で開き直すしかない。
+    """
+    import openpyxl as _op
+    if not headers:
+        return []
+    try:
+        wb_f = _op.load_workbook(path, data_only=False)
+    except Exception:
+        return []
+    try:
+        ws = (wb_f[sheet_name] if sheet_name and sheet_name in wb_f.sheetnames
+              else wb_f.worksheets[0])
+        out = []
+        last = min(int(getattr(ws, "max_row", 0) or 0), header_row + limit)
+        for c, name in enumerate(headers, start=1):
+            if str(name) == "":
+                continue
+            has_value = has_formula = False
+            for r in range(header_row + 1, last + 1):
+                v = ws.cell(row=r, column=c).value
+                if v is None:
+                    continue
+                if isinstance(v, str) and v.startswith("="):
+                    has_formula = True
+                elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                    has_value = True
+            if has_formula and not has_value:
+                out.append(str(name))
+        return out
+    except Exception:
+        return []
+    finally:
+        wb_f.close()
+
+
+def unverified_numeric_columns(headers: list, verified: list, formula_columns=()) -> list:
+    """**検算できなかった列**の名前（見出しの順）。
+
+    ★ 根（今日ずっと出ている家系）: 「無いこと」で伝えようとしていた ──
+      分母が消える・列が消える・Σ の行が消える。**出ないものは読めない。**
+      検算できなかったなら、できなかったと**書く**。
+    ★ 対象は「数値として扱われるはずだったのに扱えなかった列」だけ。
+      最初から文字の列（品名など）は検算の対象ではないので言わない（誤爆にしない）。
+    """
+    verified_set = {str(v) for v in (verified or ())}
+    formula_set = {str(f) for f in (formula_columns or ())}
+    return [str(h) for h in (headers or ())
+            if str(h) != "" and str(h) in formula_set and str(h) not in verified_set]
 
 
 def numeric_column_names(ws, header_row: int, headers: list) -> list:

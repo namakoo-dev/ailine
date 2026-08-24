@@ -10907,10 +10907,31 @@ def cmd_stack(a: argparse.Namespace) -> int:
     #   結合見出しの請求書で数量・金額が消えても exit 0・⚠ なし・Σ 行も出ない、という
     #   実測（盲検の実データ耐性レビュー）への処置。判定そのものは変えていない。
     header_drop_warning = header_row_drops_columns(ws, header_row)
+    # ★ 2026-08-24（第二波 M3）: 同名の列がある表は**積まずに断る**。
+    #   実測: 見出し `品番/備考/金額/備考`（社内用 と 客先提出用）で客先提出用が
+    #   社内用に化け、exit 0・Σ 一致 ✓ で通っていた。しかもやる側と見る側が同じ
+    #   「名前→列」の辞書を別々に組むので**照合も同じように潰れて恒真**だった。
+    #   ★ 値が黙って化けるより、断られる方がはるかに安い。
+    dupe_headers = multifile.duplicate_header_names(base_headers)
+    if dupe_headers:
+        names = "・".join(f"『{h}』" for h in dupe_headers)
+        print(f"■ ailine stack  folder={folder}  out={out}")
+        print(f"× 基準ファイル {base_path.name} に同じ名前の列があります（{names}）。"
+              f"名前で列を引くため、どちらの値かを取り違えます"
+              f"── 見出しを別々の名前にしてから、もう一度お試しください")
+        return 3
     # ★ operator 盲検7度目の直し（2026-08-21）: 合計行検出は基準の数値列すべてを見る
     #   （旧 value_col_name の『最初の数値列』1本だけを keyed 列にする形は廃止 ── 実務標準形
     #   （数量・単価つき請求書）で合計の数字が金額列にしか無く、全トリガが沈黙していた）。
     numeric_cols = multifile_stack.numeric_column_names(ws, header_row, base_headers)
+    # ★ 2026-08-24（第二波 M6）: 検算できなかった列を**黙って落とさない**。
+    #   `=B2*C2` の金額列は data_only では None になり数値列と見なされないので、
+    #   実測では **Σ金額 の行がそもそも出なかった** ── 「Σ が出ない」＝「検算していない」
+    #   なのに、出ないことが唯一の信号だった。**出ないものは読めない。**
+    formula_only = multifile.formula_columns_without_cache(base_path, header_row, base_headers,
+                                                          sheet_name=base_sheet)
+    unverified_cols = multifile.unverified_numeric_columns(
+        base_headers, numeric_cols, formula_columns=formula_only)
     base_wb.close()
 
     skipped, files_json, excluded_detail, mismatches, col_a_warnings = [], [], [], [], []
@@ -11067,7 +11088,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
     result = {"denominator": denominator, "stacked_files": stacked_files,
               "rows_written": len(stacked_rows), "files": files_json, "skipped": skipped,
               "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,
-              "col_a_warnings": col_a_warnings, "header_drop_warning": header_drop_warning, "sheet_fallbacks": sheet_fallbacks,
+              "col_a_warnings": col_a_warnings, "header_drop_warning": header_drop_warning, "unverified_cols": unverified_cols, "sheet_fallbacks": sheet_fallbacks,
               "self_excluded": self_excluded, "total_word_warnings": total_word_warnings,
               "rebuilt_own_output": rebuilt_own_output, "collision_notice": collision_notice,
               "excluded": excluded}
