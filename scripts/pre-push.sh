@@ -34,6 +34,9 @@ if [ $rc -ne 0 ]; then
     echo "" >&2
     echo "✗ pre-push: 素の環境で落ちました（exit $rc）。" >&2
     echo "  手元に在るものに依存しています ── 依存を外すか requirements-dev.txt に宣言を。" >&2
+    echo "  ★ 出力に returncode=3221225794 (0xC0000142) が並んでいる場合は別件です:" >&2
+    echo "    Windows のプロセス資源の枯渇（重い走行を並行させすぎ）。" >&2
+    echo "    他の pytest / push を止めてから、もう一度 push してください。" >&2
     exit 1
 fi
 echo "✓ pre-push: 素の環境でも通過"
