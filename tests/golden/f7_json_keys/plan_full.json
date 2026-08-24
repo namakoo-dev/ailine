@@ -12,6 +12,8 @@
     "items": "list[dict{detail:str,idx:int,label:str,status:str}]",
     "model": "str",
     "ok": "bool",
+    "op": "str",
+    "ops": "list[str]",
     "out": "str",
     "path": "str",
     "plan": "list[dict{command:str,interpretation:dict{books:list[str],op:str,sheet:str,slots:list[dict{key:str,kind:null,origin:str,value:str}|dict{key:str,kind:str,origin:str,value:str}]},op:str,postcondition:str,status:str}|dict{command:str,interpretation:dict{books:list[str],op:str,sheet:str,slots:list[dict{key:str,kind:str,origin:str,value:str}]},op:str,postcondition:str,status:str}]",

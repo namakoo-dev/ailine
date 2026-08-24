@@ -23,3 +23,17 @@ if [ $rc -ne 0 ]; then
     exit 1
 fi
 echo "✓ pre-push: 実機テスト通過"
+
+# ★ 2026-08-24: 「手元に在って CI に無いもの」で CI が落ちる事故がこの repo で 4 度
+#   起きている（lxml / ollama / LibreOffice / Pillow）。どれも手元では緑だった。
+#   宣言していない依存を遮断して、CI と同じ素の環境で走らせる。
+echo "▶ pre-push: CI と同じ素の環境で走らせます（宣言外の依存を遮断）…"
+python scripts/ci_parity.py
+rc=$?
+if [ $rc -ne 0 ]; then
+    echo "" >&2
+    echo "✗ pre-push: 素の環境で落ちました（exit $rc）。" >&2
+    echo "  手元に在るものに依存しています ── 依存を外すか requirements-dev.txt に宣言を。" >&2
+    exit 1
+fi
+echo "✓ pre-push: 素の環境でも通過"

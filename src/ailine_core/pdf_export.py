@@ -135,10 +135,29 @@ import re as _re
 import zipfile as _zipfile
 
 _SHAPE_RE = _re.compile(r"<(?:\w+:)?sp[ >]")
+_PIC_RE = _re.compile(r"<(?:\w+:)?pic[ >]")
 _NAME_RE = _re.compile(r'<(?:\w+:)?cNvPr[^>]*\bname="([^"]*)"')
 
 
-def vanishing_shapes(path) -> list:
+def pillow_available() -> bool:
+    """Pillow が入っているか。
+
+    ★ 2026-08-24 の実測（CI と同じ素の環境で走らせて発覚）: openpyxl は画像を
+    読み書きするのに Pillow を使う。Pillow が無いと、往復で **画像まで落ちる**。
+    ailine が宣言している依存は openpyxl だけなので、買い手の環境に Pillow が
+    在る保証はない ── つまり「写真として貼られた印は消えません」は条件つきの真実で、
+    無条件に言うと嘘になる。
+    """
+    import importlib.util
+    try:
+        return importlib.util.find_spec("PIL") is not None
+    except (ImportError, ValueError, AttributeError):
+        # find_spec は「壊れた/遮断された」パッケージで例外を投げうる。
+        # 判定できない＝当てにできない、なので「無い」側に倒す（安全側＝嘘の安心を出さない）。
+        return False
+
+
+def vanishing_shapes(path, with_pillow: bool | None = None) -> list:
     """openpyxl の往復で落ちる図形の名前を返す（画像は落ちないので数えない）。
 
     戻り値は名前のリスト（名前が無ければ "(名前なし)"）。読めない/図形が無ければ空。
@@ -146,17 +165,24 @@ def vanishing_shapes(path) -> list:
     openpyxl が読めない図形は最初から見えないので恒真になる（別実装で測る）。
     """
     names = []
+    if with_pillow is None:
+        with_pillow = pillow_available()
     try:
         with _zipfile.ZipFile(path) as z:
             for entry in z.namelist():
                 if not (entry.startswith("xl/drawings/") and entry.endswith(".xml")):
                     continue
                 text = z.read(entry).decode("utf-8", errors="replace")
-                if not _SHAPE_RE.search(text):
+                has_shape = bool(_SHAPE_RE.search(text))
+                # ★ Pillow が無ければ画像（pic）も落ちる ── 条件つきで数える。
+                has_pic = (not with_pillow) and bool(_PIC_RE.search(text))
+                if not (has_shape or has_pic):
                     continue
                 # 図形が在る drawing の中から、sp を持つアンカーの名前だけを拾う
                 for anchor in _re.split(r"(?=<(?:\w+:)?(?:one|two)CellAnchor)", text):
-                    if not _SHAPE_RE.search(anchor):
+                    is_shape = bool(_SHAPE_RE.search(anchor))
+                    is_pic = (not with_pillow) and bool(_PIC_RE.search(anchor))
+                    if not (is_shape or is_pic):
                         continue
                     m = _NAME_RE.search(anchor)
                     names.append(m.group(1) if m and m.group(1) else "(名前なし)")
@@ -165,15 +191,26 @@ def vanishing_shapes(path) -> list:
     return names
 
 
-def vanishing_shapes_warning(names) -> list:
-    """人へ見せる行（空なら空リスト）。"""
+def vanishing_shapes_warning(names, with_pillow: bool | None = None) -> list:
+    """人へ見せる行（空なら空リスト）。
+
+    ★「写真として貼られた印は消えません」は **Pillow が在る時だけ**の真実。
+    無条件に言うと嘘になるので、環境で文言を変える（機械は嘘をつかない）。
+    """
     if not names:
         return []
+    if with_pillow is None:
+        with_pillow = pillow_available()
     shown = "、".join(f"『{n}』" for n in names[:3])
     more = f"（ほか {len(names) - 3} 件）" if len(names) > 3 else ""
-    return [
-        f"⚠ この冊には、PDF に写せない図形が {len(names)} 件あります: {shown}{more}",
-        "  → 角印・社判・テキストボックスなどが PDF から消えます"
-        "（写真として貼られた印は消えません）。",
-        "  → 印が要る書類なら、LibreOffice や Excel で直接 PDF 保存してください。",
-    ]
+    lines = [f"⚠ この冊には、PDF に写せない図形が {len(names)} 件あります: {shown}{more}"]
+    if with_pillow:
+        lines.append("  → 角印・社判・テキストボックスなどが PDF から消えます"
+                     "（写真として貼られた印は消えません）。")
+    else:
+        lines.append("  → 角印・社判・テキストボックスに加え、写真として貼られた印も"
+                     "PDF から消えます（この環境には Pillow が入っていません）。")
+        lines.append("  → pip install Pillow で、写真の印だけは残せます。")
+    lines.append("  → 印が要る書類なら、LibreOffice や Excel で直接 PDF 保存して"
+                 "ください。")
+    return lines

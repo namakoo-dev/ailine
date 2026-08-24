@@ -2168,7 +2168,7 @@ def test_acquire_run_lock_fails_when_held_by_live_other_process(tmp_path, monkey
     other_pid = 999999   # 実在しないふりをする pid（_pid_alive を差し替えて『生きている』にする）
     lock.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
                                  .isoformat(timespec="seconds")}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: pid == other_pid)
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: pid == other_pid)
     acquired, msg = ailine.acquire_run_lock(lock)
     assert acquired is False
     assert "別の ailine が実行中です" in msg
@@ -2178,7 +2178,7 @@ def test_acquire_run_lock_reclaims_when_pid_is_dead(tmp_path, monkeypatch):
     lock = tmp_path / "run.lock"
     lock.write_text(json.dumps({"pid": 999999, "ts": ailine.datetime.now(ailine.timezone.utc)
                                  .isoformat(timespec="seconds")}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: False)
     acquired, msg = ailine.acquire_run_lock(lock)
     assert acquired is True
     info = json.loads(lock.read_text(encoding="utf-8"))
@@ -2189,7 +2189,7 @@ def test_acquire_run_lock_reclaims_when_stale_by_age(tmp_path, monkeypatch):
     lock = tmp_path / "run.lock"
     old_ts = (ailine.datetime.now(ailine.timezone.utc) - _dt.timedelta(hours=1)).isoformat(timespec="seconds")
     lock.write_text(json.dumps({"pid": 999999, "ts": old_ts}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: True)   # pid 自体は生きている
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: True)   # pid 自体は生きている
     acquired, msg = ailine.acquire_run_lock(lock)
     assert acquired is True   # 30分超の age で stale 判定・奪取できる
 
@@ -2218,7 +2218,7 @@ def test_cmd_run_exits_6_when_run_lock_busy(tmp_path, monkeypatch, capsys):
     other_pid = 999999
     lock_path.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
                                      .isoformat(timespec="seconds")}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: pid == other_pid)
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: pid == other_pid)
     called = {"n": 0}
     monkeypatch.setattr(ailine, "check_excel_lock", lambda b: called.__setitem__("n", called["n"] + 1) or None)
     argv = run_argv(

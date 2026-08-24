@@ -200,7 +200,7 @@ def test_exit_6_run_lock_busy(tmp_path, monkeypatch):
     other_pid = 999999
     lock_path.write_text(json.dumps({"pid": other_pid, "ts": ailine.datetime.now(ailine.timezone.utc)
                                      .isoformat(timespec="seconds")}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: pid == other_pid)
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: pid == other_pid)
     argv = run_argv(
         book=str(book), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,

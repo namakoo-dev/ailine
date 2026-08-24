@@ -13,7 +13,6 @@
 #      読めない図形は最初から見えないので恒真になる（別実装で測る）
 
 import re
-import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -33,42 +32,83 @@ _SHAPE = ('<oneCellAnchor><from><col>5</col><colOff>0</colOff><row>1</row><rowOf
 
 
 def _png(w=8, h=8):
+    """8x8 の赤い PNG を手で作る（Pillow を使わない ── CI に Pillow は無い）。"""
     import struct, zlib
     def chunk(tag, data):
         body = tag + data
         return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xffffffff)
-    raw = b"".join(b"\x00" + bytes((200, 0, 0)) * w for _ in range(h))
-    return (b"\x89PNG\r\n\x1a\n"
+    raw = b"".join(bytes([0]) + bytes((200, 0, 0)) * w for _ in range(h))
+    return (bytes([137, 80, 78, 71, 13, 10, 26, 10])
             + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+# ★ 2026-08-24 の CI 赤で学んだ: 初版は openpyxl.drawing.image.Image を使っていて
+#   **Pillow を要求**した。手元には在り CI には無い ──「居るから見えない」の 3 度目。
+#   ここでは drawing 一式を手で組んで zip に入れる（依存ゼロ・openpyxl の書き手にも依存
+#   しないので、検出器を openpyxl とは別実装で測るという狙いにも合う）。
+
+_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+_PIC = ('<oneCellAnchor><from><col>3</col><colOff>0</colOff><row>1</row><rowOff>0</rowOff></from>'
+        '<ext cx="76200" cy="76200"/>'
+        '<pic><nvPicPr><cNvPr id="1" name="SEAL_IMAGE"/><cNvPicPr/></nvPicPr>'
+        f'<blipFill><a:blip xmlns:a="{NS}" xmlns:r="{_REL}" r:embed="rId1"/><a:stretch xmlns:a="{NS}">'
+        '<a:fillRect/></a:stretch></blipFill>'
+        f'<spPr><a:prstGeom xmlns:a="{NS}" prst="rect"/></spPr></pic><clientData/></oneCellAnchor>')
+
+
+def _write_drawing(path, body):
+    """既存の .xlsx に drawing 一式（media + drawing.xml + rels + シートからの参照）を足す。"""
+    import os
+    tmp = str(path) + ".t"
+    drawing = f'<wsDr xmlns="{_XDR}">{body}</wsDr>'
+    rels = (f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'<Relationship Id="rId1" Type="{_REL}/image" Target="../media/image1.png"/>'
+            f'</Relationships>')
+    sheet_rels = (f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                  f'<Relationship Id="rIdD" Type="{_REL}/drawing" Target="../drawings/drawing1.xml"/>'
+                  f'</Relationships>')
+    with zipfile.ZipFile(path) as zi, zipfile.ZipFile(tmp, "w") as zo:
+        for item in zi.infolist():
+            data = zi.read(item.filename)
+            if item.filename == "[Content_Types].xml":
+                text = data.decode("utf-8").replace(
+                    "</Types>",
+                    '<Default Extension="png" ContentType="image/png"/>'
+                    '<Override PartName="/xl/drawings/drawing1.xml" ContentType='
+                    '"application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>')
+                data = text.encode("utf-8")
+            elif item.filename == "xl/worksheets/sheet1.xml":
+                text = data.decode("utf-8").replace(
+                    "</worksheet>", f'<drawing xmlns:r="{_REL}" r:id="rIdD"/></worksheet>')
+                data = text.encode("utf-8")
+            zo.writestr(item, data)
+        zo.writestr("xl/media/image1.png", _png())
+        zo.writestr("xl/drawings/drawing1.xml", drawing)
+        zo.writestr("xl/drawings/_rels/drawing1.xml.rels", rels)
+        zo.writestr("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels)
+    os.replace(tmp, path)
+    return path
+
+
 def _book_with_image(tmp_path):
-    from openpyxl.drawing.image import Image as XLImage
-    seal = tmp_path / "seal.png"
-    seal.write_bytes(_png())
+    """画像だけの冊（写真として貼られた印 ── これは消えない）。"""
     p = tmp_path / "img.xlsx"
     wb = openpyxl.Workbook()
     wb.active["A1"] = "請求書"
-    wb.active.add_image(XLImage(str(seal)), "D2")
     wb.save(p)
-    return p
+    return _write_drawing(p, _PIC)
 
 
 def _book_with_shape(tmp_path):
-    """画像の冊に、画像でない図形を 1 つ手で足す（LibreOffice/Excel が作る形の代用）。"""
-    base = _book_with_image(tmp_path)
+    """画像 + 画像でない図形（描かれた角印 ── これが消える）。"""
     p = tmp_path / "shape.xlsx"
-    shutil.copy2(base, p)
-    tmp = str(p) + ".t"
-    with zipfile.ZipFile(p) as zi, zipfile.ZipFile(tmp, "w") as zo:
-        for item in zi.infolist():
-            data = zi.read(item.filename)
-            if item.filename == "xl/drawings/drawing1.xml":
-                data = data.decode("utf-8").replace("</wsDr>", _SHAPE + "</wsDr>").encode("utf-8")
-            zo.writestr(item, data)
-    import os
-    os.replace(tmp, p)
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = "請求書"
+    wb.save(p)
+    _write_drawing(p, _PIC + _SHAPE)
     # ★ 治具が本当に仕込めたかを先に確かめる（初版は仕込めておらず、自分の壊れた
     #   治具を測って「消えない」と誤結論しかけた）。
     with zipfile.ZipFile(p) as z:
@@ -80,6 +120,9 @@ def _book_with_shape(tmp_path):
 
 def test_openpyxl_roundtrip_keeps_images_but_drops_shapes(tmp_path):
     """★ 前提の凍結: openpyxl の版が変わってこの事実が変われば、ここが最初に鳴る。"""
+    if not pdf_export.pillow_available():
+        pytest.skip("Pillow が無い環境 ── この向き（画像は残る）は測れない"
+                     "（測れない回は skip と書く。緑にしない）")
     shaped = _book_with_shape(tmp_path)
     out = tmp_path / "after.xlsx"
     openpyxl.load_workbook(shaped).save(out)
@@ -95,18 +138,39 @@ def test_openpyxl_roundtrip_keeps_images_but_drops_shapes(tmp_path):
 # --- ①② 検出器 ----------------------------------------------------------------------
 
 def test_detects_the_vanishing_shape(tmp_path):
-    assert pdf_export.vanishing_shapes(_book_with_shape(tmp_path)) == ["KAKUIN"]
+    """★ 環境に依らず決まるよう with_pillow を明示で渡す（実測の再現性）。"""
+    got = pdf_export.vanishing_shapes(_book_with_shape(tmp_path), with_pillow=True)
+    assert got == ["KAKUIN"]
 
 
-def test_image_only_book_is_silent(tmp_path):
-    assert pdf_export.vanishing_shapes(_book_with_image(tmp_path)) == [], \
-        "画像しか無い冊に誤爆した（写真の印は消えないのに消えると言った）"
+def test_image_only_book_is_silent_when_pillow_is_present(tmp_path):
+    got = pdf_export.vanishing_shapes(_book_with_image(tmp_path), with_pillow=True)
+    assert got == [], "画像しか無い冊に誤爆した（写真の印は消えないのに消えると言った）"
+
+
+def test_image_also_vanishes_without_pillow(tmp_path):
+    """★ Pillow が無ければ写真の印も消える ── 黙っていると嘘の安心を与える。
+
+    2026-08-24、CI と同じ素の環境で走らせて初めて出た。ailine が宣言している
+    依存は openpyxl だけなので、買い手の環境に Pillow が在る保証はない。
+    """
+    got = pdf_export.vanishing_shapes(_book_with_image(tmp_path), with_pillow=False)
+    assert got, "Pillow 不在なのに画像を安全だと言った"
+
+
+def test_warning_wording_depends_on_pillow():
+    joined = lambda flag: chr(10).join(
+        pdf_export.vanishing_shapes_warning(["K"], with_pillow=flag))
+    assert "写真として貼られた印は消えません" in joined(True)
+    assert "写真として貼られた印は消えません" not in joined(False), (
+        "Pillow が無い環境で『写真の印は消えない』と嘘をついた")
+    assert "pip install Pillow" in joined(False), "逃げ道を出していない"
 
 
 def test_unreadable_file_is_silent(tmp_path):
     p = tmp_path / "broken.xlsx"
     p.write_bytes(b"not a zip")
-    assert pdf_export.vanishing_shapes(p) == []
+    assert pdf_export.vanishing_shapes(p, with_pillow=True) == []
 
 
 def test_warning_names_the_shape_and_offers_a_way_out(tmp_path):

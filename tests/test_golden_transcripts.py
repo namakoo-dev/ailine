@@ -358,7 +358,7 @@ def _t_run_lock_busy(tmp_path, monkeypatch, capsys):
     #   時刻依存性を消す（下の test_transcript_golden の redaction 参照）。
     ts = ailine.datetime.now(ailine.timezone.utc).isoformat(timespec="seconds")
     lock_path.write_text(json.dumps({"pid": other_pid, "ts": ts}), encoding="utf-8")
-    monkeypatch.setattr(ailine, "_pid_alive", lambda pid: pid == other_pid)
+    monkeypatch.setattr(ailine, "_pid_alive", lambda pid, expect_image=None: pid == other_pid)
     return _run_main(["run", str(book), "何か変更して", "--copy"], capsys)
 
 

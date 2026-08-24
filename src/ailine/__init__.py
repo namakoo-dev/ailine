@@ -178,6 +178,8 @@ DEFAULT_KEEP_BACKUPS = 10   # M2c: book ごとにこの世代数を超えたら�
 # ★ W8b 項目6: グローバル run ロック。基盤の LibreOffice(basrun 経由)が単一インスタンス
 #   (port 2002)前提のため、ブック単位でなく `ailine run` 全体で1本にする。
 RUN_LOCK_FILE = HISTORY_DIR / "run.lock"
+# ★ #17: 「同じ依頼で前に通った op」を探して遡る件数。全件読むと履歴が育つほど重くなる。
+HISTORY_RECALL_MAX = 500
 RUN_LOCK_STALE_SECONDS = 30 * 60   # 30分超のロックは stale とみなして奪取する
 
 # ★ W10a 項目2: 既定変更(W8b-2・原本直接反映)の一度きり告知。marker ファイルの有無だけで
@@ -6777,14 +6779,37 @@ def atomic_replace_inplace(book: Path, out_book: Path, workdir: Path,
 
 # --- ★ W8b 項目6: グローバル run ロック --------------------------------------
 
-def _pid_alive(pid: int) -> bool:
+def own_image_name() -> str:
+    """自分の実行ファイル名（小文字）。ロックに焼いて、後で同一性の照合に使う。"""
+    try:
+        return Path(sys.executable).name.lower()
+    except Exception:
+        return ""
+
+
+def _pid_alive(pid: int, expect_image: str | None = None) -> bool:
     """PID が生きているか（確実な保証は無いが十分・追加の依存(psutil 等)は増やさない）。
-       判定できない場合は「生きている」扱い（安全側＝奪取しない）。"""
+       判定できない場合は「生きている」扱い（安全側＝奪取しない）。
+
+       ★ 2026-08-24: 旧実装は tasklist の出力に **PID の数字が含まれるか**の部分文字列
+       判定だった。前の ailine が終わった後にその PID を**無関係な別プロセスが取り直す**と
+       「まだ生きている」と誤判定し、ロックが居座って直後の run が exit 6 になる。
+       ★ 根: 判定に要る三項（誰のロックか／今その PID は誰か／同じか）のうち、
+       **誰のロックか**を持っていなかった。取得時に実行ファイル名を焼いておけば、
+       ここで推測（「python っぽい名前か」）をしなくて済む。
+       expect_image が None（古い形式のロック）なら従来どおりの緩い判定に落ちる。"""
     if os.name == "nt":
         try:
-            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                                   capture_output=True, text=True, encoding="utf-8", errors="replace")
-            return str(pid) in out.stdout
+            text = (out.stdout or "").strip()
+            if not text or "INFO:" in text:
+                return False           # 一致するタスクが無い＝死んでいる
+            first = text.splitlines()[0]
+            if expect_image:
+                image = first.split('","')[0].lstrip('"').lower()
+                return image == expect_image
+            return str(pid) in first
         except Exception:
             return True
     else:
@@ -6815,7 +6840,7 @@ def _lock_is_stale(info: dict | None) -> bool:
         return True
     if pid == os.getpid():
         return True
-    if not _pid_alive(pid):
+    if not _pid_alive(pid, expect_image=info.get("image")):
         return True
     try:
         ts = datetime.fromisoformat(info.get("ts", ""))
@@ -6834,7 +6859,9 @@ def acquire_run_lock(path: Path | None = None) -> tuple:
        30分超）なら奪取して新規取得する。"""
     p = path or RUN_LOCK_FILE
     p.parent.mkdir(parents=True, exist_ok=True)
-    info = {"pid": os.getpid(), "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    # ★ 2026-08-24: 「誰のロックか」を焼く（PID の使い回しで居座るのを防ぐ第三項）。
+    info = {"pid": os.getpid(), "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "image": own_image_name()}
 
     def _try_create() -> bool:
         try:
@@ -7080,6 +7107,9 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         "attempts": result.get("attempts", 0),
         "failure_kind": failure_kind,
         "error_detail": error_detail,
+        # ★ #17: 何で通ったか。過去の成功を思い出す材料（提案までで、実行はしない）。
+        "op": result.get("op"),
+        "ops": result.get("ops"),
         "changes": (result.get("changes") or [])[:3],
         "out": result.get("out"),
         # ★ M2b: DSL 経路(path="dsl")では命令言語の確認文(command)と事後条件の合否を残す。
@@ -7100,6 +7130,42 @@ def append_history(entry: dict, path: Path | None = None) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def op_that_worked_before(task: str, entries) -> tuple:
+    """同じ依頼文で**過去に成功した** op と、その日付を返す（無ければ (None, None)）。
+
+    ★ 2026-08-24（#17）: 同じブックに一字一句同じ依頼を 2 回投げると、1 回目は通り
+    2 回目は「頼める操作の一覧に照合できませんでした」で落ちた（LLM のサンプリングの揺れ）。
+    ★ 直す対象は揺れそのものではない（temperature を 0 にしても別の入力で揺れる）。
+    直すのは「揺れたときに人が困る」方 ── 道具が**自分の過去を思い出す**。
+
+    誤爆を作らない条件（実装前に決めて凍結した）:
+      - 一致は **依頼文の完全一致**のみ（部分一致だと別の依頼に前回の op を当てる）
+      - **成功した run のみ**を材料にする（失敗した run の op を勧めない）
+      - 材料が無ければ黙る（初回・別 PC で挙動が変わらない）
+      - ★ 黙って実行しない ── 呼び出し側は候補として並べ、根拠（日付）を必ず言う
+    """
+    want = (task or "").strip()
+    if not want:
+        return None, None
+    # ★ 渡された並び順に依存しない（read_history は新しい順・ファイルは古い順で、
+    #   初版は reversed() を掛けて**最古の成功**を拾っていた ── 自分で用意した
+    #   古い順の検体で試したので気づけなかった）。ts で選ぶ。
+    hits = []
+    for entry in (entries or []):
+        if not isinstance(entry, dict) or not entry.get("ok"):
+            continue
+        if (entry.get("task") or "").strip() != want:
+            continue
+        op = entry.get("op")
+        if not op or op == "PLAN":     # PLAN は 1 op に決まらないので勧めない
+            continue
+        hits.append((str(entry.get("ts") or ""), op))
+    if not hits:
+        return None, None
+    ts, op = max(hits)
+    return op, ts[:10]
 
 
 def read_history(path: Path | None = None, max_n: int = 10) -> list:
@@ -8054,6 +8120,9 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     #   provenance は resolved["_sources"] をそのまま返す派生ビュー（値・型は不変）。
     interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
+              # ★ 2026-08-24（#17）: 実行した op を**機械の値として**持たせる。
+              #   表示テキスト（解釈行）から復元してはいけない ── 文言を変えた瞬間に壊れる。
+              "op": op,
               "path": "dsl", "command": confirm.line, "postcondition": None,
               "interpretation": interpretation, "provenance": provenance}
 
@@ -8262,6 +8331,9 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
 
     interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
+              # ★ 2026-08-24（#17）: 実行した op を**機械の値として**持たせる。
+              #   表示テキスト（解釈行）から復元してはいけない ── 文言を変えた瞬間に壊れる。
+              "op": op,
               "path": "dsl", "command": confirm.line, "postcondition": None,
               "interpretation": interpretation, "provenance": provenance}
 
@@ -8440,6 +8512,9 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
 
     interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
+              # ★ 2026-08-24（#17）: 実行した op を**機械の値として**持たせる。
+              #   表示テキスト（解釈行）から復元してはいけない ── 文言を変えた瞬間に壊れる。
+              "op": op,
               "path": "dsl", "command": confirm.line, "postcondition": None,
               "interpretation": interpretation, "provenance": provenance}
 
@@ -8809,6 +8884,14 @@ def _maybe_suggest_or_refuse(a: argparse.Namespace, book: Path, source_book: Pat
         t0 = progress_start("⏳ 似た操作を確認中…")
         candidates = judge_ops_via_llm(task, about)
         progress_end(t0)
+    # ★ #17: それでも候補が無いなら、**同じ依頼で前に通った op** を思い出す。
+    #   既存の候補は押しのけない（候補が出ている回はこの経路に入らない）。
+    remembered_op, remembered_on = (None, None)
+    if not candidates:
+        remembered_op, remembered_on = op_that_worked_before(
+            task, read_history(max_n=HISTORY_RECALL_MAX))
+        if remembered_op:
+            candidates = [remembered_op]
     if not candidates:
         return cmd_refuse_vocab_miss(a, book, step)
 
@@ -8817,6 +8900,10 @@ def _maybe_suggest_or_refuse(a: argparse.Namespace, book: Path, source_book: Pat
     if args is None:
         return cmd_refuse_vocab_miss(a, book, step)
 
+    if remembered_op and op == remembered_op:
+        # ★ #17: 出す時は必ず根拠を言う（黙って前回の op を実行しない）。
+        print(f"（前回この依頼は『{OP_LABELS.get(op, op)}』で通っています"
+              f"{'・' + remembered_on if remembered_on else ''}）")
     print(f"もしかして: {OP_LABELS.get(op, op)}？")
     print(format_confirmation_line(op, resolved, inferred, sheets=sheets,
                                     target_sheet=resolved.get("_target_sheet")))
@@ -9319,6 +9406,9 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     use_formula, vocab = not getattr(a, "values", False), load_vocab()
 
     result = {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
+              # ★ #17: 段ごとの op を全部残す（PLAN は 1 依頼に複数 op）。
+              "op": "PLAN",
+              "ops": [st.get("op") for st in plan if isinstance(st, dict) and st.get("op")],
               "path": "plan", "command": None, "postcondition": None}
     if a.dry:
         print("\n（--dry プレビュー・語彙外の段は実行時に AI が直接作成（機械保証なし）で対応します。未実行）")
