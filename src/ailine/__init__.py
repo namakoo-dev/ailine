@@ -6890,6 +6890,28 @@ def undo_steps_left(book: Path, backups: list | None = None) -> int:
     return len(backups) if i is None else len(backups) - 1 - i
 
 
+def _shelve_bytes(book: Path, data: bytes) -> None:
+    """復元**前**の中身を undo の棚へ退避する（restore 自体を可逆にする材料）。
+
+    ★ 2026-08-25（復元の重大9）: 旧実装は `make_backup(book, shelf=True)` を
+      書き込みの前に呼んでいたので、①書き込みが失敗しても積まれ ②何も変わらない
+      no-op でも積まれた。実測では棚 10 件すべてが同一内容で埋まり、本物が押し出された。
+      ★ ここは「今のファイル」ではなく「**さっきまでの中身**」を積む必要があるので、
+      make_backup（ファイルを読む）ではなくバイト列を直接書く。
+    """
+    try:
+        dst = backup_path_for(book, ts=_utc_ts(), shelf=True)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        n = 2
+        while dst.exists():
+            dst = backup_path_for(book, ts=f"{_utc_ts()}-{n}", shelf=True)
+            n += 1
+        dst.write_bytes(data)
+        prune_backups(book, keep=DEFAULT_KEEP_BACKUPS, shelf=True)
+    except OSError:
+        pass
+
+
 def restore_backup(book: Path) -> Path:
     """book を「1つ前の世代」から復元する。戻り値は使ったバックアップの Path。
        バックアップが1つも無ければ例外を投げる。
@@ -6922,8 +6944,16 @@ def restore_backup(book: Path) -> Path:
                         if pruned else "最も古い状態です")
                 raise NoOlderBackupError(f"{book.name} をこれ以上は戻せません（{tail}）")
             target = backups[i + 1]
-        make_backup(book, shelf=True)   # 復元前の現状も退避＝restore 自体も可逆にする
+    # ★ 2026-08-25（復元の重大9・盲検）: 退避は**書き込みが成功してから**積む。
+    #   旧版は書き込みの**前**に呼んでいたので、読み取り専用で 3 回失敗させたら
+    #   棚が 2→5 件に増えた。しかも致命1 のループでは棚 10 件すべてが同一内容の
+    #   原本コピーで埋まり、**本物の run1/run2 の結果が押し出されて全滅**した。
+    #   ★ 棚は「undo をやり直す材料」── 何も起きなかった回に積むと、材料の方が消える。
+    _prev = book.read_bytes() if book.exists() else None
     shutil.copy2(target, book)
+    if _prev is not None and _prev != book.read_bytes():
+        # 中身が実際に変わった時だけ退避する（同じ中身なら、やり直す材料にならない）
+        _shelve_bytes(book, _prev)
     # ★ 2026-08-25: 「どの世代の上に立ったか」を記録する。内容の等値で当てないための第三項。
     _write_undo_pointer(book, target.name)
     return target
