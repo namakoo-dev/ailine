@@ -6873,19 +6873,15 @@ def restore_backup(book: Path) -> Path:
 
 
 def cmd_restore(a: argparse.Namespace) -> int:
-    book = Path(a.book).resolve()
-    if a.list:
-        backups = list_backups(book)
-        for ln in render_backup_list(book.name, backups):
-            print(ln)
-        return 0
-    try:
-        used = restore_backup(book)
-    except (FileNotFoundError, NoOlderBackupError) as e:
-        print(f"× {e}")
-        return 1
-    print(render_restore_done(book.name, used.name))
-    return 0
+    """`ailine restore` は `ailine undo` と**同じ仕事**をする（undo は restore の昇格版）。
+
+    ★ 2026-08-25（復元の中#13・盲検）: 同じ `restore_backup` を呼ぶのに、restore 側だけが
+      劣化版になっていた ── フォルダガードが無く「× w10 のバックアップが無い」と的外れな
+      理由を言い、Excel ロックの関所も、例外を言葉にする処理も、残り回数の表示も無かった。
+      undo で直したものが restore に届かない（片配線）。
+    ★ 根治: 分岐を持たず**委譲する**。2 つ書かなければ、ずれようがない。
+    """
+    return cmd_undo(a)
 
 
 def cmd_undo(a: argparse.Namespace) -> int:
