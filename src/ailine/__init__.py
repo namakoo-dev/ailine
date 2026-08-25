@@ -6903,10 +6903,32 @@ def cmd_undo(a: argparse.Namespace) -> int:
         for ln in render_backup_list(book.name, backups, shelved=len(list_undo_shelf(book))):
             print(ln)
         return 0
+    # ★ 2026-08-25（復元の致命5）: run は Excel ロックで止まるのに、undo は素通りしていた。
+    #   「Excel で結果を見て、気に入らないから戻す」は undo の**最も自然な使い方**で、
+    #   そこだけ関所が無かった。同じ検出器・同じ文言を通す。
+    lock_reason = check_excel_lock(book)
+    if lock_reason:
+        kind, detail = lock_reason
+        print(f"× {detail}。")
+        if kind == "excel":
+            print("  → Excel で開いています。閉じてから実行してください")
+        else:
+            print("  → 心当たり: Excel などで開いている / 読み取り専用 / "
+                  "書き込み権限が無い / 同期中（OneDrive 等）")
+        return EXIT_WRITE_BLOCKED
     try:
         used = restore_backup(book)
     except (FileNotFoundError, NoOlderBackupError) as e:
         print(f"× {e}")
+        return 1
+    except PermissionError as e:
+        # ★ 重大7（同じ盲検）: 読み取り専用の原本で**生の traceback** が出ていた。
+        #   命綱がスタックトレースで死ぬのが最悪なので、必ず言葉にする。
+        print(f"× {book.name} に書き込めませんでした（{e}）。")
+        print("  → ファイルが読み取り専用か、他のアプリが開いていないか確認してください")
+        return EXIT_WRITE_BLOCKED
+    except OSError as e:
+        print(f"× 復元に失敗しました（{e}）。原本は変更していません。")
         return 1
     print(render_restore_done(book.name, used.name, remaining=undo_steps_left(book)))
     # ★ 誤分類の実例台帳センサ②: undo が成功した＝その run の判断を人がひっくり返した
