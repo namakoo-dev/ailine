@@ -6583,6 +6583,55 @@ def backup_path_for(book: Path, ts: str | None = None, shelf: bool = False) -> P
     return base / f"{book.stem}.{ts}{book.suffix}"
 
 
+def keep_backups_arg(value: str) -> int:
+    """`--keep-backups` の値。★ 0 は受け付けない。
+
+    ★ 2026-08-25（復元の致命3・盲検）: 0 は `backups[0:]`＝**いま作った分ごと全部消す**
+      という意味になり、安全網ゼロで原本を書き換えていた。それでいて
+      「（もとに戻す: ailine undo）」と表示していた ── 嘘。
+      ★ `--help` は「負数で無制限」と書くが、**0 を無制限と読む利用者は普通に居る**
+        （多くの CLI がそう）。その 1 文字で原本が戻らなくなるので、ここで止める。
+    """
+    import argparse as _ap
+    try:
+        n = int(value)
+    except ValueError:
+        raise _ap.ArgumentTypeError(f"整数で指定してください: {value!r}")
+    if n == 0:
+        raise _ap.ArgumentTypeError(
+            "0 は「バックアップを作った直後に全部消す」という意味になり、"
+            "原本を戻せなくします。無制限にしたいなら -1 を、"
+            "世代を残すなら 1 以上を指定してください")
+    return n
+
+
+def _pruned_marker_path(book: Path) -> Path:
+    """「この本は剪定で古い世代を捨てたことがある」の印。★ 停止メッセージを正直にするため。"""
+    return BACKUP_DIR / _backup_namespace(book) / f".pruned-{book.stem}{book.suffix}"
+
+
+def pruned_generations_note(book: Path, keep: int) -> str | None:
+    """剪定でこれから捨てる世代を人へ告げる 1 行（捨てるものが無ければ None）。
+
+    ★ 2026-08-25（復元の致命4）: 剪定は完全に無言だった。上限を超えて古い世代を
+      黙って捨てたあと、undo が「最も古い状態です」と言う ── 実際は
+      「**まだ残っている中で**一番古い」でしかなく、原本は既に消してある。
+    """
+    if keep < 0:
+        return None
+    stale = list_backups(book)[keep:]
+    if not stale:
+        return None
+    try:
+        marker = _pruned_marker_path(book)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("1", encoding="utf-8")
+    except OSError:
+        pass
+    return (f"（古い世代 {len(stale)} 件を捨てました ── 上限 {keep} 世代。"
+            "これより前へは戻せなくなります）")
+
+
 def prune_backups(book: Path, keep: int = DEFAULT_KEEP_BACKUPS, shelf: bool = False) -> list:
     """★ M2c: book の世代のうち keep 件を超える古いもの（list_backups は新しい順）を削除する。
        戻り値は削除したパスのリスト。keep < 0 は「無制限（削除しない）」扱い。
@@ -6639,6 +6688,10 @@ def make_backup(book: Path, keep: int = DEFAULT_KEEP_BACKUPS, shelf: bool = Fals
         n += 1
     shutil.copy2(book, dst)
     if not shelf:
+        # ★ 2026-08-25（復元の致命4）: 剪定は完全に無言だった。捨てる**前**に言う。
+        note = pruned_generations_note(book, keep)
+        if note:
+            print(note)
         # ★ 2026-08-25: 実編集の世代を積んだ ── これから書き換わる中身は、どの世代とも
         #   同じでない（＝新しい編集の直後）。undo の退避（shelf）では動かさない。
         _write_undo_pointer(book, None)
@@ -6801,8 +6854,13 @@ def restore_backup(book: Path) -> Path:
         i = _undo_position(book, backups)
         if i is not None:
             if i + 1 >= len(backups):
-                raise NoOlderBackupError(
-                    f"{book.name} をこれ以上は戻せません（最も古い状態です）")
+                # ★ 2026-08-25（復元の致命4）: 「最も古い状態です」は「今のこれが原本だ」と
+                #   読める断定文。剪定で原本を捨てている時は嘘になる。
+                pruned = _pruned_marker_path(book).exists()
+                tail = ("残っている中で一番古い状態です ── 上限を超えた古い世代は"
+                        "剪定で捨てられており、原本には戻せません"
+                        if pruned else "最も古い状態です")
+                raise NoOlderBackupError(f"{book.name} をこれ以上は戻せません（{tail}）")
             target = backups[i + 1]
         make_backup(book, shelf=True)   # 復元前の現状も退避＝restore 自体も可逆にする
     shutil.copy2(target, book)
@@ -11863,7 +11921,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "0 で無効化=旧挙動の無制限)")
     r.add_argument("--ask", action="store_true",
                    help="DSL 経路の確認行の後に y/n で対話する（既定は表示して続行）")
-    r.add_argument("--keep-backups", dest="keep_backups", type=int, default=DEFAULT_KEEP_BACKUPS,
+    r.add_argument("--keep-backups", dest="keep_backups", type=keep_backups_arg,
+                    default=DEFAULT_KEEP_BACKUPS,
                    help=f"原本への反映前のバックアップを book ごとに何世代残すか (既定 {DEFAULT_KEEP_BACKUPS}、"
                         "負数で無制限)")
     r.add_argument("--values", action="store_true",
