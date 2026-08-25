@@ -4920,6 +4920,35 @@ def _total_row_left_the_bottom_reason(path: Path, source_book: Path | None, args
             f"（合計行がデータとして一緒に並べ替えられています）")
 
 
+def extent_gap(ws, header_row: int = 1, key_col: int = 1) -> dict:
+    """走査で得た範囲と、**物理の使用範囲**の食い違いを数える。
+
+    ★ 2026-08-25（塊②）: 中核 op の盲検が実測した 2 件の根。
+      行: `_scan_last_row` は key_col を上から見て**最初の空で止まる**。末尾に
+          その列が空の行があると、処理からも分母からも消える（「3行中1行が一致」の
+          真の分母は 5 だった）。★ 表の**途中**の空きは ⚠ が出るのに、
+          **末尾だけ鳴らない** ── 警告条件が「下方向に中身があるか」なので原理的に発火しない。
+      列: 並べ替えの範囲は見出し由来（`len(headers)-1`）なので、見出しの無い列は
+          範囲外に落ちる。実測では D 列だけ動かず、**全行で備考が別商品の物に付け替わった**。
+
+    ★ 物理の使用範囲は「値のあるセルの最大位置」で測る（_used_extent と同じ規則。
+      openpyxl の max_row/max_column は書式だけのセルを含んで大きく出るため使わない）。
+    戻り値の rows_* / cols_* はいずれも**見出し行を除いたデータの数**。
+    """
+    phys_r, phys_c = _used_extent(ws)
+    rows_physical = max(0, phys_r - header_row)
+    cols_physical = max(0, phys_c)
+    rows_scanned = max(0, _scan_last_row(ws, key_col=key_col, header_row=header_row) - header_row)
+    cols_scanned = max(0, _scan_last_col(ws, header_row=header_row))
+    return {
+        "rows_scanned": rows_scanned, "rows_physical": rows_physical,
+        "rows_missing": max(0, rows_physical - rows_scanned),
+        "cols_scanned": cols_scanned, "cols_physical": cols_physical,
+        "cols_missing": max(0, cols_physical - cols_scanned),
+    }
+
+
+
 def note_unverified(args: dict, count: int, why: str) -> None:
     """検証できなかった行を、**機械の値として** args に残す。
 
@@ -4976,6 +5005,17 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
         if idx is None:
             return "fail", f"列『{args['col']}』が見つからない"
         last = _scan_last_row(ws, header_row=header_row)
+        # ★ 塊②（2026-08-25）: 分母を**物理の使用範囲**と突き合わせる。
+        #   A 列走査は最初の空で止まるので、末尾に A 列が空の行があると
+        #   処理からも分母からも消える（実測: 真の分母 5 を「3行中」と言っていた）。
+        gap = extent_gap(ws, header_row=header_row)
+        if gap["rows_missing"]:
+            note_unverified(args, gap["rows_missing"],
+                            "1 列目が空のため走査がそこで止まり、この行を見ていない")
+        # ★ 行の同一性を確かめるための、**物理の列範囲**での行の中身（後段で使う）。
+        phys_cols = max(gap["cols_physical"], gap["cols_scanned"])
+        after_rows = [tuple(ws.cell(row=r, column=c).value for c in range(1, phys_cols + 1))
+                       for r in range(header_row + 1, last + 1)]
         raw_vals = [ws.cell(row=r, column=idx).value for r in range(header_row + 1, last + 1)]
         if use_formula:
             eff_vals = [bv.cell_value(r, idx, sheet=args.get("_target_sheet")) for r in range(header_row + 1, last + 1)]
@@ -5012,7 +5052,49 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
     moved = _total_row_left_the_bottom_reason(path, source_book, args, header_row, idx, sheet_name)
     if moved:
         return "fail", moved
+    # ★★ 塊②（2026-08-25・中核 op の盲検 致命1）: **行の同一性**を確かめる。
+    #   旧版はキー列の単調性しか見ておらず、見出しの無い列が置き去りになって
+    #   全行の備考が別商品の物に付け替わっても ✓ を出していた（実測）。
+    #   ★ 比べるのは**物理の列範囲**（見出し由来の範囲では、まさに壊れた列が入らない）。
+    #   ★ 並べ替えは行の集合を変えない操作なので、行の中身の多重集合が一致すれば同一性が保たれる。
+    torn = _sort_rows_lost_their_identity(source_book, after_rows, args, header_row, phys_cols)
+    if torn:
+        return "fail", torn
     return "pass", f"{len(vals)} 行を検証（{'昇順' if asc else '降順'}）{note}"
+
+
+def _sort_rows_lost_their_identity(source_book, after_rows: list, args: dict,
+                                    header_row: int, phys_cols: int) -> str | None:
+    """並べ替えの前後で、**行そのもの**が保たれているか。壊れていれば理由、無事なら None。
+
+    ★ 並べ替えは行を入れ替えるだけで、行の中身は 1 つも変わらないはず。
+      前後の行を多重集合として比べれば、順序に依らず同一性が見える。
+      ★ 見出し由来の列範囲で比べると、範囲外に落ちて壊れた列がそもそも入らないので
+        必ず一致してしまう（＝恒真）。物理の使用範囲で比べる。
+    ★ source_book が無い経路では確かめられない ── その時は黙って None（従来どおり）。
+    """
+    if source_book is None or not Path(source_book).exists():
+        return None
+    try:
+        with BookView(Path(source_book)) as bv:
+            ws = bv.sheet(args.get("_target_sheet"))
+            last = _scan_last_row(ws, header_row=header_row)
+            before_rows = [tuple(ws.cell(row=r, column=c).value for c in range(1, phys_cols + 1))
+                            for r in range(header_row + 1, last + 1)]
+    except Exception:
+        return None
+    if len(before_rows) != len(after_rows):
+        return (f"並べ替えの前後で行数が変わっています"
+                f"（元 {len(before_rows)} 行 / 後 {len(after_rows)} 行）")
+    from collections import Counter
+    lost = Counter(before_rows) - Counter(after_rows)
+    if not lost:
+        return None
+    sample = next(iter(lost))
+    shown = "・".join("(空)" if v in (None, "") else str(v) for v in sample[:4])
+    return (f"並べ替えで行がちぎれています（{len(list(lost.elements()))} 行が元と一致しません）。"
+            f"例: 元にあった行 {shown} が出力にありません"
+            " ── 見出しの無い列が一緒に動かなかった可能性があります")
 
 
 def check_compute_column(path: Path, args: dict, header_row: int = 1,
