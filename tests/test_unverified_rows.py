@@ -27,6 +27,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ailine  # noqa: E402
+# ★ 文言の実装は 1 つ（ailine_core/claim.py）。本番の dsl_step が呼ぶのと同じものを見る
+from ailine_core.claim import render_unverified_advisories  # noqa: E402
 from test_ailine import _book  # noqa: E402
 
 
@@ -54,7 +56,7 @@ def test_no_unverified_key_when_everything_was_checked(tmp_path):
 # --- ③ 何行が・なぜ、を名指しする -----------------------------------------------------
 
 def test_unverified_lines_name_the_count_and_the_reason():
-    lines = ailine.render_unverified_advisories(
+    lines = render_unverified_advisories(
         [{"rows": 2, "why": "数値でないため並び順を確かめられない"}])
     text = "\n".join(lines)
     assert text.lstrip().startswith("⚠"), f"決裁③が数える形（⚠ 始まり）でない: {text}"
@@ -63,8 +65,8 @@ def test_unverified_lines_name_the_count_and_the_reason():
 
 
 def test_no_lines_when_nothing_was_excluded():
-    assert ailine.render_unverified_advisories([]) == []
-    assert ailine.render_unverified_advisories(None) == []
+    assert render_unverified_advisories([]) == []
+    assert render_unverified_advisories(None) == []
 
 
 # --- ② ✓ を名乗らない（e2e）----------------------------------------------------------

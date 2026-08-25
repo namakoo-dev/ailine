@@ -103,7 +103,6 @@ from ailine_core.book_view import BookView
 from ailine_core.claim import (   # ★ C5/C9: Claim 型と『✓』の一元レンダラ（✓ は反映後の1箇所だけ）
     Claim, format_plan_report, format_plan_preview, overall_verdict,
     render_applied_claim, render_applied_unverified, render_applied_unobservable,
-    render_unverified_advisories,
     render_scope_notes,   # ★ 単位E: 常時注記を廃止し、その run 固有の②の1文に置き換えた
     count_suspicious_advisories, render_applied_claim_demoted,   # ★ 決裁③: ⚠ による ✓ の降格
 )
