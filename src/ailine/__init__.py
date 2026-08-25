@@ -4920,6 +4920,36 @@ def _total_row_left_the_bottom_reason(path: Path, source_book: Path | None, args
             f"（合計行がデータとして一緒に並べ替えられています）")
 
 
+def note_unverified(args: dict, count: int, why: str) -> None:
+    """検証できなかった行を、**機械の値として** args に残す。
+
+    ★ 2026-08-25（塊①）: 3 面の盲検が別々の入口から着いた根 ──
+      「判定に要る項が機械の値として在るのに、判定へ渡していない」。
+      実測（中核 op の致命6）: check_sort は除外行数を int で数えたうえで、
+      それを**文章にして捨て**、`pass` を返していた。結果、単価列の先頭が 250 なのに
+      「✓ 機械検証済み」が出た ── 除外されたのは**まさに主張を壊す 2 行**だった。
+
+    ★ ここでやらないこと: 判定（pass/fail）は 1 ビットも変えない。
+      8 行を本当に検証したことは事実なので、⚠（機械保証なし）へは落とさない。
+      ✓ を △ に降ろすのは決裁③の既存の機構（⚠ 始まりの行を数える）に任せる。
+
+    ★ 表示文から読み取らせない: 文言を変えた瞬間に壊れる（この repo の既定の作法）。
+    """
+    if not isinstance(args, dict) or count <= 0:
+        return
+    args.setdefault("_unverified", []).append({"rows": int(count), "why": why})
+
+
+def render_unverified_advisories(unverified) -> list:
+    """人へ見せる行。★ ⚠ で始めるので決裁③が数えて ✓ を △ に降ろす。"""
+    out = []
+    for u in (unverified or []):
+        out.append(f"⚠ {u['rows']} 行は検証できていません（{u['why']}）"
+                   " ── この行については「宣言どおり」と言えません")
+    return out
+
+
+
 def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = False,
                 source_book: Path | None = None) -> tuple:
     """SORT の事後条件。戻り値は (status, reason)。status ∈ {"pass","warn","fail"}。
@@ -4964,6 +4994,8 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
         else:
             excluded += 1
     note = f"（数値でない {excluded} 行は対象外）" if excluded else ""
+    # ★ 塊①: 除外を**機械の値**として残す（今までは文章にして捨てていた）。
+    note_unverified(args, excluded, "数値でないため並び順を確かめられない")
     if uncached:
         return "fail", (f"並び順の検証対象に式はあるがキャッシュ値が無く検証できない行が "
                          f"{uncached} 件あり、順序を検証できません"
@@ -5057,6 +5089,7 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
     note_parts = []
     if excluded:
         note_parts.append(f"数値でない {excluded} 行は対象外")
+        note_unverified(args, excluded, "演算の対象が数値でないため計算結果を確かめられない")
     if uncached:
         note_parts.append(f"演算対象の式にキャッシュ値が無く検証できない {uncached} 行")
     note = f"（{'・'.join(note_parts)}）" if note_parts else ""
@@ -5119,6 +5152,7 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
     note_parts = []
     if excluded:
         note_parts.append(f"数値でない {excluded} 行は対象外")
+        note_unverified(args, excluded, "演算の対象が数値でないため計算結果を確かめられない")
     if uncached:
         note_parts.append(f"演算対象の式にキャッシュ値が無く検証できない {uncached} 行")
     note = f"（{'・'.join(note_parts)}）" if note_parts else ""
@@ -5191,6 +5225,7 @@ def check_lookup_fill(path: Path, args: dict, header_row: int = 1,
                          f"{uncached} 件あり、転記結果を検証できません"
                          f"（LibreOffice を通していない可能性）")
     note = f"（キー列に式はあるがキャッシュ値が無く検証できない {uncached} 行は対象外）" if uncached else ""
+    note_unverified(args, uncached, "キー列が式でキャッシュ値が無く、転記先を確かめられない")
     if checked == 0:
         # ★ W10b 項目4a → W10f 項目5: ここまで来た行はキーが読めている（『読めなかった』
         #   場合とは別集計済み）。ただし『本当に列順が違う』のか『キー値そのものが対応表と

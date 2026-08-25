@@ -136,6 +136,9 @@ def _normalize(text: str, work: Path) -> str:
     t = re.sub(r"\d{4}-\d{2}-\d{2}T[\d:+\-]+", "<TS>", t)
     t = re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", "<TS>", t)
     t = re.sub(r"_[0-9a-f]{6}\.xlsx", "_<HASH>.xlsx", t)
+    # ★ 2026-08-25: pid は実行のたびに変わる ── 撮りたいのは「誰か」でなく
+    #   「拒否の形」なので伏せる（golden 側でも同じ処置をしている）。
+    t = re.sub(r"pid=\d+", "pid=<PID>", t)
     t = re.sub(r"pytest-of-\w+[\/]pytest-\d+", "<PYTEST>", t)
     return t
 

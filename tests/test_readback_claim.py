@@ -278,7 +278,14 @@ def test_append_total_then_sort_still_claims_and_rerunning_postconditions_would_
           絞りの前後どちらでも黙る。検体はそのまま（余裕を持たせた側に倒しておく）。
        """
     _isolate(monkeypatch, tmp_path)
-    book = _book(tmp_path, [["部門", "件数", "金額"], ["a", 3, 100], ["b", 1, 250], ["c", 2, 400]])
+    # ★ 2026-08-25（塊①）: 列の並びを 部門/件数/金額 → 部門/金額/件数 に替えた。
+    #   合計ラベルは**対象列の左隣**に置かれるので、元の並びでは 件数 が "合計"（文字列）に
+    #   なる。検証できない行が 1 行でもあると ✓ を名乗らなくなったため、この検体の
+    #   **乗り物**（✓ が出る run）が成立しなくなった。
+    #   並びを替えるとラベルは 部門 に載り、件数 は数値のままでいられる。
+    #   ★ 検体の設計（合計を足した列とは**別の列**で並べる／合計行が上へ移る／T8b は鳴らない）
+    #     は 1 ミリも変えていない。
+    book = _book(tmp_path, [["部門", "金額", "件数"], ["a", 100, 3], ["b", 250, 1], ["c", 400, 2]])
     _translate(monkeypatch, {"plan": [{"op": "APPEND_TOTAL", "args": {"col": "金額"}},
                                        {"op": "SORT", "args": {"col": "件数", "order": "desc"}}]})
 
@@ -286,18 +293,22 @@ def test_append_total_then_sort_still_claims_and_rerunning_postconditions_would_
         wb = openpyxl.load_workbook(out_book)
         ws = wb.active
         if "SortByColumn" in code:   # 2段目: 件数が空欄の合計行(750)が降順の先頭へ移動する
-            rows = [("合計", "合計", "=SUM(C2:INDEX(C:C,ROW()-1))"),
-                    ("a", 3, 100), ("c", 2, 400), ("b", 1, 250)]
+            rows = [("合計", "=SUM(B2:INDEX(B:B,ROW()-1))", 9),
+                    ("a", 100, 3), ("c", 400, 2), ("b", 250, 1)]
             for i, row in enumerate(rows, start=2):
                 for c, v in enumerate(row, start=1):
                     ws.cell(row=i, column=c, value=v)
             wb.save(out_book)
-            _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"C2": 750})
+            _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"B2": 750})
             return True, None, "ok"
-        ws.cell(row=5, column=2, value="合計")            # 1段目: データ末尾の下に合計行
-        ws.cell(row=5, column=3, value="=SUM(C2:INDEX(C:C,ROW()-1))")
+        ws.cell(row=5, column=1, value="合計")            # 1段目: データ末尾の下に合計行
+        ws.cell(row=5, column=2, value="=SUM(B2:INDEX(B:B,ROW()-1))")
+        # ★ 9 にする理由: 3+1+2=6 は「上の全部の合計」の恒等式に当たり、件数側にも
+        #   合計行が在ると算術の検算が正しく鳴る（この検体の docstring が
+        #   100+200==300 で同じ罠を踏んだと警告している）。件数は合計でない数にする。
+        ws.cell(row=5, column=3, value=9)                 # 数値なので除外されない
         wb.save(out_book)
-        _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"C5": 750})
+        _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"B5": 750})
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 

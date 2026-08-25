@@ -172,6 +172,13 @@ def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, 
                                                      precondition_broken=precondition_broken,
                                                      after_path=after_path))
         advisories.extend(deps.unrequested_new_sheet_advisory(task, before, after, op=op))
+    # ★ 2026-08-25（塊①）: 事後条件の checker が「検証できなかった行」を機械の値として
+    #   resolved["_unverified"] に残す。ここは単発・複合計画の**両方が通る唯一の合流点**
+    #   なので、1 箇所で助言に載せる（呼び出し側 4 箇所に書き写さない ── 今日までに
+    #   片配線を 6 回踏んでいる）。⚠ 始まりなので決裁③が数えて ✓ を △ に降ろす。
+    for u in (resolved or {}).get("_unverified", []):
+        advisories.append(f"⚠ {u['rows']} 行は検証できていません（{u['why']}）"
+                          " ── この行については「宣言どおり」と言えません")
     return advisories
 
 
