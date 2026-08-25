@@ -77,6 +77,9 @@ EXIT_ENVIRONMENT = 9
 #   凍結済み。README の表が verify 専用の意味（検算の不一致）しか書いておらず、
 #   同じ番号に 2 つの意味が同居していた ── 番号でなく**表**を実態に合わせた。
 EXIT_WRITE_BLOCKED = 5
+# ★ 2026-08-25（復元の重大6）: 原本への反映そのものが中止された時の番号。
+#   「道具が壊れた」ではなく「前提が満たせず反映できなかった」ので 9 と同じ族にする。
+EXIT_APPLY_FAILED = 9
 
 
 def exit_environment(message: str):
@@ -8807,10 +8810,16 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     #   持たないので len で数える）。0 なら従来どおり ✓。
     warning_count = (count_suspicious_advisories(advisories) + (1 if warn_precondition else 0)
                       + len(resolved.get("_warnings", [])))
-    _finish_apply(a, book, out_book, workdir, result,
+    # ★ 2026-08-25（復元の重大6・盲検）: _finish_apply は置換の成否を返すのに、
+    #   呼び出し元 4 箇所が**全部戻り値を捨てていた**。バックアップに失敗して原本反映を
+    #   中止しても exit 0 ── スクリプトから回す利用者は「反映されなかった」を検出できない。
+    #   ★ 表示は正直だった（「原本は無変更」と言っていた）。嘘だったのは**終了コード**。
+    _applied = _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count)
+    if not _applied:
+        return EXIT_APPLY_FAILED
 
     _finish_run(a, book, result, "none")
     return 0
@@ -8968,10 +8977,16 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
 
     warning_count = (count_suspicious_advisories(advisories) + (1 if warn_precondition else 0)
                       + len(resolved.get("_warnings", [])))
-    _finish_apply(a, book, out_book, workdir, result,
+    # ★ 2026-08-25（復元の重大6・盲検）: _finish_apply は置換の成否を返すのに、
+    #   呼び出し元 4 箇所が**全部戻り値を捨てていた**。バックアップに失敗して原本反映を
+    #   中止しても exit 0 ── スクリプトから回す利用者は「反映されなかった」を検出できない。
+    #   ★ 表示は正直だった（「原本は無変更」と言っていた）。嘘だったのは**終了コード**。
+    _applied = _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count)
+    if not _applied:
+        return EXIT_APPLY_FAILED
 
     _finish_run(a, book, result, "none")
     return 0
@@ -9125,10 +9140,16 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
 
     warning_count = (count_suspicious_advisories(advisories) + (1 if warn_precondition else 0)
                       + len(resolved.get("_warnings", [])))
-    _finish_apply(a, book, out_book, workdir, result,
+    # ★ 2026-08-25（復元の重大6・盲検）: _finish_apply は置換の成否を返すのに、
+    #   呼び出し元 4 箇所が**全部戻り値を捨てていた**。バックアップに失敗して原本反映を
+    #   中止しても exit 0 ── スクリプトから回す利用者は「反映されなかった」を検出できない。
+    #   ★ 表示は正直だった（「原本は無変更」と言っていた）。嘘だったのは**終了コード**。
+    _applied = _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count)
+    if not _applied:
+        return EXIT_APPLY_FAILED
 
     _finish_run(a, book, result, "none")
     return 0
@@ -10082,11 +10103,17 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     #   advisories に含めていない別集計・_run_dsl_plan_step の docstring 参照）。
     warning_count = (count_suspicious_advisories(text for _idx, text in step_advisory_entries)
                       + len(suspicion_sink))
-    _finish_apply(a, book, out_book, workdir, result,
+    # ★ 2026-08-25（復元の重大6・盲検）: _finish_apply は置換の成否を返すのに、
+    #   呼び出し元 4 箇所が**全部戻り値を捨てていた**。バックアップに失敗して原本反映を
+    #   中止しても exit 0 ── スクリプトから回す利用者は「反映されなかった」を検出できない。
+    #   ★ 表示は正直だった（「原本は無変更」と言っていた）。嘘だったのは**終了コード**。
+    _applied = _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(verdict == "ok" and not subject_sink["warnings"]),
                    scope="; ".join(label for _idx, label, _st, _det in items),
                    scope_note="\n".join(render_scope_notes(subject_sink["unspoken"])),
                    warning_count=warning_count)
+    if not _applied:
+        return EXIT_APPLY_FAILED
 
     _finish_run(a, book, result, "none")
     return 0

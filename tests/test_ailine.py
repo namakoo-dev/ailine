@@ -6023,7 +6023,10 @@ def test_b2_replace_and_fallback_both_fail_leaves_book_untouched(tmp_path, monke
 
     rc = ailine.main(_chain_run_argv(book))
     captured = capsys.readouterr()
-    assert rc == 0   # 自由生成の適用自体は成功。反映(置換)だけが失敗している
+    # ★ 2026-08-25: 旧コメントは「適用自体は成功。反映(置換)だけが失敗している」と
+    #   書いていたが、**利用者にとって「反映されていない」は失敗**だ。
+    #   その理解こそが盲検の指摘した嘘だった（表示は正直・終了コードだけが嘘）。
+    assert rc == ailine.EXIT_APPLY_FAILED, captured.out
     assert "置換に失敗した" in captured.out
     assert book.read_bytes() == original_bytes   # 原本は無傷
     out_book = book.with_name(book.stem + ".out" + book.suffix)
@@ -6053,7 +6056,11 @@ def test_b2_backup_failure_aborts_replacement_book_untouched(tmp_path, monkeypat
 
     rc = ailine.main(_chain_run_argv(book))
     captured = capsys.readouterr()
-    assert rc == 0
+    # ★ 2026-08-25（復元の重大6・盲検）: ここは **exit 0 を凍結していた**。
+    #   反映を中止したのに成功を名乗るのは嘘で、スクリプトから回す利用者は
+    #   「反映されなかった」を検出できない。★ この検体の狙いは「原本が無傷」であって、
+    #   exit 0 はそれを測る道具ではない ── 意図は保ったまま、非零を明示で縛る。
+    assert rc == ailine.EXIT_APPLY_FAILED, captured.out
     assert "バックアップに失敗" in captured.out
     assert book.read_bytes() == original_bytes   # 原本は無傷
     out_book = book.with_name(book.stem + ".out" + book.suffix)
