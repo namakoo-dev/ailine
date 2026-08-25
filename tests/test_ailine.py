@@ -1714,8 +1714,12 @@ def test_make_backup_prunes_beyond_keep(tmp_path, monkeypatch):
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     book = tmp_path / "book.xlsx"
     book.write_bytes(b"content")
+    # ★ 2026-08-25: 中身が最新世代と 1 バイトも違わないなら世代を積まなくなった
+    #   （undo 直後の run で同じ内容が二重に積まれ、undo が同じ中身を 2 回通っていた）。
+    #   この検体が測りたいのは**剪定**なので、毎回中身を変えて世代が確実に積まれるようにする。
     for i in range(3):
         monkeypatch.setattr(ailine, "_utc_ts", lambda i=i: f"2026010{i+1}T000000Z")
+        book.write_bytes(f"content-{i}".encode("utf-8"))
         ailine.make_backup(book, keep=2)
     remaining = ailine.list_backups(book)
     assert len(remaining) == 2
@@ -1727,6 +1731,7 @@ def test_make_backup_default_keep_is_ten(tmp_path, monkeypatch):
     book.write_bytes(b"content")
     for i in range(12):
         monkeypatch.setattr(ailine, "_utc_ts", lambda i=i: f"202601{i+1:02d}T000000Z")
+        book.write_bytes(f"content-{i}".encode("utf-8"))   # ★ 同上（毎回中身を変える）
         ailine.make_backup(book)   # keep 省略 = 既定 DEFAULT_KEEP_BACKUPS(=10)
     assert len(ailine.list_backups(book)) == 10
 

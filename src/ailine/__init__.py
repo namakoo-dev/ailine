@@ -6533,6 +6533,21 @@ def make_backup(book: Path, keep: int = DEFAULT_KEEP_BACKUPS, shelf: bool = Fals
        ★ W11: shelf=True は undo が「復元前の現状」を退避するときの置き場（BACKUP_DIR/
        <ns>/undo/）。遡りの履歴には数えないが、ファイルとしては同じ作法で残す
        （undo を可逆にする性質＝退避そのものは減らさない）。"""
+    # ★ 2026-08-25（復元の致命1の後半）: undo の直後に run すると、「いま復元したばかりの
+    #   内容」がもう一度世代に積まれる。歩みは（同一性で判定するようになったので）壊れないが、
+    #   **中身の同じ世代を 2 回通る**ので、使う側には「undo が効いていない」ように見える。
+    #   最新世代と 1 バイトも違わないなら、積まない ── 世代列は「変化の履歴」であって
+    #   「実行の履歴」ではない。★ 退避棚（shelf）は別: undo 自体を可逆にするための記録なので
+    #   同じ中身でも残す。
+    if not shelf:
+        existing = list_backups(book)
+        if existing:
+            try:
+                if existing[0].read_bytes() == book.read_bytes():
+                    prune_backups(book, keep=keep, shelf=shelf)
+                    return existing[0]
+            except OSError:
+                pass
     ts = _utc_ts()
     dst = backup_path_for(book, ts=ts, shelf=shelf)
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -6541,6 +6556,10 @@ def make_backup(book: Path, keep: int = DEFAULT_KEEP_BACKUPS, shelf: bool = Fals
         dst = backup_path_for(book, ts=f"{ts}-{n}", shelf=shelf)
         n += 1
     shutil.copy2(book, dst)
+    if not shelf:
+        # ★ 2026-08-25: 実編集の世代を積んだ ── これから書き換わる中身は、どの世代とも
+        #   同じでない（＝新しい編集の直後）。undo の退避（shelf）では動かさない。
+        _write_undo_pointer(book, None)
     prune_backups(book, keep=keep, shelf=shelf)
     return dst
 
@@ -6595,14 +6614,67 @@ def list_undo_shelf(book: Path) -> list:
     return _sorted_newest_first(_gather_backups(undo_shelf_dir(book), book.stem, book.suffix))
 
 
+def _undo_pointer_path(book: Path) -> Path:
+    """「いま、どの世代の上に立っているか」を記録する印の置き場。
+
+    ★ 2026-08-25（復元の致命1・盲検の最重）: 現在地を**内容の等値**で決めていたため、
+    同じ内容の世代が 2 つ並んだ瞬間に位置が確定できず、undo が振動して原本へ永久に
+    到達できなくなっていた（トリガは `run → undo → run` ── README が勧める使い方）。
+    ★ 内容は世代の一意キーではない。**どの世代から復元したか**を覚えておく。
+    """
+    return BACKUP_DIR / _backup_namespace(book) / f".at-{book.stem}{book.suffix}"
+
+
+def _read_undo_pointer(book: Path) -> str | None:
+    try:
+        name = _undo_pointer_path(book).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return name or None
+
+
+def _write_undo_pointer(book: Path, backup_name: str | None) -> None:
+    """backup_name=None は「新しい編集の直後（どの世代の上でもない）」の意味。"""
+    path = _undo_pointer_path(book)
+    try:
+        if backup_name is None:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(backup_name, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _undo_position(book: Path, backups: list) -> int | None:
-    """book の現在の中身が世代列(新しい順)のどこにいるかの添字。どこにも無ければ None
-       （＝実編集の直後で、まだ 1 段も遡っていない）。"""
+    """book の現在地が世代列(新しい順)のどこかの添字。どこでもなければ None
+       （＝実編集の直後で、まだ 1 段も遡っていない）。
+
+    ★ 判定は「どの世代から復元したか」の記録（同一性）で行う。内容は
+      **その記録がまだ有効かの確認**にだけ使う ── 人が Excel で直接編集していたら
+      指し先は当てにならないので、新しい編集の直後として扱う。
+    ★ 記録が無い置き場（この仕組みより前に作られたバックアップ）は、従来どおり
+      内容の一致で探す（後方互換・そこでは重複の事故が残るが、壊れはしない）。
+    """
     try:
         current = book.read_bytes()
     except OSError:
         return None
-    for i, p in enumerate(backups):
+
+    pointed = _read_undo_pointer(book)
+    if pointed:
+        for i, p in enumerate(backups):
+            if p.name != pointed:
+                continue
+            try:
+                if p.read_bytes() == current:
+                    return i          # 記録どおりの世代の上に立っている
+            except OSError:
+                pass
+            return None               # 人が直接編集した ── 指し先は当てにならない
+        return None                   # 指し先の世代が剪定で消えた
+
+    for i, p in enumerate(backups):   # 記録が無い置き場（後方互換）
         try:
             if p.read_bytes() == current:
                 return i
@@ -6652,6 +6724,8 @@ def restore_backup(book: Path) -> Path:
             target = backups[i + 1]
         make_backup(book, shelf=True)   # 復元前の現状も退避＝restore 自体も可逆にする
     shutil.copy2(target, book)
+    # ★ 2026-08-25: 「どの世代の上に立ったか」を記録する。内容の等値で当てないための第三項。
+    _write_undo_pointer(book, target.name)
     return target
 
 
