@@ -5,7 +5,10 @@
     "target_col": "単価",
     "source_sheet": "Sheet",
     "key_col": "商品",
-    "_target_sheet": "単価表"
+    "_target_sheet": "単価表",
+    "_warnings": [
+      "参照表『Sheet』では『単価』が 3 列目ですが、この転記は 2 列目を値として読む仕組みです（1 列目がキー・2 列目が値）。実際に書き込まれるのは『数量』の値です ── 意図と違う場合は、キーと『単価』だけの表を用意してください"
+    ]
   },
   "inferred": [],
   "err": null

@@ -3328,6 +3328,31 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         #   こちらを優先 — 依頼文に転記先/参照元の2シート名が両方出て一般解決が曖昧に
         #   フォールバックしていても、LOOKUP_FILL のここでの解決は影響を受けない）。
         resolved["_target_sheet"] = resolved["target_sheet"]
+        # ★★ 塊③(2/2)・中核 op 致命2（2026-08-24 の盲検）:
+        #   書き手（VLookupFromTable）は参照表の**列1（2 番目の列）を値**と決め打ちし、
+        #   検算（check_lookup_fill）も同じ決め打ちで期待値を作る ── やる側と見る側が
+        #   同じ思い込みを共有しているので必ず一致する（恒真）。
+        #   実測: マスタ = 商品/区分/**単価**（3 列目）で「単価を転記して」と頼むと、
+        #   **単価の列に「果物」が入って ✓** が出た。数値であるべき列に文字列が入る。
+        #   ★ 商品コード/商品名/単価 のような 3 列マスタは実務でごく普通。
+        #   → 書く**前**に前提を照合する: 頼まれた列名が参照表の 2 列目でなければ断る。
+        #   ★ 見出しが読めない参照表では断らない（根拠が無い時に止めない）。
+        #   ★ 断らずに**開示する**理由（実測で 1 度誤爆した）:
+        #     事故の形   マスタ=[商品,区分,単価] → 2 列目は「区分」
+        #     正しい依頼 明細  =[商品,数量,単価] → 2 列目は「数量」
+        #     どちらも「2 列目 ≠ 頼まれた列」で、**列の位置だけでは区別できない**。
+        #     断ると正しい依頼まで止める（既存検体で実証）。判定は変えず、
+        #     何が書かれるかを名指しして ✓ を △ に降ろす（決裁③の機構に乗せる）。
+        _src_headers = list((book_meta.get("headers") or {}).get(resolved["source_sheet"], []))
+        _want = resolved.get("target_col")
+        if len(_src_headers) > 2 and isinstance(_want, str) and _want in _src_headers:
+            _at = _src_headers.index(_want) + 1
+            if _at != 2:
+                resolved["_warnings"] = resolved.get("_warnings", []) + [
+                    f"参照表『{resolved['source_sheet']}』では『{_want}』が {_at} 列目ですが、"
+                    f"この転記は 2 列目を値として読む仕組みです（1 列目がキー・2 列目が値）。"
+                    f"実際に書き込まれるのは『{_src_headers[1]}』の値です ── "
+                    f"意図と違う場合は、キーと『{_want}』だけの表を用意してください"]
         # ★ W10c 致命2: target_col は COMPUTE_COLUMN の target と違い OP_SCHEMA 上は必須
         #   slot なので、LLM は「存在しないなら空にする」を選べない。実測（監査再現）:
         #   対象シートに『単価』列がまだ無いのに転記を頼むと、LLM がそれと無関係な
