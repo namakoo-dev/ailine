@@ -13,7 +13,9 @@
 #
 # 契約:
 #   ① README が案内するタグは、この repo の**最新タグ**と一致する
-#   ② README が「まずこれを打つ」と書いたコマンドは、そのタグに実在する
+#   ② README が「まずこれを打つ」と書いたコマンドは、そのタグに**実在する**
+#      ── または、その場で版の要求を**開示している**（断れない時は開示する）。
+#      実在するようになったら但し書きの残骸を同じ試験が赤にする（両方向に噛む）。
 
 import re
 import subprocess
@@ -78,6 +80,18 @@ def test_the_first_command_exists_in_that_tag():
     #   当たり、サブコマンドが無いのに「在る」と判定していた。
     #   ★ **サブコマンドの登録**で見る ── 探すものを、意味の在る形で書く。
     registered = re.findall(r'sub\.add_parser\("([a-z][a-z-]*)"', tagged_src)
-    assert cmd in registered, (
-        f"README が最初に打てと言う `ailine {cmd}` が、案内するタグ {newest} に無い"
-        f"（{newest} のサブコマンド: {' '.join(sorted(set(registered)))}）")
+    # ★ 断れない時は開示する: 版を上げるのは出荷の判断で、README だけでは直せない。
+    #   だから契約は「実在する」**または**「その場で版の要求を開示している」の二択にする。
+    #   ── ただし**両方向に噛む**: 実在するようになったら、古い但し書きが残っていることを
+    #   同じ試験が赤にする（開示は消し忘れると嘘になる）。
+    nearby = chr(10).join(lines[i:i + 14])
+    discloses = ("v0.1.2" in nearby or "以降" in nearby) and cmd in nearby
+    if cmd in registered:
+        assert not discloses, (
+            f"`ailine {cmd}` は案内するタグ {newest} に実在するのに、README に版の但し書きが"
+            "残っている（開示は消し忘れると嘘になる）")
+    else:
+        assert discloses, (
+            f"README が最初に打てと言う `ailine {cmd}` が、案内するタグ {newest} に無く、"
+            f"その場に版の但し書きも無い（{newest} のサブコマンド: "
+            f"{' '.join(sorted(set(registered)))}）")
