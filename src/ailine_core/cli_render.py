@@ -129,17 +129,40 @@ def render_freeform_notice_compact(reason: str, step_prefix: str = "") -> str:
 
 # --- restore/undo のバックアップ一覧・復元結果（cmd_restore と cmd_undo が手書きで重複） --
 
-def render_backup_list(book_name: str, backups: list, shelved: int = 0) -> list:
+def render_legacy_note(legacy: list) -> list:
+    """旧フラット領域の同名世代を**開示する** 1 行（混ぜないが、隠しもしない）。
+
+    ★ 2026-08-25（復元の致命①）: 直下のファイルはフォルダ情報を持たないので、
+      同名なら別フォルダの他人のものでも遡り履歴に入っていた。混ぜるのをやめた以上、
+      在ることは言う ── **実パスを出す**（手で戻せる形で渡す）。
+    ★ ⚠ で始めない: これは「今の操作が確かめられていない」ではなく、
+      「使わなかったものが在る」という案内。✓ を降ろす理由にはしない。
+    """
+    if not legacy:
+        return []
+    return [f"（旧領域に同名の世代が {len(legacy)} 件ありますが、どのフォルダのものか"
+            f"分からないため遡りには混ぜません: {legacy[0].parent}）"]
+
+
+def render_backup_list(book_name: str, backups: list, shelved: int = 0,
+                        shelf_dir=None, legacy: list | None = None) -> list:
     """`ailine restore --list` / `ailine undo --list` の一覧表示。backups は新しい順。
        ★ W11: shelved は「undo が取った復元前の退避」の件数。0 でなければ 1 行だけ添える
-       （遡りには数えないが**捨ててはいない**ので、undo をやり直したい人に在り処を示す）。"""
+       （遡りには数えないが**捨ててはいない**ので、undo をやり直したい人に在り処を示す）。
+       ★ 2026-08-25（復元の重大⑤）: 在り処は `backups/<名前空間>/undo/` という
+       **プレースホルダをそのまま印字**していた（実体は sha1 先頭 8 桁）。
+       案内は打てる形で出す ── shelf_dir をもらって実パスを書く。"""
+    lines = []
     if not backups:
-        return [f"{book_name} のバックアップは無い"]
-    lines = [f"{book_name} のバックアップ（{len(backups)} 世代・新しい順）:"]
-    lines.extend(p.name for p in backups)
+        lines.append(f"{book_name} のバックアップは無い")
+    else:
+        lines.append(f"{book_name} のバックアップ（{len(backups)} 世代・新しい順）:")
+        lines.extend(p.name for p in backups)
     if shelved:
+        where = str(shelf_dir) if shelf_dir else "backups/<名前空間>/undo/"
         lines.append(f"（このほかに undo が取った復元前の退避が {shelved} 件"
-                     f"・backups/<名前空間>/undo/ 内・遡りには数えない）")
+                     f"・{where} 内・遡りには数えない）")
+    lines.extend(render_legacy_note(legacy))
     return lines
 
 

@@ -29,6 +29,14 @@ SCAN_CANDIDATE_SUFFIXES = {".xlsx", ".xls"}
 # 「旧形式(.xls)」として報告される）。
 OPENPYXL_READABLE_SUFFIX = ".xlsx"
 
+# ailine.py の `_why_output_is_unusable`（原本へ被せる前・バックアップを復元する前の
+# 「そもそも開けるか」の検査）が使う、**openpyxl.load_workbook が受け付ける**拡張子。
+# ★ OPENPYXL_READABLE_SUFFIX（1 値・複数ファイル経路の基準）とは目的が違う:
+#   あちらは「この経路で扱う形式はこれ 1 つ」、こちらは「調べようがあるか」。
+#   ここに無い形式（.ods 等）を「壊れている」と言えば、命綱を丸ごと塞ぐことになる
+#   ── 出ないことは信号でない（逆向きにも同じ）。
+OPENPYXL_PROBEABLE_SUFFIXES = {".xlsx", ".xlsm", ".xltx", ".xltm"}
+
 # ailine.py の `_cmd_run_body`（run の暗黙前段への早期分岐）・`_unreadable_book_for_match_message`
 # （M3 の誤誘導修正）が使う、CSV 検疫（ailine_core/csv_quarantine.py）の対象拡張子。
 CSV_SUFFIX = ".csv"

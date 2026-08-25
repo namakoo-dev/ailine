@@ -1453,6 +1453,8 @@ def test_list_backups_sorted_newest_first_and_filters_by_stem_suffix(tmp_path, m
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    backups = backups / ailine._backup_namespace(tmp_path / "book.xlsx")
+    backups.mkdir(parents=True, exist_ok=True)
     (backups / "book.20200101T000000Z.xlsx").write_bytes(b"old")
     (backups / "book.20260101T000000Z.xlsx").write_bytes(b"new")
     (backups / "other.20260101T000000Z.xlsx").write_bytes(b"unrelated")   # 別 book
@@ -1468,6 +1470,8 @@ def test_restore_backup_restores_and_stays_reversible(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    backups = backups / ailine._backup_namespace(tmp_path / "book.xlsx")
+    backups.mkdir(parents=True, exist_ok=True)
     book = tmp_path / "book.xlsx"
     (backups / "book.20200101T000000Z.xlsx").write_bytes(b"BACKED_UP_CONTENT")
     book.write_bytes(b"CURRENT")   # --inplace で上書きされた後の現状を模す
@@ -1526,14 +1530,23 @@ def test_backup_and_restore_two_same_named_files_in_different_folders_do_not_cro
     assert b"B-ORIGINAL" not in a_contents and b"B-EDITED" not in a_contents
 
 def test_list_backups_reads_legacy_flat_area_read_only(tmp_path, monkeypatch):
-    # ★ 旧フラット領域（名前空間分離前の名残）は読み取りのみ互換。
+    """★ 2026-08-25（復元の致命①）で契約を**訂正**した検体。
+
+    旧: 旧フラット領域は遡り履歴に**混ぜて**読む（＝読み取りのみ互換）。
+    新: 混ぜない。直下のファイルはフォルダ情報を持たないので、同名なら別フォルダの
+        他人のものでも入ってしまう（実データの混線を再現済み）。
+        ★ ただし**読めなくはしない** ── 別の口（list_legacy_backups）で数え、
+          案内文で在り処を開示する。「使わない」と「無かったことにする」は違う。
+    """
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
     (backups / "legacy.20200101T000000Z.xlsx").write_bytes(b"old-flat")
     book = tmp_path / "legacy.xlsx"
-    found = ailine.list_backups(book)
-    assert [p.name for p in found] == ["legacy.20200101T000000Z.xlsx"]
+    assert ailine.list_backups(book) == [], "出所の分からない世代を遡りに混ぜた"
+    found = ailine.list_legacy_backups(book)
+    assert [p.name for p in found] == ["legacy.20200101T000000Z.xlsx"], "読めなくしてしまった"
+    assert ailine.render_legacy_note(found), "在ることを黙った"
 
 def test_make_backup_never_writes_to_legacy_flat_area(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
@@ -1665,9 +1678,15 @@ def test_undo_list_mentions_the_shelf_without_counting_it_as_a_generation(tmp_pa
     assert "2 世代" in out                       # 遡れる世代は増えていない
     assert "退避が 1 件" in out and "遡りには数えない" in out
 
-def test_legacy_backups_stay_readable_and_walkable(tmp_path, monkeypatch):
-    """★ 既存資産との互換: 名前空間ディレクトリ直下の既存世代も旧フラット領域も、
-       これまでどおり遡りの対象（棚を足したことで読めなくなるものは無い）。"""
+def test_legacy_backups_are_readable_but_never_walked_silently(tmp_path, monkeypatch):
+    """★★ 番人同士が矛盾していた（盲検 2 回目・いちばんの発見）。
+
+    片方は「別フォルダの同名ブックは混線しない」を守り、もう片方は
+    「旧フラット領域へ遡れる」を互換として守っていた。**両方とも単独では緑**で、
+    組み合わせを誰も試していなかった ── 前者にフラット 1 件足すだけで赤くなる。
+
+    両立する契約は 1 つだけ: 遡りは名前空間の中で閉じる。旧領域は読めるが歩かない。
+    """
     backups = tmp_path / "backups"
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
     book = tmp_path / "book.xlsx"
@@ -1676,11 +1695,37 @@ def test_legacy_backups_stay_readable_and_walkable(tmp_path, monkeypatch):
     (ns / "book.20260101T000000000000Z.xlsx").write_bytes(b"v1")   # 名前空間の既存世代
     (backups / "book.20200101T000000Z.xlsx").write_bytes(b"v0")    # 旧フラット領域
     book.write_bytes(b"v2")
-    assert [p.read_bytes() for p in ailine.list_backups(book)] == [b"v1", b"v0"]
+    assert [p.read_bytes() for p in ailine.list_backups(book)] == [b"v1"]
     ailine.restore_backup(book); assert book.read_bytes() == b"v1"
-    ailine.restore_backup(book); assert book.read_bytes() == b"v0"
-    with pytest.raises(ailine.NoOlderBackupError):
+    with pytest.raises(ailine.NoOlderBackupError) as ei:
         ailine.restore_backup(book)
+    # ★ 端に着いた時こそ、旧領域が在ることを言う（黙って行き止まりにしない）
+    assert "旧領域" in str(ei.value), f"在るのに言わなかった: {ei.value}"
+
+
+def test_two_folders_do_not_cross_even_with_a_legacy_file_present(tmp_path, monkeypatch):
+    """★ 検分者の再現をそのまま検体にする ── これが実データの混線だった。
+
+        A 社の古い世代が直下に残っている状態で B 社の同名ブックを編集
+        → B の遡り履歴: [b'B-v0', b'A-SECRET']
+
+    ★ この機械の実 ~/.ailine/backups/ 直下にも 4 件在った（作り話ではない）。
+    """
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    a_dir, b_dir = tmp_path / "A社", tmp_path / "B社"
+    a_dir.mkdir(); b_dir.mkdir()
+    b_book = b_dir / "見積書.xlsx"
+    b_book.write_bytes(b"B-v1")
+    ns_b = backups / ailine._backup_namespace(b_book)
+    ns_b.mkdir(parents=True)
+    (ns_b / "見積書.20260820T000000Z.xlsx").write_bytes(b"B-v0")
+    backups.mkdir(parents=True, exist_ok=True)
+    (backups / "見積書.20260814T130448Z.xlsx").write_bytes(b"A-SECRET")   # 旧領域の A 社
+    got = [p.read_bytes() for p in ailine.list_backups(b_book)]
+    assert b"A-SECRET" not in got, f"別フォルダの中身が遡り履歴に混ざった: {got}"
+    assert got == [b"B-v0"]
+
 
 
 # --- ★ M2c: バックアップのプルーニング -----------------------------------------
@@ -1689,6 +1734,8 @@ def test_prune_backups_keeps_only_newest_n(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    backups = backups / ailine._backup_namespace(tmp_path / "book.xlsx")
+    backups.mkdir(parents=True, exist_ok=True)
     book = tmp_path / "book.xlsx"
     for i in range(5):
         (backups / f"book.2026010{i+1}T000000Z.xlsx").write_bytes(b"x")
@@ -1703,6 +1750,8 @@ def test_prune_backups_negative_keep_means_unlimited(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    backups = backups / ailine._backup_namespace(tmp_path / "book.xlsx")
+    backups.mkdir(parents=True, exist_ok=True)
     book = tmp_path / "book.xlsx"
     for i in range(3):
         (backups / f"book.2026010{i+1}T000000Z.xlsx").write_bytes(b"x")
@@ -1739,6 +1788,8 @@ def test_cmd_restore_list_shows_generation_count(tmp_path, monkeypatch, capsys):
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    backups = backups / ailine._backup_namespace(tmp_path / "book.xlsx")
+    backups.mkdir(parents=True, exist_ok=True)
     (backups / "book.20200101T000000Z.xlsx").write_bytes(b"a")
     (backups / "book.20200102T000000Z.xlsx").write_bytes(b"b")
     ns = argparse.Namespace(book=str(tmp_path / "book.xlsx"), list=True)
@@ -2391,6 +2442,8 @@ def test_cmd_restore_list_shows_backups(tmp_path, monkeypatch, capsys):
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    backups = backups / ailine._backup_namespace(tmp_path / "book.xlsx")
+    backups.mkdir(parents=True, exist_ok=True)
     (backups / "book.20200101T000000Z.xlsx").write_bytes(b"a")
     ns = argparse.Namespace(book=str(tmp_path / "book.xlsx"), list=True)
     rc = ailine.cmd_restore(ns)
@@ -2410,6 +2463,8 @@ def test_cmd_restore_restores_and_reports_success(tmp_path, monkeypatch, capsys)
     backups = tmp_path / "backups"
     backups.mkdir(parents=True)
     monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    backups = backups / ailine._backup_namespace(tmp_path / "book.xlsx")
+    backups.mkdir(parents=True, exist_ok=True)
     book = tmp_path / "book.xlsx"
     book.write_bytes(b"current")
     (backups / "book.20200101T000000Z.xlsx").write_bytes(b"restored")

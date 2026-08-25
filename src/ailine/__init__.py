@@ -115,7 +115,8 @@ from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 
 from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手書きしていた表示の純関数化
     render_excluded_lines,
     render_code_block, render_retry_options, render_aborted, render_run_header,
-    render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
+    render_backup_list, render_legacy_note,
+    render_restore_done, render_vocab_add_result, render_vocab_listing,
     render_alias_listing,   # ★ W10 便A: `ailine alias list`
     render_ops_table,
     freeform_notice_reason, render_freeform_notice_compact,   # ★ K-1（単発向けの旧 render_freeform_notice は廃止）
@@ -125,7 +126,8 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_folder_routes,
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
 )
-from ailine_core.filetypes import BOOKLIKE_SUFFIXES, CSV_SUFFIX   # ★ 拡張子判定の登録簿（単発の定数のみ import）
+from ailine_core.filetypes import (BOOKLIKE_SUFFIXES, CSV_SUFFIX,
+                                   OPENPYXL_PROBEABLE_SUFFIXES)   # ★ 拡張子判定の登録簿
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
@@ -6629,6 +6631,10 @@ _BACKUP_TS_SEQ_RE = re.compile(r"-(\d+)$")
 UNDO_SHELF_DIRNAME = "undo"
 
 
+class BrokenBackupError(Exception):
+    """復元元が Excel として開けない ── 原本に被せる前に止める（復元の致命②）。"""
+
+
 class NoOlderBackupError(Exception):
     """★ W11: 最も古い世代に着いていて、これ以上遡れない（＝undo の端）。
        「バックアップが1つも無い」(FileNotFoundError)とは別物なので型で分ける。"""
@@ -6837,9 +6843,28 @@ def list_backups(book: Path) -> list:
        ★ W11: undo の退避棚 BACKUP_DIR/<ns>/undo/ は**含めない**（直下しか見ないので
        自動的に外れる）。棚を見たいときは list_undo_shelf() を使う。"""
     stem, suffix = book.stem, book.suffix
-    found = _gather_backups(BACKUP_DIR / _backup_namespace(book), stem, suffix)
-    found += _gather_backups(BACKUP_DIR, stem, suffix)
-    return _sorted_newest_first(found)
+    return _sorted_newest_first(
+        _gather_backups(BACKUP_DIR / _backup_namespace(book), stem, suffix))
+
+
+def list_legacy_backups(book: Path) -> list:
+    """旧フラット領域（BACKUP_DIR 直下・名前空間分離前の名残）にある**同名**の世代。
+
+    ★ 2026-08-25（復元の致命①・盲検 2 回目）: ここは以前 list_backups が黙って
+      混ぜていた。直下のファイルは**フォルダの情報を持たない**ので、同名なら
+      誰のものでも遡り履歴に入る ── 実際に再現した:
+
+          A 社の古い世代が直下に残っている状態で B 社の同名ブックを編集
+          → B の遡り履歴に A 社の中身が入る
+
+      ★ この機械の実 ~/.ailine/backups/ 直下にも 4 件在った。
+
+    ★ 番人が 2 本、互いに反対を守っていた（「混線しない」と「旧領域へ遡れる」）。
+      どちらも単独では緑で、**組み合わせが誰も試されていなかった**。
+      両方を同時に真にする道は 1 つ ── 出所が分からないものを**勝手に使わない**、
+      しかし**在ることは言う**（断れない時は開示する）。読めるし、手で戻せる。
+    """
+    return _sorted_newest_first(_gather_backups(BACKUP_DIR, book.stem, book.suffix))
 
 
 def list_undo_shelf(book: Path) -> list:
@@ -6966,8 +6991,11 @@ def restore_backup(book: Path) -> Path:
        ★ W11: 退避先は undo の棚（undo_shelf_dir）で、遡りの履歴には混ぜない
        （混ぜていたので、端に着いた後の undo が退避を最新世代として釣り上げていた）。"""
     backups = list_backups(book)   # 新しい順
+    # ★ 2026-08-25（復元の致命①）: 旧領域の同名世代は**使わない**が、
+    #   「無い」と言い切ると嘘になる場面がある ── 在ることと、なぜ使わないかを言う。
+    legacy_note = "".join(render_legacy_note(list_legacy_backups(book)))
     if not backups:
-        raise FileNotFoundError(f"{book.name} のバックアップが無い")
+        raise FileNotFoundError(f"{book.name} のバックアップが無い{legacy_note}")
 
     target = backups[0]
     if book.exists():
@@ -6980,13 +7008,28 @@ def restore_backup(book: Path) -> Path:
                 tail = ("残っている中で一番古い状態です ── 上限を超えた古い世代は"
                         "剪定で捨てられており、原本には戻せません"
                         if pruned else "最も古い状態です")
-                raise NoOlderBackupError(f"{book.name} をこれ以上は戻せません（{tail}）")
+                raise NoOlderBackupError(
+                    f"{book.name} をこれ以上は戻せません（{tail}）{legacy_note}")
             target = backups[i + 1]
     # ★ 2026-08-25（復元の重大9・盲検）: 退避は**書き込みが成功してから**積む。
     #   旧版は書き込みの**前**に呼んでいたので、読み取り専用で 3 回失敗させたら
     #   棚が 2→5 件に増えた。しかも致命1 のループでは棚 10 件すべてが同一内容の
     #   原本コピーで埋まり、**本物の run1/run2 の結果が押し出されて全滅**した。
     #   ★ 棚は「undo をやり直す材料」── 何も起きなかった回に積むと、材料の方が消える。
+    # ★ 2026-08-25（復元の致命②・片配線の 4 度目）: 「壊れた結果を原本に被せない」検査は
+    #   **今朝、反映側にだけ**入れた（_why_output_is_unusable）。命綱の側は素の copy2 で、
+    #   開けもしないファイルを原本に上書きして「✓ 復元した」と名乗っていた。
+    #   ★ 別の世代へ勝手にずらさない ── どれを使うかは人が決める（黙って代用しない）。
+    # ★ 基準は「今の原本が満たしているもの」── 三項目で見る。
+    #   原本が開ける xlsx なのに復元元が開けないなら、被せた瞬間に確実に壊れる → 断る。
+    #   原本が既に開けないなら、それは**救出**の最中で、同じ物差しを当てる根拠が無い
+    #   （ここで断ると、壊れたファイルを直したい人の命綱を塞ぐ）。
+    if book.exists() and _why_output_is_unusable(book) is None:
+        broken = _why_output_is_unusable(target)
+        if broken:
+            raise BrokenBackupError(
+                f"バックアップ {target.name} が開けません（{broken}）。"
+                f"原本は変更していません ── 世代は {target.parent} に在ります")
     _prev = book.read_bytes() if book.exists() else None
     shutil.copy2(target, book)
     if _prev is not None and _prev != book.read_bytes():
@@ -7024,7 +7067,10 @@ def cmd_undo(a: argparse.Namespace) -> int:
         return 1
     if a.list:
         backups = list_backups(book)
-        for ln in render_backup_list(book.name, backups, shelved=len(list_undo_shelf(book))):
+        for ln in render_backup_list(book.name, backups,
+                                      shelved=len(list_undo_shelf(book)),
+                                      shelf_dir=undo_shelf_dir(book),
+                                      legacy=list_legacy_backups(book)):
             print(ln)
         return 0
     # ★ 2026-08-25（復元の重大8）: undo も原本を書き換える ── run と同じ実行ロックを取る。
@@ -7048,7 +7094,7 @@ def _cmd_undo_body(a: argparse.Namespace, book: Path) -> int:
         return EXIT_WRITE_BLOCKED
     try:
         used = restore_backup(book)
-    except (FileNotFoundError, NoOlderBackupError) as e:
+    except (FileNotFoundError, NoOlderBackupError, BrokenBackupError) as e:
         print(f"× {e}")
         return 1
     except PermissionError as e:
@@ -7769,6 +7815,14 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
     }
 
 
+def _file_digest(path: Path) -> str | None:
+    """ファイルの指紋（sha256 先頭 16 桁）。読めなければ None ── 無いことは信号でない。"""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
 def append_history(entry: dict, path: Path | None = None) -> None:
     """history.jsonl に 1 行 append する。★ 失敗したら例外を投げる（run 本体を落とさ
        ないための try は呼び出し側(cmd_run)が持つ。ここでは書き込みロジックだけ）。"""
@@ -7962,6 +8016,11 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
     #   ✓ と言ったか」を足すだけ。✓ を出さなかった run（--dry・失敗・機械保証なし）は空リスト
     #   ＝『主張していない』が機械可読に残る。
     result.setdefault("claims", [])
+    # ★ 2026-08-25（復元の致命③）: 出力先の関所が「この道具が過去にそこへ書いたか」
+    #   だけで通していたので、**利用者がその後どれだけ手を入れても素通り**した。
+    #   判定には三項が要る（依頼/宣言/実体）── 実体の項として、書いた物の指紋を残す。
+    if result.get("out"):
+        result["out_sha"] = _file_digest(Path(result["out"]))
     if a.json:
         print("\n" + json.dumps(result, ensure_ascii=False))
     if result.get("path") not in ("dsl", "plan"):
@@ -8139,7 +8198,13 @@ def _why_output_is_unusable(path: Path) -> str | None:
 
     ★ 2026-08-25（復元の中10）: 原本へ被せる前の最後の確認。ここで止めれば原本は無傷。
     ★ 中身の正しさは見ない ── それは事後条件の仕事。ここが見るのは「開けるか」だけ。
+    ★ 2026-08-25: openpyxl が読めない拡張子（.ods 等）では**調べようがない**。
+      調べられないことを「壊れている」と言えば、命綱を丸ごと塞いでしまう
+      ── 出ないことは信号でない（逆向きにも同じ）。None を返して黙って通す。
+      （今の版では .ods は build_book_meta の時点で落ちるので、ここは将来への保険。）
     """
+    if Path(path).suffix.lower() not in OPENPYXL_PROBEABLE_SUFFIXES:
+        return None
     try:
         with BookView(path) as bv:
             if not bv.sheetnames:
@@ -10453,11 +10518,31 @@ def refuse_if_output_is_someone_elses(book: Path) -> int | None:
             if not isinstance(entry, dict):
                 continue
             recorded = entry.get("out")
-            if recorded and str(Path(recorded).resolve()) == target:
-                return None          # 自分が書いた場所 ── 従来どおり作り直す
+            if not (recorded and str(Path(recorded).resolve()) == target):
+                continue
+            # ★ 2026-08-25（復元の致命③・**今朝入れたこの関所そのものの穴**）:
+            #   「自分が書いた場所」だけでは足りない。README が慎重な人に勧める
+            #   `--copy` の成果物は、書いた**後**に人が手を入れて育てる物で、
+            #   それが原本反映 1 回で警告なしに消えていた。
+            #   ★ 三項目（実体）で見る: いま在る物が、俺が置いた物のままか。
+            stamped = entry.get("out_sha")
+            if stamped is None:
+                return None      # 指紋を残す前の古い記録 ── 従来どおり（判定材料が無い）
+            if stamped == _file_digest(out):
+                return None      # 俺が置いたまま ── 作り直してよい
+            return _refuse_edited_output(out)
     except Exception:
         pass
     return _refuse_output_conflict(out, None)
+
+
+def _refuse_edited_output(out: Path) -> int:
+    """自分が書いた物だが、その後**人が手を入れている** ── 消さずに断る（exit 7）。"""
+    print(f"⚠ 出力先に書けません: {out}")
+    print(f"（{out.name} は ailine が作った物ですが、そのあと変更されています。"
+          "作業内容が消えるので上書きしません ── 別の場所へ移すか削除してから、"
+          "もう一度実行してください）")
+    return 7
 
 
 def _refuse_output_conflict(out: Path, mark: str | None) -> int:

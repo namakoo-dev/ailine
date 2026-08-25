@@ -11,6 +11,7 @@
     "model": "str",
     "ok": "bool",
     "out": "str",
+    "out_sha": "str",
     "path": "str",
     "postcondition": "null",
     "task": "str"
