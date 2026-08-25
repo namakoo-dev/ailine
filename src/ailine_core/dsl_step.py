@@ -79,6 +79,9 @@ class DslStepDeps:
     # ★ 摩擦⑥: LO の一時不調から復元する再試行が使う（ailine.py の _stop_office）。
     stop_office: Callable
     snapshot: Callable
+    # ★ 2026-08-25（復元の中10）: 成果物が Excel として開けるかを見る（開けるなら None）。
+    #   ailine_core は ailine を import しない規律なので、本体から注入する。
+    why_output_is_unusable: Callable
     diff_snapshots: Callable
     run_postcondition: Callable
     progress_start: Callable
@@ -331,6 +334,17 @@ def apply_dsl_step(op: str, resolved: dict, code: str, *, apply_target: Path, be
         deps.progress_end(t0)
     if not okrun:
         return DslApplyResult(runtime_error=err_apply, after=None, changes=None, changed=False,
+                               postcondition_status=None, postcondition_reason=None)
+
+    # ★★ 2026-08-25（復元の中10・盲検）: 適用直後・読み戻しの**前**に「そもそも開けるか」
+    #   を見る。旧版は関門が無く、壊れた成果物（zip として読めない等）を原本へ被せてから
+    #   「読み戻して確認できませんでした」と言っていた ── **確認は原本を潰した後**だった。
+    #   ★ ここは全 op が通る唯一の合流点で、原本はまだ無傷。止められるのはここだけ。
+    #   ★ 中身の正しさは見ない（それは事後条件の仕事）── 見るのは「開けるか」だけ。
+    broken = deps.why_output_is_unusable(apply_target)
+    if broken:
+        return DslApplyResult(runtime_error=f"作った結果が壊れています（{broken}）",
+                               after=None, changes=None, changed=False,
                                postcondition_status=None, postcondition_reason=None)
 
     after = deps.snapshot(apply_target)

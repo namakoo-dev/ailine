@@ -6959,6 +6959,12 @@ def cmd_undo(a: argparse.Namespace) -> int:
         for ln in render_backup_list(book.name, backups, shelved=len(list_undo_shelf(book))):
             print(ln)
         return 0
+    # ★ 2026-08-25（復元の重大8）: undo も原本を書き換える ── run と同じ実行ロックを取る。
+    #   （--list は読むだけなので上で先に返している）
+    return under_run_lock(lambda: _cmd_undo_body(a, book))
+
+
+def _cmd_undo_body(a: argparse.Namespace, book: Path) -> int:
     # ★ 2026-08-25（復元の致命5）: run は Excel ロックで止まるのに、undo は素通りしていた。
     #   「Excel で結果を見て、気に入らないから戻す」は undo の**最も自然な使い方**で、
     #   そこだけ関所が無かった。同じ検出器・同じ文言を通す。
@@ -7423,6 +7429,27 @@ def acquire_run_lock(path: Path | None = None) -> tuple:
         pass
     _RUN_LOCK_HANDLE = (fd, p)
     return True, None
+
+
+def under_run_lock(fn):
+    """原本を書き換える処理を、グローバル実行ロックで挟む。
+
+    ★ 2026-08-25（復元の重大8・盲検）: ロックを取っていたのは `run` だけで、
+      **undo / restore は原本を書くのに取っていなかった**。実測:
+          run  → exit=6  × 別の ailine が実行中です
+          undo → exit=0  ✓ … から復元した        ← 素通り
+      run 実行中の undo は、run 末尾の atomic_replace_inplace に上書きされるうえ、
+      その run が「復元したばかりの内容」を世代として積む ── 致命1 の引き金を自分で引く。
+    ★ 同じ形を書き写さない: run も undo も restore も、この 1 つを通る。
+    """
+    acquired, msg = acquire_run_lock()
+    if not acquired:
+        print(f"× {msg}")
+        return 6
+    try:
+        return fn()
+    finally:
+        release_run_lock()
 
 
 def release_run_lock(path: Path | None = None) -> None:
@@ -7930,6 +7957,18 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
     # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。
     #   --copy でも --inplace でも成果物は out_book なので、1 本の測定で両経路を覆う。
     _output_fidelity = check_round_trip_fidelity(book, out_book)
+    # ★★ 2026-08-25（復元の中10・盲検）: 原本に被せる**前**に「そもそも開けるか」を見る。
+    #   旧版は反映の関門に「開ける xlsx か」の検査が無く、壊れた成果物（zip として
+    #   読めない等）をそのまま原本へ被せてから「読み戻して確認できませんでした」と
+    #   言っていた ── **確認は原本を潰した後**だった。報告は正直だが順序が逆。
+    #   ★ 原本はまだ無傷なこの位置でしか止められない。
+    if a.inplace:
+        broken = _why_output_is_unusable(out_book)
+        if broken:
+            print(f"× 作った結果が壊れているため、原本には反映しませんでした（{broken}）")
+            print(_untouched_original_line(book, out_book))
+            result["out"] = str(out_book)
+            return False
     if a.inplace:
         ok_ip, err_ip = atomic_replace_inplace(
             book, out_book, workdir, keep_backups=getattr(a, "keep_backups", DEFAULT_KEEP_BACKUPS))
@@ -8027,6 +8066,21 @@ def likely_cause_of_no_change(book_path, sheet_name=None) -> list:
     return lines
 
 
+def _why_output_is_unusable(path: Path) -> str | None:
+    """成果物が Excel として開けない理由（開けるなら None）。
+
+    ★ 2026-08-25（復元の中10）: 原本へ被せる前の最後の確認。ここで止めれば原本は無傷。
+    ★ 中身の正しさは見ない ── それは事後条件の仕事。ここが見るのは「開けるか」だけ。
+    """
+    try:
+        with BookView(path) as bv:
+            if not bv.sheetnames:
+                return "シートが 1 枚もありません"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
 def _untouched_original_line(book: Path, out_book: Path) -> str:
     """★ C9: 失敗して終わるときに必ず出す1行。査定2本が「原本がどうなったか分からない」と
        書いた沈黙の穴 ―― 途中で止まった run は原本無変更を名乗らず、`.out` が黙って隣に
@@ -8039,14 +8093,7 @@ def cmd_run(a: argparse.Namespace) -> int:
        ロックで挟む（基盤の LibreOffice が単一インスタンス前提のため、ブック単位でなく
        ailine run 全体で1本）。取得できなければ即 exit 6（LO 起動・翻訳より前）。
        finally で確実に解放する（sys.exit も SystemExit 例外なので finally は通る）。"""
-    acquired, msg = acquire_run_lock()
-    if not acquired:
-        print(f"× {msg}")
-        return 6
-    try:
-        return _cmd_run_body(a)
-    finally:
-        release_run_lock()
+    return under_run_lock(lambda: _cmd_run_body(a))
 
 
 def _cmd_run_body(a: argparse.Namespace) -> int:
@@ -8678,7 +8725,9 @@ def _make_dsl_step_deps() -> DslStepDeps:
         maybe_warn_target_overwrite=_maybe_warn_target_overwrite,
         interpretation_summary_line=_interpretation_summary_line, confirm_overwrite_or_gate=_confirm_overwrite_or_gate,
         basrun_apply=basrun_apply, stop_office=_stop_office,   # ★ 摩擦⑥: LO 一時不調の再試行が使う
-        snapshot=snapshot, diff_snapshots=diff_snapshots,
+        snapshot=snapshot,
+        # ★ 2026-08-25（復元の中10）: 適用直後の関門（原本に被せる前の最前線）。
+        why_output_is_unusable=_why_output_is_unusable, diff_snapshots=diff_snapshots,
         run_postcondition=run_postcondition, progress_start=progress_start, progress_end=progress_end,
         pivot_caveat=PIVOT_CAVEAT, verify_dsl_args=verify_dsl_args,
         apply_new_column_fallback=_apply_new_column_fallback, build_advisories=build_advisories,
