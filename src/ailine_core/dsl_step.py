@@ -179,9 +179,8 @@ def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, 
     #   resolved["_unverified"] に残す。ここは単発・複合計画の**両方が通る唯一の合流点**
     #   なので、1 箇所で助言に載せる（呼び出し側 4 箇所に書き写さない ── 今日までに
     #   片配線を 6 回踏んでいる）。⚠ 始まりなので決裁③が数えて ✓ を △ に降ろす。
-    for u in (resolved or {}).get("_unverified", []):
-        advisories.append(f"⚠ {u['rows']} 行は検証できていません（{u['why']}）"
-                          " ── この行については「宣言どおり」と言えません")
+    from ailine_core.claim import render_unverified_advisories
+    advisories.extend(render_unverified_advisories((resolved or {}).get("_unverified")))
     return advisories
 
 

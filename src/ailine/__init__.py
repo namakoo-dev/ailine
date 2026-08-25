@@ -103,6 +103,7 @@ from ailine_core.book_view import BookView
 from ailine_core.claim import (   # ★ C5/C9: Claim 型と『✓』の一元レンダラ（✓ は反映後の1箇所だけ）
     Claim, format_plan_report, format_plan_preview, overall_verdict,
     render_applied_claim, render_applied_unverified, render_applied_unobservable,
+    render_unverified_advisories,
     render_scope_notes,   # ★ 単位E: 常時注記を廃止し、その run 固有の②の1文に置き換えた
     count_suspicious_advisories, render_applied_claim_demoted,   # ★ 決裁③: ⚠ による ✓ の降格
 )
@@ -5000,6 +5001,39 @@ def extent_gap(ws, header_row: int = 1, key_col: int = 1) -> dict:
 
 
 
+def note_extent_gap(out_book: Path, resolved_args: dict, header_row: int = 1) -> None:
+    """走査で見た範囲と、**物理の使用範囲**の食い違いを ⚠ に変える ── op に依らず 1 箇所で。
+
+    ★ 2026-08-25（塊①・盲検 2 回目の致命①②）: extent_gap は在ったが、20 ある事後条件の
+      うち **check_sort 1 本にしか挿さっていなかった**。同じ検体（末尾行の 1 列目が空）で
+      並べ替えだけが △ に落ち、集計・抽出・重複除去・一括書換・太字・桁区切り・グラフは
+      すべて ✓ を名乗った ── 見ていない行が在るのは**表の性質**であって op の性質ではない。
+
+    ★ だから各 checker に配って回らない（今日までに片配線を 7 回踏んだ）。
+      全 op が必ず通る run_postcondition の入口で、1 度だけ数える。
+
+    ★ 判定（pass/fail）は 1 ビットも変えない。✓ を △ に降ろすのは決裁③の既存の機構に任せる。
+    """
+    if not isinstance(resolved_args, dict):
+        return
+    try:
+        with BookView(out_book) as bv:
+            ws = bv.sheet(resolved_args.get("_target_sheet"))
+            gap = extent_gap(ws, header_row=header_row)
+    except Exception as e:
+        # ★ 出ないことは信号でない: 測れなかったことを黙って飲まず、そう言う。
+        note_unverified(resolved_args, 1,
+                        f"表の範囲を測れませんでした（{type(e).__name__}）")
+        return
+    if gap["rows_missing"]:
+        note_unverified(resolved_args, gap["rows_missing"],
+                        "1 列目が空のため走査がそこで止まり、この行を見ていない")
+    if gap["cols_missing"]:
+        note_unverified(resolved_args, gap["rows_physical"],
+                        f"見出しの無い列が {gap['cols_missing']} 列あり、"
+                        "その列については何も確かめていない")
+
+
 def note_unverified(args: dict, count: int, why: str) -> None:
     """検証できなかった行を、**機械の値として** args に残す。
 
@@ -5018,15 +5052,6 @@ def note_unverified(args: dict, count: int, why: str) -> None:
     if not isinstance(args, dict) or count <= 0:
         return
     args.setdefault("_unverified", []).append({"rows": int(count), "why": why})
-
-
-def render_unverified_advisories(unverified) -> list:
-    """人へ見せる行。★ ⚠ で始めるので決裁③が数えて ✓ を △ に降ろす。"""
-    out = []
-    for u in (unverified or []):
-        out.append(f"⚠ {u['rows']} 行は検証できていません（{u['why']}）"
-                   " ── この行については「宣言どおり」と言えません")
-    return out
 
 
 
@@ -5059,10 +5084,10 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
         # ★ 塊②（2026-08-25）: 分母を**物理の使用範囲**と突き合わせる。
         #   A 列走査は最初の空で止まるので、末尾に A 列が空の行があると
         #   処理からも分母からも消える（実測: 真の分母 5 を「3行中」と言っていた）。
+        # ★ 2026-08-25: 食い違いの**記録**は run_postcondition の入口に畳んだ
+        #   （note_extent_gap）。ここで gap を取るのは phys_cols を得るためだけ ──
+        #   ここでも数えると二重計上になる。
         gap = extent_gap(ws, header_row=header_row)
-        if gap["rows_missing"]:
-            note_unverified(args, gap["rows_missing"],
-                            "1 列目が空のため走査がそこで止まり、この行を見ていない")
         # ★ 行の同一性を確かめるための、**物理の列範囲**での行の中身（後段で使う）。
         phys_cols = max(gap["cols_physical"], gap["cols_scanned"])
         after_rows = [tuple(ws.cell(row=r, column=c).value for c in range(1, phys_cols + 1))
@@ -6404,6 +6429,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
        apply 前の chart XML パス集合）を CHART の check_chart_series へそのまま渡す。
        None なら check_chart_series 側が従来どおり先頭一致で見る（後方互換）。"""
     try:
+        # ★ 全 op の合流点。見ていない行/列が在るのは表の性質なので、op を問わず先に数える。
+        note_extent_gap(out_book, resolved_args, header_row)
         if op == "CHART":
             # ★ グラフ段: 事後条件を二層にする。①グラフ数+1（旧 check_chart・恒真殺しの
             #   手前）②その1個が意図した種別/値列を指しているか（check_chart_series・

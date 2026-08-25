@@ -118,7 +118,38 @@ def test_trailing_rows_are_named_not_swallowed(tmp_path):
     p = _book(tmp_path, [["商品", "単価"], ["a", 120], ["b", 200],
                           [None, 1500], [None, 2000]])
     args = {"col": "単価", "order": "desc"}
-    ailine.check_sort(p, args)
+    # ★ 2026-08-25: 本番の合流点で測る。以前は check_sort を直に呼んでいたが、
+    #   食い違いを数えるのは run_postcondition の入口へ畳んだ（全 op に効かせるため）。
+    ailine.run_postcondition("SORT", p, args)
     assert args.get("_unverified"), "末尾の 2 行が黙って消えた"
     assert any("2 行" in str(u["rows"]) or u["rows"] == 2 for u in args["_unverified"]), \
         args["_unverified"]
+
+
+# --- ⑥ 見ていない行が在ることは、表の性質であって op の性質でない ------------------------
+
+@pytest.mark.parametrize("op", sorted(ailine.POSTCONDITIONS) + ["CHART"])
+def test_every_op_notices_the_trailing_gap(tmp_path, op):
+    """★ 盲検 2 回目の致命①②: extent_gap は在ったのに **20 本中 1 本**にしか
+       挿さっていなかった。同じ検体で並べ替えだけが △ に落ち、集計・抽出・重複除去・
+       一括書換・太字・桁区切り・グラフは ✓ を名乗った。
+
+       ★ 1 本の試験で**全経路**を縛る（各 checker に書き写させない）。この試験は
+       note_extent_gap の配線を外すと全件が同時に赤くなる（変異試験で確認済み）。
+       事後条件の**判定**は問わない ── 問うのは「見ていない行を数えたか」だけ。
+    """
+    p = _book(tmp_path, [["商品", "単価"], ["a", 120], ["b", 200],
+                          [None, 1500], [None, 2000]])
+    args = {"col": "単価", "order": "desc", "value_col": "単価"}
+    ailine.run_postcondition(op, p, args, source_book=p)
+    assert args.get("_unverified"), f"{op}: 末尾の 2 行を見ていないのに黙っている"
+    assert any(u["rows"] == 2 for u in args["_unverified"]), args["_unverified"]
+
+
+@pytest.mark.parametrize("op", sorted(ailine.POSTCONDITIONS) + ["CHART"])
+def test_no_op_cries_wolf_on_a_tidy_table(tmp_path, op):
+    """⑤ 誤爆しない: 整った表では 1 op も ⚠ を足さない。"""
+    p = _book(tmp_path, [["商品", "単価"], ["a", 120], ["b", 200]])
+    args = {"col": "単価", "order": "desc", "value_col": "単価"}
+    ailine.run_postcondition(op, p, args, source_book=p)
+    assert not args.get("_unverified"), f"{op}: 食い違いが無いのに鳴った: {args['_unverified']}"

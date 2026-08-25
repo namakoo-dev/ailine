@@ -167,6 +167,19 @@ def render_applied_claim(claim: Claim, display_name: str) -> list:
     return [line]
 
 
+def render_unverified_advisories(unverified) -> list:
+    """検証できなかった行を、人へ見せる ⚠ 行にする。★ ⚠ で始めるので決裁③が数えて ✓ を △ に降ろす。
+
+    ★ 2026-08-25（塊②）: ここが**文言の唯一の実装**。以前は ailine 本体に同名関数が在り、
+      本番（dsl_step）は同じ文を**その場に書き写して**いた ── 名前つきの方は誰も呼ばず、
+      試験だけがそれを守っていた（番人が本番でない方を見張る片配線）。
+      ailine_core に置いたのは、本番の合流点である dsl_step から直接呼べる側だから。
+    """
+    return [f"⚠ {u['rows']} 行は検証できていません（{u['why']}）"
+            " ── この行については「宣言どおり」と言えません"
+            for u in (unverified or [])]
+
+
 def render_applied_unverified(display_name: str, observed: str) -> list:
     """機械保証が無い経路（自由生成・検証対象不足の段を含む計画）の反映後の行。✓ は使わない。
        読み戻し自体は行うので「今このファイルはこうなっている」だけは同じ強度で言える。"""
