@@ -7991,6 +7991,12 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
                   "「読み取り専用」と権限を確認してください")
         return EXIT_WRITE_BLOCKED
 
+    # ★ 2026-08-25（復元の致命2）: 出力先に**人のファイル**が在れば、触る前に止める。
+    #   LO 起動・翻訳より前 ── ロック検出と同じ位置に置く（壊してから気づかない）。
+    conflict = refuse_if_output_is_someone_elses(book)
+    if conflict is not None:
+        return conflict
+
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
     try:
@@ -8587,7 +8593,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
-    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    out_book = out_book_path(book)
     apply_timeout = a.timeout if a.timeout else None   # 0 で無効化（旧挙動 = 無制限）
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     _helper_catalog, helper_files = load_helpers(helpers_dir)
@@ -8779,7 +8785,7 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
-    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    out_book = out_book_path(book)
     apply_timeout = a.timeout if a.timeout else None
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     _helper_catalog, helper_files = load_helpers(helpers_dir)
@@ -8937,7 +8943,7 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
-    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    out_book = out_book_path(book)
     apply_timeout = a.timeout if a.timeout else None
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     _helper_catalog, helper_files = load_helpers(helpers_dir)
@@ -9842,7 +9848,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
-    out_book = book.with_name(book.stem + ".out" + book.suffix)
+    out_book = out_book_path(book)
     apply_timeout = a.timeout if a.timeout else None
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     refs_dir = Path(a.refs).resolve() if a.refs else DEFAULT_REFS
@@ -10137,6 +10143,44 @@ def _own_extract_output_status(path: Path, col: str, cmp: str, value) -> tuple:
                        and cond.get("kind") == "extract" and cond.get("column") == col
                        and cond.get("cmp") == cmp and cond.get("value") == value)
     return mark, same_condition
+
+
+def out_book_path(book: Path) -> Path:
+    """`--copy` と作業用に使う `<名前>.out.<拡張子>` の場所。★ 実装は 1 つ。
+
+    ★ 2026-08-25（復元の致命2・盲検）: この式が 4 箇所に書き写されていて、
+      どこにも**存在確認が無かった**。利用者が自分で作った `売上.out.xlsx` は
+      一言も無く上書きされ、原本反映が成功すると unlink で消えていた。
+      フォルダ経路には同じ危険への関所が既に在るのに、単一ブック経路に無かった（片配線）。
+    """
+    return book.with_name(book.stem + ".out" + book.suffix)
+
+
+def refuse_if_output_is_someone_elses(book: Path) -> int | None:
+    """出力先に**人のファイル**が在れば exit 7 で止める。無ければ None。
+
+    ★ ailine 産（前回の .out）は従来どおり黙って作り直す ── 印で見分ける
+      （フォルダ経路の関所と同じ規則・同じ出口）。
+    """
+    out = out_book_path(book)
+    if not out.exists():
+        return None
+    # ★ 根拠は「この道具が過去にそこへ書いたか」── 履歴が out を記録している。
+    #   ★ 印（stack/extract の CREATOR_MARK）は使えない: 単一ブック経路の .out には
+    #     印が付かない（実測で確認 ── 印は複数ファイル経路だけの仕組みだった）。
+    #   ★ 履歴が無い/読めない時は**止める側**に倒す（人のファイルを壊すより、
+    #     一度断って人に確認してもらう方が安い）。
+    try:
+        target = str(out.resolve())
+        for entry in read_history(max_n=HISTORY_RECALL_MAX):
+            if not isinstance(entry, dict):
+                continue
+            recorded = entry.get("out")
+            if recorded and str(Path(recorded).resolve()) == target:
+                return None          # 自分が書いた場所 ── 従来どおり作り直す
+    except Exception:
+        pass
+    return _refuse_output_conflict(out, None)
 
 
 def _refuse_output_conflict(out: Path, mark: str | None) -> int:
