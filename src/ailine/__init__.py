@@ -4923,6 +4923,29 @@ def _total_row_left_the_bottom_reason(path: Path, source_book: Path | None, args
             f"（合計行がデータとして一緒に並べ替えられています）")
 
 
+def note_stringy_numbers(args: dict, values) -> None:
+    """数え上げの対象に「数字に見える文字列」が混ざっていたら、機械の値として残す。
+
+    ★ 2026-08-25（塊③・中核 op の致命3/4）: `check_aggregate` は
+      `v = v if _is_number(v) else 0` を**期待側と観測側の両方**に掛けていた。
+      LibreOffice の SUM と同じ落とし方をするので**必ず一致する** ── 検算が恒真。
+      実測: 営業 1000 + '2000'(文字列) + 1500 → 出力 2500（正 4500）で ✓ が出た。
+    ★ 恒真を切る条件は「**別実装で**確かめる」こと。文字列を 0 にする判断（_is_number）
+      とは別の実装（compare_blocked.looks_numeric）で「数字に見えるか」を見る。
+    ★ 判定（0 として足すこと）は 1 ビットも変えない ── 変えると LO の結果と食い違い、
+      別の嘘になる。変えるのは**言うかどうか**だけ。
+    """
+    from ailine_core import compare_blocked as _cb
+    stringy = [v for v in values if _cb.looks_numeric(v)]
+    if not stringy:
+        return
+    shown = "、".join(f"『{v}』" for v in stringy[:3])
+    more = f"（ほか {len(stringy) - 3} 件）" if len(stringy) > 3 else ""
+    note_unverified(args, len(stringy),
+                    f"数字に見えますが文字列のセルがあり、0 として足されています: "
+                    f"{shown}{more} ── 合計がその分だけ小さくなります")
+
+
 def extent_gap(ws, header_row: int = 1, key_col: int = 1) -> dict:
     """走査で得た範囲と、**物理の使用範囲**の食い違いを数える。
 
@@ -5347,6 +5370,7 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
         if gi is None or vi is None:
             return "fail", "分類列/集計列が見つからない"
         expect: dict = {}
+        _stringy_seen: list = []
         uncached = 0
         r = header_row + 1
         while src.cell(row=r, column=1).value not in (None, ""):
@@ -5363,6 +5387,9 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
                 uncached += 1
                 r += 1
                 continue
+            # ★ 塊③（2026-08-25）: 0 に落とす**前**に、別実装で「数字に見えるか」を見る。
+            #   判定は変えない（0 として足す）── 変えるのは言うかどうかだけ。
+            _stringy_seen.append(v)
             v = v if _is_number(v) else 0   # ★ 止血2: 非数値/None は0扱い（クラッシュさせない）
             expect[k] = expect.get(k, 0) + v
             r += 1
@@ -5370,6 +5397,7 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
             return "fail", (f"分類列/集計列に式はあるがキャッシュ値が無く検証できない行が "
                              f"{uncached} 件あり、集計を検証できません"
                              f"（LibreOffice を通していない可能性）")
+        note_stringy_numbers(args, _stringy_seen)
         if not expect:
             return "fail", _ZERO_TARGET_REASON   # ★ 止血1: 集計元データが0件を「合格」にしない
         out = bv.sheet("集計")
@@ -5580,6 +5608,10 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
 
         raw_vals = [bv.cell_value(rr, idx, sheet=args.get("_target_sheet")) for rr in range(header_row + 1, last + 1)]
         nums = [v for v in raw_vals if _is_number(v)]
+        # ★ 塊③（2026-08-25・致命4）: 画面に 1000・2000・3000 が並んでいるのに合計 4000 に
+        #   なるのは、文字列の「2000」が数え上げから落ちているから。判定は変えず（落とす）、
+        #   別実装（compare_blocked.looks_numeric）で見て**言う**。
+        note_stringy_numbers(args, [v for v in raw_vals if not _is_number(v)])
         got_cached = bv.cell_value(total_row, idx, sheet=args.get("_target_sheet"))
     if not nums:
         return "fail", _ZERO_TARGET_REASON
