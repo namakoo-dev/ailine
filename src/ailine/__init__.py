@@ -5137,7 +5137,18 @@ def _sort_rows_lost_their_identity(source_book, after_rows: list, args: dict,
     if len(before_rows) != len(after_rows):
         return (f"並べ替えの前後で行数が変わっています"
                 f"（元 {len(before_rows)} 行 / 後 {len(after_rows)} 行）")
+    # ★★ 2026-08-25 の回帰の直し（盲検 2 回目 R1）: 相対参照の式は、行が動けば
+    #   **変わるのが正しい**（=B2*C2 → =B5*C5）。生の値で比べると「ちぎれた」と
+    #   誤判定し、**この製品の看板ユースケース**「金額列を作って金額順に並べる」が
+    #   必ず落ちていた（出力は完全に正しいのに検算だけが間違っていた）。
+    #   ★ 式のセルは同一性の材料にしない ── 行が動いた事実そのものを表すので、
+    #     「変わっていないこと」を要求できない。
+    def _identity(row):
+        return tuple("" if (isinstance(v, str) and v.startswith("=")) else v for v in row)
+
     from collections import Counter
+    before_rows = [_identity(r) for r in before_rows]
+    after_rows = [_identity(r) for r in after_rows]
     lost = Counter(before_rows) - Counter(after_rows)
     if not lost:
         return None

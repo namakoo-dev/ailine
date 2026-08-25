@@ -54,8 +54,8 @@ AI が直接生成を試していたが、機械検証できない操作は行�
 
 ```bash
 # 1) ailine 本体（tag を指定して固定する）
-uv tool install git+https://github.com/namakoo-dev/ailine@v0.1.0
-#    uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.1.0
+uv tool install git+https://github.com/namakoo-dev/ailine@v0.1.1
+#    uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.1.1
 
 # 2) 文書に適用する土台（別 repo・MIT）。clone して環境変数で場所を教える
 git clone https://github.com/namakoo-dev/basrun
