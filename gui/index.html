@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ailine</title>
+<style>
+  :root{
+    --bg:#12141a; --panel:#191c24; --line:#2a2f3a; --ink:#e8eaf0; --dim:#9aa3b2;
+    --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#7dd3fc;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.7 "Yu Gothic UI","Hiragino Sans",system-ui,sans-serif}
+  header{padding:18px 26px;border-bottom:1px solid var(--line);display:flex;
+         align-items:baseline;gap:14px}
+  h1{margin:0;font-size:19px;letter-spacing:.04em}
+  .tag{color:var(--dim);font-size:13px}
+  main{display:grid;grid-template-columns:340px 1fr;gap:0;height:calc(100vh - 61px)}
+  .side{border-right:1px solid var(--line);padding:20px;overflow:auto}
+  .work{padding:20px 26px;overflow:auto}
+  label{display:block;color:var(--dim);font-size:12.5px;margin:14px 0 6px}
+  input,textarea,button{font:inherit;color:var(--ink);background:var(--panel);
+    border:1px solid var(--line);border-radius:8px;padding:9px 11px;width:100%}
+  textarea{min-height:78px;resize:vertical}
+  button{cursor:pointer;width:auto;padding:9px 16px}
+  button:hover{border-color:var(--accent)}
+  button[disabled]{opacity:.45;cursor:default}
+  .files{margin-top:8px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .files div{padding:8px 11px;cursor:pointer;border-bottom:1px solid var(--line);
+             font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .files div:last-child{border-bottom:0}
+  .files div:hover{background:#20242e}
+  .files div.on{background:#233043;color:var(--accent)}
+  .row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+  .work{position:relative}
+  #badge{position:sticky;top:0;z-index:2}
+  .badge{display:inline-flex;align-items:center;gap:10px;border-radius:10px;
+         padding:12px 18px;font-size:17px;font-weight:700;border:1px solid}
+  .b-verified{color:var(--ok);border-color:#25603c;background:#132318}
+  .b-warned{color:var(--warn);border-color:#6b5316;background:#231d10}
+  .b-unverified,.b-unobservable{color:var(--bad);border-color:#6b2a2a;background:#231313}
+  .b-none{color:var(--dim);border-color:var(--line);background:var(--panel)}
+  .why{margin:10px 0 0;color:var(--dim);font-size:13.5px}
+  .lines{margin-top:16px}
+  .lines div{padding:5px 0;border-bottom:1px dashed #232833;font-size:14px}
+  .warnline{color:var(--warn)}
+  pre{background:#0e1015;border:1px solid var(--line);border-radius:8px;padding:14px;
+      overflow:auto;font-size:12.5px;color:#c7ccd8;max-height:38vh}
+  details{margin-top:16px}
+  summary{cursor:pointer;color:var(--dim);font-size:13px}
+  .note{color:var(--dim);font-size:12.5px;margin-top:4px}
+  .spin{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>ailine</h1>
+  <span class="tag">日本語で頼む → LibreOffice で適用 → <b>読み戻して確かめる</b></span>
+</header>
+<main>
+  <section class="side">
+    <label>作業フォルダ</label>
+    <input id="dir" value="">
+    <div class="row"><button id="reload">読み込む</button></div>
+    <div class="files" id="files"></div>
+    <div class="note" id="dirnote"></div>
+
+    <label>頼みごと</label>
+    <textarea id="task" placeholder="例: 売上から原価を引いた利益の列を作って"></textarea>
+    <div class="row">
+      <button id="run">実行（原本に反映）</button>
+      <button id="runcopy">下書きで実行</button>
+      <button id="undo">もとに戻す</button>
+    </div>
+    <div class="note">原本に反映しても、<b>もとに戻す</b>で戻せます。</div>
+  </section>
+
+  <section class="work">
+    <div id="badge" class="badge b-none">まだ実行していません</div>
+    <p class="why" id="why">ファイルを選んで、日本語で頼んでください。</p>
+    <div class="lines" id="lines"></div>
+    <details><summary>実行の全文を見る</summary><pre id="raw"></pre></details>
+  </section>
+</main>
+<script>
+// ★ 判定は作らない。ailine が返した verdict をそのまま映すだけ。
+//   ここに「advisories を数える」「postcondition から導く」を書いた瞬間、
+//   この画面は 2 つ目の実装になる（そういう欠陥をこの repo は 4 回踏んでいる）。
+const VERDICT = {
+  verified:     {mark:"✓", text:"機械検証済み",
+                 why:"適用したあとファイルを開き直して、宣言どおりに変わったことを確かめました。"},
+  warned:       {mark:"△", text:"確かめきれていないところがあります",
+                 why:"変化そのものは確かめました。ただし下の ⚠ については「宣言どおり」と言えません。"},
+  unverified:   {mark:"⚠", text:"機械保証はありません",
+                 why:"適用して読み戻しはしましたが、内容が宣言どおりかは機械で確かめていません。"},
+  unobservable: {mark:"⚠", text:"読み戻せませんでした",
+                 why:"適用はしましたが、ファイルを開き直せていません。何も保証しません。"},
+  not_applied:  {mark:"—", text:"適用していません",
+                 why:"この実行は何も主張していません（下書き・断り・失敗のいずれか）。"},
+};
+const $ = s => document.querySelector(s);
+const files = $("#files"); let picked = null, dir = "";
+
+function setBadge(key, extra){
+  const v = VERDICT[key] || VERDICT.not_applied;
+  const b = $("#badge");
+  b.className = "badge b-" + (VERDICT[key] ? key : "none");
+  b.textContent = v.mark + "  " + v.text;
+  $("#why").textContent = v.why + (extra ? "  " + extra : "");
+}
+function busy(on, msg){
+  for (const id of ["run","runcopy","undo","reload"]) $("#"+id).disabled = on;
+  if (on){ $("#badge").className = "badge b-none";
+           $("#badge").textContent = "⏳  " + msg;
+           $("#why").textContent = "ローカルの小型 LLM と LibreOffice で処理しています。"; }
+}
+async function loadFiles(){
+  const r = await fetch("/api/files?dir=" + encodeURIComponent($("#dir").value));
+  const d = await r.json();
+  dir = d.dir; $("#dir").value = d.dir;
+  files.innerHTML = "";
+  $("#dirnote").textContent = d.error ? ("読めません: " + d.error)
+                                       : (d.files.length + " 件の .xlsx");
+  for (const f of d.files){
+    const el = document.createElement("div");
+    el.textContent = f.name + (f.draft ? "  （ailine の下書き）" : "");
+    if (f.draft) el.style.color = "var(--dim)";
+    // ★ パスは画面で組み立てない（区切り文字の二重化を実測で踏んだ）。サーバが返した値をそのまま持つ。
+    el.onclick = () => { picked = f;
+      [...files.children].forEach(c => c.classList.remove("on"));
+      el.classList.add("on"); };
+    files.appendChild(el);
+  }
+}
+function bookPath(){ return picked ? picked.path : ""; }
+
+function show(res){
+  const j = res.json || {};
+  // ★ verdict 以外から印を導かない
+  setBadge(j.verdict, "");
+  const lines = $("#lines"); lines.innerHTML = "";
+  const text = res.text || "";
+  // ★ 生成した .bas は「全文を見る」の中だけに置く。ここへ流すと **判定が画面外へ押し出される**
+  //   （実測でバッジが見えなくなった）。この道具の芯は判定なので、そこを隠さない。
+  let inCode = false;
+  for (const ln of text.split(String.fromCharCode(10))){
+    const s = ln.trim();
+    if (s.indexOf("生成した") >= 0 && s.charAt(0) !== "★") { inCode = true; continue; }
+    if (inCode) { if (/^[─—-]{6,}$/.test(s)) inCode = false; continue; }
+    if (!s || s.charAt(0) === "{") continue;
+    if (s.startsWith("⏳") || s.startsWith("■")) continue;
+    const el = document.createElement("div");
+    el.textContent = s;
+    if (s.startsWith("⚠") || s.startsWith("★") || s.startsWith("×")) el.className = "warnline";
+    lines.appendChild(el);
+  }
+  $("#raw").textContent = text;
+  document.querySelector(".work").scrollTop = 0;
+}
+async function call(path, body, msg){
+  // ★ alert() は使わない: モーダルは画面を止める（デモ中に固まる・実測で踏んだ）。
+  //   言いたいことは画面の中で言う。
+  if (!picked){ setBadge("not_applied", "左の一覧からファイルを選んでください。"); return; }
+  busy(true, msg);
+  try{
+    const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
+                                  body: JSON.stringify(Object.assign({book: bookPath()}, body))});
+    show(await r.json());
+  } catch(e){
+    setBadge("unobservable", "画面から実行できませんでした: " + e);
+  } finally { busy(false); }
+}
+$("#reload").onclick = loadFiles;
+$("#run").onclick     = () => call("/api/run",  {task: $("#task").value, copy:false}, "実行中…");
+$("#runcopy").onclick = () => call("/api/run",  {task: $("#task").value, copy:true},  "下書きで実行中…");
+$("#undo").onclick    = () => call("/api/undo", {}, "もとに戻しています…");
+loadFiles();
+</script>
+</body>
+</html>

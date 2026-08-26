@@ -8135,6 +8135,10 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
     #   ✓ と言ったか」を足すだけ。✓ を出さなかった run（--dry・失敗・機械保証なし）は空リスト
     #   ＝『主張していない』が機械可読に残る。
     result.setdefault("claims", [])
+    # ★ 適用まで行かなかった run（--dry・失敗・断り）は**何も主張していない**。
+    #   キーは必ず在って、値でそれが分かる形にする（無いことで伝えない）。
+    result.setdefault("verdict", "not_applied")
+    result.setdefault("warning_count", 0)
     # ★ 2026-08-25（復元の致命③）: 出力先の関所が「この道具が過去にそこへ書いたか」
     #   だけで通していたので、**利用者がその後どれだけ手を入れても素通り**した。
     #   判定には三項が要る（依頼/宣言/実体）── 実体の項として、書いた物の指紋を残す。
@@ -8258,6 +8262,20 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             warning_count += count_suspicious_advisories([msg])
 
     evidence, err = observe_book_state(final)
+    # ★★ 2026-08-26: 判定（✓ / △ / ⚠）を**決めているこの場所で**機械可読にも出す。
+    #   ★ なぜ: 画面に出る印は今まで**文字としてしか存在しなかった**ので、別の入口
+    #     （GUI・自動化）から使うには印を読み取り直すか、条件を書き写すしかなかった。
+    #     書き写せばそれは 2 つ目の実装で、今週ずっと潰してきた欠陥をこちらで新造する。
+    #   ★ 決めるのは 1 箇所・映すのは何箇所でも、という形にする。
+    #   verdict の意味:
+    #     "verified"   … 機械検証済み（✓）
+    #     "warned"     … 検証はしたが疑わしい ⚠ が在る（△・決裁③の降格）
+    #     "unverified" … 機械保証なし（自由生成・検証対象不足）
+    #     "unobservable" … 適用したが読み戻せなかった（何も保証しない）
+    result["verdict"] = ("unobservable" if err is not None else
+                          ("warned" if warning_count > 0 else "verified") if machine_verified
+                          else "unverified")
+    result["warning_count"] = warning_count
     if err is not None:
         for ln in render_applied_unobservable(final.name, err):
             print(ln)

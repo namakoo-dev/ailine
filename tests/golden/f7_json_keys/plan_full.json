@@ -20,6 +20,8 @@
     "plan": "list[dict{command:str,interpretation:dict{books:list[str],op:str,sheet:str,slots:list[dict{key:str,kind:null,origin:str,value:str}|dict{key:str,kind:str,origin:str,value:str}]},op:str,postcondition:str,status:str}|dict{command:str,interpretation:dict{books:list[str],op:str,sheet:str,slots:list[dict{key:str,kind:str,origin:str,value:str}]},op:str,postcondition:str,status:str}]",
     "postcondition": "null",
     "provenance": "null",
-    "task": "str"
+    "task": "str",
+    "verdict": "str",
+    "warning_count": "int"
   }
 }

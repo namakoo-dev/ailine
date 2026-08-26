@@ -18,6 +18,8 @@
     "path": "str",
     "postcondition": "str",
     "provenance": "null",
-    "task": "str"
+    "task": "str",
+    "verdict": "str",
+    "warning_count": "int"
   }
 }
