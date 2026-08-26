@@ -181,6 +181,18 @@ def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, 
     #   片配線を 6 回踏んでいる）。⚠ 始まりなので決裁③が数えて ✓ を △ に降ろす。
     from ailine_core.claim import render_unverified_advisories
     advisories.extend(render_unverified_advisories((resolved or {}).get("_unverified")))
+    # ★★ 2026-08-26: 削除は**画面の差分に何も出ない**操作なので、何を消したかを言わなければ
+    #   人は取り返しがつくかを判断できない（「消えたものは差分に出ない」の家系）。
+    #   ★ ⚠ は付けない ── 頼まれたとおりに消えたことは事実で、✓ を降ろす理由にはならない。
+    #     ただし**必ず読める場所に出す**（undo で戻せることも同時に言う）。
+    deleted = (resolved or {}).get("_deleted") or []
+    if deleted:
+        advisories.append(f"消した中身（{len(deleted)} 行）── 戻すなら ailine undo:")
+        for row in deleted[:10]:
+            shown = "／".join("" if v is None else str(v) for v in row)
+            advisories.append(f"  ・{shown}")
+        if len(deleted) > 10:
+            advisories.append(f"  ・ほか {len(deleted) - 10} 行")
     return advisories
 
 

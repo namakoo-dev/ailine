@@ -432,6 +432,66 @@ _add("insert_rows_warn_no_source_book", "INSERT_ROWS", {"at": 2, "count": 1},
 _add("insert_rows_fail_shift_mismatch", "INSERT_ROWS", {"at": 2, "count": 1},
      _b_insert_rows_fail_mismatch)
 
+# --- ★ 2026-08-26: 表の基本操作 3 種 ----------------------------------------
+_TB = [["商品", "金額"], ["りんご", 100], ["みかん", 200], ["ぶどう", 300]]
+
+
+def _b_add_row_pass(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額"], ["りんご", 100], ["梨", 600],
+                    ["みかん", 200], ["ぶどう", 300]])
+    return after, before
+
+
+def _b_add_row_overwrite(tmp_path):
+    """押し下げずに上書きした（みかんが消えた）。"""
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額"], ["りんご", 100], ["梨", 600], ["ぶどう", 300]])
+    return after, before
+
+
+def _b_delete_rows_pass(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額"], ["りんご", 100], ["ぶどう", 300]])
+    return after, before
+
+
+def _b_delete_rows_left_blank(tmp_path):
+    """詰めずに空行を残した。"""
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額"], ["りんご", 100], [None, None], ["ぶどう", 300]])
+    return after, before
+
+
+def _b_delete_column_pass(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品"], ["りんご"], ["みかん"], ["ぶどう"]])
+    return after, before
+
+
+def _b_delete_column_took_neighbour(tmp_path):
+    """隣の列を巻き込んだ（商品が消えて金額が残った）。"""
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["金額"], [100], [200], [300]])
+    return after, before
+
+
+_ADD = {"at": 3, "values": {"商品": "梨", "金額": 600}}
+_add("add_row_pass", "ADD_ROW", dict(_ADD), _b_add_row_pass)
+_add("add_row_fail_overwrote_a_row", "ADD_ROW", dict(_ADD), _b_add_row_overwrite)
+_add("delete_rows_pass", "DELETE_ROWS", {"at": 3, "count": 1}, _b_delete_rows_pass)
+_add("delete_rows_fail_blank_left", "DELETE_ROWS", {"at": 3, "count": 1},
+     _b_delete_rows_left_blank)
+_add("delete_column_pass", "DELETE_COLUMN", {"col": "金額"}, _b_delete_column_pass)
+_add("delete_column_fail_took_neighbour", "DELETE_COLUMN", {"col": "金額"},
+     _b_delete_column_took_neighbour)
+
 # --- DRAW_BORDERS -----------------------------------------------------------
 def _b_borders_pass(tmp_path):
     p = tmp_path / "b.xlsx"

@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "金額",
+    "_target_sheet": "Sheet",
+    "_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ]
+  },
+  "inferred": [],
+  "err": null
+}

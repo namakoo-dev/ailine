@@ -172,6 +172,17 @@ _add("append_total_unknown_col", "APPEND_TOTAL", {"col": "不明"})
 _add("insert_rows_ok_explicit_count", "INSERT_ROWS", {"at": "3", "count": "2"})
 _add("insert_rows_ok_default_count_inferred", "INSERT_ROWS", {"at": "3"})
 _add("insert_rows_bad_at", "INSERT_ROWS", {"at": "0"})
+
+# --- ★ 2026-08-26: 表の基本操作 3 種 --------------------------------------
+_add("add_row_ok", "ADD_ROW", {"at": 3, "values": {"商品": "梨", "金額": 600}})
+_add("add_row_unknown_column", "ADD_ROW", {"at": 3, "values": {"存在しない": 1}})
+_add("add_row_on_header", "ADD_ROW", {"at": 1, "values": {"商品": "梨"}})
+_add("add_row_no_values", "ADD_ROW", {"at": 3, "values": {}})
+_add("delete_rows_ok", "DELETE_ROWS", {"at": 3, "count": 2})
+_add("delete_rows_default_count", "DELETE_ROWS", {"at": 3})
+_add("delete_rows_on_header", "DELETE_ROWS", {"at": 1})
+_add("delete_column_ok", "DELETE_COLUMN", {"col": "金額"})
+_add("delete_column_unknown", "DELETE_COLUMN", {"col": "存在しない"})
 _add("insert_rows_bad_count", "INSERT_ROWS", {"at": "3", "count": "abc"})
 
 # --- DRAW_BORDERS / AUTOFIT（引数無し） ------------------------------------

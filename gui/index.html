@@ -51,6 +51,22 @@
   summary{cursor:pointer;color:var(--dim);font-size:13px}
   .note{color:var(--dim);font-size:12.5px;margin-top:4px}
   .spin{color:var(--accent)}
+  .step{color:var(--ink);font-size:13.5px;font-weight:700;margin:20px 0 8px}
+  .step:first-of-type{margin-top:0}
+  button.primary{border-color:#2b6079;background:#16242e;color:var(--accent)}
+  .folder{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  .sheets{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
+  .sheet h3{margin:0 0 8px;font-size:13px;color:var(--dim);font-weight:600;letter-spacing:.04em}
+  .sheet .wrap{border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:46vh}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);
+        padding:6px 9px;white-space:nowrap;text-align:left}
+  thead th{position:sticky;top:0;background:#1d212b;color:var(--dim);font-weight:600;z-index:1}
+  tbody tr:first-child td{background:#1b1f28;font-weight:600}
+  td.chg{background:#1e3326;color:var(--ok);font-weight:600}
+  td.add{background:#22301f;color:var(--ok)}
+  .sheetnote{color:var(--dim);font-size:12px;margin-top:6px}
+  .empty{color:var(--dim);font-size:13px;padding:14px}
 </style>
 </head>
 <body>
@@ -60,25 +76,40 @@
 </header>
 <main>
   <section class="side">
-    <label>作業フォルダ</label>
-    <input id="dir" value="">
-    <div class="row"><button id="reload">読み込む</button></div>
+    <label class="step">① ファイルを選ぶ</label>
     <div class="files" id="files"></div>
     <div class="note" id="dirnote"></div>
 
-    <label>頼みごと</label>
+    <label class="step">② 日本語で頼む</label>
     <textarea id="task" placeholder="例: 売上から原価を引いた利益の列を作って"></textarea>
+
+    <label class="step">③ 実行する</label>
     <div class="row">
-      <button id="run">実行（原本に反映）</button>
-      <button id="runcopy">下書きで実行</button>
-      <button id="undo">もとに戻す</button>
+      <button id="runcopy" class="primary">下書きで実行</button>
+      <button id="run">原本に反映</button>
     </div>
-    <div class="note">原本に反映しても、<b>もとに戻す</b>で戻せます。</div>
+    <div class="note">下書きは原本を触りません。原本に反映しても <b>もとに戻す</b> で戻せます。</div>
+    <div class="row"><button id="undo">もとに戻す</button></div>
+
+    <details class="folder"><summary>別のフォルダを見る</summary>
+      <input id="dir" value="">
+      <div class="row"><button id="reload">読み込む</button></div>
+    </details>
   </section>
 
   <section class="work">
     <div id="badge" class="badge b-none">まだ実行していません</div>
     <p class="why" id="why">ファイルを選んで、日本語で頼んでください。</p>
+    <div class="sheets">
+      <div class="sheet"><h3>操作する前</h3>
+        <div class="wrap" id="before"><div class="empty">ファイルを選ぶと出ます</div></div>
+        <div class="sheetnote" id="beforenote"></div></div>
+      <div class="sheet"><h3>操作したあと</h3>
+        <div class="wrap" id="after"><div class="empty">実行すると出ます</div></div>
+        <div class="sheetnote" id="afternote"></div></div>
+    </div>
+    <p class="sheetnote">変わったセルに色を付けています ── <b>見た目の補助であって、判定ではありません</b>。
+      判定は上のバッジ（ailine が返したもの）です。</p>
     <div class="lines" id="lines"></div>
     <details><summary>実行の全文を見る</summary><pre id="raw"></pre></details>
   </section>
@@ -129,11 +160,63 @@ async function loadFiles(){
     // ★ パスは画面で組み立てない（区切り文字の二重化を実測で踏んだ）。サーバが返した値をそのまま持つ。
     el.onclick = () => { picked = f;
       [...files.children].forEach(c => c.classList.remove("on"));
-      el.classList.add("on"); };
+      el.classList.add("on");
+      showBefore(); };
     files.appendChild(el);
   }
 }
 function bookPath(){ return picked ? picked.path : ""; }
+
+let beforeCells = null;
+function baseName(p){ const parts = p.split(String.fromCharCode(92)).join("/").split("/"); return parts[parts.length-1]; }
+function drawTable(host, noteEl, d, other){
+  host.innerHTML = ""; noteEl.textContent = "";
+  if (!d || d.error){ host.innerHTML = '<div class="empty">' + ((d && d.error) || "出せません") + '</div>'; return; }
+  const cells = d.cells || [];
+  if (!cells.length){ host.innerHTML = '<div class="empty">空のシートです</div>'; return; }
+  const t = document.createElement("table");
+  const thead = document.createElement("thead"); const hr = document.createElement("tr");
+  hr.appendChild(document.createElement("th"));
+  for (let c = 0; c < (cells[0]||[]).length; c++){
+    const th = document.createElement("th");
+    th.textContent = String.fromCharCode(65 + (c % 26));
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr); t.appendChild(thead);
+  const tb = document.createElement("tbody");
+  cells.forEach((row, ri) => {
+    const tr = document.createElement("tr");
+    const rh = document.createElement("th"); rh.textContent = ri + 1; tr.appendChild(rh);
+    row.forEach((v, ci) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      if (other){
+        const was = (other[ri] || [])[ci];
+        if (was === undefined) td.className = "add";
+        else if (was !== v) td.className = "chg";
+      }
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb); host.appendChild(t);
+  const bits = [d.sheet + "  " + d.rows + " 行 × " + d.cols + " 列"];
+  if (d.note) bits.push(d.note);
+  if (d.uncached) bits.push(d.uncached + " 個のセルは数式で、計算結果がファイルに入っていません");
+  noteEl.textContent = bits.join(" ／ ");
+}
+async function loadSheet(path){
+  if (!path) return null;
+  const r = await fetch("/api/sheet?path=" + encodeURIComponent(path));
+  return await r.json();
+}
+async function showBefore(){
+  const d = await loadSheet(bookPath());
+  beforeCells = (d && d.cells) || null;
+  drawTable($("#before"), $("#beforenote"), d, null);
+  $("#after").innerHTML = '<div class="empty">実行すると出ます</div>';
+  $("#afternote").textContent = "";
+}
 
 function show(res){
   const j = res.json || {};
@@ -157,6 +240,14 @@ function show(res){
   }
   $("#raw").textContent = text;
   document.querySelector(".work").scrollTop = 0;
+  // ★ 「本当にそうなったか」は、文字でなく**表で**確かめられなければ意味がない。
+  //   出せる先（j.out）は ailine が返したもの ── 画面が推測して探しに行かない。
+  const shown = j.out || bookPath();
+  loadSheet(shown).then(d => {
+    drawTable($("#after"), $("#afternote"), d, beforeCells);
+    if (d && !d.error && shown !== bookPath())
+      $("#afternote").textContent = "（下書き: " + baseName(shown) + "）  " + $("#afternote").textContent;
+  });
 }
 async function call(path, body, msg){
   // ★ alert() は使わない: モーダルは画面を止める（デモ中に固まる・実測で踏んだ）。

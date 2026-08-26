@@ -157,6 +157,49 @@ Sub InsertRows(oDoc As Object, atRow As Integer, count As Integer)
 End Sub
 
 
+' 行を1本挿し、指定した列に値を書く（2026-08-26 追加）。
+' ★ 既存の InsertRows は**空行を挿すだけ**で、値を入れる手段が 1 つも無かった
+'   （21 op のどれにも「データを 1 行足す」が無いことを実測で確認）。
+' colIdxCsv: 0起点の列番号を "0,1,2" の形で／valuesCsv: 同じ並びの値／
+' typesCsv:  各値の型 "s"(文字) か "n"(数値)。区切りは Chr(1)（値にカンマが入りうるため）。
+Sub AddRowWithValues(oDoc As Object, atRow As Integer, colIdxCsv As String, _
+                      valuesCsv As String, typesCsv As String)
+    Dim oSheet As Object, oCell As Object
+    Dim cols() As String, vals() As String, kinds() As String
+    Dim i As Integer
+    oSheet = oDoc.Sheets.getByIndex(0)
+    oSheet.Rows.insertByIndex(atRow, 1)
+    If Len(colIdxCsv) = 0 Then Exit Sub
+    cols = Split(colIdxCsv, ",")
+    vals = Split(valuesCsv, Chr(1))
+    kinds = Split(typesCsv, ",")
+    For i = 0 To UBound(cols)
+        oCell = oSheet.getCellByPosition(CInt(cols(i)), atRow)
+        If i <= UBound(kinds) And kinds(i) = "n" Then
+            oCell.setValue(CDbl(vals(i)))
+        Else
+            oCell.setString(vals(i))
+        End If
+    Next i
+End Sub
+
+
+' 行をまとめて消す（2026-08-26 追加）。atRow は 0起点、count は本数。
+Sub DeleteRows(oDoc As Object, atRow As Integer, count As Integer)
+    Dim oSheet As Object
+    oSheet = oDoc.Sheets.getByIndex(0)
+    oSheet.Rows.removeByIndex(atRow, count)
+End Sub
+
+
+' 列を1本消す（2026-08-26 追加）。colIdx は 0起点。
+Sub DeleteColumn(oDoc As Object, colIdx As Integer)
+    Dim oSheet As Object
+    oSheet = oDoc.Sheets.getByIndex(0)
+    oSheet.Columns.removeByIndex(colIdx, 1)
+End Sub
+
+
 ' データ範囲（見出し行0〜最終データ行・0列〜最終列）に格子の罫線を引く。
 ' ★ 範囲は自動検出する。呼び側は引数なしでよい（迷わせない）。
 Sub DrawTableBorders(oDoc As Object)

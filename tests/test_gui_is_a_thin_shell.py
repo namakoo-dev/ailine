@@ -86,6 +86,18 @@ def test_the_shell_runs_this_repo_not_the_installed_copy():
 # --- ④⑤ 依存とモーダル ----------------------------------------------------------------
 
 def test_the_shell_adds_no_dependency():
+    """④ 画面のために**新しい依存を増やさない**。
+
+    ★ 2026-08-26 に契約を正した: 初版は「標準ライブラリだけ」と書いていたが、
+      表を見せるために openpyxl（**既に製品が宣言している依存**）と ailine_core
+      （この repo 自身）を使った時点で赤くなった。守りたいのは「新しい依存が増えないこと」
+      なので、比べる相手を**pyproject の宣言**にする ── 手で書いた白名簿にしない
+      （宣言が増えたらこの試験も自動で追随する）。
+    """
+    declared = set(re.findall(r'"([A-Za-z0-9_.-]+)\s*[><=!]',
+                               (REPO / "pyproject.toml").read_text(encoding="utf-8")))
+    declared = {d.split("[")[0].replace("-", "_").lower() for d in declared}
+    own = {p.name for p in (REPO / "src").iterdir() if p.is_dir()}
     tree = ast.parse(SERVER)
     mods = set()
     for node in ast.walk(tree):
@@ -93,8 +105,10 @@ def test_the_shell_adds_no_dependency():
             mods.update(a.name.split(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             mods.add(node.module.split(".")[0])
-    third_party = mods - set(sys.stdlib_module_names)
-    assert not third_party, f"標準ライブラリ以外を入れた: {sorted(third_party)}"
+    extra = mods - set(sys.stdlib_module_names) - declared - own
+    assert not extra, (
+        f"製品が宣言していない依存を画面が持ち込んだ: {sorted(extra)}"
+        f"（宣言済み: {sorted(declared)} ／ 自前: {sorted(own)}）")
 
 
 def test_no_blocking_modal():

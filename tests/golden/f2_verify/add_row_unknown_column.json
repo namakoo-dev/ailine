@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "resolved": {
+    "at": 3,
+    "values": {
+      "存在しない": 1
+    },
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "列『存在しない』がこの表にありません（ある列: 商品、数量、単価、金額）"
+}

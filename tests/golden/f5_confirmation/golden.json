@@ -1,4 +1,5 @@
 {
+  "add_row_values": "解釈: 操作:行追加 挿入位置:3 入れる値:商品=梨／金額=600",
   "aggregate": "解釈: 操作:集計 分類列:商品 集計列:金額",
   "append_total_with_source": "解釈: 操作:合計追加 対象列:金額 ラベル:合計 率:1.1（依頼文: 10%）",
   "append_total_without_source": "解釈: 操作:合計追加 対象列:金額 ラベル:合計 率:1.0",
@@ -10,6 +11,8 @@
   "compute_column_without_target_omits_field": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:*",
   "dedup": "解釈: 操作:重複除去 判定キー:商品",
   "dedup_multi_key": "解釈: 操作:重複除去 判定キー:商品・金額",
+  "delete_column_one": "解釈: 操作:列削除 削除する列:金額",
+  "delete_rows_inferred": "解釈: 操作:行削除 削除位置:3 行数:1(推定)",
   "draw_borders_no_fields": "解釈: 操作:けい線",
   "extract": "解釈: 操作:抽出 対象列:金額 条件:以上 値:40000",
   "fill_color_row": "解釈: 操作:背景色 対象:row:1 色:red",

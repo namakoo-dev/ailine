@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "resolved": {
+    "at": 3,
+    "values": {
+      "商品": "梨",
+      "金額": 600
+    },
+    "_target_sheet": "Sheet",
+    "_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_values_label": "商品=梨／金額=600"
+  },
+  "inferred": [],
+  "err": null
+}

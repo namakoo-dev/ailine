@@ -2047,6 +2047,19 @@ OP_META = {
     "INSERT_ROWS": {"category": "表を編集する", "label": "行挿入", "folder": False,
                       "synonyms": ["行を挿入", "行を追加", "行を足す"],
                       "match_phrases": ["行を追加する", "空行を入れる", "行間を空ける"]},
+    # ★ 2026-08-26: 表計算の基本操作なのに 21 op のどれにも無かった 3 つ
+    #   （Namakoo が GUI を触って実測: 「5行目に商品として梨を追加して」が
+    #     行挿入＋一括書換に分解され、4 段とも別々の理由で落ちた）。
+    #   ★ 削除はこの道具で最も破壊的な操作 ── 消す前に中身を見せる（下の check_* 参照）。
+    "ADD_ROW": {"category": "表を編集する", "label": "行追加", "folder": False,
+                 "synonyms": ["行を追加して値を入れる", "データを1行足す", "レコードを追加"],
+                 "match_phrases": ["行を追加して", "1行足して", "データを追加"]},
+    "DELETE_ROWS": {"category": "表を編集する", "label": "行削除", "folder": False,
+                     "synonyms": ["行を削除", "行を消す", "行を取り除く"],
+                     "match_phrases": ["行を削除して", "行を消して", "不要な行を除く"]},
+    "DELETE_COLUMN": {"category": "表を編集する", "label": "列削除", "folder": False,
+                       "synonyms": ["列を削除", "列を消す", "列を取り除く"],
+                       "match_phrases": ["列を削除して", "列を消して", "この列は要らない"]},
     "DRAW_BORDERS": {"category": "見た目を整える", "label": "けい線", "folder": False,
                        "synonyms": ["けい線を引く", "罫線を引く", "枠線を付ける"],
                        "match_phrases": ["線で囲む", "表に枠を付ける", "けい線"]},
@@ -2288,6 +2301,10 @@ OP_SCHEMA = {
     # ★ W9: INSERT_ROWS は count が既定値ありの任意項目（at だけ必須）。
     #   DRAW_BORDERS/AUTOFIT は引数無し（空タプル＝ any(...) が常に False で FREEFORM に落ちない）。
     "INSERT_ROWS": ("at",),
+    # ★ 2026-08-26: 値は列名で受ける ── 実在しない列名を機械が弾ける（幻覚の封鎖）。
+    "ADD_ROW": ("at", "values"),
+    "DELETE_ROWS": ("at",),
+    "DELETE_COLUMN": ("col",),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": ("group_col", "value_col"),
@@ -2340,9 +2357,13 @@ WRITE_NEW_SHEET = "new_sheet"               # 新しいシートを作る
 WRITE_FORMAT_ONLY = "format_only"           # セルの値は変えない（書式・罫線・列幅・埋め込みグラフ）
 WRITE_ROW_SHIFT = "row_shift"               # 行を挿入して既存行を下へずらす（値そのものは残る）
 WRITE_REORDER = "reorder"                   # 行を並べ替える（値の集合は保存される）
+# ★ 2026-08-26: 「値が消える」を宣言できる種別が **1 つも無かった**（実測で気づいた ──
+#   削除を row_shift と宣言したら、番人が「行を動かすだけのはずが値が 3 件消えた」と
+#   正しく怒った。宣言の側が嘘をついていた）。消すことを頼まれた op のための種別。
+WRITE_REMOVE = "remove"                     # 行/列ごと取り除く（値は減る・詰まる）
 WRITE_KINDS = frozenset({
     WRITE_EXISTING_COLUMN, WRITE_NEW_COLUMN, WRITE_NEW_ROW_AT_END, WRITE_NEW_SHEET,
-    WRITE_FORMAT_ONLY, WRITE_ROW_SHIFT, WRITE_REORDER})
+    WRITE_FORMAT_ONLY, WRITE_ROW_SHIFT, WRITE_REORDER, WRITE_REMOVE})
 
 
 @dataclass(frozen=True)
@@ -2390,6 +2411,10 @@ OP_WRITE_TARGET = {
     "APPEND_TOTAL": WriteTarget(writes=(WRITE_NEW_ROW_AT_END,)),
     # 行を挿入するだけ・既存値は下にずれるだけで残る
     "INSERT_ROWS": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
+    # ★ 2026-08-26: 追加も削除も既存行を**ずらす**（削除は詰める）。
+    "ADD_ROW": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
+    "DELETE_ROWS": WriteTarget(writes=(WRITE_REMOVE,)),
+    "DELETE_COLUMN": WriteTarget(writes=(WRITE_REMOVE,)),
     "DRAW_BORDERS": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     "AUTOFIT": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     # 新規シート（DataPilot）を作るだけ。入力シートは読むだけ＝無変更が正常
@@ -2477,6 +2502,9 @@ OP_SUBJECT_SLOTS = {
     # ★ label は「金額の性質の限定（税込み/税抜き）」が依頼文にある時だけ問う（subject.py 参照）。
     "APPEND_TOTAL": (("col", SUBJ_COLUMN), ("label", SUBJ_LABEL)),
     "INSERT_ROWS": (("at", SUBJ_ROW),),
+    "ADD_ROW": (("at", SUBJ_ROW),),
+    "DELETE_ROWS": (("at", SUBJ_ROW),),
+    "DELETE_COLUMN": (("col", SUBJ_COLUMN),),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": (("group_col", SUBJ_COLUMN), ("value_col", SUBJ_COLUMN)),
@@ -2690,8 +2718,11 @@ APPEND_TOTAL: 列の合計(SUM)を表の最終行の下に追加する（税込�
   label(省略可・既定"合計"。表示ラベル。「税込み合計」等、依頼の言い方をそのまま入れる)
   ★ 合計(SUM)専用。平均・最大・最小など他の統計量は語彙に無い（OUT_OF_VOCAB にする）。
   倍率(税率等)は入れない。数値化はここでは行わない（機械が別途確定する）
-INSERT_ROWS: 行を挿入する。依頼文に具体的な行番号がある時だけ使う。
+INSERT_ROWS: **空行だけ**を挿入する。値を入れる依頼なら ADD_ROW を使う。
   args: at(1起点の行番号。この行の位置に挿入され、既存行は下にずれる), count(省略可・既定1・挿入する行数)
+ADD_ROW: 値を入れた行を1本追加する。args: at(1起点の行番号), values(列名→値の対応)
+DELETE_ROWS: 行を削除して詰める。args: at(1起点の行番号), count(省略可・既定1)
+DELETE_COLUMN: 列を1本削除する。args: col(列名)
 DRAW_BORDERS: 依頼文に「けい線/罫線/枠線」という言葉が明示された時だけ使う。表にけい線(格子線)を
   引く。args不要（表全体が対象）★「整えて」「いい感じに」のような具体性の無い依頼には
   絶対に使わない（曖昧なら CLARIFY で確認する）
@@ -3554,6 +3585,59 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                     f"食い違うため機械抽出({mfactor:g})を採用しました"
                 ]
 
+    # --- ★ 2026-08-26: 表の基本操作 3 種（追加・行削除・列削除）---------------
+    elif op in ("ADD_ROW", "DELETE_ROWS"):
+        at_raw = str(resolved.get("at", "")).strip()
+        if not (at_raw.isdigit() and int(at_raw) >= 1):
+            return False, resolved, inferred, f"行番号『{resolved.get('at')}』が不正です（1以上の整数）"
+        resolved["at"] = int(at_raw)
+        _sheet = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+        _hr = int((book_meta.get("header_rows") or {}).get(_sheet, 1) or 1)
+        # ★ 見出し行より上を触らせない（表の骨格を壊す操作は受け付けない）。
+        if int(at_raw) <= _hr:
+            return False, resolved, inferred, (
+                f"{at_raw}行目は見出し行（{_hr}行目）またはその上です ── "
+                "見出しを壊す操作は受け付けません")
+        if op == "DELETE_ROWS":
+            c = resolved.get("count")
+            if c in (None, ""):
+                resolved["count"] = 1
+                inferred.add("count")
+            else:
+                cs = str(c).strip()
+                if not (cs.isdigit() and int(cs) >= 1):
+                    return False, resolved, inferred, f"削除行数『{c}』が不正です（1以上の整数）"
+                resolved["count"] = int(cs)
+        else:
+            # ★ 値は**列名で**受ける。実在しない列名はここで弾く（幻覚の封鎖）。
+            vals = resolved.get("values")
+            if not isinstance(vals, dict) or not vals:
+                return False, resolved, inferred, (
+                    "入れる値が読み取れません（列名と値の組で書いてください）")
+            headers = (book_meta.get("headers") or {}).get(
+                resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
+            unknown = [k for k in vals if str(k) not in [str(h) for h in headers]]
+            if unknown:
+                return False, resolved, inferred, (
+                    f"列『{"、".join(map(str, unknown))}』がこの表にありません"
+                    f"（ある列: {"、".join(map(str, headers))}）")
+            resolved["values"] = {str(k): v for k, v in vals.items()}
+            resolved["_headers"] = [str(h) for h in headers]
+            resolved["_values_label"] = "／".join(
+                f"{k}={v}" for k, v in resolved["values"].items())
+
+    elif op == "DELETE_COLUMN":
+        name = str(resolved.get("col", "")).strip()
+        headers = (book_meta.get("headers") or {}).get(
+            resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
+        if name not in [str(h) for h in headers]:
+            return False, resolved, inferred, (
+                f"列『{name}』がこの表にありません（ある列: {"、".join(map(str, headers))}）")
+        if len([h for h in headers if str(h) != ""]) <= 1:
+            return False, resolved, inferred, "列が 1 本しかないので削除できません"
+        resolved["col"] = name
+        resolved["_headers"] = [str(h) for h in headers]
+
     # --- ★ W9: 検証済みヘルパ4種の語彙昇格 -----------------------------------
     elif op == "INSERT_ROWS":
         at_raw = str(resolved.get("at", "")).strip()
@@ -4019,6 +4103,9 @@ _CONFIRM_FIELDS = {
     "APPEND_TOTAL": (("対象列", "col", None), ("ラベル", "label", None), ("率", "factor", None)),
     # ★ W9: 検証済みヘルパ4種の語彙昇格。
     "INSERT_ROWS": (("挿入位置", "at", None), ("行数", "count", None)),
+    "ADD_ROW": (("挿入位置", "at", None), ("入れる値", "_values_label", None)),
+    "DELETE_ROWS": (("削除位置", "at", None), ("行数", "count", None)),
+    "DELETE_COLUMN": (("削除する列", "col", None),),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": (("分類列", "group_col", None), ("集計列", "value_col", None)),
@@ -4567,6 +4654,41 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         at0 = int(resolved_args["at"]) - 1   # 1起点(Excel行番号) → 0起点(Basic)
         count = int(resolved_args.get("count", 1) or 1)
         return wrap(f"    Call InsertRows(oDoc, {at0}, {count})\n")
+
+    # ★ 2026-08-26: 表の基本操作 3 種（Namakoo が GUI を触って欠けを実測）。
+    #   ★ insertByIndex / removeByIndex を使う ── 挿入は**途中でも押し下げ**、
+    #     削除は**詰める**（clearContents だと空行が残る）。
+    if op == "ADD_ROW":
+        at0 = int(resolved_args["at"]) - 1
+        values = resolved_args.get("values") or {}
+        headers = list(resolved_args.get("_headers") or [])
+        idx, vals, kinds = [], [], []
+        for name, v in values.items():
+            if name not in headers:
+                continue
+            idx.append(str(headers.index(name)))
+            # ★ 型は書く値そのものから決める。数値を文字列で書くと下流の SUM が壊れる
+            #   （この repo が何度も測ってきた「静かに壊れる」形）。
+            if isinstance(v, bool):
+                vals.append("TRUE" if v else "FALSE"); kinds.append("s")
+            elif isinstance(v, (int, float)):
+                vals.append(repr(v)); kinds.append("n")
+            else:
+                vals.append(str(v)); kinds.append("s")
+        sep = chr(1)
+        return wrap(
+            f'    Call AddRowWithValues(oDoc, {at0}, "{",".join(idx)}", '
+            f'"{sep.join(vals)}", "{",".join(kinds)}")\n')
+
+    if op == "DELETE_ROWS":
+        at0 = int(resolved_args["at"]) - 1
+        count = int(resolved_args.get("count", 1) or 1)
+        return wrap(f"    Call DeleteRows(oDoc, {at0}, {count})\n")
+
+    if op == "DELETE_COLUMN":
+        headers = list(resolved_args.get("_headers") or [])
+        col0 = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
+        return wrap(f"    Call DeleteColumn(oDoc, {col0})\n")
 
     if op == "DRAW_BORDERS":
         return wrap("    Call DrawTableBorders(oDoc)\n")
@@ -5704,6 +5826,145 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
 #   openpyxl の生スキャン(_scan_last_row/_scan_last_col)で実データ範囲を都度見つける
 #   （header_row を渡しはするが、ヘルパが物理1行目前提で動く以上、通常は 1 のまま使う想定）。
 
+def _rows_of(ws, header_row: int, last_row: int, last_col: int) -> list:
+    """見出しより下の行を、そのまま値の組で読む（比較用）。"""
+    return [tuple(ws.cell(row=r, column=c).value for c in range(1, last_col + 1))
+             for r in range(header_row + 1, last_row + 1)]
+
+
+def check_add_row(path: Path, args: dict, header_row: int = 1,
+                   source_book: Path | None = None) -> tuple:
+    """ADD_ROW の事後条件。
+
+    ★ 2026-08-26: Namakoo が GUI を触って見つけた欠け（21 op のどれにも
+      「データを 1 行足す」が無かった）への実装。
+    ★ 何を証明するか ── **押し下げたこと**（末尾に足しただけではないこと）:
+      ① 行数がちょうど 1 増えている
+      ② at 行目が、宣言した列に宣言した値を持つ（型込みで等値）
+      ③ **at 行目以降の元の行が、1 行ずれてそのまま在る**（上書きしていない）
+      ④ at より上の行が 1 セルも変わっていない
+    ★ source_book が無ければ②だけを見る warn（断定しない・INSERT_ROWS と同じ劣化）。
+    """
+    at = int(args["at"])
+    values = args.get("values") or {}
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+        headers = [str(ws.cell(row=header_row, column=c).value or "")
+                    for c in range(1, last_col + 1)]
+        wrong = []
+        for name, want in values.items():
+            if str(name) not in headers:
+                wrong.append(f"列『{name}』が見つからない")
+                continue
+            got = ws.cell(row=at, column=headers.index(str(name)) + 1).value
+            if got != want:
+                wrong.append(f"{name}: {want!r} のはずが {got!r}")
+        if wrong:
+            return "fail", f"{at}行目の値が宣言と違う（{'／'.join(wrong)}）"
+        last_after = _scan_last_row(ws, header_row=header_row)
+        after_rows = _rows_of(ws, header_row, last_after, last_col)
+    if source_book is None or not Path(source_book).exists():
+        return "warn", f"{at}行目の値のみ確認（適用前ファイルとの突き合わせ無し）"
+    with BookView(source_book) as bv_b:
+        ws_b = bv_b.sheet(args.get("_target_sheet"))
+        last_before = _scan_last_row(ws_b, header_row=header_row)
+        before_rows = _rows_of(ws_b, header_row, last_before, last_col)
+    if len(after_rows) != len(before_rows) + 1:
+        return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行 → "
+                         f"適用後 {len(after_rows)} 行・1 行増えるはず）")
+    k = at - header_row - 1          # 挿入位置（データ行の 0 起点）
+    # ④ 上は不変
+    if after_rows[:k] != before_rows[:k]:
+        return "fail", f"{at}行目より上の行が変わっている（挿入で既存行を壊した疑い）"
+    # ③ 下は 1 行ずれてそのまま
+    if after_rows[k + 1:] != before_rows[k:]:
+        return "fail", (f"{at}行目より下の行が元のままでない ── "
+                         "押し下げずに上書きした疑いがあります")
+    return "pass", f"{at}行目に 1 行追加（上下の行は元のまま・値は宣言どおり）"
+
+
+def check_delete_rows(path: Path, args: dict, header_row: int = 1,
+                       source_book: Path | None = None) -> tuple:
+    """DELETE_ROWS の事後条件。**詰めたこと**を証明する。
+
+    ① 行数がちょうど count 減っている
+    ② 残った行が、適用前から消した分を抜いた並びと**順序ごと連続で**一致する
+       （＝空行が残っていない・別の行を巻き込んでいない）
+    ★ 消した中身は呼び出し側が画面に出す（args["_deleted"] に積む）──
+      「消えたものは差分に出ない」への処置。
+    """
+    at = int(args["at"])
+    count = int(args.get("count", 1) or 1)
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+        after_rows = _rows_of(ws, header_row,
+                               _scan_last_row(ws, header_row=header_row), last_col)
+    if source_book is None or not Path(source_book).exists():
+        return "warn", "適用前ファイルが無いため、消えた行を確かめられていません"
+    with BookView(source_book) as bv_b:
+        ws_b = bv_b.sheet(args.get("_target_sheet"))
+        before_rows = _rows_of(ws_b, header_row,
+                                _scan_last_row(ws_b, header_row=header_row), last_col)
+    k = at - header_row - 1
+    if k < 0 or k >= len(before_rows):
+        return "fail", f"{at}行目は表の範囲外です（データは {len(before_rows)} 行）"
+    expected = before_rows[:k] + before_rows[k + count:]
+    if len(after_rows) != len(expected):
+        return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行から {count} 行消えて "
+                         f"{len(expected)} 行のはずが {len(after_rows)} 行）")
+    if after_rows != expected:
+        return "fail", "残った行の並びが元と違う ── 詰め方が正しくない疑いがあります"
+    note_deleted(args, [before_rows[i] for i in range(k, min(k + count, len(before_rows)))])
+    return "pass", f"{at}行目から {count} 行を削除（残りは順序ごと元のまま）"
+
+
+def check_delete_column(path: Path, args: dict, header_row: int = 1,
+                         source_book: Path | None = None) -> tuple:
+    """DELETE_COLUMN の事後条件。**他の列が 1 セルも変わらない**ことを証明する。"""
+    name = str(args["col"])
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+        headers_after = [str(ws.cell(row=header_row, column=c).value or "")
+                          for c in range(1, last_col + 1)]
+        if name in headers_after:
+            return "fail", f"列『{name}』がまだ在ります（削除されていない）"
+        after_rows = _rows_of(ws, header_row,
+                               _scan_last_row(ws, header_row=header_row), last_col)
+    if source_book is None or not Path(source_book).exists():
+        return "warn", f"列『{name}』が無いことのみ確認（適用前ファイルとの突き合わせ無し）"
+    with BookView(source_book) as bv_b:
+        ws_b = bv_b.sheet(args.get("_target_sheet"))
+        lc_b = max(_scan_last_col(ws_b, header_row=header_row), 1)
+        headers_before = [str(ws_b.cell(row=header_row, column=c).value or "")
+                           for c in range(1, lc_b + 1)]
+        if name not in headers_before:
+            return "fail", f"適用前にも列『{name}』が無い（消した対象が特定できない）"
+        j = headers_before.index(name)
+        before_rows = _rows_of(ws_b, header_row,
+                                _scan_last_row(ws_b, header_row=header_row), lc_b)
+    if headers_after != headers_before[:j] + headers_before[j + 1:]:
+        return "fail", "見出しの並びが元と違う（別の列を巻き込んだ疑い）"
+    expected = [r[:j] + r[j + 1:] for r in before_rows]
+    if after_rows != expected:
+        return "fail", "残った列の中身が元と違う ── 別の列を巻き込んだ疑いがあります"
+    note_deleted(args, [(r[j],) for r in before_rows])
+    return "pass", f"列『{name}』を削除（残りの列は 1 セルも変わらず）"
+
+
+def note_deleted(args: dict, rows) -> None:
+    """消した中身を機械の値として残す（呼び出し側が人に見せる）。
+
+    ★ 「消えたものは差分に出ない」── 削除は**画面の差分に何も出ない**操作なので、
+      何を消したかを言わなければ、人は取り返しがつくかを判断できない。
+    """
+    if not isinstance(args, dict) or not rows:
+        return
+    args["_deleted"] = [list(r) for r in rows][:20]
+
+
 def check_insert_rows(path: Path, args: dict, header_row: int = 1,
                        source_book: Path | None = None) -> tuple:
     """INSERT_ROWS の事後条件。source_book(適用前のコピー)が渡されれば、
@@ -6403,6 +6664,9 @@ POSTCONDITIONS = {
     "CENTER_ALIGN": check_center_align, "APPEND_TOTAL": check_append_total,
     # ★ W9: 検証済みヘルパ4種。
     "INSERT_ROWS": check_insert_rows, "DRAW_BORDERS": check_draw_borders,
+    # ★ 2026-08-26: 表の基本操作 3 種
+    "ADD_ROW": check_add_row, "DELETE_ROWS": check_delete_rows,
+    "DELETE_COLUMN": check_delete_column,
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
@@ -6472,7 +6736,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
                        source_book=source_book)
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
-        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP"):
+        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
+                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:

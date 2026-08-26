@@ -24,6 +24,7 @@
   | existing_column  | （前提なし＝上書き前提・既存の関所）     |
   | format_only      | 値が1つも変わらない                     |
   | row_shift/reorder| 値の多重集合が保存される                 |
+  | remove           | 前提なし（値が減るのが正しい・事後条件が並びで証明する） |
 
 ★★ 単位J: new_column を NO_PRECONDITION から外し、本物の前提を与えた。
   盲検 operator 査定の実測: title_rows.xlsx に「売上から原価を引いた利益の列」を作らせ、
@@ -267,7 +268,11 @@ PRECONDITIONS = {
 }
 
 # 前提を持たない種類（既存の破壊の関所＝書き込み先列の既存値検知が守る側）。
-NO_PRECONDITION = frozenset({"existing_column"})
+# ★ 2026-08-26: "remove"（行/列の削除）は**値が減るのが正しい**ので、値の保存を前提に
+#   できない。忘れたのではなく「前提は無いと確認した」側に置く ── 代わりに
+#   check_delete_rows / check_delete_column が「残りが順序ごと一致すること」を証明し、
+#   消した中身は必ず画面に出す（note_deleted）。
+NO_PRECONDITION = frozenset({"existing_column", "remove"})
 
 
 def check_write_preconditions_detail(writes, before: dict, after: dict, *,

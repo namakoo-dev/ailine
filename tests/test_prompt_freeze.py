@@ -56,7 +56,22 @@ _FROZEN = {
     #   ★ この実測を根拠に、台帳の残り（DATE_CALC 2 件・PRINT/EXPORT_DOC 4 件）は
     #   **OPS_DOC を増やさない形**で実装した ── PRINT/EXPORT_DOC は `export-pdf`
     #   サブコマンド、日付の扱いは既存 op（EXTRACT/SORT）の穴埋めとして。
-    "OPS_DOC": "f1d00fb654aed28a",
+    # ★ 2026-08-26: 表の基本操作 3 種（ADD_ROW / DELETE_ROWS / DELETE_COLUMN）の語彙昇格で
+    #   OPS_DOC に **3 行**追加（+ INSERT_ROWS の 1 行を「空行だけ」と直した）。
+    #   きっかけは Namakoo が GUI を触った実測 ── 「5行目に商品として梨を追加して」が
+    #   行挿入＋一括書換に分解されて 4 段とも落ちた。21 op のどれにも
+    #   「データを 1 行足す」「行/列を消す」が無かった。
+    #   bench/translation_dsl_battery_run.py 実 7B（qwen2.5-coder:7b・items v1）で実走:
+    #     op 94.2%(49/52)・slot 98.6%(68/69)・曖昧誤断定 0%(0/10)
+    #     （合格線 90%/80%/20%以下 ── すべてクリア）
+    #   ★ 代償を正直に書く: 帳票段直後の 96.2% から **1 件ぶん下がった**
+    #     （新たに #21 FILL_COLOR→FREEFORM が崩れた）。「1 行でも他 op を押しのける」という
+    #     08-24 の観測（16 行で 98.1%→94.2%）と同じ向き。
+    #   ★ 測定器も 1 件直した: #45「金額列を削除して」は expect=freeform（理由:
+    #     「削除 op は語彙にない」）だった ── **その前提を今日変えた**ので、検体を
+    #     DELETE_COLUMN 期待へ付け替えた（緩めたのではなく契約の訂正）。
+    #   ★ これ以上は同じ検体で調整しない（自己汚染）── 実運用の誤分類が出たら測り直す。
+    "OPS_DOC": "19ce775d7d59cf4f",
     "TRANSLATION_SYSTEM": "8dd5cd3a43d833fe",
     "TRANSLATION_FEWSHOT": "c10a9b45e6cada35",
     # ★ 2026-08-22: W10 便B（二段目翻訳・op 固定で args だけ埋めさせる）で追加した第4の定数。

@@ -136,6 +136,15 @@ _add("append_total_with_label_factor1_1_hr3", "APPEND_TOTAL",
 _add("insert_rows_at3_count1", "INSERT_ROWS", {"at": 3, "count": 1})
 _add("insert_rows_at1_count2", "INSERT_ROWS", {"at": 1, "count": 2})
 
+# --- ★ 2026-08-26: 表の基本操作 3 種 --------------------------------------
+_add("add_row_middle", "ADD_ROW",
+     {"at": 3, "values": {"商品": "梨", "金額": 600}, "_headers": ["商品", "金額"]})
+_add("add_row_string_only", "ADD_ROW",
+     {"at": 2, "values": {"商品": "梨"}, "_headers": ["商品", "金額"]})
+_add("delete_rows_at3", "DELETE_ROWS", {"at": 3, "count": 1})
+_add("delete_rows_at2_count3", "DELETE_ROWS", {"at": 2, "count": 3})
+_add("delete_column_second", "DELETE_COLUMN", {"col": "金額", "_headers": ["商品", "金額"]})
+
 # --- DRAW_BORDERS / AUTOFIT（引数無し） ------------------------------------
 _add("draw_borders", "DRAW_BORDERS", {})
 _add("autofit", "AUTOFIT", {})

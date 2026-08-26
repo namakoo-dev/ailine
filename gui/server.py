@@ -57,6 +57,55 @@ def _ailine(args: list) -> tuple:
     return proc.returncode, out, payload
 
 
+MAX_ROWS = 200
+MAX_COLS = 40
+
+
+def _read_sheet(path: Path, sheet: str | None) -> dict:
+    """表を画面に出すために読む。**判定はしない** ── 見せるだけ。
+
+    ★ 読み手は ailine 自身の独立読み（ailine_core.xml_readback）を使う。
+      ここで新しい読み実装を書けば、画面が「本体とは違うもの」を見せうる
+      ── 2026-08-26 に、この repo の 2 つの読み実装が食い違っていて
+      `9:00` が `1899-12-30T09:00:00` になっていたのを実測している。
+      両者が一致することは tests/test_readers_agree.py が機械で守っている。
+    ★ 大きい表は途中で切るが、**切ったことは必ず言う**（出ないことは信号でない）。
+    """
+    try:
+        sys.path.insert(0, str(REPO / "src"))
+        from ailine_core import xml_readback
+        import openpyxl
+    except Exception as e:
+        return {"error": f"読み手を用意できません: {e}"}
+    try:
+        names = openpyxl.load_workbook(path, read_only=True).sheetnames
+    except Exception as e:
+        return {"error": f"開けません: {type(e).__name__}: {e}"}
+    try:
+        data = xml_readback.read_grid(path, sheet_name=sheet)
+    except Exception as e:
+        return {"error": f"読めません: {type(e).__name__}: {e}", "sheets": names}
+    grid = data["grid"]
+    rows_n, cols_n = data["max_row"], data["max_col"]
+    shown_r, shown_c = min(rows_n, MAX_ROWS), min(cols_n, MAX_COLS)
+    cells = [[_cell_text(grid.get((r, c))) for c in range(1, shown_c + 1)]
+              for r in range(1, shown_r + 1)]
+    note = ""
+    if rows_n > shown_r or cols_n > shown_c:
+        note = f"表が大きいので {shown_r} 行 × {shown_c} 列だけ出しています（実際は {rows_n} 行 × {cols_n} 列）"
+    return {"sheets": names, "sheet": data["sheet_name"], "cells": cells,
+            "rows": rows_n, "cols": cols_n, "note": note,
+            "uncached": len(data.get("uncached_formulas") or ())}
+
+
+def _cell_text(v) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    return str(v)
+
+
 def _default_dir() -> Path:
     """最初に開くフォルダ。同梱のサンプルがあればそこ、無ければ repo 直下。"""
     for cand in (REPO / "demo_gui", REPO / "demo"):
@@ -80,10 +129,27 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
                     "application/json; charset=utf-8")
 
+    def _url(self):
+        """★ http.server は要求行を latin-1 で str にするので、日本語のパスを
+           クエリに乗せると壊れる（実測: `1_売上.xlsx` が読めなかった）。
+           バイト列へ戻してから UTF-8 として読み直す。"""
+        raw = self.path
+        try:
+            raw = raw.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+        return urlparse(raw)
+
     def do_GET(self):
-        u = urlparse(self.path)
+        u = self._url()
         if u.path in ("/", "/index.html"):
             self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+            return
+        if u.path == "/api/sheet":
+            q = parse_qs(u.query)
+            path = Path((q.get("path") or [""])[0])
+            want = (q.get("sheet") or [None])[0]
+            self._json(200, _read_sheet(path, want))
             return
         if u.path == "/api/files":
             q = parse_qs(u.query)

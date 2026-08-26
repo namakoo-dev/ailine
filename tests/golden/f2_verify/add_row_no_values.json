@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "at": 3,
+    "values": {},
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "入れる値が読み取れません（列名と値の組で書いてください）"
+}

@@ -48,6 +48,11 @@ _add("append_total_with_source", "APPEND_TOTAL",
 _add("append_total_without_source", "APPEND_TOTAL",
      {"col": "金額", "label": "合計", "factor": 1.0})
 _add("insert_rows_count_inferred", "INSERT_ROWS", {"at": 3, "count": 1}, inferred=("count",))
+
+_add("add_row_values", "ADD_ROW",
+     {"at": 3, "values": {"商品": "梨"}, "_values_label": "商品=梨／金額=600"})
+_add("delete_rows_inferred", "DELETE_ROWS", {"at": 3, "count": 1}, inferred=("count",))
+_add("delete_column_one", "DELETE_COLUMN", {"col": "金額"})
 _add("draw_borders_no_fields", "DRAW_BORDERS", {})
 _add("autofit_no_fields", "AUTOFIT", {})
 _add("pivot", "PIVOT", {"group_col": "商品", "value_col": "金額"})
