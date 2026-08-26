@@ -11758,8 +11758,28 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
     body = (f"{write_result.rows_written} 行×{write_result.cols_written} 列を 1 セルも"
             f"変えずに書いた（欠落{len(roundtrip.missing)}・不一致{len(roundtrip.mismatched)}"
             f"・余剰{len(roundtrip.surplus)}）")
-    if roundtrip.ok:
+    # ★★ 2026-08-26（データの出入口の盲検・致命3）: 数式だがキャッシュ値が無いセルは
+    #   grid から消えるので**分母からも消え**、空欄で書き出しても「欠落 0」が成立した
+    #   ── 金額列が全部数式の見積書は、金額が全部空の CSV が ✓ で出る。
+    #   同じブック・同じコマンドで、LO の再計算の有無だけで結果が変わり、どちらも ✓ だった。
+    #   ★ 「検算していません」ではなく **「値が空になりました」** と実害の形で言う。
+    uncached = list(getattr(grid, "uncached_formulas", ()) or ())
+    for r, c in uncached[:5]:
+        lines.append(f"⚠ {r}行目{c}列目は数式で、計算結果がファイルに入っていないため"
+                     "**空欄で書き出しました**（元の値は分かりません）")
+    if len(uncached) > 5:
+        lines.append(f"⚠ 同じ形のセルがほかに {len(uncached) - 5} 個あります")
+    if uncached:
+        lines.append("  → Excel か LibreOffice で一度開いて保存し直すと、計算結果が入ります")
+    if roundtrip.ok and not uncached:
         lines.append(f"✓ シートの {body}")
+        for ln in lines:
+            print(ln)
+        _record_csv_export_history(book_path, out_path, a.sheet, ok=True)
+        return 0
+    if roundtrip.ok:
+        # ★ 書けた分は本当に書けている ── ✓ は名乗らないが × でもない（△）。
+        lines.append(f"△ シートの {body} ── ただし上の ⚠ は確かめられていません")
         for ln in lines:
             print(ln)
         _record_csv_export_history(book_path, out_path, a.sheet, ok=True)

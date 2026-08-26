@@ -112,11 +112,37 @@ def _is_date_numfmt(numfmt_id: int, custom_numfmts: dict) -> bool:
     return bool(_DATE_TOKEN_RE.search(_QUOTED_RE.sub("", code)))
 
 
+def _round_to_second(dt: datetime.datetime) -> datetime.datetime:
+    """シリアル値（float）から作った日時を秒へ丸める。
+
+    ★ 2026-08-26: 一致番人（tests/test_readers_agree.py）が**検分者も見つけていない**
+      食い違いを掴んだ ── `2026-01-02 18:30` を読むと `18:30:00.000001` になっていた。
+      1 日を float で割る以上ずれるのは避けられないので、**秒へ丸める**
+      （Excel の画面にも CSV にもマイクロ秒は出てこない ── 誤差を値に漏らさない）。
+    """
+    if dt.microsecond == 0:
+        return dt
+    add = 1 if dt.microsecond >= 500000 else 0
+    return dt.replace(microsecond=0) + datetime.timedelta(seconds=add)
+
+
 def _serial_to_date(serial: float):
-    """Excel のシリアル値 → datetime.date（時刻成分が無ければ）/ datetime.datetime。
+    """Excel のシリアル値 → datetime.date / datetime.time / datetime.datetime。
        ★ openpyxl と同じ基準日（1899-12-30）を使う ── 1900年を閏年扱いする Excel の
-       バグごと踏襲することで、両実装の変換結果が一致する。"""
-    dt = _EXCEL_EPOCH + datetime.timedelta(days=serial)
+       バグごと踏襲することで、両実装の変換結果が一致する。
+
+    ★★ 2026-08-26（データの出入口の盲検・致命2）: **1 日未満は時刻**として返す。
+      それまでは `9:00` と見えているセルを `1899-12-30T09:00:00` にしていた
+      （openpyxl は `datetime.time(9, 0)` を返す）── **同じ repo の 2 つの読み実装が
+      食い違っていた**。export-csv はこちらの読みで書き、こちらの読みで検算するので、
+      誤読のまま「1 セルも変えずに書いた（欠落0・不一致0・余剰0）」と ✓ が出ていた。
+      勤怠表を給与ソフトへ渡す用途で黙って壊れる。
+      ★ 基準は「openpyxl と一致すること」── 番人もそう書いてある
+        （tests/test_readers_agree.py・どちらかが動いたら赤くなる）。
+    """
+    dt = _round_to_second(_EXCEL_EPOCH + datetime.timedelta(days=serial))
+    if 0 <= serial < 1:
+        return dt.time()
     return dt.date() if dt.time() == datetime.time(0, 0) else dt
 
 
@@ -208,6 +234,7 @@ def read_grid(path, sheet_name: str | None = None) -> dict:
         sheet_path, used_sheet_name, sheet_fallback = _sheet_target(z, sheet_name)
         root = ET.fromstring(z.read(sheet_path))
         grid: dict = {}
+        uncached: list = []      # ★ 数式だがキャッシュ値が無いセル（空セルとは別物）
         max_row = max_col = 0
         for row_el in root.findall(".//main:sheetData/main:row", _NS):
             for c in row_el.findall("main:c", _NS):
@@ -223,12 +250,23 @@ def read_grid(path, sheet_name: str | None = None) -> dict:
                 is_date = _is_date_numfmt(numfmt_id, custom_numfmts)
                 value = _cell_value(c, shared, is_date=is_date)
                 if value is None:
+                    # ★★ 2026-08-26（データの出入口の盲検・致命3）: ここで「空セル」と
+                    #   **数式だがキャッシュ値が無いセル**が同じ扱いになっていた。
+                    #   後者は grid から消えるので、export-csv の分母（declared）からも
+                    #   消え、空欄で書き出しても「欠落 0」が成立していた
+                    #   ── 金額列が全部数式の見積書は、金額が全部空の CSV が ✓ で出る。
+                    #   ★ 空と「読めなかった」は別物。数えて呼び出し側へ渡す。
+                    if c.find("main:f", _NS) is not None:
+                        uncached.append((r, col))
+                        max_row = max(max_row, r)
+                        max_col = max(max_col, col)
                     continue
                 grid[(r, col)] = value
                 max_row = max(max_row, r)
                 max_col = max(max_col, col)
         return {"grid": grid, "max_row": max_row, "max_col": max_col,
-                "sheet_name": used_sheet_name, "sheet_fallback": sheet_fallback}
+                "sheet_name": used_sheet_name, "sheet_fallback": sheet_fallback,
+                "uncached_formulas": sorted(uncached)}
 
 
 def header_names(data: dict, header_row: int = 1, max_scan_cols: int = 200) -> list:

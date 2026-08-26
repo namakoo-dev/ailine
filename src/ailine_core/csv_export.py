@@ -81,6 +81,9 @@ class SourceGrid:
     max_row: int
     max_col: int
     sheet_fallback: bool
+    # ★ 2026-08-26（致命3）: 数式だがキャッシュ値が無いセル。空セルと同じ扱いにすると
+    #   分母（declared）から消え、空欄で書き出しても「欠落 0」が成立してしまう。
+    uncached_formulas: tuple = ()
 
 
 def read_source(path, sheet_name: str) -> SourceGrid:
@@ -89,7 +92,8 @@ def read_source(path, sheet_name: str) -> SourceGrid:
        要求を、read_grid を読むだけで満たす。"""
     data = xml_readback.read_grid(path, sheet_name=sheet_name)
     return SourceGrid(grid=data["grid"], max_row=data["max_row"], max_col=data["max_col"],
-                       sheet_fallback=data["sheet_fallback"])
+                       sheet_fallback=data["sheet_fallback"],
+                       uncached_formulas=tuple(data.get("uncached_formulas") or ()))
 
 
 def _cell_for_csv(value):
@@ -101,6 +105,10 @@ def _cell_for_csv(value):
         return "TRUE" if value else "FALSE"
     if isinstance(value, (int, float)):
         return value
+    # ★ 2026-08-26: 時刻は時刻として書く（datetime.time は date の下位型ではないので
+    #   下の分岐に吸われないが、順序を明示しておく ── 読み手の誤解を残さない）。
+    if isinstance(value, datetime.time):
+        return value.isoformat()
     if isinstance(value, datetime.date):
         return value.isoformat()
     return str(value)
