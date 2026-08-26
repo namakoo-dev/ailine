@@ -82,6 +82,12 @@ def _numeric_columns(grid: dict, base_headers: list, rows: list) -> list:
     return out
 
 
+# ★ 検算が「書き手と同じ規則で」落とした行の控え（2026-08-26・致命①⑨）。
+#   戻り値のタプルを増やすと試験の直呼びが壊れるので、パス → 行番号 の形で残す。
+#   ここに入った行は「検算が裏取りしていない除外」── 呼び出し側が必ず人へ見せる。
+_LAST_DROPPED: dict = {}
+
+
 def _expected_rows_for_source(path, base_headers: list, label_col_name, numeric_col_names: list,
                                sheet_name: str | None = None):
     """1元ファイルを独立に読み直し、『積まれるはずだった行』の行番号集合と、
@@ -123,6 +129,17 @@ def _expected_rows_for_source(path, base_headers: list, label_col_name, numeric_
     num_cols = len(src_headers)
     data_rows = [r for r in all_rows if xml_readback.row_has_any_value(data, r, num_cols)]
     expected_rows = {r for r in data_rows if r not in excluded_rows}
+    # ★★ 2026-08-26（複数ファイルの盲検・致命①⑨）: ここは書き手（stack）と**同じ関数**で
+    #   除外を決めている。だから書き手が本物のデータ行を「合計行」と誤判定して落とすと、
+    #   検算も同じ行を落とし、**両方が同じ間違いをして一致する＝恒真**になる。
+    #   実測: 区切りの空行がある表で、3 列すべて埋まった売上 1,000 円が消え、
+    #   stack も verify も exit 0（--json の mismatches も空）。
+    #   ★ 上の docstring が書くとおり、共有は**別の恒真**（片方だけ取り逃がす）を避ける
+    #     ための意図的な判断だった。だが同じ罠の裏返しでしかない。
+    #   ★ 三項で解く: 書き手は除外する／検算は除外を**判断しない**／差は人に見せる。
+    #     判定（expected_rows）はここでは変えない ── 変えると正しい合計行を持つ表が
+    #     全部不一致になる。代わりに**落とした行を記録して、呼び出し側が開示する**。
+    _LAST_DROPPED[str(path)] = sorted(r for r in data_rows if r in excluded_rows)
 
     values: dict = {}
     for bh in base_headers:
@@ -456,6 +473,8 @@ def _verify_stack(out_path, src_folder) -> dict:
 
     expected_total = 0
     sums_source = {name: 0.0 for name in numeric_cols}
+    unbacked = []          # ★ 検算が裏取りしていない除外（複数ファイルの盲検・致命①⑨）
+    _LAST_DROPPED.clear()
     for fname in sorted(refs):
         path = src_folder / fname
         if not path.exists():
@@ -463,6 +482,8 @@ def _verify_stack(out_path, src_folder) -> dict:
         expected_rows, values = _expected_rows_for_source(path, base_headers,
                                                             label_col_name, numeric_cols,
                                                             sheet_name=base_sheet_name)
+        for _r in _LAST_DROPPED.get(str(path), []):
+            unbacked.append({"kind": "unbacked_exclusion", "file": fname, "row": _r})
         expected_total += len(expected_rows)
         for name in numeric_cols:
             for v in values.get(name, {}).values():
@@ -522,8 +543,13 @@ def _verify_stack(out_path, src_folder) -> dict:
     #   `ailine verify` 単独実行（cmd_verify）は kind を問わず exit 5 にする ── 意図どおり。
     mismatches.extend(_total_word_mismatches(out_data, out_headers, out_rows))
 
+    # ★ 2026-08-26（致命①⑨）: 書き手と同じ規則で落ちた行は、検算が裏取りしたものではない。
+    #   数字が合っていても黙らない ── どのファイルの何行目を落としたかを人へ見せる。
+    #   ★ 判定（exit）は変えない: 正しい合計行を持つ表を全部不合格にしないため。
+    #     ただし「一致しました」と言い切らせない（開示が出た回は ✓ を名乗らない）。
     return {"row_count": row_count, "sums": sums,
-            "mismatch": mismatches[0] if mismatches else None, "mismatches": mismatches}
+            "mismatch": mismatches[0] if mismatches else None, "mismatches": mismatches,
+            "unbacked_exclusions": unbacked}
 
 
 # ---- M3: 照合出力の単独検算（`ailine verify <出力> <元A> <元B>`） ----

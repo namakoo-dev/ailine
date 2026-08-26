@@ -468,6 +468,15 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
     lines.append(f"行数: 元 {result['row_count']['source']} / 出力 {result['row_count']['output']}")
     for col, both in result.get("sums", {}).items():
         lines.append(sum_line(col, both, result.get("excluded_rows", 0)))
+    # ★★ 2026-08-26（複数ファイルの盲検・致命①⑨）: 検算は書き手と**同じ関数**で
+    #   「合計行」を落としている。両方が同じ間違いをすれば一致してしまう（恒真）。
+    #   実測: 区切りの空行がある表で、3 列すべて埋まった売上 1,000 円が消えて exit 0。
+    #   ★ 判定は変えない（正しい合計行を持つ表を全部不合格にしないため）。
+    #     代わりに**落とした行を名指しする** ── 人が「それは売上だ」と気づける形にする。
+    for u in result.get("unbacked_exclusions") or []:
+        lines.append(f"⚠ {u['file']} の {u['row']}行目を『合計行』として除外しています"
+                     "（検算はこの判断を裏取りしていません ── 本物のデータ行なら、"
+                     "その金額は上の合計に入っていません）")
     mismatches = result.get("mismatches")
     if mismatches is None:   # ★ 後方互換: 複数形を持たない呼び出し元（無いはずだが fail closed）
         mismatches = [mismatch] if mismatch else []

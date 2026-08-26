@@ -20,8 +20,9 @@ import しない・openpyxl だけを使う）。期待文字列の組み立て�
 - `APPEND_TOTAL` → `SORT` の順（「最終ファイルで全段の事後条件を再実行する版を選ばなかった」
   ことの回帰試験。再実行版だと `check_append_total` が `"=SUM("` の初出行で合計行を探すため、
   SORT で合計行が上へ移動した**正しい** run が偽 fail になる）
-- 原本適用のフォールバック経路（`atomic_replace_inplace` の copy2 側・ゴールデンが1本も
-  無かった経路）
+- 原本適用の予備経路（`atomic_replace_inplace` の再 rename 側・ゴールデンが1本も
+  無かった経路。★ 2026-08-26 まではここが copy2 で**原本へ直接書いて**いた ── 途中で
+  失敗すると原本が 0 バイトになるので、経路ごと廃した）
 
 ★ 実機 LibreOffice/ollama は使わない（translate_task / basrun_apply を差し替え、
 それ以外は本物のパイプラインを通す＝tests/test_golden_transcripts.py と同じ流儀）。
@@ -331,21 +332,33 @@ def test_append_total_then_sort_still_claims_and_rerunning_postconditions_would_
 # ⑥ 原本適用のフォールバック経路（atomic_replace_inplace の copy2 側）
 # ===========================================================================
 
-def test_claim_holds_on_the_copy2_fallback_path_of_atomic_replace(tmp_path, monkeypatch, capsys):
-    """★ ゴールデンが1本も無かった経路。os.replace が落ちて copy2 へ落ちた run でも、
-       ✓ は「原本を読み戻して確かめた」という同じ意味でなければならない。"""
+def test_claim_holds_on_the_retry_path_of_atomic_replace(tmp_path, monkeypatch, capsys):
+    """★ ゴールデンが1本も無かった経路。1 度目の置換が落ちて予備の経路へ回った run でも、
+       ✓ は「原本を読み戻して確かめた」という同じ意味でなければならない。
+
+    ★ 2026-08-26 に**擬似障害の当て所を移した**（復元の盲検 3 回目・致命3）:
+      旧経路は `copy2(out_book, book)` ── **原本へ直接書く**フォールバックで、
+      途中で失敗すると原本が 0 バイトになった。この試験は当時「原本 b.xlsx への
+      置換が落ちたら」で障害を作っていたが、新しい実装ではその場合**成功しない**
+      （原本へ直接書く経路を持たないので、正しく失敗する）。
+      予備の経路は「原本と同じフォルダに staging を取り直してもう一度 rename」なので、
+      **作業フォルダからの置換だけ**を落とす ── 試験の意図（✓ の意味は経路で変わらない）
+      は 1 ミリも緩めていない。
+    """
     _isolate(monkeypatch, tmp_path)
     real_replace = os.replace
 
     def flaky_replace(src, dst, *args, **kwargs):
-        if str(dst).endswith("b.xlsx"):
+        # 作業フォルダの staging からの置換だけ落とす（クロスデバイスを模す）
+        if Path(src).name.startswith("staged"):
             raise OSError("staging の置換に失敗した（テスト用の擬似障害）")
         return real_replace(src, dst, *args, **kwargs)
     monkeypatch.setattr(ailine.os, "replace", flaky_replace)
 
     book, rc, out = _single_success_run(tmp_path, monkeypatch, capsys)
     assert rc == 0, out
-    assert "copy2 へフォールバックした" in out, out
+    assert "原本と同じフォルダで置換した" in out, out
+    assert "原本は壊していません" in out, out
     named = _assert_claim_is_independently_rederivable(out, _candidates(book))
     assert named == book.name
     # 原本に実際に反映されている（フォールバックでも中身が入っている）ことを裏取りする。

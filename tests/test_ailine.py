@@ -2203,7 +2203,17 @@ def test_atomic_replace_inplace_backup_failure_aborts_without_touching_book(tmp_
     assert book.read_bytes() == b"ORIGINAL"   # 原本は無変更
     assert out_book.exists()                   # .out はそのまま残る
 
-def test_atomic_replace_inplace_falls_back_to_copy2_when_os_replace_fails(tmp_path, monkeypatch):
+def test_atomic_replace_inplace_retries_with_a_rename_not_by_writing_into_the_book(tmp_path, monkeypatch):
+    """★ 2026-08-26 に契約を**訂正**した検体（復元の盲検 3 回目・致命3）。
+
+    旧契約: os.replace が失敗したら `copy2(out_book, book)` で**原本へ直接書く**。
+    実測した壊れ方: copy2 は dst を開いた瞬間に切り詰めるので、途中で失敗すると
+      原本が **0 バイト**になる。それで False を返すと呼び出し側は必ず
+      「原本は変更していません」と印字する ── **壊した上で無変更を名乗る**。
+    新契約: 原本へ直接書く経路を持たない。作業フォルダからの置換に失敗したら、
+      **原本と同じフォルダに staging を取り直してもう一度 rename する**
+      （rename は成功か失敗かしかなく、半端な原本を作らない）。
+    """
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     book = tmp_path / "book.xlsx"
     book.write_bytes(b"ORIGINAL")
@@ -2211,15 +2221,52 @@ def test_atomic_replace_inplace_falls_back_to_copy2_when_os_replace_fails(tmp_pa
     out_book.write_bytes(b"NEW-CONTENT")
     workdir = tmp_path / ".ailine_book"
     workdir.mkdir()
-    monkeypatch.setattr(ailine.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
+    real_replace = ailine.os.replace
+    def flaky_replace(src, dst):
+        # 作業フォルダからの置換だけ失敗させる（クロスデバイスを模す）
+        if Path(src).parent == workdir:
+            raise OSError("cross-device link")
+        return real_replace(src, dst)
+    monkeypatch.setattr(ailine.os, "replace", flaky_replace)
     ok, err = ailine.atomic_replace_inplace(book, out_book, workdir)
-    assert ok is True
-    assert err is None
-    assert book.read_bytes() == b"NEW-CONTENT"   # copy2 フォールバックで反映されている
-    backups = ailine.list_backups(book)
-    assert len(backups) == 1   # バックアップは os.replace 失敗の前に既に確保済み
+    assert ok is True and err is None
+    assert book.read_bytes() == b"NEW-CONTENT"
+    assert len(ailine.list_backups(book)) == 1
+    # 置き場の掃除（原本の隣にゴミを残さない）
+    leftovers = [q.name for q in tmp_path.iterdir() if q.name.startswith(".ailine_staged")]
+    assert leftovers == [], leftovers
 
-def test_atomic_replace_inplace_both_replace_and_fallback_fail_reports_honestly(tmp_path, monkeypatch):
+
+def test_atomic_replace_inplace_never_leaves_a_half_written_book(tmp_path, monkeypatch):
+    """★★ 致命3 の芯: **どう失敗しても原本は 1 バイトも変わらない**。
+
+    ここが旧実装の穴だった ── 「置換に失敗した」と正直に報告しながら、
+    その時点で原本は既に 0 バイトだった（障害注入で再現）。
+    """
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = tmp_path / "book.xlsx"
+    book.write_bytes(b"ORIGINAL")
+    out_book = tmp_path / "book.out.xlsx"
+    out_book.write_bytes(b"NEW-CONTENT")
+    workdir = tmp_path / ".ailine_book"
+    workdir.mkdir()
+    monkeypatch.setattr(ailine.os, "replace",
+                         lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
+    ok, err = ailine.atomic_replace_inplace(book, out_book, workdir)
+    assert ok is False
+    assert "置換に失敗した" in err
+    assert book.read_bytes() == b"ORIGINAL",         "失敗を報告しながら原本を壊した（0 バイト化・嘘の無変更報告）"
+    assert "原本は無変更" in err, f"呼び出し側が言う『無変更』の根拠を持っていない: {err}"
+    leftovers = [q.name for q in tmp_path.iterdir() if q.name.startswith(".ailine_staged")]
+    assert leftovers == [], leftovers
+
+
+def test_atomic_replace_inplace_does_not_write_into_the_book_at_all(tmp_path, monkeypatch):
+    """★ 負の被覆: **原本を書き込みで開く呼び出しが 1 度も無い**ことを直接主張する。
+
+    「壊れなかった」を状態で測ると、たまたま壊れなかった実装を通してしまう。
+    ここでは **copy2 の宛先に原本が現れないこと**を測る（経路そのものの不在）。
+    """
     import shutil as _shutil
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
     book = tmp_path / "book.xlsx"
@@ -2228,20 +2275,16 @@ def test_atomic_replace_inplace_both_replace_and_fallback_fail_reports_honestly(
     out_book.write_bytes(b"NEW-CONTENT")
     workdir = tmp_path / ".ailine_book"
     workdir.mkdir()
-    monkeypatch.setattr(ailine.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
+    dests = []
     real_copy2 = _shutil.copy2
-    calls = {"n": 0}
-    def fake_copy2(src, dst):
-        calls["n"] += 1
-        # 1回目=バックアップ作成の内部コピー・2回目=staging へのコピー は成功させ、
-        # 3回目=os.replace 失敗後のフォールバック copy2(out_book, book) だけ失敗させる。
-        if calls["n"] <= 2:
-            return real_copy2(src, dst)
-        raise OSError("also locked")
-    monkeypatch.setattr(ailine.shutil, "copy2", fake_copy2)
-    ok, err = ailine.atomic_replace_inplace(book, out_book, workdir)
-    assert ok is False
-    assert "置換に失敗した" in err
+    def watching_copy2(src, dst):
+        dests.append(Path(dst))
+        return real_copy2(src, dst)
+    monkeypatch.setattr(ailine.shutil, "copy2", watching_copy2)
+    monkeypatch.setattr(ailine.os, "replace",
+                         lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
+    ailine.atomic_replace_inplace(book, out_book, workdir)
+    assert book not in dests, f"原本を書き込み先にした: {[str(d) for d in dests]}"
 
 
 # ===========================================================================

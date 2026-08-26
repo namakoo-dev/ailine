@@ -7394,22 +7394,39 @@ def atomic_replace_inplace(book: Path, out_book: Path, workdir: Path,
     except Exception as e:
         return False, f"バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}"
 
+    def _discard(p: Path) -> None:
+        try:
+            if p.exists():
+                p.unlink()
+        except OSError:
+            pass
+
     staging = workdir / f"staged{book.suffix}"
     try:
         shutil.copy2(out_book, staging)
         os.replace(staging, book)
     except OSError as e:
+        # ★★ 2026-08-26（復元の盲検 3 回目・致命3）: ここには
+        #   `shutil.copy2(out_book, book)` ── **原本へ直接書くフォールバック**が在った。
+        #   copy2 は dst を開いた瞬間に切り詰めるので、途中で失敗すると原本が 0 バイトになる。
+        #   それで False を返すと、呼び出し側は必ず「原本は変更していません」と印字する
+        #   ── **壊した上で無変更を名乗る**。障害注入で再現済み（ENOSPC / size 0 / BadZipFile）。
+        #   ★ 根治は「フォールバックを直す」ではなく **原本へ直接書く経路を持たないこと**。
+        #     置換は必ず rename で行う（rename は成功か失敗かしかなく、半端な原本を作らない）。
+        #   ★ 元のフォールバックの建前はクロスデバイスだった。それは staging の置き場を
+        #     **原本と同じフォルダ**に取り直せば消える ── だからもう一度 rename する。
+        _discard(staging)
+        near = book.parent / f".ailine_staged_{book.stem}{book.suffix}"
         try:
-            shutil.copy2(out_book, book)
+            shutil.copy2(out_book, near)
+            os.replace(near, book)
         except OSError as e2:
-            return False, f"置換に失敗した（バックアップは確保済み）: {e2}"
-        print(f"⚠ 原子的な置換に失敗したため copy2 へフォールバックした（バックアップは確保済み）: {e}")
+            _discard(near)
+            return False, (f"置換に失敗した（原本は無変更・バックアップは確保済み）: {e2}")
+        print("⚠ 作業フォルダからの置換に失敗したため、原本と同じフォルダで置換した"
+              f"（原本は壊していません・バックアップは確保済み）: {e}")
     finally:
-        if staging.exists():
-            try:
-                staging.unlink()
-            except OSError:
-                pass
+        _discard(staging)
 
     try:
         if out_book.exists() and out_book != book:
