@@ -1264,6 +1264,15 @@ def count_reconciliation(before: dict, after: dict) -> str | None:
     #   ここでは「データ行」として数えない（分母(data_rows)も同じ範囲の定義に揃える）。
     data_changed_rows = {r for r in all_changed_rows if min_r < r <= max_r}
     changed_rows = len(data_changed_rows)
+    # ★ 2026-08-26（初回体験の盲検 3 回目・CONFUSING 5）: 実測で
+    #   「列 D: データ 0 行のうち 3 行を変更（0 行は未変更）」が出た（3+0 ≠ 0）。
+    #   根: 分母 data_rows は**隣の列**（key_col = col-1）を数えて作っている。
+    #   その列が空（実測は lookup.xlsx の単価列）だと分母が 0 になり、算数が壊れる。
+    #   ★ 分母を都合のいい代用品から作らない ── 壊れた時は**物理の使用範囲**から取る。
+    #     data_changed_rows は定義上 (min_r, max_r] に収まるので、これで必ず整合する。
+    #   ★ 今まで整合していた出力は 1 文字も変わらない（壊れている時だけ差し替える）。
+    if changed_rows > data_rows:
+        data_rows = max_r - min_r
     unchanged_rows = max(data_rows - changed_rows, 0)
     col_letter = get_column_letter(col)
     # ★ operator 指摘②(2026-08-19): 1500 行のブックで「データ 999 行のうち 999 行を変更」と
@@ -6846,6 +6855,28 @@ def list_backups(book: Path) -> list:
         _gather_backups(BACKUP_DIR / _backup_namespace(book), stem, suffix))
 
 
+def _renamed_or_moved_note(book: Path) -> str:
+    """同じフォルダの世代置き場に**別の名前の**世代が在れば、そう言う。
+
+    ★ 2026-08-26（復元の盲検 3 回目・重大5）: ファイル名を変えたり移動したりすると
+      `× <名前> のバックアップが無い` とだけ言って終わっていた。世代はそのまま在るのに、
+      利用者には「消えた」としか見えない ── 命綱が「無い」と言うのと
+      「別の名前で在る」は別物。
+    ★ 勝手に結び付けない（同名でない物を当てるのは、致命①で塞いだばかりの事故の形）。
+      在り処と、名前で結び付いていることだけを言う。
+    """
+    ns_dir = BACKUP_DIR / _backup_namespace(book)
+    if not ns_dir.is_dir():
+        return ""
+    others = [q for q in ns_dir.iterdir()
+               if q.is_file() and not q.name.startswith(".")]
+    if not others:
+        return ""
+    return (f"（このフォルダの世代置き場には別の名前の世代が {len(others)} 件あります: "
+            f"{ns_dir} ── 世代は「フォルダ＋ファイル名」で結び付けているので、"
+            "名前を変えたり移したりすると辿れなくなります）")
+
+
 def list_legacy_backups(book: Path) -> list:
     """旧フラット領域（BACKUP_DIR 直下・名前空間分離前の名残）にある**同名**の世代。
 
@@ -6994,7 +7025,8 @@ def restore_backup(book: Path) -> Path:
     #   「無い」と言い切ると嘘になる場面がある ── 在ることと、なぜ使わないかを言う。
     legacy_note = "".join(render_legacy_note(list_legacy_backups(book)))
     if not backups:
-        raise FileNotFoundError(f"{book.name} のバックアップが無い{legacy_note}")
+        raise FileNotFoundError(f"{book.name} のバックアップが無い"
+                                 f"{_renamed_or_moved_note(book)}{legacy_note}")
 
     target = backups[0]
     if book.exists():
@@ -7081,16 +7113,9 @@ def _cmd_undo_body(a: argparse.Namespace, book: Path) -> int:
     # ★ 2026-08-25（復元の致命5）: run は Excel ロックで止まるのに、undo は素通りしていた。
     #   「Excel で結果を見て、気に入らないから戻す」は undo の**最も自然な使い方**で、
     #   そこだけ関所が無かった。同じ検出器・同じ文言を通す。
-    lock_reason = check_excel_lock(book)
-    if lock_reason:
-        kind, detail = lock_reason
-        print(f"× {detail}。")
-        if kind == "excel":
-            print("  → Excel で開いています。閉じてから実行してください")
-        else:
-            print("  → 心当たり: Excel などで開いている / 読み取り専用 / "
-                  "書き込み権限が無い / 同期中（OneDrive 等）")
-        return EXIT_WRITE_BLOCKED
+    blocked = refuse_if_locked(book)
+    if blocked is not None:
+        return blocked
     try:
         used = restore_backup(book)
     except (FileNotFoundError, NoOlderBackupError, BrokenBackupError) as e:
@@ -7116,7 +7141,41 @@ def _cmd_undo_body(a: argparse.Namespace, book: Path) -> int:
 # ★ W8b: 安全器官（既定の反転は次コミット。今回は原本を直接書く危険を減らす下ごしらえ）
 # ---------------------------------------------------------------------------
 
-def check_excel_lock(book: Path) -> str | None:
+def refuse_if_locked(book: Path) -> int | None:
+    """書き込みが塞がれていれば、理由を人の言葉で言って EXIT_WRITE_BLOCKED を返す。
+
+    ★ 2026-08-26（初回体験の盲検 3 回目・CONFUSING 3）: 同じ判断が **4 箇所**に
+      書き写されていて、3 通りに散らばっていた ──
+        run（単一ブック）: 断定しない・心当たり 2 行（08-24 に直した正しい形）
+        undo:             断定しない・心当たり 1 行（最後の 1 行が抜けている）
+        run（2 冊照合）:   **「Excel で開かれています」と断定**・しかも
+                          `{lock_a}` で **タプルをそのまま印字**していた
+      ★ 直しは「3 つとも直す」ではなく **1 つに畳んで呼び出し側に持たせない**
+        （今日までに片配線を 8 回踏んでいる）。番人も 1 本で 4 経路を縛る。
+
+    ★ 重大7（復元の盲検 3 回目）の一部: Excel が異常終了すると `~$` が残り、
+      undo まで恒久的に塞がれる。**回避フラグは足さない**（設計判断は別途）が、
+      残骸である可能性と、消せば直ることは言う ── 断れない時は開示する。
+    """
+    reason = check_excel_lock(book)
+    if not reason:
+        return None
+    kind, detail = reason
+    print(f"× {detail}。")
+    if kind == "excel":
+        print("  → Excel で開いています。閉じてから実行してください")
+        print("  → Excel を開いていないのに出る場合は、同じフォルダの"
+              f"「~${book.name}」が前回の異常終了の残骸です（消せば進めます）")
+    else:
+        # ★ 原因を断定しない ── 見たのは「書けない」ことだけ。心当たりを並べる。
+        print("  → 心当たり: Excel などで開いている / 読み取り専用 / "
+              "書き込み権限が無い / 同期中（OneDrive 等）")
+        print("  → 開いていないのに出る場合は、ファイルのプロパティで"
+              "「読み取り専用」と権限を確認してください")
+    return EXIT_WRITE_BLOCKED
+
+
+def check_excel_lock(book: Path) -> tuple | None:
     """book が Excel 等で開かれている兆候を機械的に見る。開かれていそうなら理由の
        文字列（人間可読）、そうでなければ None。
        ★ W8b 項目2: ①同フォルダの Excel ロックファイル(~$<name>) の存在
@@ -8292,19 +8351,9 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
     if not book.exists():
         exit_environment(f"文書が無い: {book}")
 
-    lock_reason = check_excel_lock(book)
-    if lock_reason:
-        kind, detail = lock_reason
-        print(f"× {detail}。")
-        if kind == "excel":
-            print("  → Excel で開いています。閉じてから実行してください")
-        else:
-            # ★ 原因を断定しない ── 見たのは「書けない」ことだけ。心当たりを並べる。
-            print("  → 心当たり: Excel などで開いている / 読み取り専用 / "
-                  "書き込み権限が無い / 同期中（OneDrive 等）")
-            print("  → 開いていないのに出る場合は、ファイルのプロパティで"
-                  "「読み取り専用」と権限を確認してください")
-        return EXIT_WRITE_BLOCKED
+    blocked = refuse_if_locked(book)
+    if blocked is not None:
+        return blocked
 
     # ★ 2026-08-25（復元の致命2）: 出力先に**人のファイル**が在れば、触る前に止める。
     #   LO 起動・翻訳より前 ── ロック検出と同じ位置に置く（壊してから気づかない）。
@@ -10990,14 +11039,10 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
     as_json = bool(getattr(a, "json", False))
     say = (lambda *args, **kw: None) if as_json else print
 
-    lock_a = check_excel_lock(book_a)
-    if lock_a:
-        print(f"× Excel で開かれています。閉じてから実行してください。（{lock_a}）")
-        return 5
-    lock_b = check_excel_lock(book_b)
-    if lock_b:
-        print(f"× Excel で開かれています。閉じてから実行してください。（{lock_b}）")
-        return 5
+    for _b in (book_a, book_b):
+        blocked = refuse_if_locked(_b)
+        if blocked is not None:
+            return blocked
 
     sha_a = hashlib.sha256(book_a.read_bytes()).hexdigest()
     sha_b = hashlib.sha256(book_b.read_bytes()).hexdigest()

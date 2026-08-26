@@ -117,3 +117,31 @@ def test_old_history_without_a_fingerprint_behaves_as_before(tmp_path, monkeypat
     _history_with_out(tmp_path, monkeypatch, out, None)
     _xlsx(out, "人が書き足した")
     assert ailine.refuse_if_output_is_someone_elses(book) is None
+
+
+# --- 重大5: 名前を変えたら「無い」ではなく「別の名前で在る」と言う ----------------------
+
+def test_renaming_points_at_the_generations_instead_of_saying_none(tmp_path, monkeypatch):
+    """★ 実測: mv したら `× ... のバックアップが無い` だけ。世代はそのまま在るのに。"""
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = _xlsx(tmp_path / "見積 書.xlsx")
+    ns = backups / ailine._backup_namespace(book)
+    ns.mkdir(parents=True)
+    _xlsx(ns / "見積 書.20260101T000000Z.xlsx", "v0")
+    renamed = _xlsx(tmp_path / "見積 書_最終版.xlsx")
+    with pytest.raises(FileNotFoundError) as ei:
+        ailine.restore_backup(renamed)
+    msg = str(ei.value)
+    assert "別の名前の世代が 1 件" in msg, f"在り処を言わず行き止まりにした: {msg}"
+    assert str(ns) in msg, msg
+
+
+def test_no_note_when_the_shelf_is_genuinely_empty(tmp_path, monkeypatch):
+    """誤爆防止: 本当に 1 件も無い時は余計なことを言わない。"""
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(ailine, "BACKUP_DIR", backups)
+    book = _xlsx(tmp_path / "b.xlsx")
+    with pytest.raises(FileNotFoundError) as ei:
+        ailine.restore_backup(book)
+    assert "別の名前の世代" not in str(ei.value), str(ei.value)

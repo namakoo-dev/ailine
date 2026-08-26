@@ -875,6 +875,35 @@ def test_count_reconciliation_untruncated_message_is_unchanged(tmp_path):
     assert ailine.count_reconciliation(before, after) == "列 B: データ 2 行のうち 1 行を変更（1 行は未変更）"
 
 
+def test_count_reconciliation_never_prints_impossible_arithmetic(tmp_path):
+    """★ 2026-08-26（初回体験の盲検 3 回目・CONFUSING 5）の再現。
+
+    実測: 「列 D: データ 0 行のうち 3 行を変更（0 行は未変更）」── 3+0 ≠ 0。
+    根: 分母は**隣の列**（key_col = col-1）を数えて作る。その列が空だと 0 になる
+    （実測は同梱 lookup.xlsx の単価列 ── VLOOKUP で埋める前提で空になっている）。
+    ★ 分母を都合のいい代用品から作らない。壊れた時は物理の使用範囲から取る。
+    """
+    p = _book(tmp_path, [["商品", "単価", "備考"],
+                          ["りんご", None, None],
+                          ["ばなな", None, None],
+                          ["みかん", None, None]])
+    before = ailine.snapshot(p)
+    wb = openpyxl.load_workbook(p)
+    ws = wb.active
+    for r in (2, 3, 4):
+        ws.cell(row=r, column=3, value="確認済")     # C 列（左隣の B 列は全部空）
+    wb.save(p)
+    after = ailine.snapshot(p)
+    msg = ailine.count_reconciliation(before, after)
+    assert msg, "前提: この形で件数行が出ること"
+    import re
+    m = re.search(r"データ (\d+) 行のうち (\d+) 行を変更（(\d+) 行は未変更）", msg)
+    assert m, f"形が変わった: {msg}"
+    denom, changed, unchanged = (int(x) for x in m.groups())
+    assert changed + unchanged == denom, f"算数が合わない: {msg}"
+    assert changed == 3 and denom == 3, msg
+
+
 def test_count_reconciliation_none_when_multiple_columns_changed(tmp_path):
     p = _book(tmp_path, [["商品", "金額"], ["りんご", 100], ["バナナ", 200]])
     before = ailine.snapshot(p)
