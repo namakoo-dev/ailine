@@ -7375,6 +7375,32 @@ def format_fidelity_warning(fidelity: dict) -> str:
 
 # --- ★ W8b 項目4: アトミック置換（--inplace の torn-write 窓の根治） --------------
 
+def _is_our_scratch_output(book: Path, out_book: Path) -> bool:
+    """out_book を「今回の run の作業ファイル」として消してよいか。
+
+    ★ 2026-08-26（復元の致命1）: 原本反映の run は `<stem>.out.xlsx` を作業ファイルに
+      使うが、**`--copy` の成果物と同じ名前**なので、消すと人の成果物が消える。
+    ★ 判定には三項が要る（依頼／宣言／実体）。ここで使えるのは実体だけ ──
+      **この run が始まる前から在ったか**を見る。前から在ったなら、それは前回の
+      `--copy` の成果物か人の物で、今回の作業ファイルではない。
+    ★ 印は使えない（単一ブック経路の .out には印が付かない ── 実測済み）。
+    """
+    stamp = getattr(_is_our_scratch_output, "_pre_existing", None)
+    if stamp is None:
+        return True          # 記録が無い（旧経路）── 従来どおり
+    return str(out_book.resolve()) not in stamp
+
+
+def note_pre_existing_output(out_book: Path) -> None:
+    """run の**開始時**に、出力先が既に在ったかを控える（消してよいかの実体の項）。"""
+    seen = getattr(_is_our_scratch_output, "_pre_existing", None)
+    if seen is None:
+        seen = set()
+        _is_our_scratch_output._pre_existing = seen
+    if Path(out_book).exists():
+        seen.add(str(Path(out_book).resolve()))
+
+
 def atomic_replace_inplace(book: Path, out_book: Path, workdir: Path,
                             keep_backups: int = DEFAULT_KEEP_BACKUPS) -> tuple:
     """--inplace の実体。(ok: bool, error_message: str|None)。ok=False の場合、
@@ -7428,11 +7454,22 @@ def atomic_replace_inplace(book: Path, out_book: Path, workdir: Path,
     finally:
         _discard(staging)
 
-    try:
-        if out_book.exists() and out_book != book:
-            out_book.unlink()
-    except OSError:
-        pass
+    # ★★ 2026-08-26（復元の盲検 3 回目・致命1）: ここは無条件に `<stem>.out.xlsx` を消す。
+    #   原本反映 run も作業ファイルに**同じ名前**を使うので、`--copy` で作った成果物と
+    #   同じ場所を掴んで消していた（undo は book しか守らないので戻せない）。
+    #   ★ 8/25 に入れた関所は run の**入口**だけを見ており、この**出口**を見ていなかった
+    #     ── 同じ .out を巡る 2 経路のうち片方しか塞いでいない（片配線）。
+    #   ★ 入口と同じ判断をここでも書き写さず、**同じ器官に問い合わせる**:
+    #     「これは今回の run が作った物か」だけを消す根拠にする。
+    if _is_our_scratch_output(book, out_book):
+        try:
+            if out_book.exists() and out_book != book:
+                out_book.unlink()
+        except OSError:
+            pass
+    elif out_book.exists():
+        # ★ 消さなかったことを黙らない（出ないことは信号でない）。
+        print(f"（{out_book.name} は今回の run より前から在ったので消していません）")
     return True, None
 
 
@@ -7879,6 +7916,13 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         "ops": result.get("ops"),
         "changes": (result.get("changes") or [])[:3],
         "out": result.get("out"),
+        # ★★ 2026-08-26（復元の盲検 3 回目・致命2）: `out_sha` は _finish_run が確かに
+        #   作っていたのに、**ここがキーを固定列挙していて写していなかった**。
+        #   結果 history 全行で欠落 → 関所は `stamped is None` で常に素通り →
+        #   `_refuse_edited_output` は**到達不能**だった（＝あの直しは一度も発火していない）。
+        #   ★ 番人が通した理由の方が重い: 検体が history の行を**手で書いて**いて、
+        #     本番の書き手（この関数）を一度も通っていなかった ── 継ぎ目を跨いでいない。
+        "out_sha": result.get("out_sha"),
         # ★ M2b: DSL 経路(path="dsl")では命令言語の確認文(command)と事後条件の合否を残す。
         #   自由生成経路(path="freeform")では両方 None のまま（既存キーは不変）。
         "path": result.get("path", "freeform"),
@@ -10570,6 +10614,10 @@ def refuse_if_output_is_someone_elses(book: Path) -> int | None:
       （フォルダ経路の関所と同じ規則・同じ出口）。
     """
     out = out_book_path(book)
+    # ★ 2026-08-26（復元の致命1）: 入口と出口で同じことを 2 度判断させない。
+    #   ここは run の一番最初に必ず通る ── 「始まる前から在ったか」をここで控える。
+    #   出口（atomic_replace_inplace の後始末）はこの控えだけを見て消すかを決める。
+    note_pre_existing_output(out)
     if not out.exists():
         return None
     # ★ 根拠は「この道具が過去にそこへ書いたか」── 履歴が out を記録している。
@@ -11612,8 +11660,25 @@ def _record_csv_export_history(book_path: Path, out_path: Path, sheet: str, ok: 
         pass
 
 
+def _export_out_path(a: argparse.Namespace, default_path: Path) -> tuple:
+    """書き出し系の出力先と、上書きの関所。戻り値 (出力先, 断る理由 or None)。
+
+    ★ 2026-08-26（データの出入口の盲検・高7）: この関所は export-csv にしか無く、
+      `export-pdf --out keep.pdf` は既存の PDF を**黙って上書き**していた（exit 0）。
+      しかも下の docstring は「export-pdf には --out が在ったので非対称でもあった」と
+      **自覚を書きながら**、直したのは --out が無かった側だけだった。
+      ★ 片配線の自覚つきの片配線 ── 2 箇所に書き写さず、1 つの器官にして両方が通る。
+    """
+    raw = getattr(a, "out", None)
+    out_path = Path(raw).resolve() if raw else default_path
+    if out_path.exists() and not getattr(a, "overwrite", False):
+        return out_path, (f"× 出力先 {out_path} が既にあります。"
+                           f"別名にするなら --out、上書きしてよければ --overwrite を付けてください")
+    return out_path, None
+
+
 def _export_csv_out_path(a: argparse.Namespace, book_path: Path) -> tuple:
-    """`export-csv` の出力先と、上書きの関所。戻り値 (出力先, 断る理由 or None)。
+    """`export-csv` の出力先と、上書きの関所（_export_out_path への委譲）。
 
     ★ なぜ在るか（盲検レビュー・2026-08-24）: 出力先は book.with_suffix(".csv") 固定で
       --out が無く、出納帳の 4 月分を出した後に 5 月分を出すと**同じ名前で黙って上書き**
@@ -11621,12 +11686,7 @@ def _export_csv_out_path(a: argparse.Namespace, book_path: Path) -> tuple:
       export-pdf には --out が在ったので、同じ道具の中で非対称でもあった。
     ★ 関所の形と exit 7 は既存の出力先の関所に合わせる（同じ意味の旗を 2 通り作らない）。
     """
-    raw = getattr(a, "out", None)
-    out_path = Path(raw).resolve() if raw else book_path.with_suffix(".csv")
-    if out_path.exists() and not getattr(a, "overwrite", False):
-        return out_path, (f"× 出力先 {out_path} が既にあります。"
-                           f"別名にするなら --out、上書きしてよければ --overwrite を付けてください")
-    return out_path, None
+    return _export_out_path(a, book_path.with_suffix(".csv"))
 
 
 def cmd_export_csv(a: argparse.Namespace) -> int:
@@ -11740,7 +11800,14 @@ def _soffice_to_pdf(book_path, out_path, sheet=None, orientation=None, fit_to_wi
     soffice = office / ("soffice.exe" if os.name == "nt" else "soffice")
     if not soffice.exists():
         return False, f"soffice が無い: {soffice}"
-    out_dir = Path(out_path).parent
+    # ★★ 2026-08-26（データの出入口の盲検・致命4）: ここは `--outdir <出力先の親>` を
+    #   渡していたので、soffice は**必ず一度 `<ブック名>.pdf` を出力先フォルダに作る**。
+    #   `--out` で別名を指定していても、そこに同名の PDF が在れば予告なく消える
+    #   （実測: 顧客へ送った確定版 `請求書.pdf` が exit 0 のまま消滅）。
+    #   ★ 根治: **人のフォルダを soffice に触らせない**。専用の一時フォルダへ出してから
+    #     宣言した名前へ移す ── 出力先に現れるファイルは `out_path` ただ 1 つになる。
+    _pdf_tmp = tempfile.TemporaryDirectory(prefix="ailine_pdfout_")
+    out_dir = Path(_pdf_tmp.name)
     cmd = [str(soffice), "--headless", "--norestore", "--convert-to", "pdf",
             "--outdir", str(out_dir), str(book_path)]
     try:
@@ -11750,9 +11817,15 @@ def _soffice_to_pdf(book_path, out_path, sheet=None, orientation=None, fit_to_wi
         return False, f"変換に失敗しました: {e}"
     made = out_dir / (Path(book_path).stem + ".pdf")
     if not made.exists():
+        _pdf_tmp.cleanup()
         return False, f"PDF が作られませんでした（{(proc.stderr or proc.stdout or "").strip()[:200]}）"
-    if made != Path(out_path):
-        made.replace(out_path)
+    try:
+        # 一時フォルダは別ボリュームでありうるので move（replace はクロスデバイスで落ちる）
+        shutil.move(str(made), str(out_path))
+    except OSError as e:
+        return False, f"PDF を {out_path} へ置けませんでした: {e}"
+    finally:
+        _pdf_tmp.cleanup()
     return True, ""
 
 
@@ -11813,7 +11886,11 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
     values = [c for row in wb[sheet].iter_rows(values_only=True) for c in row if c is not None]
     wb.close()
 
-    out_path = Path(a.out).resolve() if a.out else book_path.with_suffix(".pdf")
+    out_path, _refuse_pdf = _export_out_path(a, book_path.with_suffix(".pdf"))
+    if _refuse_pdf:
+        print(f"■ ailine export-pdf  file={book_path}  sheet={sheet}")
+        print(_refuse_pdf)
+        return 7
     # ★ 実測（2026-08-24）: 既定のまま出すと**列幅で文字が切れて PDF から消える**
     #   （「あかつき商事」が落ちた）。Excel 印刷の古典的な事故で、読み戻しが掴んだ。
     #   --fit-to-width / --orientation は原本を触らず**一時コピー**に効かせる。
@@ -12346,6 +12423,8 @@ def build_parser() -> argparse.ArgumentParser:
     ep.add_argument("--orientation", default=None, choices=["portrait", "landscape"],
                      help="用紙の向き")
     ep.add_argument("--fit-to-width", action="store_true", help="横幅を1ページに収める")
+    ep.add_argument("--overwrite", action="store_true",
+                     help="出力先が既にあっても上書きする（関所 exit 7）")
     ep.set_defaults(func=cmd_export_pdf)
 
     sc = sub.add_parser("scan", help="フォルダ内の複数ブックを棚卸しする（書き込みゼロ）")

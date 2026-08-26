@@ -80,13 +80,30 @@ def test_unprobeable_format_is_not_called_broken(tmp_path, monkeypatch):
 # --- ④⑤ 人が育てた .out を消さない -----------------------------------------------------
 
 def _history_with_out(tmp_path, monkeypatch, out: Path, sha):
+    """★★ 2026-08-26 に治具を作り直した（復元の盲検 3 回目・致命2）。
+
+    旧版は history の 1 行を**この治具が手で組んで**いた。本番の書き手は
+    `build_history_entry` で、そちらは **out_sha を写していなかった** ──
+    つまり**検体が、本番の欠けている項を自分で供給していた**。関所は一度も
+    発火せず、それでも試験は緑だった。「同じ関数で作った分母は恒真」の親戚で、
+    今回は *検体の側が* 中間項を代用した形。
+
+    ★ 直しは「out_sha を足す」だけでは足りない。**治具から手書きの経路を無くす** ──
+      history の行は必ず `build_history_entry` を通す。こうすると、本番の書き手が
+      キーを落とした瞬間にこの試験が赤くなる（継ぎ目を跨ぐ）。
+    """
     import json
     hist = tmp_path / "history.jsonl"
-    entry = {"ts": "2026-08-25T00:00:00+00:00", "book": str(tmp_path / "book.xlsx"),
-              "task": "t", "ok": True, "out": str(out)}
+    result = {"ok": True, "out": str(out)}
     if sha is not None:
-        entry["out_sha"] = sha
-    hist.write_text(json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
+        result["out_sha"] = sha
+    entry = ailine.build_history_entry(result, tmp_path / "book.xlsx", "t", "m", "none")
+    assert "out" in entry, "本番の書き手が out を写していない"
+    if sha is not None:
+        assert entry.get("out_sha") == sha, (
+            "本番の書き手が out_sha を写していない ── 関所は永遠に素通りする"
+            "（この assert が致命2 の再発を止める）")
+    hist.write_text(json.dumps(entry, ensure_ascii=False) + chr(10), encoding="utf-8")
     monkeypatch.setattr(ailine, "HISTORY_FILE", hist)
 
 
@@ -145,3 +162,42 @@ def test_no_note_when_the_shelf_is_genuinely_empty(tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError) as ei:
         ailine.restore_backup(book)
     assert "別の名前の世代" not in str(ei.value), str(ei.value)
+
+
+# --- 致命1: --copy の成果物を、次の原本反映 run が無言で消す ---------------------------
+
+def test_inplace_run_does_not_delete_a_pre_existing_copy_artifact(tmp_path, monkeypatch, capsys):
+    """★ 実測: `--copy` で作った `<stem>.out.xlsx` が、次の原本反映 run で
+       一言も無く消えた（undo は book しか守らないので戻せない）。
+
+    根: `atomic_replace_inplace` の後始末が **無条件に** out_book を消していた。
+    原本反映 run も作業ファイルに同じ名前を使うので、同じ場所を掴む。
+    ★ 8/25 に入れた関所は run の**入口**だけを見ており、この**出口**を見ていなかった。
+    """
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = _xlsx(tmp_path / "uriage.xlsx", "original")
+    out = ailine.out_book_path(book)
+    _xlsx(out, "人が育てた --copy の成果物")
+    # run の入口（関所）が控える ── 本番と同じ経路を通す（治具で代用しない）
+    _history_with_out(tmp_path, monkeypatch, out, ailine._file_digest(out))
+    ailine.refuse_if_output_is_someone_elses(book)
+    workdir = tmp_path / ".ailine_uriage"
+    workdir.mkdir()
+    ok, err = ailine.atomic_replace_inplace(book, out, workdir)
+    assert ok, err
+    assert out.exists(), "人が育てた --copy の成果物を無言で消した"
+    assert "消していません" in capsys.readouterr().out
+
+
+def test_inplace_run_still_cleans_up_its_own_scratch(tmp_path, monkeypatch):
+    """誤爆防止: 今回の run が作った作業ファイルは従来どおり片づける。"""
+    monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "backups")
+    book = _xlsx(tmp_path / "b.xlsx", "original")
+    out = ailine.out_book_path(book)
+    ailine.refuse_if_output_is_someone_elses(book)   # この時点では .out は無い
+    _xlsx(out, "今回の作業結果")
+    workdir = tmp_path / ".ailine_b"
+    workdir.mkdir()
+    ok, err = ailine.atomic_replace_inplace(book, out, workdir)
+    assert ok, err
+    assert not out.exists(), "自分の作業ファイルを片づけていない（ゴミが残る）"
