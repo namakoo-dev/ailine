@@ -210,3 +210,39 @@ def test_clearing_a_leftover_renames_instead_of_deleting():
     assert "rename(" in block, "改名していない"
     assert "target.unlink()" not in block, "対象を消している"
     assert "（捨てた）" in SERVER
+
+
+# --- ⑧ エクスプローラと複数ファイル ------------------------------------------------------
+
+def test_the_shell_opens_a_real_dialog_because_the_browser_cannot():
+    """★ ブラウザの file input は**完全なパスを返さない**（そういう作りになっている）。
+       この道具は原本の場所を知らないと何もできないので、パスが要る。
+       localhost に閉じた作りだから、サーバ側で OS のダイアログを開く。
+    ★ tkinter は標準ライブラリ ── 依存の番人（上）が「増えていないこと」を確かめる。
+    """
+    assert "_native_dialog" in SERVER
+    block = _code_only(SERVER[SERVER.index("def _native_dialog"):][:1400])
+    for need in ("askopenfilename", "askdirectory", "asksaveasfilename"):
+        assert need in block, f"{need} が無い（開く/フォルダ/保存の 3 つが要る）"
+    assert "-topmost" in block, "前面に出していない（ブラウザの裏に出ると固まって見える）"
+
+
+def test_saving_is_a_copy_not_a_move():
+    """★ 「名前を付けて保存」は**複製**（元の物を消さない・下書きを育てたまま出せる）。"""
+    i = SERVER.index("/api/save_as")
+    block = _code_only(SERVER[i:i + 900])
+    assert "shutil.copy2" in block, "複製していない"
+    assert "rename(" not in block and "unlink()" not in block, "元の物を動かしている"
+
+
+def test_the_multifile_paths_go_through_the_tool_not_the_page():
+    """★ 複数ファイルでも画面は判定を作らない ── 本体のコマンドを叩くだけ。
+
+    ★ 需要はここに寄っている（実測の需要地図: 上位 5 件中 4 件が複数ファイル）ので、
+      画面から触れる形にした。判定の線は 1 冊の時とまったく同じ。
+    """
+    i = SERVER.index('elif u.path == "/api/folder":')
+    block = _code_only(SERVER[i:i + 1800])
+    for cmd in ('"scan"', '"stack"', '"verify"'):
+        assert cmd in block, f"{cmd} を叩いていない"
+    assert "verdict" not in block, "画面側の経路で判定を作りかけている"

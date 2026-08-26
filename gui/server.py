@@ -60,6 +60,7 @@ def _ailine(args: list) -> tuple:
 
 # ★ 下書きの続き（本 → 作業中の下書きファイル）。段取りだけを持つ・判定は持たない。
 _DRAFTS: dict = {}
+_LAST_MULTI: dict = {}
 DRAFT_SUFFIX = "（下書き）"
 
 
@@ -68,6 +69,38 @@ def _draft_path(book: Path) -> Path:
     if book.stem.endswith(DRAFT_SUFFIX):
         return book
     return book.with_name(book.stem + DRAFT_SUFFIX + book.suffix)
+
+def _native_dialog(kind: str, start: str = "", name: str = "") -> str:
+    """本物のエクスプローラを開く。**サーバと画面が同じ機械**だから成り立つ。
+
+    ★ なぜサーバ側で開くか: ブラウザの `<input type=file>` は**完全なパスを返さない**
+      （セキュリティ上そうなっている）。この道具は原本の場所を知らないと何もできない
+      ので、パスが要る。localhost に閉じた作りだから、素直に OS のダイアログを使う。
+    ★ tkinter は標準ライブラリ（新しい依存は増えない ── 番人が確認する）。
+    ★ 前面に出す小細工が要る（ブラウザの裏に出ると「固まった」に見える）。
+    """
+    import tkinter
+    from tkinter import filedialog
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    try:
+        if kind == "folder":
+            got = filedialog.askdirectory(title="フォルダを選ぶ", initialdir=start or None)
+        elif kind == "save":
+            got = filedialog.asksaveasfilename(
+                title="名前を付けて保存", initialdir=start or None,
+                initialfile=name or None, defaultextension=".xlsx",
+                filetypes=[("Excel ブック", "*.xlsx"), ("すべて", "*.*")])
+        else:
+            got = filedialog.askopenfilename(
+                title="ファイルを選ぶ", initialdir=start or None,
+                filetypes=[("Excel ブック", "*.xlsx"), ("すべて", "*.*")])
+    finally:
+        root.destroy()
+    return got or ""
+
 
 MAX_ROWS = 200
 MAX_COLS = 40
@@ -226,6 +259,18 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             return
+        if u.path == "/api/pick":
+            q = parse_qs(u.query)
+            kind = (q.get("kind") or ["file"])[0]
+            start = (q.get("start") or [""])[0]
+            name = (q.get("name") or [""])[0]
+            try:
+                got = _native_dialog(kind, start, name)
+            except Exception as e:
+                self._json(200, {"path": "", "error": f"ダイアログを開けません: {e}"})
+                return
+            self._json(200, {"path": got})
+            return
         if u.path == "/api/sheet":
             q = parse_qs(u.query)
             path = Path((q.get("path") or [""])[0])
@@ -293,6 +338,53 @@ class Handler(BaseHTTPRequestHandler):
                         shutil.copy2(book, draft)
                     _DRAFTS[book] = str(draft)
                     rc, out, payload = _ailine(["run", str(draft), task, "--json"])
+            elif u.path == "/api/folder":
+                # ★ 複数ファイルの経路（scan / stack / run <フォルダ>）。
+                #   ★ 需要はここに寄っている（実測の需要地図: 上位 5 件中 4 件が複数ファイル）。
+                #   ★ ここでも判定は作らない ── 本体の出力をそのまま運ぶ。
+                folder = req.get("folder") or ""
+                kind = req.get("kind") or "scan"
+                if kind == "scan":
+                    rc, out, payload = _ailine(["scan", folder])
+                elif kind == "stack":
+                    dst = req.get("dst") or str(Path(folder) / "縦積み.xlsx")
+                    rc, out, payload = _ailine(["stack", folder, "--out", dst])
+                    if rc == 0:
+                        _LAST_MULTI["out"] = dst
+                        _LAST_MULTI["src"] = folder
+                elif kind == "extract":
+                    rc, out, payload = _ailine(["run", folder, req.get("task") or ""])
+                elif kind == "verify":
+                    made = _LAST_MULTI.get("out")
+                    if not made:
+                        # ★ 判定は作らない（json は空のまま）。画面には言葉だけ返す。
+                        self._json(200, {"rc": 1, "json": None,
+                                          "text": "先に縦積みを作ってください（検算はその結果に対して行います）"})
+                        return
+                    rc, out, payload = _ailine(["verify", made, _LAST_MULTI.get("src") or folder])
+                else:
+                    self._json(400, {"error": "不明な操作"})
+                    return
+                self._json(200, {"rc": rc, "text": out, "json": payload,
+                                  "made": _LAST_MULTI.get("out") if kind == "stack" else None})
+                return
+            elif u.path == "/api/save_as":
+                # ★ 「保存」は**複製**であって移動ではない（元の物は残す）。
+                #   下書きを育てたまま、清書だけ別名で外へ出せる形にする。
+                src = Path(req.get("path") or book)
+                dst = Path(req.get("dst") or "")
+                if not src.exists():
+                    self._json(200, {"rc": 1, "json": {"verdict": "not_applied"},
+                                      "text": f"保存するものがありません: {src}"})
+                    return
+                try:
+                    shutil.copy2(src, dst)
+                    msg = f"{dst} に保存しました（{src.name} はそのまま残っています）"
+                    code = 0
+                except OSError as e:
+                    msg, code = f"保存できませんでした: {e}", 1
+                self._json(200, {"rc": code, "json": {"verdict": "not_applied"}, "text": msg})
+                return
             elif u.path == "/api/clear_leftover":
                 # ★★ 2026-08-26（Namakoo が 2 度実測）: 前の run が残した作業結果が
                 #   出力先を塞ぎ、**人が手でファイルを消すまで先へ進めない**状態になった。

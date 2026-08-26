@@ -51,6 +51,9 @@
   summary{cursor:pointer;color:var(--dim);font-size:13px}
   .note{color:var(--dim);font-size:12.5px;margin-top:4px}
   .spin{color:var(--accent)}
+  .tabs{display:flex;gap:8px;margin-bottom:16px}
+  .tab{flex:1;text-align:center;padding:8px 6px;font-size:13.5px}
+  .tab.on{border-color:var(--accent);color:var(--accent);background:#16242e}
   .step{color:var(--ink);font-size:13.5px;font-weight:700;margin:20px 0 8px}
   .step:first-of-type{margin-top:0}
   button.primary{border-color:#2b6079;background:#16242e;color:var(--accent)}
@@ -76,31 +79,52 @@
 </header>
 <main>
   <section class="side">
-    <label class="step">① ファイルを選ぶ</label>
-    <div class="files" id="files"></div>
-    <div class="note" id="dirnote"></div>
-
-    <label class="step">② 日本語で頼む</label>
-    <textarea id="task" placeholder="例: 売上から原価を引いた利益の列を作って"></textarea>
-
-    <label class="step">③ 実行する</label>
-    <div class="row">
-      <button id="runcopy" class="primary">下書きで実行</button>
-      <button id="run">原本に反映</button>
+    <input id="dir" type="hidden" value="">
+    <div class="tabs">
+      <button id="tab1" class="tab on">1 冊を編集</button>
+      <button id="tabN" class="tab">フォルダをまとめる</button>
     </div>
-    <div class="note">下書きは原本を触りません。原本に反映しても <b>もとに戻す</b> で戻せます。</div>
-    <div class="note" id="draftnote"></div>
-    <div class="row"><button id="undo">もとに戻す</button>
-      <button id="draftreset">下書きを捨てる</button></div>
-    <div class="row"><button id="openlo">この結果を Excel/LibreOffice で開く</button></div>
-    <div class="row" id="leftoverrow" style="display:none">
-      <button id="clearleftover">前回の作業結果を片づける</button></div>
-    <div class="note">グラフ・図形・印刷の見え方は表に映りません ── 本物のアプリで見てください。</div>
 
-    <details class="folder"><summary>別のフォルダを見る</summary>
-      <input id="dir" value="">
-      <div class="row"><button id="reload">読み込む</button></div>
-    </details>
+    <div id="pane1">
+      <label class="step">① ファイルを選ぶ</label>
+      <div class="row"><button id="pick" class="primary">エクスプローラで選ぶ…</button></div>
+      <div class="files" id="files"></div>
+      <div class="note" id="dirnote"></div>
+
+      <label class="step">② 日本語で頼む</label>
+      <textarea id="task" placeholder="例: 売上から原価を引いた利益の列を作って"></textarea>
+
+      <label class="step">③ 実行する</label>
+      <div class="row">
+        <button id="runcopy" class="primary">下書きで実行</button>
+        <button id="run">原本に反映</button>
+      </div>
+      <div class="note">下書きは原本を触りません。原本に反映しても <b>もとに戻す</b> で戻せます。</div>
+      <div class="note" id="draftnote"></div>
+      <div class="row"><button id="undo">もとに戻す</button>
+        <button id="draftreset">下書きを捨てる</button></div>
+      <div class="row"><button id="saveas">名前を付けて保存…</button>
+        <button id="openlo">Excel/LibreOffice で開く</button></div>
+      <div class="note">グラフ・図形・印刷の見え方は表に映りません ── 本物のアプリで見てください。</div>
+      <div class="row" id="leftoverrow" style="display:none">
+        <button id="clearleftover">前回の作業結果を片づける</button></div>
+    </div>
+
+    <div id="paneN" style="display:none">
+      <label class="step">① フォルダを選ぶ</label>
+      <div class="row"><button id="pickfolder" class="primary">エクスプローラで選ぶ…</button></div>
+      <div class="note" id="foldernote">まだ選んでいません</div>
+
+      <label class="step">② まとめ方を選ぶ</label>
+      <div class="row"><button id="mscan">棚卸し（書き込みゼロ）</button></div>
+      <div class="row"><button id="mstack">縦積みして 1 冊に</button>
+        <button id="mverify">その結果を検算</button></div>
+      <label class="step">③ 条件で抜き出す（任意）</label>
+      <textarea id="mtask" placeholder="例: 金額が10000以上の行を抜き出して"></textarea>
+      <div class="row"><button id="mextract">抜き出す</button></div>
+      <div class="note">どれも原本は読むだけです（縦積み・抽出は新しいブックを作ります）。</div>
+    </div>
+
   </section>
 
   <section class="work">
@@ -293,6 +317,64 @@ async function call(path, body, msg){
     setBadge("unobservable", "画面から実行できませんでした: " + e);
   } finally { busy(false); }
 }
+function showPane(which){
+  $("#pane1").style.display = which === 1 ? "" : "none";
+  $("#paneN").style.display = which === 1 ? "none" : "";
+  $("#tab1").className = "tab" + (which === 1 ? " on" : "");
+  $("#tabN").className = "tab" + (which === 1 ? "" : " on");
+}
+$("#tab1").onclick = () => showPane(1);
+$("#tabN").onclick = () => showPane(2);
+
+// ★ 本物のエクスプローラを開く（サーバと画面が同じ機械だから成り立つ）。
+//   ブラウザの file input は**完全なパスを返さない**ので使えない。
+async function pick(kind, extra){
+  const q = new URLSearchParams(Object.assign({kind: kind}, extra || {}));
+  const r = await fetch("/api/pick?" + q.toString());
+  return (await r.json()).path || "";
+}
+$("#pick").onclick = async () => {
+  const got = await pick("file", {start: dir});
+  if (!got) return;
+  const parts = got.split(String.fromCharCode(92)).join("/").split("/");
+  $("#dir").value = parts.slice(0, -1).join(String.fromCharCode(92));
+  await loadFiles();
+  const row = [...files.children].find(c => c.textContent.indexOf(parts[parts.length-1]) === 0);
+  if (row) row.click();
+};
+$("#saveas").onclick = async () => {
+  const src = lastShown || bookPath();
+  if (!src) { setBadge("not_applied", "保存するものがありません。"); return; }
+  const dst = await pick("save", {start: dir, name: baseName(src)});
+  if (!dst) return;
+  call("/api/save_as", {path: src, dst: dst}, "保存しています…");
+};
+
+let folder = "";
+$("#pickfolder").onclick = async () => {
+  const got = await pick("folder", {start: dir});
+  if (!got) return;
+  folder = got;
+  $("#foldernote").textContent = got;
+};
+async function multi(kind, body){
+  if (!folder){ setBadge("not_applied", "先にフォルダを選んでください。"); return; }
+  busy(true, "処理中…");
+  try{
+    const r = await fetch("/api/folder", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(Object.assign({book: folder, folder: folder, kind: kind}, body||{}))});
+    const res = await r.json();
+    show(res);
+    if (res.made){ lastShown = res.made; loadSheet(res.made).then(d =>
+      drawTable($("#after"), $("#afternote"), d, null)); }
+  } finally { busy(false); }
+}
+$("#mscan").onclick    = () => multi("scan");
+$("#mstack").onclick   = () => multi("stack");
+$("#mverify").onclick  = () => multi("verify");
+$("#mextract").onclick = () => multi("extract", {task: $("#mtask").value});
+
 $("#reload").onclick = loadFiles;
 $("#run").onclick     = () => call("/api/run",  {task: $("#task").value, copy:false}, "実行中…");
 $("#runcopy").onclick = () => call("/api/run",  {task: $("#task").value, copy:true},  "下書きで実行中…");
