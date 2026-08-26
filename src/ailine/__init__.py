@@ -3587,6 +3587,20 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
 
     # --- ★ 2026-08-26: 表の基本操作 3 種（追加・行削除・列削除）---------------
     elif op in ("ADD_ROW", "DELETE_ROWS"):
+        # ★★ 2026-08-27（Namakoo が実測）: 「みかんの下に梨を追加して」が動かなかった。
+        #   位置を**行番号**でしか受け取れないのに、人は相対で言う。LLM に数えさせると
+        #   外し、空行だけの INSERT_ROWS に落ちていた。
+        #   ★ 分担を変える: LLM は「誰の隣か」を言うだけ／**行番号は機械が実表を数えて決める**
+        #     （列名の解決を機械 3 段でやっているのと同じ形）。
+        #   ★ 機械が決めた位置は LLM の数字より優先する ── 実表を見た側が正しい。
+        _sheet0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+        _hr0 = int((book_meta.get("header_rows") or {}).get(_sheet0, 1) or 1)
+        _at_anchor, _anchor_note = resolve_row_anchor(task, book_meta, _sheet0, header_row=_hr0)
+        if _anchor_note and _at_anchor is None:
+            return False, resolved, inferred, _anchor_note
+        if _at_anchor is not None:
+            resolved["at"] = _at_anchor
+            resolved["_at_basis"] = _anchor_note
         at_raw = str(resolved.get("at", "")).strip()
         if not (at_raw.isdigit() and int(at_raw) >= 1):
             return False, resolved, inferred, f"行番号『{resolved.get('at')}』が不正です（1以上の整数）"
@@ -3611,6 +3625,20 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         else:
             # ★ 値は**列名で**受ける。実在しない列名はここで弾く（幻覚の封鎖）。
             vals = resolved.get("values")
+            # ★ 2026-08-27（実測）: LLM は values を**並び**で返すことがある
+            #   （['梨', 600, 300]）。列名の対応は**機械が付けられる** ── 左から順に
+            #   当てる。多すぎる時だけ断る（推測で余りを捨てない）。
+            #   ★ 決めた対応は解釈行に出す（_values_label）── 黙って割り当てない。
+            _headers_now = (book_meta.get("headers") or {}).get(
+                resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
+            if isinstance(vals, (list, tuple)):
+                if len(vals) > len(_headers_now):
+                    return False, resolved, inferred, (
+                        f"入れる値が {len(vals)} 個ありますが、列は {len(_headers_now)} 本です"
+                        f"（ある列: {"、".join(map(str, _headers_now))}）")
+                vals = {str(h): v for h, v in zip(_headers_now, vals)}
+                resolved["values"] = vals
+                inferred.add("values")
             if not isinstance(vals, dict) or not vals:
                 return False, resolved, inferred, (
                     "入れる値が読み取れません（列名と値の組で書いてください）")
@@ -4103,8 +4131,10 @@ _CONFIRM_FIELDS = {
     "APPEND_TOTAL": (("対象列", "col", None), ("ラベル", "label", None), ("率", "factor", None)),
     # ★ W9: 検証済みヘルパ4種の語彙昇格。
     "INSERT_ROWS": (("挿入位置", "at", None), ("行数", "count", None)),
-    "ADD_ROW": (("挿入位置", "at", None), ("入れる値", "_values_label", None)),
-    "DELETE_ROWS": (("削除位置", "at", None), ("行数", "count", None)),
+    "ADD_ROW": (("挿入位置", "at", None), ("位置の根拠", "_at_basis", None),
+                 ("入れる値", "_values_label", None)),
+    "DELETE_ROWS": (("削除位置", "at", None), ("位置の根拠", "_at_basis", None),
+                     ("行数", "count", None)),
     "DELETE_COLUMN": (("削除する列", "col", None),),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
@@ -5952,6 +5982,91 @@ def check_delete_column(path: Path, args: dict, header_row: int = 1,
         return "fail", "残った列の中身が元と違う ── 別の列を巻き込んだ疑いがあります"
     note_deleted(args, [(r[j],) for r in before_rows])
     return "pass", f"列『{name}』を削除（残りの列は 1 セルも変わらず）"
+
+
+_re_between = re.compile(r"([^\s、。]+?)\s*と\s*([^\s、。]+?)\s*の\s*間")
+
+
+def _re_anchor(suffix: str):
+    return re.compile(r"([^\s、。]+?)" + re.escape(suffix))
+
+
+_ANCHOR_AFTER = ("の下に", "の下へ", "の後に", "の後ろに", "の次に")
+_ANCHOR_BEFORE = ("の上に", "の上へ", "の前に")
+
+
+_re_value_assign = re.compile(r"[^\s、。]+\s*(?:は|を|＝|=)\s*[0-9０-９]")
+
+
+def insert_rows_should_have_been_add_row(task: str, resolved: dict) -> str | None:
+    """`INSERT_ROWS`（空行だけ）に読み取ったが、依頼文が**値も入れろ**と言っている形。
+
+    ★ 2026-08-27（Namakoo が実測）:「みかんとぶどうの間に梨を追加して。売上は600 原価は300」
+      が空行 1 本の挿入になった。op の取り違えで、位置の問題ではない。
+    ★ 黙って op を書き換えない ── 証拠（依頼文に値の指定が在る）を示して、
+      二段目翻訳（op を固定して args だけ埋め直す）へ回す判断材料にする。
+    ★ 「言い換えてください」で終わらせない: 利用者の書き方は正しかった。
+    """
+    if not _re_value_assign.search(task or ""):
+        return None
+    return "依頼文に入れる値の指定があります（行挿入は空行を挿すだけです）"
+
+
+def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
+                        header_row: int = 1) -> tuple:
+    """依頼文の「**みかんの下に**」「**みかんとぶどうの間に**」から行番号を決める。
+
+    ★ 2026-08-27（Namakoo が実測）: ADD_ROW は位置を**行番号**でしか受け取れないのに、
+      人は相対で言う。LLM に数えさせると外し、空行だけの INSERT_ROWS に落ちていた。
+    ★ 分担を変える: **LLM は「誰の隣か」を言うだけ／行番号は機械が実表を数えて決める**
+      （列名の解決を機械 3 段でやっているのと同じ形）。
+    ★ 見つからない・複数ある時は**決めない**（推測で行を挿すと、静かに別の場所へ入る）。
+    戻り値: (行番号 or None, 説明 or 断りの理由 or None)
+    """
+    text = (task or "").replace("　", " ")
+    want_after, name, second = None, None, None
+    m = _re_between.search(text)
+    if m:
+        want_after, name, second = True, m.group(1).strip(), m.group(2).strip()
+    else:
+        for suf in _ANCHOR_AFTER:
+            m = _re_anchor(suf).search(text)
+            if m:
+                want_after, name = True, m.group(1).strip()
+                break
+        if name is None:
+            for suf in _ANCHOR_BEFORE:
+                m = _re_anchor(suf).search(text)
+                if m:
+                    want_after, name = False, m.group(1).strip()
+                    break
+    if not name:
+        return None, None
+    path = book_meta.get("path")
+    if not path:
+        return None, None
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last = _scan_last_row(ws, header_row=header_row)
+            last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+            hits = [r for r in range(header_row + 1, last + 1)
+                     if any(str(ws.cell(row=r, column=c).value or "").strip() == name
+                             for c in range(1, last_col + 1))]
+    except Exception:
+        return None, None
+    if not hits:
+        return None, f"『{name}』という行が見つかりません（依頼文の位置を確かめてください）"
+    if len(hits) > 1:
+        return None, (f"『{name}』が {len(hits)} 行あります（{'、'.join(str(h) for h in hits)}行目）"
+                       " ── どれの隣か決められません")
+    row = hits[0]
+    at = row + 1 if want_after else row
+    where = "下" if want_after else "上"
+    note = f"『{name}』（{row}行目）の{where}＝{at}行目"
+    if second:
+        note += f"（『{second}』との間）"
+    return at, note
 
 
 def note_deleted(args: dict, rows) -> None:
@@ -8967,6 +9082,21 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             plan = [translation]
         else:
             plan = [{"op": "FREEFORM", "args": {}}]
+
+    # ★★ 2026-08-27（Namakoo が実測）:「みかんとぶどうの間に梨を追加して。売上は600」が
+    #   **空行 1 本の挿入**になった。位置ではなく op の取り違えで、しかも LLM は
+    #   複数段の計画（行挿入＋一括書換）を返す ── だから計画の**長さを見る前に**判じる。
+    #   ★ 黙って op を書き換えない ── 依頼文に**値の指定が在る**という証拠を確かめ、
+    #     二段目翻訳（op を固定して args だけ埋め直す・既にある機構）へ回す。
+    #     そして**根拠を必ず画面に出す**（勝手に別の操作へすり替えない）。
+    #   ★ 「言い換えてください」で終わらせない: 利用者の書き方は正しかった。
+    if any((st or {}).get("op") == "INSERT_ROWS" for st in plan):
+        _why = insert_rows_should_have_been_add_row(a.task, {})
+        if _why:
+            _fixed = translate_task_fixed_op(a.model, "ADD_ROW", a.task, book_meta)
+            if _fixed and (_fixed.get("args") or {}).get("values"):
+                print(f"（『行挿入』でなく『行追加』として読み直しました ── {_why}）")
+                plan = [{"op": "ADD_ROW", "args": _fixed["args"]}]
 
     if len(plan) == 1:
         step = plan[0]

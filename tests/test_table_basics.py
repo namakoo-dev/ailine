@@ -179,3 +179,82 @@ def test_deleted_content_reaches_the_report():
     src = Path(REPO / "src" / "ailine_core" / "dsl_step.py").read_text(encoding="utf-8")
     assert '"_deleted"' in src, "本番の合流点が消した中身を読んでいない"
     assert "戻すなら ailine undo" in src, "取り返しがつくことを言っていない"
+
+
+# --- ⑧ 位置は相対で言われる（Namakoo が実測）--------------------------------------------
+#
+# 「みかんの下に梨を追加して」「みかんとぶどうの間に梨を追加して」がどちらも動かなかった。
+# ★ 根: ADD_ROW は位置を**行番号**でしか受け取れないのに、人は相対で言う。
+#   LLM に数えさせると外し、空行だけの INSERT_ROWS に落ちていた。
+# ★ 分担を変えた: LLM は「誰の隣か」を言うだけ／**行番号は機械が実表を数えて決める**
+#   （列名の解決を機械 3 段でやっているのと同じ形）。
+
+def _anchor_meta(tmp_path):
+    p = _book(tmp_path, name="anchor.xlsx")
+    return p, {"sheets": ["売上"], "headers": {"売上": ["商品", "売上", "原価"]},
+                "header_rows": {"売上": 1}, "path": str(p)}
+
+
+@pytest.mark.parametrize("task,expect_at", [
+    ("みかんの下に梨を追加して", 4),
+    ("みかんの後に梨を追加して", 4),
+    ("みかんとぶどうの間に梨を追加して", 4),
+    ("りんごの上に梨を追加して", 2),
+    ("ぶどうの前に梨を追加して", 4),
+])
+def test_relative_positions_resolve_to_a_row_number(tmp_path, task, expect_at):
+    _p, meta = _anchor_meta(tmp_path)
+    at, note = ailine.resolve_row_anchor(task, meta, "売上")
+    assert at == expect_at, f"{task} → {at} / {note}"
+    assert note and "行目" in note, note
+
+
+def test_an_unknown_anchor_is_refused_by_name(tmp_path):
+    """★ 推測で行を挿さない（静かに別の場所へ入るのが一番こわい）。"""
+    _p, meta = _anchor_meta(tmp_path)
+    at, note = ailine.resolve_row_anchor("すいかの下に梨を追加して", meta, "売上")
+    assert at is None and "すいか" in note, note
+
+
+def test_an_ambiguous_anchor_is_refused(tmp_path):
+    """同じ名前が 2 行あるなら決めない。"""
+    p = _book(tmp_path, [["商品", "売上", "原価"], ["みかん", 1, 1], ["みかん", 2, 2]],
+               name="dup.xlsx")
+    meta = {"sheets": ["売上"], "headers": {"売上": ["商品", "売上", "原価"]},
+             "header_rows": {"売上": 1}, "path": str(p)}
+    at, note = ailine.resolve_row_anchor("みかんの下に足して", meta, "売上")
+    assert at is None and "2 行" in note, note
+
+
+def test_the_machine_position_beats_the_model(tmp_path):
+    """★ 実表を見た側が正しい ── LLM が別の行番号を言っても機械が上書きし、根拠を残す。"""
+    _p, meta = _anchor_meta(tmp_path)
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "ADD_ROW", {"at": 99, "values": {"商品": "梨"}}, meta,
+        task="みかんの下に梨を追加して")
+    assert ok, err
+    assert resolved["at"] == 4, resolved
+    assert "みかん" in resolved["_at_basis"], resolved
+
+
+def test_positional_values_are_named_by_the_machine(tmp_path):
+    """★ LLM は values を**並び**で返すことがある。列名は機械が付ける（決めた対応は出す）。"""
+    _p, meta = _anchor_meta(tmp_path)
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "ADD_ROW", {"at": 3, "values": ["梨", 600, 300]}, meta, task="3行目に足して")
+    assert ok, err
+    assert resolved["values"] == {"商品": "梨", "売上": 600, "原価": 300}, resolved
+    assert resolved["_values_label"] == "商品=梨／売上=600／原価=300"
+
+
+def test_too_many_positional_values_are_refused(tmp_path):
+    _p, meta = _anchor_meta(tmp_path)
+    ok, _r, _i, err = ailine.verify_dsl_args(
+        "ADD_ROW", {"at": 3, "values": [1, 2, 3, 4]}, meta, task="3行目に足して")
+    assert not ok and "4 個" in err, err
+
+
+def test_insert_rows_with_values_in_the_task_is_re_read():
+    """★ 「値の指定が在る」という証拠がある時だけ、行追加として読み直す（黙って変えない）。"""
+    assert ailine.insert_rows_should_have_been_add_row("みかんの下に梨を追加して。売上は600", {})
+    assert ailine.insert_rows_should_have_been_add_row("3行目に1行挿入して", {}) is None
