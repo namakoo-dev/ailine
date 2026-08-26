@@ -93,6 +93,8 @@
     <div class="row"><button id="undo">もとに戻す</button>
       <button id="draftreset">下書きを捨てる</button></div>
     <div class="row"><button id="openlo">この結果を Excel/LibreOffice で開く</button></div>
+    <div class="row" id="leftoverrow" style="display:none">
+      <button id="clearleftover">前回の作業結果を片づける</button></div>
     <div class="note">グラフ・図形・印刷の見え方は表に映りません ── 本物のアプリで見てください。</div>
 
     <details class="folder"><summary>別のフォルダを見る</summary>
@@ -171,7 +173,7 @@ async function loadFiles(){
 }
 function bookPath(){ return picked ? picked.path : ""; }
 
-let beforeCells = null, lastShown = null;
+let beforeCells = null, lastShown = null, blockedPath = null;
 function baseName(p){ const parts = p.split(String.fromCharCode(92)).join("/").split("/"); return parts[parts.length-1]; }
 function drawTable(host, noteEl, d, other){
   host.innerHTML = ""; noteEl.textContent = "";
@@ -257,6 +259,11 @@ function show(res){
     lines.appendChild(el);
   }
   $("#raw").textContent = text;
+  // ★ 出力先が塞がれた回は、抜け道のボタンを出す（行き止まりにしない）。
+  const blocked = text.split(String.fromCharCode(10))
+    .find(l => l.indexOf("出力先に書けません") >= 0);
+  blockedPath = blocked ? blocked.split(": ").slice(1).join(": ").trim() : null;
+  $("#leftoverrow").style.display = blockedPath ? "flex" : "none";
   document.querySelector(".work").scrollTop = 0;
   // ★ 「本当にそうなったか」は、文字でなく**表で**確かめられなければ意味がない。
   //   出せる先（j.out）は ailine が返したもの ── 画面が推測して探しに行かない。
@@ -293,6 +300,9 @@ $("#undo").onclick    = () => call("/api/undo", {}, "もとに戻しています
 $("#draftreset").onclick = () => call("/api/draft_reset", {}, "下書きを手放しています…");
 // ★ 表に映らないもの（グラフ・図形）は本物のアプリで見る。画面で再現しようとしない。
 $("#openlo").onclick  = () => call("/api/open", {path: lastShown || bookPath()}, "開いています…");
+// ★ 断り文が「別の場所へ移すか削除してから」と言っている作業を、人が 1 手でできるようにする。
+//   （消さずに改名する ── 取り返しを残す）
+$("#clearleftover").onclick = () => call("/api/clear_leftover", {path: blockedPath}, "片づけています…");
 loadFiles();
 </script>
 </body>

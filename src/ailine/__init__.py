@@ -8452,6 +8452,23 @@ def observe_book_state(path: Path) -> tuple:
 #   pending/confirm の中間状態は作らない — undo 一本（architect 判定）。
 # ★★ C9: 『✓』の発生点をここ1箇所へ動かした。原本(--copy なら .out)が確定した後に
 #   読み戻し、その結果だけを Claim にして描く。段別 ✓・--dry の ✓・反映前の ✓ は廃止。
+def _finish_failed_apply(a: argparse.Namespace, book: Path, result: dict) -> int:
+    """反映に失敗して終わる時の、唯一の出口。
+
+    ★★ 2026-08-26（Namakoo が実測・盲検の中9 と同じ根）: ここは
+      `return EXIT_APPLY_FAILED` で **_finish_run を通らずに抜けて**いた。
+      その結果:
+        ・「作業結果は <名前>.out.xlsx に残っています」と**言っておきながら**、
+          その物を作ったことを**履歴に記録していなかった**
+        ・次の run は出力先の関所で「この道具が書いた記録がありません」と塞がれる
+        ・人が手でファイルを消すまで、その本には**二度と実行できない**（行き止まり）
+      ★ 自分の言葉と自分の記録が食い違うと、自分の関所が自分を締め出す。
+      ★ 4 箇所に書き写されていたので、1 つの器官に畳んだ（また片配線を作らない）。
+    """
+    _finish_run(a, book, result, "apply_failed")
+    return EXIT_APPLY_FAILED
+
+
 def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Path,
                    result: dict, machine_verified: bool, scope: str = "",
                    scope_note: str = "", warning_count: int = 0) -> bool:
@@ -9446,7 +9463,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count)
     if not _applied:
-        return EXIT_APPLY_FAILED
+        return _finish_failed_apply(a, book, result)
 
     _finish_run(a, book, result, "none")
     return 0
@@ -9613,7 +9630,7 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count)
     if not _applied:
-        return EXIT_APPLY_FAILED
+        return _finish_failed_apply(a, book, result)
 
     _finish_run(a, book, result, "none")
     return 0
@@ -9776,7 +9793,7 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count)
     if not _applied:
-        return EXIT_APPLY_FAILED
+        return _finish_failed_apply(a, book, result)
 
     _finish_run(a, book, result, "none")
     return 0
@@ -10740,7 +10757,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                    scope_note="\n".join(render_scope_notes(subject_sink["unspoken"])),
                    warning_count=warning_count)
     if not _applied:
-        return EXIT_APPLY_FAILED
+        return _finish_failed_apply(a, book, result)
 
     _finish_run(a, book, result, "none")
     return 0

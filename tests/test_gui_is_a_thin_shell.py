@@ -182,3 +182,31 @@ def test_dropping_a_draft_does_not_delete_it():
     block = SERVER[i:i + 700]
     assert "unlink" not in block and "remove" not in block, "下書きを消している"
     assert "残っています" in block
+
+
+# --- ⑦ 行き止まりを画面が持たない ------------------------------------------------------
+
+def test_the_page_offers_a_way_out_of_a_blocked_output():
+    """★ 2026-08-26（Namakoo が 2 度実測）: 前の run が残した作業結果が出力先を塞ぎ、
+       **人が手でファイルを消すまで先へ進めない**状態になった。
+
+    ★ 製品は断ったままにする（人が置いたファイルを黙って消さない設計は正しい）。
+      画面は、断り文が言っている「別の場所へ移すか削除してから」を**人が 1 手で
+      できる形**にする ── 決めるのは人、実行だけを楽にする。
+    """
+    js = _script(HTML, code_only=True)
+    assert "clear_leftover" in js, "塞がれた時の抜け道が画面に無い（行き止まり）"
+    assert "出力先に書けません" in js, "塞がれたことを画面が見ていない"
+
+
+def test_clearing_a_leftover_renames_instead_of_deleting():
+    """★ 片づけは**改名**であって削除ではない（取り返しを残す）。
+
+    消してしまうと、この repo が 2026-08-26 に直したばかりの事故
+    （--copy の成果物の無言削除）を、画面のボタンで再現することになる。
+    """
+    i = SERVER.index("/api/clear_leftover")
+    block = _code_only(SERVER[i:i + 1400])
+    assert "rename(" in block, "改名していない"
+    assert "target.unlink()" not in block, "対象を消している"
+    assert "（捨てた）" in SERVER

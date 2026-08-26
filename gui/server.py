@@ -293,6 +293,29 @@ class Handler(BaseHTTPRequestHandler):
                         shutil.copy2(book, draft)
                     _DRAFTS[book] = str(draft)
                     rc, out, payload = _ailine(["run", str(draft), task, "--json"])
+            elif u.path == "/api/clear_leftover":
+                # ★★ 2026-08-26（Namakoo が 2 度実測）: 前の run が残した作業結果が
+                #   出力先を塞ぎ、**人が手でファイルを消すまで先へ進めない**状態になった。
+                #   ★ 製品は断ったままにする（人が置いたファイルを黙って消さない設計は正しい）。
+                #     画面は、断り文が言っている「別の場所へ移すか削除してから」を
+                #     **人が 1 手でできる形**にする ── 決めるのは人、実行だけを楽にする。
+                #   ★ 中身を見せてから消す（何を捨てるか分からないまま押させない）。
+                target = Path(req.get("path") or "")
+                if not target.exists():
+                    self._json(200, {"rc": 0, "json": {"verdict": "not_applied"},
+                                      "text": "片づけるものはありません。"})
+                    return
+                trash = target.with_name(target.stem + "（捨てた）" + target.suffix)
+                try:
+                    if trash.exists():
+                        trash.unlink()
+                    target.rename(trash)      # ★ 消さずに改名する（取り返しを残す）
+                    msg = (f"{target.name} を {trash.name} に改名しました"
+                            "（消していません）。もう一度実行できます。")
+                except OSError as e:
+                    msg = f"片づけられませんでした: {e}"
+                self._json(200, {"rc": 0, "json": {"verdict": "not_applied"}, "text": msg})
+                return
             elif u.path == "/api/open":
                 # ★ 表に映らないもの（グラフ・図形・印刷の見え方）は、本物のアプリで見るのが早い。
                 #   画面で再現しようとすると**画面が 2 つ目の実装**になる ── 見せる相手は実物。

@@ -231,3 +231,68 @@ def test_refusal_still_names_a_sibling_command_output(tmp_path, capsys):
     ailine._refuse_output_conflict(out, "ailine stack")
     printed = capsys.readouterr().out
     assert "ailine stack" in printed, printed
+
+
+# --- 行き止まり: 失敗した run が残した物に、自分の関所が塞がれる ------------------------
+
+def test_the_failed_apply_exit_records_before_leaving(tmp_path, monkeypatch, capsys):
+    """★★ 2026-08-26（Namakoo が実測・盲検の中9 と同じ根）。
+
+    実測した壊れ方:
+      失敗した run が「作業結果は <名前>.out.xlsx に残っています」と案内する
+      → しかしその物を作ったことを**履歴に記録しない**出口が在った
+      → 次の run が出力先の関所で「この道具が書いた記録がありません」と塞がれる
+      → 人が手でファイルを消すまで、その本には**二度と実行できない**
+    ★ 自分の言葉と自分の記録が食い違うと、自分の関所が自分を締め出す。
+
+    ★ 検体の訂正（同日）: 初版は「BOLD を失敗させる」経路で測ったが、そこは
+      **事後条件 fail の出口**で、元から記録していた ── **測りたい経路を通っていなかった**。
+      12 ある「作業結果を残す」出口のうち、記録していなかったのは 2 つだけで、
+      どちらも _finish_apply が False を返す側だった。だから**その出口を直接測る**。
+    """
+    from test_golden_transcripts import _isolate
+    _isolate(monkeypatch, tmp_path)
+    book = _xlsx(tmp_path / "b.xlsx")
+    # ★ 治具は本番が読む属性を全部持つ（欠けると _finish_run が握り潰して
+    #   「記録できなかった」を「記録しなかった」と誤って測る ── 自分で踏んだ）
+    a = type("A", (), {"json": False, "dry": False, "task": "t",
+                        "model": "qwen2.5-coder:7b"})()
+    result = {"ok": False, "out": str(ailine.out_book_path(book)), "path": "dsl"}
+    rc = ailine._finish_failed_apply(a, book, result)
+    assert rc == ailine.EXIT_APPLY_FAILED
+    entries = ailine.read_history(max_n=5)
+    assert entries, "失敗した反映が履歴に 1 行も残っていない"
+    assert Path(entries[0]["out"]).name == ailine.out_book_path(book).name, entries[0]
+    assert entries[0]["failure_kind"] == "apply_failed", entries[0]
+
+
+def test_every_exit_that_leaves_a_file_records_it():
+    """★ 12 ある出口を**数えて**縛る（1 つ増えたら気づける形にする）。
+
+    「作業結果は…に残っています」と言う行の直後 3 行に、_finish_run か
+    _finish_failed_apply のどちらかが在ること。書き写しでなく**数で**守る。
+    """
+    src = (Path(REPO) / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    lines = src.split(chr(10))
+    said, recorded = 0, 0
+    for n, ln in enumerate(lines):
+        if "_untouched_original_line(book" not in ln or "def " in ln:
+            continue
+        said += 1
+        nearby = chr(10).join(lines[n:n + 4])
+        if "_finish_run(" in nearby or "return False" in nearby:
+            recorded += 1
+    assert said >= 10, f"出口の数え方が変わった（{said} 件）── 契約を読み直すこと"
+    assert said == recorded, (
+        f"作業結果を案内しながら記録しない出口が {said - recorded} 件ある "
+        "── 次の run が自分の関所に塞がれて行き止まりになる")
+
+
+def test_a_human_edited_leftover_is_still_refused(tmp_path, monkeypatch, capsys):
+    """★ 誤爆防止: 残骸に人が手を入れていたら、従来どおり止める（今日入れた守りは残す）。"""
+    book = _xlsx(tmp_path / "b.xlsx")
+    out = ailine.out_book_path(book)
+    _xlsx(out, "ailine が残した")
+    _history_with_out(tmp_path, monkeypatch, out, ailine._file_digest(out))
+    _xlsx(out, "人が書き足した")
+    assert ailine.refuse_if_output_is_someone_elses(book) == 7
