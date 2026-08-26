@@ -246,3 +246,18 @@ def test_the_multifile_paths_go_through_the_tool_not_the_page():
     for cmd in ('"scan"', '"stack"', '"verify"'):
         assert cmd in block, f"{cmd} を叩いていない"
     assert "verdict" not in block, "画面側の経路で判定を作りかけている"
+
+
+def test_the_page_never_touches_an_element_that_does_not_exist():
+    """★ 2026-08-26 に実測で踏んだ（Namakoo「実行できない」）。
+
+    左側を作り直したとき `読み込む` ボタンを消したのに、JS はその id を触り続けた。
+    `$("#reload").disabled` が null で落ち、**以降の配線が全部死んだ** ──
+    画面は普通に出るのに、どのボタンも効かない。一番わかりにくい壊れ方。
+    ★ 目で見ても分からないので、機械で照合する（id は増えるので、白名簿にしない）。
+    """
+    ids = set(re.findall(r'id="([\w-]+)"', HTML))
+    js = _script(HTML, code_only=True)
+    used = set(re.findall(r'\$\("#([\w-]+)"\)', js))
+    missing = sorted(used - ids)
+    assert not missing, f"JS が触るのに HTML に無い id: {missing}（null で以降が全部死ぬ）"

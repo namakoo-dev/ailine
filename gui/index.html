@@ -171,7 +171,13 @@ function setBadge(key, extra){
   $("#why").textContent = v.why + (extra ? "  " + extra : "");
 }
 function busy(on, msg){
-  for (const id of ["run","runcopy","undo","reload"]) $("#"+id).disabled = on;
+  // ★ 実測で踏んだ: 消したボタンの id を触り続けて null で落ち、**以降の配線が全部死んだ**
+  //   （画面は出るのに何も実行できない ── 一番わかりにくい壊れ方）。
+  //   在るものだけ触る。id の食い違いは番人が別に見張る。
+  for (const id of ["run","runcopy","undo","draftreset","saveas","openlo",
+                     "pick","pickfolder","mscan","mstack","mverify","mextract"]) {
+    const el = $("#"+id); if (el) el.disabled = on;
+  }
   if (on){ $("#badge").className = "badge b-none";
            $("#badge").textContent = "⏳  " + msg;
            $("#why").textContent = "ローカルの小型 LLM と LibreOffice で処理しています。"; }
@@ -375,7 +381,6 @@ $("#mstack").onclick   = () => multi("stack");
 $("#mverify").onclick  = () => multi("verify");
 $("#mextract").onclick = () => multi("extract", {task: $("#mtask").value});
 
-$("#reload").onclick = loadFiles;
 $("#run").onclick     = () => call("/api/run",  {task: $("#task").value, copy:false}, "実行中…");
 $("#runcopy").onclick = () => call("/api/run",  {task: $("#task").value, copy:true},  "下書きで実行中…");
 $("#undo").onclick    = () => call("/api/undo", {}, "もとに戻しています…");
