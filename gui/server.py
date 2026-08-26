@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import threading
@@ -59,6 +60,14 @@ def _ailine(args: list) -> tuple:
 
 # ★ 下書きの続き（本 → 作業中の下書きファイル）。段取りだけを持つ・判定は持たない。
 _DRAFTS: dict = {}
+DRAFT_SUFFIX = "（下書き）"
+
+
+def _draft_path(book: Path) -> Path:
+    """下書きの置き場。★ 名前を積み重ねない（.out.out.out… にしない）。"""
+    if book.stem.endswith(DRAFT_SUFFIX):
+        return book
+    return book.with_name(book.stem + DRAFT_SUFFIX + book.suffix)
 
 MAX_ROWS = 200
 MAX_COLS = 40
@@ -91,14 +100,83 @@ def _read_sheet(path: Path, sheet: str | None) -> dict:
     grid = data["grid"]
     rows_n, cols_n = data["max_row"], data["max_col"]
     shown_r, shown_c = min(rows_n, MAX_ROWS), min(cols_n, MAX_COLS)
-    cells = [[_cell_text(grid.get((r, c))) for c in range(1, shown_c + 1)]
+    # ★ 2026-08-26（Namakoo の指摘）: 値だけ出すと**中央揃え・太字・背景色・罫線が
+    #   何も見えない**。24 op のうち 5 つが見た目の操作なのに、確かめる手段が無かった。
+    #   → 書式も一緒に運ぶ（openpyxl は既に製品の依存・新しい依存は増やさない）。
+    #   ★ 判定はしない。見せるだけ。
+    style = _read_styles(path, data["sheet_name"], shown_r, shown_c)
+    style_error = style.pop(("error",), None)
+    cells = [[{"t": _cell_text(grid.get((r, c))), **style.get((r, c), {})}
+               for c in range(1, shown_c + 1)]
               for r in range(1, shown_r + 1)]
     note = ""
     if rows_n > shown_r or cols_n > shown_c:
         note = f"表が大きいので {shown_r} 行 × {shown_c} 列だけ出しています（実際は {rows_n} 行 × {cols_n} 列）"
     return {"sheets": names, "sheet": data["sheet_name"], "cells": cells,
             "rows": rows_n, "cols": cols_n, "note": note,
+            "style_error": style_error,
+            "shapes": _count_shapes(path, data["sheet_name"]),
             "uncached": len(data.get("uncached_formulas") or ())}
+
+
+def _count_shapes(path: Path, sheet: str) -> dict:
+    """グラフ・画像の数。★ 表には**絶対に映らない**ので、数だけでも言う。
+
+    ★ 「消えたものは差分に出ない」の家系: グラフが増えた/消えたことは値の表に一切出ない。
+      画面が黙れば、人は「何も起きなかった」と読む。
+    """
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+        ws = wb[sheet] if sheet in wb.sheetnames else wb.active
+        n = {"charts": len(getattr(ws, "_charts", []) or []),
+             "images": len(getattr(ws, "_images", []) or [])}
+        wb.close()
+        return n
+    except Exception:
+        return {}
+
+
+def _read_styles(path: Path, sheet: str, rows: int, cols: int) -> dict:
+    """セルの見た目（太字・寄せ・背景色・数値書式・罫線）を読む。**判定はしない**。"""
+    out: dict = {}
+    try:
+        # ★ 実測で踏んだ: ここで import し忘れ、NameError が下の except に握り潰されて
+        #   **書式が黙って出なくなっていた**（ファイルには太字も #,##0 も入っていた）。
+        #   ★ 握り潰す except は「出ないことを信号にする」── 気づけない形だった。
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+        ws = wb[sheet] if sheet in wb.sheetnames else wb.active
+    except Exception as e:
+        out[("error",)] = str(e)
+        return out
+    for r in range(1, rows + 1):
+        for c in range(1, cols + 1):
+            cell = ws.cell(row=r, column=c)
+            info = {}
+            if cell.font is not None and cell.font.bold:
+                info["b"] = 1
+            al = getattr(cell.alignment, "horizontal", None)
+            if al:
+                info["a"] = al
+            fill = getattr(cell.fill, "start_color", None)
+            rgb = getattr(fill, "rgb", None) if fill else None
+            if isinstance(rgb, str) and rgb not in ("00000000",) and rgb.endswith(("FFFFFF",)) is False:
+                info["g"] = rgb[-6:]
+            nf = cell.number_format
+            if nf and nf != "General":
+                info["n"] = nf
+            b = cell.border
+            if b and any(getattr(getattr(b, side), "style", None)
+                          for side in ("left", "right", "top", "bottom")):
+                info["k"] = 1
+            if info:
+                out[(r, c)] = info
+    try:
+        wb.close()
+    except Exception:
+        pass
+    return out
 
 
 def _cell_text(v) -> str:
@@ -204,14 +282,29 @@ class Handler(BaseHTTPRequestHandler):
                     rc, out, payload = _ailine(["run", book, task, "--json"])
                     _DRAFTS.pop(book, None)     # 原本に反映したら下書きの役目は終わり
                 else:
-                    draft = _DRAFTS.get(book)
-                    if draft and Path(draft).exists():
-                        rc, out, payload = _ailine(["run", draft, task, "--json"])
-                    else:
-                        rc, out, payload = _ailine(["run", book, task, "--copy", "--json"])
-                        made = (payload or {}).get("out")
-                        if rc == 0 and made and Path(made).exists():
-                            _DRAFTS[book] = made
+                    # ★★ 2026-08-26（Namakoo が実測・俺の直しが連れてきたバグ）:
+                    #   初版は `--copy` の成果物（<名前>.out.xlsx）に反映し続けた。すると
+                    #   作業ファイルが <名前>.out.out.xlsx になり、失敗した回の残骸が残って
+                    #   **次から関所に塞がれ、行き止まりになった**。
+                    #   ★ 名前を積み重ねる設計が間違い。下書きは**人が読める名前のファイル
+                    #     1 つ**にして、そこへ普通に反映する（backup も undo も普通に効く）。
+                    draft = _draft_path(Path(book))
+                    if not draft.exists():
+                        shutil.copy2(book, draft)
+                    _DRAFTS[book] = str(draft)
+                    rc, out, payload = _ailine(["run", str(draft), task, "--json"])
+            elif u.path == "/api/open":
+                # ★ 表に映らないもの（グラフ・図形・印刷の見え方）は、本物のアプリで見るのが早い。
+                #   画面で再現しようとすると**画面が 2 つ目の実装**になる ── 見せる相手は実物。
+                target = req.get("path") or book
+                try:
+                    import os as _o
+                    _o.startfile(str(Path(target)))     # Windows の既定アプリで開く
+                    msg = f"{Path(target).name} を開きました（表に映らないものはこちらで）"
+                except Exception as e:
+                    msg = f"開けませんでした: {e}"
+                self._json(200, {"rc": 0, "json": {"verdict": "not_applied"}, "text": msg})
+                return
             elif u.path == "/api/draft_reset":
                 # 下書きを捨てて、次は原本からやり直す（消しはしない ── 残す）
                 dropped = _DRAFTS.pop(book, None)

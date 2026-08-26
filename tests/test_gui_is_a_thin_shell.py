@@ -24,6 +24,16 @@ SERVER = (GUI / "server.py").read_text(encoding="utf-8")
 sys.path.insert(0, str(REPO / "src"))
 
 
+def _code_only(py: str) -> str:
+    """Python の行コメントを落とす。
+
+    ★ 2 度踏んだ: 番人が**自分の説明文**に当たって赤くなる（JS 側でも同じことをした）。
+      契約はコードについてのものなので、見る対象を正す ── 緩めてはいない。
+      ★ 文字列リテラル中の `#` は落とさない（この番人が見る範囲には無いことを前提にする）。
+    """
+    return chr(10).join(ln.split("#")[0] for ln in py.split(chr(10)))
+
+
 def _script(html: str, code_only: bool = False) -> str:
     m = re.search(r"<script>(.*?)</script>", html, re.S)
     assert m, "script が無い"
@@ -126,15 +136,33 @@ def test_draft_continues_instead_of_restarting_from_the_original():
 
     根: 下書きが毎回 `run <原本> --copy` で、**毎回原本から作り直して**いた。
     人は「1 つやって、次をやる」と積み上げるのに、道具は積み上げていなかった。
-    ★ 直し: 下書きは作業用のファイルを 1 つ持ち続け、2 回目からはその下書き自身に反映する。
+
+    ★ 同じ日に**契約を 1 度訂正した**（最初の直しが連れてきたバグ・これも実測）:
+      初版は `--copy` の成果物に反映し続けたので、作業ファイルが `<名前>.out.out.xlsx`
+      と積み重なり、失敗した回の残骸が次の run を関所で塞いで**行き止まり**になった。
+      → 下書きは**人が読める名前のファイル 1 つ**にして、そこへ普通に反映する。
     """
     assert "_DRAFTS" in SERVER, "下書きの続きを持っていない（毎回原本から作り直す）"
     i = SERVER.index('if u.path == "/api/run":')
-    block = SERVER[i:i + 1800]
-    assert "_DRAFTS.get(book)" in block, "2 回目に下書きを見ていない"
-    assert "--copy" in block, "1 回目に原本から作る経路が無い"
+    block = SERVER[i:i + 2000]
+    assert "_draft_path(" in block, "下書きの置き場を決めていない"
+    assert "shutil.copy2(book, draft)" in block, "1 回目に原本から作る経路が無い"
+    assert "--copy" not in _code_only(block), (
+        "下書きに --copy を使っている ── 名前が .out.out… と積み重なって行き止まりになる")
     # ★ 原本に反映したら下書きの役目は終わり（古い下書きに積み続けない）
     assert "_DRAFTS.pop(book, None)" in block
+
+
+def test_the_draft_name_never_stacks():
+    """★ `.out.out.out…` を作らない（実測で行き止まりになった形）。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gui_server", REPO / "gui" / "server.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    once = mod._draft_path(Path("C:/x/売上.xlsx"))
+    twice = mod._draft_path(once)
+    assert once == twice, f"下書きの下書きを作った: {once} → {twice}"
+    assert once.name == "売上（下書き）.xlsx", once.name
 
 
 def test_the_page_says_where_it_is_writing():

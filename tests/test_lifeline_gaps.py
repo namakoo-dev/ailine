@@ -201,3 +201,33 @@ def test_inplace_run_still_cleans_up_its_own_scratch(tmp_path, monkeypatch):
     ok, err = ailine.atomic_replace_inplace(book, out, workdir)
     assert ok, err
     assert not out.exists(), "自分の作業ファイルを片づけていない（ゴミが残る）"
+
+
+# --- 中9: 自分が作った物を「人のファイル」と断定しない --------------------------------
+
+def test_refusal_does_not_claim_whose_file_it_is(tmp_path, capsys):
+    """★ 盲検の中9 ＋ Namakoo が実際に踏んだ形。
+
+    実測: ailine が 1 分前に作り「作業結果はここに残っています」と自分で案内した
+    ファイルについて「**ailine の印が無い人のファイルです**」と断定していた。
+    （失敗した run は history に out を残さないので、印が見つからない側へ落ちる）
+    ★ 見たものと解釈を分ける ── 分かるのは「この道具が書いた記録が無い」ことだけ。
+      止めるのは正しい。説明が嘘なのは別の問題。
+    """
+    out = tmp_path / "b.out.xlsx"
+    out.write_bytes(b"x")
+    rc = ailine._refuse_output_conflict(out, None)
+    printed = capsys.readouterr().out
+    assert rc == 7
+    assert "人のファイル" not in printed, f"誰の物かを断定した: {printed}"
+    assert "記録がありません" in printed, printed
+    assert "失敗した run" in printed, f"心当たりを挙げていない: {printed}"
+
+
+def test_refusal_still_names_a_sibling_command_output(tmp_path, capsys):
+    """誤爆防止: 印がある時は従来どおり、どのコマンドの出力かを名指しする。"""
+    out = tmp_path / "b.xlsx"
+    out.write_bytes(b"x")
+    ailine._refuse_output_conflict(out, "ailine stack")
+    printed = capsys.readouterr().out
+    assert "ailine stack" in printed, printed
