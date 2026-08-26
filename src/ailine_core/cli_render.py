@@ -490,6 +490,10 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
             lines.append(f"⚠ 帰属が一致しません: {m['file']} の {m['src_row']}行目 "
                          f"列『{m['column']}』 元 {_fmt_num(m['source'])} / "
                          f"出力 {_fmt_num(m['output'])}")
+        elif kind == "unreadable_source":
+            # ★ 2026-08-26（致命⑥）: 壊れた .xlsx を生の traceback で落とさず、名指しする。
+            lines.append(f"⚠ {m['name']} を読めませんでした（{m['source']}）"
+                         " ── この冊の行は検算の分母に入っていません")
         elif kind == "missing_source":
             # ★ 2026-08-24: 元フォルダに在るのに出力の出所列に一度も現れない冊。
             #   旧版は元側の一覧を**出力自身の出所列**から作っていたので、この不一致は

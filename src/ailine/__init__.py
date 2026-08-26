@@ -10820,6 +10820,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     skipped, files_json, excluded_detail, mismatches = [], [], [], []
     sheet_fallbacks, matched_rows_all = [], []
     blocked_total, blocked_samples = 0, []   # ★ 第三波 H3: 数字に見える文字列（開示専用）
+    uncached_total = 0                        # ★ 致命③: 条件列の「数式だが値が無い」セル
     extract_dropped = {}   # ★ 2026-08-24: 値として運べない中身（コメント/リンク）
     all_findings = []   # ★ M2.5: 検分シートの所見（inspection.Finding）
     file_sheet_map = []   # ★ M2.5: [(ファイル名, 使ったシート, 備考), ...]
@@ -10838,6 +10839,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         file_sheet_map.append((r.name, sheet_used, "並べ替えて照合" if r.reordered else ""))
         for _row, _kind in getattr(r, "dropped_notes", ()) or ():
             extract_dropped[_kind] = extract_dropped.get(_kind, 0) + 1
+        uncached_total += getattr(r, "uncached_in_column", 0) or 0
         if r.blocked:
             blocked_total += r.blocked["count"]
             for sm in r.blocked["samples"]:
@@ -10968,7 +10970,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
           "mismatches": mismatches, "total_word_warnings": total_word_warnings,
           "rebuilt_own_output": rebuilt_own_output,
           "blocked_stringy": ({"count": blocked_total, "samples": blocked_samples[:3]}
-                               if blocked_total else None)}
+                               if blocked_total else None),
+          "uncached_in_column": uncached_total}
     if as_json:
         print(json.dumps({"out": str(out), "written": True,
                           "condition": {"column": col, "cmp": cmp, "value": value},
@@ -10992,6 +10995,14 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             {"count": blocked_total, "samples": blocked_samples[:3]} if blocked_total else None,
             col, total_matched):
         say(line)
+    # ★★ 2026-08-26（複数ファイルの盲検・致命③）: stack は「検算していません」と言うのに、
+    #   この経路には警告そのものが無かった（片配線）── 金額が全部数式の請求書に対して
+    #   『計 0 行一致』＋『行の完全会計: 成立』＋ exit 0 という**嘘の成功報告**が出ていた。
+    if uncached_total:
+        say(f"  ⚠ 『{col}』の {uncached_total} 件は数式で、計算結果がファイルに"
+            "入っていないため**条件に合うか確かめられませんでした**"
+            "（合わなかったのではありません）")
+        say("  → Excel か LibreOffice で一度開いて保存し直すと、計算結果が入ります")
     # ★ D6 差し戻し（実弾検分・2026-08-21）: 正常なファイルは名指ししない ── 名指しは
     #   異常のあるファイル（取れなかった／閉じる検査の不一致／シート fallback）だけ。
     #   正常分（並べ替え・合計行の除外・行の完全会計）は 1 行の集計に畳む。

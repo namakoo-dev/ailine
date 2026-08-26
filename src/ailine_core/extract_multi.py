@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import openpyxl
 
-from ailine_core import compare_blocked, inspection, multifile, total_row
+from ailine_core import compare_blocked, inspection, multifile, total_row, xml_readback
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 
 # ★ 書き手の印。stack.py の CREATOR_MARKS が「将来の extract を先取りして凍結」した
@@ -141,6 +141,9 @@ class FileExtractResult:
     # ★ 2026-08-24 第三波 H3: 数値比較から落ちた「数字に見える文字列」の件数と例。
     #   判定には一度も使わない（compare_blocked の docstring）── 開示のためだけ。
     blocked: dict | None = None
+    # ★ 2026-08-26（致命③）: 条件列のうち「数式だが値が入っていない」セルの数。
+    #   空セルと区別が付かないまま不一致側へ落ちるので、件数を持って開示する。
+    uncached_in_column: int = 0
     # ★ 2026-08-24: 値として運べない「中身」（コメント/ハイパーリンク）。stack と同じ。
     dropped_notes: list = field(default_factory=list)
 
@@ -214,6 +217,21 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
                 unmatched_cells.append(cell)
         # ★ 開示専用（判定は上で既に終わっている・ここで結果は 1 ビットも変えない）。
         blocked = compare_blocked.scan_column(unmatched_cells, cmp)
+        # ★★ 2026-08-26（複数ファイルの盲検・致命③）: 数式だがキャッシュ値が無いセルは
+        #   data_only=True で None になり、**空セルと区別が付かない**まま「条件に合わない」
+        #   側へ落ちる。実測: 金額が全部数式の請求書に「金額が 1 以上の行を抜き出して」と
+        #   頼むと『2 中 0 ファイルで計 0 行一致』＋『行の完全会計: 成立』＋ exit 0 ──
+        #   **嘘の成功報告**。stack 側には警告が在るのに、この経路だけ無かった（片配線）。
+        #   ★ ここでも判定は変えない（読めないものを「合う」とは言えない）── 数えて言う。
+        uncached_in_col = 0
+        if value_col:
+            try:
+                _rb = xml_readback.read_grid(path, sheet_name=ws.title)
+                _cand = set(candidate_rows)
+                uncached_in_col = sum(1 for (rr, cc) in _rb.get("uncached_formulas") or ()
+                                       if cc == value_col and rr in _cand)
+            except Exception:
+                uncached_in_col = 0      # 測れなければ 0（嘘の件数を作らない）
 
         rows = []
         dropped_notes = []
@@ -268,6 +286,7 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
                                   rows_unmatched=len(unmatched_rows),
                                   excluded=verdict.excluded, mismatches=verdict.mismatches,
                                   sheet_fallback=sheet_fallback, findings=findings,
-                                  blocked=blocked, dropped_notes=dropped_notes)
+                                  blocked=blocked, dropped_notes=dropped_notes,
+                                  uncached_in_column=uncached_in_col)
     finally:
         wb.close()

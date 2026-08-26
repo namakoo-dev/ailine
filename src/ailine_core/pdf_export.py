@@ -63,7 +63,16 @@ def renderings(value) -> list:
                 f"{d.year}年{d.month}月{d.day}日"]
         return out
     if isinstance(value, bool):
-        return [str(value)]
+        # ★ 2026-08-26（出入口の盲検・高5）: PDF は Excel の表示に従って TRUE/FALSE と出る。
+        #   `str(True)` だけを候補にしていたので、真偽値のある表は**どうやっても ✓ が出ず
+        #   常に exit 3** だった。csv_export は既に "TRUE" に寄せていて、兄弟モジュールで
+        #   表記が食い違っていた ── 番人が誤爆すると、人は番人を見なくなる。
+        return ["TRUE" if value else "FALSE", str(value)]
+    if isinstance(value, _dt.time):
+        # ★ 同（高5）: 時刻は `09:00:00` でなく `9:00` と出る。勤怠表が全滅していた。
+        return [f"{value.hour}:{value.minute:02d}",
+                f"{value.hour:02d}:{value.minute:02d}",
+                value.isoformat()]
     if isinstance(value, (int, float)):
         n = int(value) if float(value).is_integer() else value
         plain = str(n)
@@ -108,16 +117,70 @@ def verify_values_in_pdf(pdf_path, values) -> PdfCheck:
         return r
     text = read_pdf_text(pdf_path)
     r.text_chars = len(text)
-    flat = text.replace(" ", "").replace(chr(160), "")
+    # ★ 2026-08-26（出入口の盲検・高6）: 空白しか除いていなかったので、列幅で
+    #   `1月` が改行をまたいで折り返されると不一致になっていた。改行も除く。
+    # ★ 2 つの見方を持つ（片方だけでは両立しない・自分で踏んだ）:
+    #   flat   … 空白を全部除いた形。語間に空白が挟まる抽出（`1, 000`）に強い
+    #   spaced … 空白を 1 つに畳んだ形。**数字の境界**を見るのに要る
+    #            （flat だと `5 80` が `580` になり、`5` が「数字に挟まれている」と
+    #             判定されて正しい一致まで捨ててしまう）
+    import re as _re2
+    _norm = text.replace(chr(160), " ")
+    flat = _re2.sub(r"\s+", "", _norm)
+    spaced = _re2.sub(r"\s+", " ", _norm)
+    # ★★ 2026-08-26（出入口の盲検・致命1）: ここは `c in flat` ── **PDF 全文への
+    #   素の部分文字列の包含**で、位置も出現回数も見ていなかった。
+    #   ・隠し行/印刷範囲で消えた行の値が、別の行にも在れば「載っている」と数えた
+    #     （6 行中 3 行が PDF に無いのに ✓ 欠落 0・実測）
+    #   ・`12345` は可視の `123456` に含まれるので、消えても検出されなかった
+    #   ★ 直し: **必要な回数だけ在ること**を見る（同じ値が 2 回在るなら PDF にも 2 回）。
+    #     数字だけの候補は**前後が数字でない**ことも要る（部分一致の穴）。
+    need: dict = {}
+    order: list = []
     for v in values:
-        cands = [c for c in renderings(v) if c != ""]
+        cands = tuple(c for c in renderings(v) if c != "")
         if not cands:
             continue
         r.checked += 1
-        # ★ 表示ゆれのどれか 1 つでも載っていれば「載っている」。
-        if not any(c.replace(" ", "") in flat for c in cands):
+        if cands not in need:
+            need[cands] = 0
+            order.append(cands)
+        need[cands] += 1
+    for cands in order:
+        found = 0
+        for c in cands:
+            hay = spaced if (c and all(ch in _DIGITS for ch in c)) else flat
+            found = max(found, _count_occurrences(hay, c))
+        if found < need[cands]:
             r.missing.append(cands[0])
     return r
+
+
+_DIGITS = "0123456789"
+
+
+def _count_occurrences(flat: str, cand: str) -> int:
+    """flat に cand が「独立して」現れる回数。
+
+    ★ 数字だけの候補は、前後に数字が続いていたら数えない ── `12345` を `123456` の
+      中に見つけて「載っている」と言わないため（実測の穴）。
+    """
+    numeric = cand and all(ch in _DIGITS for ch in cand)
+    n = 0
+    start = 0
+    while True:
+        i = flat.find(cand, start)
+        if i < 0:
+            return n
+        start = i + 1
+        if numeric:
+            before = flat[i - 1] if i > 0 else ""
+            after = flat[i + len(cand)] if i + len(cand) < len(flat) else ""
+            # ★ 空文字は「任意の文字列の部分文字列」なので `"" in _DIGITS` は True。
+            #   先頭・末尾の一致が全部ここで捨てられる（自分で仕込みかけた・実測で捕獲）。
+            if (before and before in _DIGITS) or (after and after in _DIGITS):
+                continue
+        n += 1
 
 
 # --- openpyxl の往復で落ちる図形の検出（2026-08-24・第三波 #9）--------------------

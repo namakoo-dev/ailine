@@ -86,6 +86,8 @@ def _numeric_columns(grid: dict, base_headers: list, rows: list) -> list:
 #   戻り値のタプルを増やすと試験の直呼びが壊れるので、パス → 行番号 の形で残す。
 #   ここに入った行は「検算が裏取りしていない除外」── 呼び出し側が必ず人へ見せる。
 _LAST_DROPPED: dict = {}
+# ★ 読めなかった冊（致命⑥）── 黙って飛ばさず名指しする
+_UNREADABLE: dict = {}
 
 
 def _expected_rows_for_source(path, base_headers: list, label_col_name, numeric_col_names: list,
@@ -103,7 +105,17 @@ def _expected_rows_for_source(path, base_headers: list, label_col_name, numeric_
        （旧 value_col_name）でなく『基準の数値列集合すべて』（numeric_col_names）を見る ──
        stack.evaluate_and_stack（書いた側）と同じ検出でないと、片方だけが取り逃がして
        恒真ペア（間違った数字同士が一致）になる。"""
-    data = xml_readback.read_grid(path, sheet_name=sheet_name)
+    # ★★ 2026-08-26（複数ファイルの盲検・致命⑥）: ここは try を持たず、フォルダに
+    #   壊れた .xlsx が 1 本混ざるだけで **生の traceback** で落ちていた（exit 1）。
+    #   同じ verify.py の中でも `_attribution_mismatch` は try/except を持っており、
+    #   **同一ファイル内で非対称**だった。scan と run <フォルダ> は名指しして完走する
+    #   ── 4 経路のうち 2 経路だけ塞がっている片配線。
+    #   ★ 黙って飛ばさない: 読めなかった冊は呼び出し側が名指しできるよう記録する。
+    try:
+        data = xml_readback.read_grid(path, sheet_name=sheet_name)
+    except Exception as e:
+        _UNREADABLE[str(path)] = f"{type(e).__name__}: {e}"
+        return set(), {}
     header_row = _find_header_row(data, base_headers)
     if header_row is None:
         return set(), {}
@@ -475,6 +487,7 @@ def _verify_stack(out_path, src_folder) -> dict:
     sums_source = {name: 0.0 for name in numeric_cols}
     unbacked = []          # ★ 検算が裏取りしていない除外（複数ファイルの盲検・致命①⑨）
     _LAST_DROPPED.clear()
+    _UNREADABLE.clear()
     for fname in sorted(refs):
         path = src_folder / fname
         if not path.exists():
@@ -497,6 +510,11 @@ def _verify_stack(out_path, src_folder) -> dict:
     #   （盲検の使い勝手レビューでも「どのファイルが原因か一言も言わない」が致命だった）。
     ms_mismatches = [{"kind": "missing_source", "column": None, "name": n,
                        "source": n, "output": None} for n in sorted(missing_sources)]
+    # ★ 致命⑥: 読めなかった冊は「無かったこと」にしない ── 不一致として名指しする
+    #   （分母から黙って消えると、冊が丸ごと落ちたフォルダに ✓ が出る）。
+    for _p, _why in sorted(_UNREADABLE.items()):
+        ms_mismatches.append({"kind": "unreadable_source", "column": None,
+                               "name": Path(_p).name, "source": _why, "output": None})
     if expected_total != actual_total:
         rc_mismatch = {"kind": "row_count", "column": None,
                        "source": expected_total, "output": actual_total}
