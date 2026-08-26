@@ -89,7 +89,9 @@
       <button id="run">原本に反映</button>
     </div>
     <div class="note">下書きは原本を触りません。原本に反映しても <b>もとに戻す</b> で戻せます。</div>
-    <div class="row"><button id="undo">もとに戻す</button></div>
+    <div class="note" id="draftnote"></div>
+    <div class="row"><button id="undo">もとに戻す</button>
+      <button id="draftreset">下書きを捨てる</button></div>
 
     <details class="folder"><summary>別のフォルダを見る</summary>
       <input id="dir" value="">
@@ -243,6 +245,11 @@ function show(res){
   // ★ 「本当にそうなったか」は、文字でなく**表で**確かめられなければ意味がない。
   //   出せる先（j.out）は ailine が返したもの ── 画面が推測して探しに行かない。
   const shown = j.out || bookPath();
+  // ★ 黙って別のファイルを触らない ── 今どこに書いているかを必ず見せる。
+  //   （下書きは 2 回目から**下書き自身**に積み上げる: 原本から作り直すと前の操作が消える）
+  $("#draftnote").textContent = (shown && shown !== bookPath())
+    ? ("下書き " + baseName(shown) + " に積み上げています（原本は無変更）")
+    : "";
   loadSheet(shown).then(d => {
     drawTable($("#after"), $("#afternote"), d, beforeCells);
     if (d && !d.error && shown !== bookPath())
@@ -266,6 +273,7 @@ $("#reload").onclick = loadFiles;
 $("#run").onclick     = () => call("/api/run",  {task: $("#task").value, copy:false}, "実行中…");
 $("#runcopy").onclick = () => call("/api/run",  {task: $("#task").value, copy:true},  "下書きで実行中…");
 $("#undo").onclick    = () => call("/api/undo", {}, "もとに戻しています…");
+$("#draftreset").onclick = () => call("/api/draft_reset", {}, "下書きを手放しています…");
 loadFiles();
 </script>
 </body>

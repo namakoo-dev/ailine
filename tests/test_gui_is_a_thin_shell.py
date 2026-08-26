@@ -116,3 +116,41 @@ def test_no_blocking_modal():
     js = _script(HTML, code_only=True)
     for bad in ("alert(", "confirm(", "prompt("):
         assert bad not in js, f"画面を止めるモーダルを使っている: {bad}"
+
+
+# --- ⑥ 下書きは積み上がる（原本から作り直さない）----------------------------------------
+
+def test_draft_continues_instead_of_restarting_from_the_original():
+    """★ 2026-08-26（Namakoo が実測）: 「梨を追加して」→「梨の売上を2000に」と続けると、
+       **1 つ目の操作が消えた**。
+
+    根: 下書きが毎回 `run <原本> --copy` で、**毎回原本から作り直して**いた。
+    人は「1 つやって、次をやる」と積み上げるのに、道具は積み上げていなかった。
+    ★ 直し: 下書きは作業用のファイルを 1 つ持ち続け、2 回目からはその下書き自身に反映する。
+    """
+    assert "_DRAFTS" in SERVER, "下書きの続きを持っていない（毎回原本から作り直す）"
+    i = SERVER.index('if u.path == "/api/run":')
+    block = SERVER[i:i + 1800]
+    assert "_DRAFTS.get(book)" in block, "2 回目に下書きを見ていない"
+    assert "--copy" in block, "1 回目に原本から作る経路が無い"
+    # ★ 原本に反映したら下書きの役目は終わり（古い下書きに積み続けない）
+    assert "_DRAFTS.pop(book, None)" in block
+
+
+def test_the_page_says_where_it_is_writing():
+    """★ 黙って別のファイルを触らない ── 今どこに書いているかを必ず見せる。"""
+    js = _script(HTML, code_only=True)
+    assert "draftnote" in js, "書き込み先を画面に出していない"
+    assert "積み上げています" in HTML
+
+
+def test_dropping_a_draft_does_not_delete_it():
+    """『下書きを捨てる』は**手放すだけ**（ファイルは消さない）。
+
+    ★ 消してしまうと、人が育てた成果物が画面のボタン 1 つで消える ──
+      この repo が 2026-08-26 に直したばかりの事故（--copy の成果物の無言削除）と同じ形。
+    """
+    i = SERVER.index('/api/draft_reset')
+    block = SERVER[i:i + 700]
+    assert "unlink" not in block and "remove" not in block, "下書きを消している"
+    assert "残っています" in block

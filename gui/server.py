@@ -57,6 +57,9 @@ def _ailine(args: list) -> tuple:
     return proc.returncode, out, payload
 
 
+# ★ 下書きの続き（本 → 作業中の下書きファイル）。段取りだけを持つ・判定は持たない。
+_DRAFTS: dict = {}
+
 MAX_ROWS = 200
 MAX_COLS = 40
 
@@ -188,10 +191,35 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             if u.path == "/api/run":
-                args = ["run", book, req.get("task") or "", "--json"]
-                if req.get("copy"):
-                    args.append("--copy")
-                rc, out, payload = _ailine(args)
+                # ★★ 2026-08-26（Namakoo が実測）: 「梨を追加して」→「梨の売上を2000に」と
+                #   続けると、**1 つ目の操作が消えた**。
+                #   根: 下書きは毎回 `run <原本> --copy` なので、**毎回原本から作り直す**。
+                #   人は「1 つやって、次をやる」と積み上げるのに、道具は積み上げない。
+                #   ★ 直し: 下書きは**作業用のファイルを 1 つ持ち続ける**。
+                #     1 回目は原本から作り（--copy）、2 回目からはその下書き自身に反映する。
+                #     下書きにもバックアップと undo が効く（普通のブックと同じ扱い）。
+                #   ★ ここは段取りであって判定ではない（verdict は本体の値をそのまま運ぶ）。
+                task = req.get("task") or ""
+                if not req.get("copy"):
+                    rc, out, payload = _ailine(["run", book, task, "--json"])
+                    _DRAFTS.pop(book, None)     # 原本に反映したら下書きの役目は終わり
+                else:
+                    draft = _DRAFTS.get(book)
+                    if draft and Path(draft).exists():
+                        rc, out, payload = _ailine(["run", draft, task, "--json"])
+                    else:
+                        rc, out, payload = _ailine(["run", book, task, "--copy", "--json"])
+                        made = (payload or {}).get("out")
+                        if rc == 0 and made and Path(made).exists():
+                            _DRAFTS[book] = made
+            elif u.path == "/api/draft_reset":
+                # 下書きを捨てて、次は原本からやり直す（消しはしない ── 残す）
+                dropped = _DRAFTS.pop(book, None)
+                self._json(200, {"rc": 0, "json": {"verdict": "not_applied"},
+                                  "text": (f"下書きを手放しました（{Path(dropped).name} は"
+                                            "残っています）。次は原本から作り直します。"
+                                            if dropped else "手放す下書きはありません。")})
+                return
             elif u.path == "/api/undo":
                 rc, out, payload = _ailine(["undo", book])
             elif u.path == "/api/history":
