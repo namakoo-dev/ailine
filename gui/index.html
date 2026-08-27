@@ -98,9 +98,11 @@
       <label class="step">③ 実行する</label>
       <div class="row">
         <button id="runcopy" class="primary">下書きで実行</button>
+        <button id="runcont">この結果に続けて</button>
         <button id="run">原本に反映</button>
       </div>
-      <div class="note">下書きは原本を触りません。原本に反映しても <b>もとに戻す</b> で戻せます。</div>
+      <div class="note"><b>下書きで実行</b>は毎回<b>原本から</b>やり直します（同じことを何度試しても増えません）。
+        前の結果に重ねたいときだけ <b>この結果に続けて</b> を押してください。</div>
       <div class="note" id="draftnote"></div>
       <div class="row"><button id="undo">もとに戻す</button>
         <button id="draftreset">下書きを捨てる</button></div>
@@ -462,6 +464,7 @@ $("#mextract").onclick = () => multi("extract", {task: $("#mtask").value});
 
 $("#run").onclick     = () => call("/api/run",  {task: $("#task").value, copy:false}, "実行中…");
 $("#runcopy").onclick = () => call("/api/run",  {task: $("#task").value, copy:true},  "下書きで実行中…");
+$("#runcont").onclick = () => call("/api/run",  {task: $("#task").value, copy:true, "continue":true}, "続けて実行中…");
 $("#undo").onclick    = () => call("/api/undo", {}, "もとに戻しています…");
 $("#draftreset").onclick = () => call("/api/draft_reset", {}, "下書きを手放しています…");
 // ★ 表に映らないもの（グラフ・図形）は本物のアプリで見る。画面で再現しようとしない。

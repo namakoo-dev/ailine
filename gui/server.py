@@ -356,8 +356,26 @@ class Handler(BaseHTTPRequestHandler):
                     #   **次から関所に塞がれ、行き止まりになった**。
                     #   ★ 名前を積み重ねる設計が間違い。下書きは**人が読める名前のファイル
                     #     1 つ**にして、そこへ普通に反映する（backup も undo も普通に効く）。
+                    # ★★ 2026-08-27（Namakoo が 2 度実測）: 昨夜「積み上げ」にしたのは
+                    #   「梨を追加」→「梨の売上を2000に」で 1 つ目が消えるのを直すため
+                    #   だった。だがそれで **試すたびに増える**という別の困りごとを作った。
+                    #   ★ 分けるべきだったのは「試す」と「積む」── 既定は**原本から**。
+                    #     積むのは人が明示した時だけ（continue=true）。
+                    #     VS Code 系の作法（編集をその場で確定させず人が受け入れる）と同じ線。
                     draft = _draft_path(Path(book))
-                    if not draft.exists():
+                    _cont = bool(req.get("continue"))
+                    _note = ""
+                    if not _cont or not draft.exists():
+                        if draft.exists() and draft.read_bytes() != Path(book).read_bytes():
+                            # ★ 前の下書きを黙って捨てない ── 1 つだけ退避して残す。
+                            keep = draft.with_name(draft.stem + "（前回）" + draft.suffix)
+                            try:
+                                if keep.exists():
+                                    keep.unlink()
+                                draft.replace(keep)
+                                _note = f"（下書きを原本から作り直しました。前の下書きは {keep.name} に残しています）"
+                            except OSError:
+                                _note = ""
                         shutil.copy2(book, draft)
                     _DRAFTS[book] = str(draft)
                     # ★★ 2026-08-27（Namakoo が実測・俺の画面の壊れ方）:
@@ -372,13 +390,13 @@ class Handler(BaseHTTPRequestHandler):
                     #   増えていた（下書きは積み上げる設計にしたので、それ自体は正しい）。
                     #   ★ 壊れていたのは**動作でなく、積み上げが見えないこと**。
                     #     同じ依頼を繰り返したら、そう言う（黙って 2 つ目を作らない）。
-                    _same = _DRAFT_LAST_TASK.get(str(draft)) == task
                     _DRAFT_LAST_TASK[str(draft)] = task
                     rc, out, payload = _ailine(["run", str(draft), task, "--json"])
-                    if _same and rc == 0:
-                        out = ("（同じ依頼をこの下書きに続けて実行しました ── "
-                                "1 回につき 1 つ増えます。やり直すなら「下書きを捨てる」）"
-                                + chr(10) + out)
+                    if _note:
+                        out = _note + chr(10) + out
+                    if _cont:
+                        out = ("（この下書きに**続けて**実行しました ── "
+                                "1 回につき 1 つ増えます）" + chr(10) + out)
                     self._json(200, {"rc": rc, "text": out, "json": payload,
                                       "before": _before, "target": str(draft)})
                     return

@@ -130,27 +130,27 @@ def test_no_blocking_modal():
 
 # --- ⑥ 下書きは積み上がる（原本から作り直さない）----------------------------------------
 
-def test_draft_continues_instead_of_restarting_from_the_original():
-    """★ 2026-08-26（Namakoo が実測）: 「梨を追加して」→「梨の売上を2000に」と続けると、
-       **1 つ目の操作が消えた**。
+def test_a_draft_run_starts_from_the_original_unless_asked_to_continue():
+    """★★ 2026-08-27 に**契約を反転させた**（Namakoo が 2 度実測）。
 
-    根: 下書きが毎回 `run <原本> --copy` で、**毎回原本から作り直して**いた。
-    人は「1 つやって、次をやる」と積み上げるのに、道具は積み上げていなかった。
+    経緯を残す（どちらの困りごとも本物だったから）:
+      08-26 夜: 「梨を追加して」→「梨の売上を2000に」で **1 つ目が消えた**
+                → 下書きを積み上げる形にした
+      08-27 昼: 同じ依頼を試すたびに **梨が増え続けた**
+                → 「試す」と「積む」を分けていなかったのが根
 
-    ★ 同じ日に**契約を 1 度訂正した**（最初の直しが連れてきたバグ・これも実測）:
-      初版は `--copy` の成果物に反映し続けたので、作業ファイルが `<名前>.out.out.xlsx`
-      と積み重なり、失敗した回の残骸が次の run を関所で塞いで**行き止まり**になった。
-      → 下書きは**人が読める名前のファイル 1 つ**にして、そこへ普通に反映する。
+    ★ 分け方: **下書きで実行＝毎回原本から**（何度試しても増えない）／
+      前の結果に重ねたい時だけ「この結果に続けて」。
+      VS Code 系の作法（編集をその場で確定させず、人が受け入れる）と同じ線。
+    ★ 前の下書きは黙って捨てない ── 1 つだけ退避して残す。
     """
-    assert "_DRAFTS" in SERVER, "下書きの続きを持っていない（毎回原本から作り直す）"
     i = SERVER.index('if u.path == "/api/run":')
-    block = SERVER[i:i + 2000]
-    assert "_draft_path(" in block, "下書きの置き場を決めていない"
-    assert "shutil.copy2(book, draft)" in block, "1 回目に原本から作る経路が無い"
-    assert "--copy" not in _code_only(block), (
-        "下書きに --copy を使っている ── 名前が .out.out… と積み重なって行き止まりになる")
-    # ★ 原本に反映したら下書きの役目は終わり（古い下書きに積み続けない）
-    assert "_DRAFTS.pop(book, None)" in block
+    block = _code_only(SERVER[i:i + 3000])
+    assert 'req.get("continue")' in block, "『続けて』を人が選べない"
+    assert "shutil.copy2(book, draft)" in block, "原本から作り直す経路が無い"
+    assert "（前回）" in SERVER, "前の下書きを黙って捨てている"
+    js = _script(HTML, code_only=True)
+    assert "runcont" in js and '"continue":true' in js, "画面に『続けて』が無い"
 
 
 def test_the_draft_name_never_stacks():
@@ -302,7 +302,7 @@ def test_before_and_after_come_from_the_same_file():
     ★ 前は**実行の直前にサーバが読む**（画面が後から取りに行くと、もう変わっている）。
     """
     i = SERVER.index('if u.path == "/api/run":')
-    block = _code_only(SERVER[i:i + 2600])
+    block = _code_only(SERVER[i:i + 4200])
     assert block.count("_read_sheet(") >= 2, "実行の直前に『前』を読んでいない"
     assert '"before"' in block and '"target"' in block, "前と対象を返していない"
     js = _script(HTML, code_only=True)
@@ -350,19 +350,14 @@ def test_the_comparison_basis_is_chosen_by_the_person():
     assert "drawTable($(\"#after\")" in block, "基準を変えても色を塗り直していない"
 
 
-def test_repeating_the_same_request_is_disclosed():
-    """★ 2026-08-27（Namakoo「一つ追加すればいいのに複数追加してしまっている」）。
+def test_continuing_is_disclosed():
+    """★ 積むのは人が選んだ時だけ ── 選んだことを画面でも言う。
 
-    ★ 実測で切り分けた: **1 回の実行は 1 行しか足していなかった**（clean な下書きで確認）。
-      押した回数だけ増えていた ── 下書きは積み上げる設計なので、動作は正しい。
-    ★ 壊れていたのは動作でなく、**積み上げが見えないこと**。
-      同じ依頼を繰り返したら、そう言う（黙って 2 つ目を作らない）。
-    ★ ここは段取りの話で、判定は作らない（verdict は本体のまま）。
+    ★ 2026-08-27 に一度「同じ依頼を繰り返したら警告する」を入れたが、**既定を
+      原本からに変えたので要らなくなった**（増えないので）。対症療法を根治で
+      置き換えた形 ── 残しておくと嘘の警告になる。
     """
-    assert "_DRAFT_LAST_TASK" in SERVER, "同じ依頼の繰り返しを覚えていない"
-    i = SERVER.index("_DRAFT_LAST_TASK.get(")
-    block = SERVER[i:i + 700]
-    assert "1 回につき 1 つ増えます" in block, "積み上がることを言っていない"
-    assert "下書きを捨てる" in block, "やり直す道を示していない"
-    # 下書きを手放したら忘れる（古い記憶で誤って警告しない）
-    assert "_DRAFT_LAST_TASK.pop(" in SERVER
+    i = SERVER.index('if u.path == "/api/run":')
+    block = SERVER[i:i + 4200]
+    assert "1 回につき 1 つ増えます" in block, "積むことを言っていない"
+    assert "_cont" in block
