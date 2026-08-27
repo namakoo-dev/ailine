@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "row": "りんご",
+    "col": "利益",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "列『利益』がこの表にありません（ある列: 商品、金額）"
+}

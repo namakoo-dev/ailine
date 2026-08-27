@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "row": "すいか",
+    "col": "金額",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "『すいか』という行が見つかりません"
+}

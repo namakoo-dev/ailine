@@ -157,6 +157,49 @@ Sub InsertRows(oDoc As Object, atRow As Integer, count As Integer)
 End Sub
 
 
+' 名前で行を探す（2026-08-27 追加）。0 起点の行 index / 見つからない -1 / 複数 -2。
+' ★ 走査は gotoEndOfUsedArea（物理の使用範囲）── Python 側の走査は 1 列目の最初の空で
+'   止まるので、表の途中に空行があるとその下を見失う。Basic 側ではその穴が構造的に無い。
+Function FindRowByName(oSheet As Object, sName As String, nCol As Integer, nHeaderRow As Integer) As Integer
+    Dim oCur As Object, lastRow As Long, r As Long, hit As Integer, n As Integer
+    oCur = oSheet.createCursor()
+    oCur.gotoEndOfUsedArea(False)
+    lastRow = oCur.RangeAddress.EndRow
+    hit = -1 : n = 0
+    For r = nHeaderRow + 1 To lastRow
+        If Trim(oSheet.getCellByPosition(nCol, r).getString()) = sName Then
+            hit = r : n = n + 1
+        End If
+    Next r
+    If n = 0 Then
+        FindRowByName = -1
+    ElseIf n > 1 Then
+        FindRowByName = -2
+    Else
+        FindRowByName = hit
+    End If
+End Function
+
+
+' 名前で指した行の、指定した列に**1 セルだけ**書く（2026-08-27 追加）。
+' ★ なぜ 1 セル専用のヘルパか: 列全体を書く SetColumnValue を流用して走査範囲を
+'   間違えると「1 セルのはずが列を潰す」── この機能で最も起きやすい壊れ方で、
+'   しかも列全体の事後条件では**潰した方が pass する**（逆向きの検算になる）。
+' sKind: "n"=数値 / それ以外=文字。
+Sub SetCellByName(oDoc As Object, sName As String, nKeyCol As Integer, _
+                   nCol As Integer, sValue As String, sKind As String, nHeaderRow As Integer)
+    Dim oSheet As Object, r As Integer
+    oSheet = oDoc.Sheets.getByIndex(0)
+    r = FindRowByName(oSheet, sName, nKeyCol, nHeaderRow)
+    If r < 0 Then Exit Sub
+    If sKind = "n" Then
+        oSheet.getCellByPosition(nCol, r).setValue(CDbl(sValue))
+    Else
+        oSheet.getCellByPosition(nCol, r).setString(sValue)
+    End If
+End Sub
+
+
 ' 行を1本挿し、指定した列に値を書く（2026-08-26 追加）。
 ' ★ 既存の InsertRows は**空行を挿すだけ**で、値を入れる手段が 1 つも無かった
 '   （21 op のどれにも「データを 1 行足す」が無いことを実測で確認）。

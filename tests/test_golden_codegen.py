@@ -145,6 +145,12 @@ _add("delete_rows_at3", "DELETE_ROWS", {"at": 3, "count": 1})
 _add("delete_rows_at2_count3", "DELETE_ROWS", {"at": 2, "count": 3})
 _add("delete_column_second", "DELETE_COLUMN", {"col": "金額", "_headers": ["商品", "金額"]})
 
+_add("set_cell_value_number", "SET_CELL_VALUE",
+     {"row": "りんご", "col": "金額", "value": "2000", "_write_numeric": True,
+      "_write_numeric_value": 2000.0, "_headers": ["商品", "金額"]})
+_add("set_cell_value_text", "SET_CELL_VALUE",
+     {"row": "りんご", "col": "商品", "value": "洋梨", "_headers": ["商品", "金額"]})
+
 # --- DRAW_BORDERS / AUTOFIT（引数無し） ------------------------------------
 _add("draw_borders", "DRAW_BORDERS", {})
 _add("autofit", "AUTOFIT", {})

@@ -2054,6 +2054,15 @@ OP_META = {
     "ADD_ROW": {"category": "表を編集する", "label": "行追加", "folder": False,
                  "synonyms": ["行を追加して値を入れる", "データを1行足す", "レコードを追加"],
                  "match_phrases": ["行を追加して", "1行足して", "データを追加"]},
+    # ★ 2026-08-27: 1 セルだけ書き換える。**第二段専用**（OPS_DOC に載せない＝語彙コスト 0）。
+    #   SET_COLUMN_VALUE と読まれた依頼が「梨の売上を…」のように**行を名指し**していたら、
+    #   op を固定して読み直す（ADD_ROW で実証済みの経路をそのまま使う）。
+    "SET_CELL_VALUE": {"category": "表を編集する", "label": "1セル書換", "folder": False,
+                        "synonyms": ["1つのセルを書き換える", "特定の行の値を変える"],
+                        # ★ 番人が空の match_phrases を通さない（作法どおり）。
+                        #   第二段専用のつもりでも、一覧（ailine ops）には出るので
+                        #   **人が読める語**を持たせる ── 空にするなら免除簿に理由が要る。
+                        "match_phrases": ["この行のこの値だけ変える", "1 セルだけ直す"]},
     "DELETE_ROWS": {"category": "表を編集する", "label": "行削除", "folder": False,
                      "synonyms": ["行を削除", "行を消す", "行を取り除く"],
                      "match_phrases": ["行を削除して", "行を消して", "不要な行を除く"]},
@@ -2305,6 +2314,8 @@ OP_SCHEMA = {
     "ADD_ROW": ("at", "values"),
     "DELETE_ROWS": ("at",),
     "DELETE_COLUMN": ("col",),
+    # ★ row=行の名前（中身）・col=列名。値は LLM に決めさせず依頼文から機械が取る（A' 原則）。
+    "SET_CELL_VALUE": ("row", "col"),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": ("group_col", "value_col"),
@@ -2415,6 +2426,9 @@ OP_WRITE_TARGET = {
     "ADD_ROW": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
     "DELETE_ROWS": WriteTarget(writes=(WRITE_REMOVE,)),
     "DELETE_COLUMN": WriteTarget(writes=(WRITE_REMOVE,)),
+    # ★ 1 セルは既存列への上書き（前提なし側）。★ ただし「1 セルのはず」は
+    #   check_set_cell_value が**変わったセルの数**で証明する（列全体を潰したら落ちる）。
+    "SET_CELL_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN,), col_key="col"),
     "DRAW_BORDERS": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     "AUTOFIT": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     # 新規シート（DataPilot）を作るだけ。入力シートは読むだけ＝無変更が正常
@@ -2505,6 +2519,7 @@ OP_SUBJECT_SLOTS = {
     "ADD_ROW": (("at", SUBJ_ROW),),
     "DELETE_ROWS": (("at", SUBJ_ROW),),
     "DELETE_COLUMN": (("col", SUBJ_COLUMN),),
+    "SET_CELL_VALUE": (("col", SUBJ_COLUMN),),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": (("group_col", SUBJ_COLUMN), ("value_col", SUBJ_COLUMN)),
@@ -3663,6 +3678,50 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             resolved["_values_label"] = "／".join(
                 f"{k}={v}" for k, v in resolved["values"].items())
 
+    elif op == "SET_CELL_VALUE":
+        # ★ 2026-08-27（Namakoo「梨の売上にピンポイントで入れたい」）:
+        #   SET_COLUMN_VALUE は**列を丸ごと**同じ値にする op で、1 セルを狙えなかった。
+        _sheet_c = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+        _headers_c = [str(h) for h in
+                       ((book_meta.get("headers") or {}).get(_sheet_c) or [])]
+        _row_name = str(resolved.get("row", "")).strip()
+        _col_name = str(resolved.get("col", "")).strip()
+        if not _row_name:
+            return False, resolved, inferred, "どの行かが読み取れません（行の名前で指してください）"
+        if _col_name not in _headers_c:
+            return False, resolved, inferred, (
+                f"列『{_col_name}』がこの表にありません"
+                f"（ある列: {"、".join(_headers_c)}）")
+        # ★ 行が実在し・1 つに決まることを**適用前に**確かめる（推測で別の行に書かない）。
+        _hitrow, _note_c = _resolve_named_row(book_meta, _sheet_c, _row_name)
+        if _hitrow is None:
+            return False, resolved, inferred, _note_c
+        resolved["row"] = _row_name
+        resolved["col"] = _col_name
+        resolved["_headers"] = _headers_c
+        resolved["_at_basis"] = _note_c
+        # ★ 値は LLM に決めさせず、依頼文から機械が取る（A' 原則・SET_COLUMN_VALUE と同じ線）。
+        #   ★ ただし 1 セルなので**裸の数字も受ける** ── 「梨の売上を2000にして」を
+        #     引用符の有無で断るのは、道具の都合を人に押し付けている（実測の困りごと）。
+        _lit = extract_quoted_literal(task)
+        if _lit is None:
+            _m = _re_bare_number.search(task or "")
+            _lit = _m.group(1) if _m else None
+        if _lit is None:
+            return False, resolved, inferred, (
+                "書き込む値が依頼文から読み取れません"
+                "（数字ならそのまま、文字なら「」で囲んで書いてください）")
+        resolved["value"] = _lit
+        # ★ 2026-08-27（実測）: `_is_number` は**型**で見るので、文字列 "2000" は False。
+        #   ここへ来る値は必ず文字列なので、**数字として読めるか**で判定する。
+        #   ★ これを外すと `'2000'` が文字列でセルに入り、下流の SUM が静かに壊れる
+        #     （この repo が何度も測ってきた形）。
+        try:
+            resolved["_write_numeric_value"] = float(str(_lit).replace(",", ""))
+            resolved["_write_numeric"] = True
+        except ValueError:
+            pass
+
     elif op == "DELETE_COLUMN":
         name = str(resolved.get("col", "")).strip()
         headers = (book_meta.get("headers") or {}).get(
@@ -4160,6 +4219,8 @@ _CONFIRM_FIELDS = {
     "DELETE_ROWS": (("削除位置", "at", None), ("位置の根拠", "_at_basis", None),
                      ("行数", "count", None)),
     "DELETE_COLUMN": (("削除する列", "col", None),),
+    "SET_CELL_VALUE": (("対象の行", "row", None), ("対象列", "col", None),
+                        ("書き込む値", "value", None)),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
     "PIVOT": (("分類列", "group_col", None), ("集計列", "value_col", None)),
@@ -4743,6 +4804,18 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         headers = list(resolved_args.get("_headers") or [])
         col0 = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
         return wrap(f"    Call DeleteColumn(oDoc, {col0})\n")
+
+    if op == "SET_CELL_VALUE":
+        headers = list(resolved_args.get("_headers") or [])
+        col0 = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
+        v = resolved_args["value"]
+        kind = "n" if resolved_args.get("_write_numeric") else "s"
+        val = (repr(float(resolved_args["_write_numeric_value"]))
+                if kind == "n" else str(v))
+        hr0 = int(resolved_args.get("_header_row", 1)) - 1
+        return wrap(
+            f'    Call SetCellByName(oDoc, "{resolved_args["row"]}", 0, {col0}, '
+            f'"{val}", "{kind}", {hr0})\n')
 
     if op == "DRAW_BORDERS":
         return wrap("    Call DrawTableBorders(oDoc)\n")
@@ -5988,6 +6061,75 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{at}行目から {count} 行を削除（残りは順序ごと元のまま）"
 
 
+def check_set_cell_value(path: Path, args: dict, header_row: int = 1,
+                          source_book: Path | None = None) -> tuple:
+    """SET_CELL_VALUE の事後条件。**1 セルであることを証明する**。
+
+    ★★ 2026-08-27（architect の査読で名指しされた穴）: 既存の check_set_column_value は
+      「対象列のデータ行が**全部**その値か」を見る ── 1 セル用に流用すると、
+      **列全体を潰した方が pass する**（逆向きの検算）。この機能で最も起きやすい
+      壊れ方（列全体の codegen を流用して走査範囲を間違える）を、番人が通してしまう。
+    ★ だから証明するのは 3 つ:
+      ① 宣言したセルが宣言した値になっている
+      ② **値が変わったセルはちょうど 1 個**（列を潰していない）
+      ③ その 1 個の座標が宣言と一致する
+    ★ ②③ は source_book が要る。無ければ①だけの warn（断定しない）。
+    """
+    name = str(args.get("row", ""))
+    col_name = str(args.get("col", ""))
+    want = args.get("value")
+    numeric = bool(args.get("_write_numeric"))
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last, last_col = data_extent(ws, header_row)
+        headers = [str(ws.cell(row=header_row, column=c).value or "")
+                    for c in range(1, last_col + 1)]
+        if col_name not in headers:
+            return "fail", f"列『{col_name}』が見つからない"
+        cidx = headers.index(col_name) + 1
+        hits = [r for r in range(header_row + 1, last + 1)
+                 if any(str(ws.cell(row=r, column=c).value or "").strip() == name
+                         for c in range(1, last_col + 1))]
+        if len(hits) != 1:
+            return "fail", f"『{name}』の行が {len(hits)} 件（1 件に決まらない）"
+        row = hits[0]
+        got = ws.cell(row=row, column=cidx).value
+        after = [[ws.cell(row=r, column=c).value for c in range(1, last_col + 1)]
+                  for r in range(header_row + 1, last + 1)]
+    # ① 宣言どおりの値か
+    if numeric:
+        w = float(args["_write_numeric_value"])
+        if not (_is_number(got) and abs(float(got) - w) <= 1e-6):
+            return "fail", f"『{name}』の{col_name}が {w:g} でない（実際 {got!r}）"
+    elif str(got) != str(want):
+        return "fail", f"『{name}』の{col_name}が {want!r} でない（実際 {got!r}）"
+    if source_book is None or not Path(source_book).exists():
+        return "warn", f"『{name}』の{col_name}のみ確認（変えていないセルは見ていません）"
+    with BookView(source_book) as bv_b:
+        ws_b = bv_b.sheet(args.get("_target_sheet"))
+        lb, cb = data_extent(ws_b, header_row)
+        before = [[ws_b.cell(row=r, column=c).value for c in range(1, max(cb, last_col) + 1)]
+                   for r in range(header_row + 1, lb + 1)]
+    # ②③ 変わったセルはちょうど 1 個で、その座標が宣言と一致する
+    changed = []
+    for ri in range(max(len(before), len(after))):
+        b_row = before[ri] if ri < len(before) else []
+        a_row = after[ri] if ri < len(after) else []
+        for ci in range(max(len(b_row), len(a_row))):
+            bv_ = b_row[ci] if ci < len(b_row) else None
+            av_ = a_row[ci] if ci < len(a_row) else None
+            if bv_ != av_:
+                changed.append((header_row + 1 + ri, ci + 1))
+    if len(changed) != 1:
+        return "fail", (f"1 セルのはずが {len(changed)} セル変わっています"
+                         f"（{'、'.join(f'{r}行{c}列' for r, c in changed[:6])}）"
+                         " ── 列全体を潰した疑いがあります")
+    if changed[0] != (row, cidx):
+        return "fail", (f"変わったのは {changed[0][0]}行{changed[0][1]}列で、"
+                         f"宣言した {row}行{cidx}列ではありません")
+    return "pass", f"『{name}』の{col_name}だけを書き換え（変わったセルは 1 個）"
+
+
 def check_delete_column(path: Path, args: dict, header_row: int = 1,
                          source_book: Path | None = None) -> tuple:
     """DELETE_COLUMN の事後条件。**他の列が 1 セルも変わらない**ことを証明する。"""
@@ -6068,6 +6210,63 @@ def insert_rows_should_have_been_add_row(task: str, resolved: dict,
         if at is not None:
             return f"依頼文が場所を{note}と指しています（行挿入は空行を挿すだけです）"
     return None
+
+
+_re_bare_number = re.compile(r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:に|へ|と)?\s*(?:し|する|して|に)")
+
+
+def _task_names_a_row(task: str, book_meta: dict, sheet: str | None) -> str | None:
+    """依頼文が**表に実在する行の名前**を指しているか。指していればその名前。
+
+    ★ 機械が実表と突き合わせて確かめる ── LLM に「これは 1 セルの話か」を判断させない。
+    ★ 1 つに決まらない（同名が 2 行）なら None（推測で書かない）。
+    """
+    path = book_meta.get("path")
+    if not path or not task:
+        return None
+    hr = int((book_meta.get("header_rows") or {}).get(sheet, 1) or 1)
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, last_col = data_extent(ws, hr)
+            names = {}
+            for r in range(hr + 1, last + 1):
+                v = str(ws.cell(row=r, column=1).value or "").strip()
+                if v:
+                    names[v] = names.get(v, 0) + 1
+    except Exception:
+        return None
+    hit = [n for n, cnt in names.items() if cnt == 1 and n in task]
+    # ★ 一番長い一致を採る（「梨」と「洋梨」が両方在る時に短い方を拾わない）
+    return max(hit, key=len) if hit else None
+
+
+def _resolve_named_row(book_meta: dict, sheet: str | None, name: str) -> tuple:
+    """行の名前 → 行番号（1 起点）。決められなければ (None, 断りの文)。
+
+    ★ 2026-08-27: 住所の解決はここ 1 箇所に集める（resolve_row_anchor もこれを使う形へ
+      寄せていく）。★ 探す範囲は**物理の使用範囲**（走査が最初の空で止まる穴を避ける）。
+    ★ 見つからない・複数ある時は**決めない** ── 推測で別の行に書くのが一番こわい。
+    """
+    path = book_meta.get("path")
+    if not path:
+        return None, "表を読めないため、どの行かを決められません"
+    hr = int((book_meta.get("header_rows") or {}).get(sheet, 1) or 1)
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, last_col = data_extent(ws, hr)
+            hits = [r for r in range(hr + 1, last + 1)
+                     if any(str(ws.cell(row=r, column=c).value or "").strip() == name
+                             for c in range(1, last_col + 1))]
+    except Exception as e:
+        return None, f"表を読めませんでした（{type(e).__name__}）"
+    if not hits:
+        return None, f"『{name}』という行が見つかりません"
+    if len(hits) > 1:
+        return None, (f"『{name}』が {len(hits)} 行あります"
+                       f"（{'、'.join(str(h) for h in hits)}行目）── どれか決められません")
+    return hits[0], f"『{name}』の行＝{hits[0]}行目"
 
 
 def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
@@ -6856,7 +7055,7 @@ POSTCONDITIONS = {
     "INSERT_ROWS": check_insert_rows, "DRAW_BORDERS": check_draw_borders,
     # ★ 2026-08-26: 表の基本操作 3 種
     "ADD_ROW": check_add_row, "DELETE_ROWS": check_delete_rows,
-    "DELETE_COLUMN": check_delete_column,
+    "DELETE_COLUMN": check_delete_column, "SET_CELL_VALUE": check_set_cell_value,
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
@@ -6927,7 +7126,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
-                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN"):
+                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -9170,6 +9369,23 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   ★ 聞き返しの機構は弱めない ── **機械が場所も値も解けている時だけ**読み直す。
     #     その時に迷う理由が無い（実表を見た側が、モデルより確かなことを知っている）。
     #   ★ 読み直したことは必ず画面に出す（黙って聞き返しを握り潰さない）。
+    # ★★ 2026-08-27（Namakoo「梨の売上にピンポイントで入れたい」）:
+    #   「梨の売上を2000にして」は SET_COLUMN_VALUE（列を丸ごと）と読まれ、
+    #   「値を『』で囲め」と断られていた。だが依頼文は**行を名指し**している。
+    #   ★ 行の名前が実表で 1 つに決まるなら、狙いは 1 セル ── 第二段で読み直す。
+    #     （OPS_DOC は 1 文字も増やさない ── 第二段は op を固定してスキーマだけ見せる）
+    _sheet_h = (book_meta.get("sheets") or [None])[0]
+    if any((st or {}).get("op") == "SET_COLUMN_VALUE" for st in plan):
+        _named = _task_names_a_row(a.task, book_meta, _sheet_h)
+        if _named:
+            _fx = translate_task_fixed_op(a.model, "SET_CELL_VALUE", a.task, book_meta)
+            if _fx and (_fx.get("args") or {}).get("col"):
+                _args = dict(_fx["args"])
+                _args.setdefault("row", _named)
+                print(f"（『一括書換』でなく『1セル書換』として読み直しました ── "
+                      f"依頼文が『{_named}』の行を名指ししています）")
+                plan = [{"op": "SET_CELL_VALUE", "args": _args}]
+
     _reread_ops = ("INSERT_ROWS", "CLARIFY", "FREEFORM", "OUT_OF_VOCAB")
     if any((st or {}).get("op") in _reread_ops for st in plan):
         _sheet_hint = (book_meta.get("sheets") or [None])[0]
@@ -9278,6 +9494,32 @@ def _maybe_warn_target_overwrite(op: str, resolved: dict, book_meta: dict, book_
     if not sheet_name:
         return None
     header_row = book_meta.get("header_rows", {}).get(sheet_name, 1)
+    # ★★ 2026-08-27（1 セル書換を足して分かった）: この関所は col_key を持つ op に対して
+    #   **列全体**の既存値を数える。1 セルだけを書く op に当てると、触りもしない
+    #   他の行の値まで「上書きします」と言って止める（実測: 空のセルに書くのに 3 件と言われた）。
+    #   ★ 宣言が「どの範囲を書くか」を持っていないのが根 ── **1 セル用は 1 セルだけ見る**。
+    if op == "SET_CELL_VALUE":
+        row_name = resolved.get("row")
+        if not row_name:
+            return None
+        hit, _why = _resolve_named_row(book_meta, sheet_name, str(row_name))
+        if hit is None:
+            return None
+        try:
+            with BookView(Path(book_path)) as bv:
+                ws = bv.sheet(sheet_name)
+                _last, last_col = data_extent(ws, header_row)
+                headers = [str(ws.cell(row=header_row, column=c).value or "")
+                            for c in range(1, last_col + 1)]
+                if col_name not in headers:
+                    return None
+                cur = ws.cell(row=hit, column=headers.index(col_name) + 1).value
+        except Exception:
+            return None
+        if cur in (None, ""):
+            return None      # 空のセルに書くだけ ── 壊すものが無い
+        return (f"★ 『{row_name}』の{col_name}には既に {cur!r} が入っています"
+                 "（この 1 セルだけを上書きします）")
     count = _column_existing_value_count(book_path, sheet_name, col_name, header_row=header_row)
     if count > 0:
         return f"★ 対象列『{col_name}』には既存の値が {count} 件あります（上書きします）"

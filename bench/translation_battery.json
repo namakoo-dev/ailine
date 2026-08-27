@@ -1449,5 +1449,25 @@
         "col": "金額"
       }
     }
+  ],
+  "items_v13": [
+    {
+      "id": 1301,
+      "book": "sales",
+      "text": "梨の売上を2000にして",
+      "expect": {
+        "op": "SET_CELL_VALUE",
+        "col": "売上"
+      }
+    },
+    {
+      "id": 1302,
+      "book": "sample",
+      "text": "りんごの在庫を『5』にして",
+      "expect": {
+        "op": "SET_CELL_VALUE",
+        "col": "在庫"
+      }
+    }
   ]
 }

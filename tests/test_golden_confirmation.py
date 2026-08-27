@@ -53,6 +53,8 @@ _add("add_row_values", "ADD_ROW",
      {"at": 3, "values": {"商品": "梨"}, "_values_label": "商品=梨／金額=600"})
 _add("delete_rows_inferred", "DELETE_ROWS", {"at": 3, "count": 1}, inferred=("count",))
 _add("delete_column_one", "DELETE_COLUMN", {"col": "金額"})
+_add("set_cell_value_one", "SET_CELL_VALUE",
+     {"row": "りんご", "col": "金額", "value": "2000"})
 _add("draw_borders_no_fields", "DRAW_BORDERS", {})
 _add("autofit_no_fields", "AUTOFIT", {})
 _add("pivot", "PIVOT", {"group_col": "商品", "value_col": "金額"})

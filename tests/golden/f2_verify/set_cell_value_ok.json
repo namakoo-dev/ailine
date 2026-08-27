@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "resolved": {
+    "row": "りんご",
+    "col": "金額",
+    "_target_sheet": "Sheet",
+    "_headers": [
+      "商品",
+      "金額"
+    ],
+    "_at_basis": "『りんご』の行＝2行目",
+    "value": "2000",
+    "_write_numeric_value": 2000.0,
+    "_write_numeric": true
+  },
+  "inferred": [],
+  "err": null
+}

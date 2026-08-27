@@ -492,6 +492,27 @@ _add("delete_column_pass", "DELETE_COLUMN", {"col": "金額"}, _b_delete_column_
 _add("delete_column_fail_took_neighbour", "DELETE_COLUMN", {"col": "金額"},
      _b_delete_column_took_neighbour)
 
+
+def _b_set_cell_pass(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額"], ["りんご", 100], ["みかん", 2000], ["ぶどう", 300]])
+    return after, before
+
+
+def _b_set_cell_whole_column(tmp_path):
+    """★ 1 セルのはずが列全体 ── 列全体の番人なら pass してしまう形。"""
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額"], ["りんご", 2000], ["みかん", 2000], ["ぶどう", 2000]])
+    return after, before
+
+
+_SC = {"row": "みかん", "col": "金額", "value": "2000",
+        "_write_numeric": True, "_write_numeric_value": 2000.0}
+_add("set_cell_pass", "SET_CELL_VALUE", dict(_SC), _b_set_cell_pass)
+_add("set_cell_fail_whole_column", "SET_CELL_VALUE", dict(_SC), _b_set_cell_whole_column)
+
 # --- DRAW_BORDERS -----------------------------------------------------------
 def _b_borders_pass(tmp_path):
     p = tmp_path / "b.xlsx"

@@ -183,6 +183,35 @@ _add("delete_rows_default_count", "DELETE_ROWS", {"at": 3})
 _add("delete_rows_on_header", "DELETE_ROWS", {"at": 1})
 _add("delete_column_ok", "DELETE_COLUMN", {"col": "金額"})
 _add("delete_column_unknown", "DELETE_COLUMN", {"col": "存在しない"})
+
+# --- ★ 2026-08-27: 1 セル書換 -----------------------------------------------
+# ★ 行を**中身**で指すので、この golden も実ファイルを持つ book_meta が要る
+#   （持たないと「表を読めない」で断られ、**断りの理由が本物でなくなる**）。
+_CELL_DIR = Path(tempfile.mkdtemp(prefix="ailine_golden_f2_cell_"))
+_CELL_BOOK = _CELL_DIR / "cell_src.xlsx"
+
+
+def _make_cell_book():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    ws.append(["商品", "金額"])
+    ws.append(["りんご", 100])
+    ws.append(["みかん", 200])
+    wb.save(_CELL_BOOK)
+
+
+_make_cell_book()
+BM_CELL = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額"]},
+            "header_rows": {"Sheet": 1}, "path": str(_CELL_BOOK)}
+_add("set_cell_value_ok", "SET_CELL_VALUE", {"row": "りんご", "col": "金額"},
+     task="りんごの金額を2000にして", book_meta=BM_CELL)
+_add("set_cell_value_unknown_row", "SET_CELL_VALUE", {"row": "すいか", "col": "金額"},
+     task="すいかの金額を2000にして", book_meta=BM_CELL)
+_add("set_cell_value_unknown_col", "SET_CELL_VALUE", {"row": "りんご", "col": "利益"},
+     task="りんごの利益を2000にして", book_meta=BM_CELL)
+_add("set_cell_value_no_value", "SET_CELL_VALUE", {"row": "りんご", "col": "金額"},
+     task="りんごの金額を変えて", book_meta=BM_CELL)
 _add("insert_rows_bad_count", "INSERT_ROWS", {"at": "3", "count": "abc"})
 
 # --- DRAW_BORDERS / AUTOFIT（引数無し） ------------------------------------
