@@ -259,6 +259,16 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             return
+        if u.path == "/api/ops":
+            # ★ 「何が頼めるか」を画面に出す。CLI の `ailine ops` と同じものを、
+            #   同じ本体から取る（画面が一覧を持たない ── 増えた op が勝手に落ちない）。
+            rc, out, _payload = _ailine(["ops"])
+            self._json(200, {"rc": rc, "text": out})
+            return
+        if u.path == "/api/aliases":
+            rc, out, _payload = _ailine(["alias", "list"])
+            self._json(200, {"rc": rc, "text": out})
+            return
         if u.path == "/api/pick":
             q = parse_qs(u.query)
             kind = (q.get("kind") or ["file"])[0]
@@ -407,6 +417,18 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError as e:
                     msg = f"片づけられませんでした: {e}"
                 self._json(200, {"rc": 0, "json": {"verdict": "not_applied"}, "text": msg})
+                return
+            elif u.path == "/api/alias_add":
+                # ★ 2026-08-27（Namakoo）: 「できない操作も登録まで誘導されないし、
+                #   登録画面も実装されていない」── CLI には alias add が在るのに、
+                #   画面からは一生辿り着けなかった。**在るのに届かない**は無いのと同じ。
+                phrase, op = (req.get("phrase") or "").strip(), (req.get("op") or "").strip()
+                if not phrase or not op:
+                    self._json(200, {"rc": 1, "json": None,
+                                      "text": "言い回しと操作の両方を指定してください"})
+                    return
+                rc, out, payload = _ailine(["alias", "add", phrase, op])
+                self._json(200, {"rc": rc, "text": out, "json": None})
                 return
             elif u.path == "/api/open":
                 # ★ 表に映らないもの（グラフ・図形・印刷の見え方）は、本物のアプリで見るのが早い。

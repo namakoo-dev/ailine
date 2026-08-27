@@ -3677,6 +3677,15 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
 
     # --- ★ W9: 検証済みヘルパ4種の語彙昇格 -----------------------------------
     elif op == "INSERT_ROWS":
+        # ★ 2026-08-27（実測）:「みかんの下に空行を入れて」で LLM が 3 行目と言った
+        #   （みかんが 3 行目なので、下は 4 行目）。**位置は op に関係なく位置** ──
+        #   同じ機械の解決を通す（片配線を作らない）。
+        _sheet_i = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+        _hr_i = int((book_meta.get("header_rows") or {}).get(_sheet_i, 1) or 1)
+        _at_i, _note_i = resolve_row_anchor(task, book_meta, _sheet_i, header_row=_hr_i)
+        if _at_i is not None:
+            resolved["at"] = _at_i
+            resolved["_at_basis"] = _note_i
         at_raw = str(resolved.get("at", "")).strip()
         if not (at_raw.isdigit() and int(at_raw) >= 1):
             return False, resolved, inferred, f"行番号『{resolved.get('at')}』が不正です（1以上の整数）"
@@ -4139,7 +4148,8 @@ _CONFIRM_FIELDS = {
     #   内部キー("factor")・関数名・コメントは不変。
     "APPEND_TOTAL": (("対象列", "col", None), ("ラベル", "label", None), ("率", "factor", None)),
     # ★ W9: 検証済みヘルパ4種の語彙昇格。
-    "INSERT_ROWS": (("挿入位置", "at", None), ("行数", "count", None)),
+    "INSERT_ROWS": (("挿入位置", "at", None), ("位置の根拠", "_at_basis", None),
+                     ("行数", "count", None)),
     "ADD_ROW": (("挿入位置", "at", None), ("位置の根拠", "_at_basis", None),
                  ("入れる値", "_values_label", None)),
     "DELETE_ROWS": (("削除位置", "at", None), ("位置の根拠", "_at_basis", None),
@@ -6004,6 +6014,7 @@ _ANCHOR_AFTER = ("の下に", "の下へ", "の後に", "の後ろに", "の次�
 _ANCHOR_BEFORE = ("の上に", "の上へ", "の前に")
 
 
+_re_row_unit = re.compile(r"[0-9０-９]*\s*行\s*(?:を|も)?\s*(?:足|追加|入れ|挿入)")
 _re_value_assign = re.compile(r"[^\s、。]+\s*(?:は|を|＝|=)\s*[0-9０-９]")
 
 
@@ -6020,7 +6031,12 @@ def insert_rows_should_have_been_add_row(task: str, resolved: dict,
     """
     text = (task or "")
     # ★ 「空行が欲しい」と明示している依頼には触らない（誤爆させない）。
-    if any(w in text for w in ("空行", "行を挿入", "行を空け", "行間")):
+    if any(w in text for w in ("空行", "空白行", "行を挿入", "行を空け", "行間")):
+        return None
+    # ★ 2026-08-27（実測・俺の読み直しの誤爆）: 「みかんとぶどうの間に1行足して」を
+    #   record の追加と誤解し、`商品=みかんとぶどう` という**値をでっち上げた**。
+    #   ★ 足そうとしているのが「**行**」そのものなら、それは空行の挿入 ── 読み直さない。
+    if _re_row_unit.search(text):
         return None
     if _re_value_assign.search(text):
         return "依頼文に入れる値の指定があります（行挿入は空行を挿すだけです）"
@@ -9113,7 +9129,13 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     二段目翻訳（op を固定して args だけ埋め直す・既にある機構）へ回す。
     #     そして**根拠を必ず画面に出す**（勝手に別の操作へすり替えない）。
     #   ★ 「言い換えてください」で終わらせない: 利用者の書き方は正しかった。
-    if any((st or {}).get("op") == "INSERT_ROWS" for st in plan):
+    # ★★ 2026-08-27（Namakoo「揺れ無しで追加するにはどうしたらいい？」）:
+    #   同じ依頼文で、通る回と聞き返す回があった（7B のサンプリングの揺れ）。
+    #   ★ 聞き返しの機構は弱めない ── **機械が場所も値も解けている時だけ**読み直す。
+    #     その時に迷う理由が無い（実表を見た側が、モデルより確かなことを知っている）。
+    #   ★ 読み直したことは必ず画面に出す（黙って聞き返しを握り潰さない）。
+    _reread_ops = ("INSERT_ROWS", "CLARIFY", "FREEFORM", "OUT_OF_VOCAB")
+    if any((st or {}).get("op") in _reread_ops for st in plan):
         _sheet_hint = (book_meta.get("sheets") or [None])[0]
         _why = insert_rows_should_have_been_add_row(a.task, {}, book_meta, _sheet_hint)
         if _why:

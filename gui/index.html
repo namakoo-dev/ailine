@@ -83,6 +83,7 @@
     <div class="tabs">
       <button id="tab1" class="tab on">1 冊を編集</button>
       <button id="tabN" class="tab">フォルダをまとめる</button>
+      <button id="tabH" class="tab">頼めること</button>
     </div>
 
     <div id="pane1">
@@ -108,6 +109,20 @@
       <div class="note">グラフ・図形・印刷の見え方は表に映りません ── 本物のアプリで見てください。</div>
       <div class="row" id="leftoverrow" style="display:none">
         <button id="clearleftover">前回の作業結果を片づける</button></div>
+    </div>
+
+    <div id="paneH" style="display:none">
+      <label class="step">頼めることの一覧</label>
+      <div class="note">この表は本体（ailine ops）から取っています ── 画面が別に持っていません。</div>
+      <div class="note">→ 右側に出します（左の枠では読めないため）。</div>
+
+      <label class="step">言い回しを登録する</label>
+      <div class="note">思いついた言い方が通らなかったら、ここで操作に結び付けられます。</div>
+      <input id="aliasphrase" placeholder="例: 大きい順にして">
+      <input id="aliasop" placeholder="例: SORT" style="margin-top:8px">
+      <div class="row"><button id="aliasadd" class="primary">登録する</button>
+        <button id="aliaslist">登録済みを見る</button></div>
+      <pre id="aliaspre" style="max-height:20vh"></pre>
     </div>
 
     <div id="paneN" style="display:none">
@@ -140,6 +155,7 @@
     </div>
     <p class="sheetnote">変わったセルに色を付けています ── <b>見た目の補助であって、判定ではありません</b>。
       判定は上のバッジ（ailine が返したもの）です。</p>
+    <pre id="opslist" style="display:none;max-height:70vh"></pre>
     <div class="lines" id="lines"></div>
     <details><summary>実行の全文を見る</summary><pre id="raw"></pre></details>
   </section>
@@ -294,6 +310,16 @@ function show(res){
     .find(l => l.indexOf("出力先に書けません") >= 0);
   blockedPath = blocked ? blocked.split(": ").slice(1).join(": ").trim() : null;
   $("#leftoverrow").style.display = blockedPath ? "flex" : "none";
+  // ★ 断られたら**登録まで誘導する**（在るのに届かない機能は無いのと同じ）。
+  //   実測: 「できない操作も登録まで誘導されない」（Namakoo・2026-08-27）
+  const refused = text.indexOf("頼める操作の一覧") >= 0 || text.indexOf("照合できません") >= 0;
+  $("#tabH").style.borderColor = refused ? "var(--warn)" : "";
+  if (refused){
+    const el = document.createElement("div");
+    el.className = "warnline";
+    el.textContent = "→ 上の「頼めること」タブで、一覧を見たり言い回しを登録したりできます";
+    lines.appendChild(el);
+  }
   document.querySelector(".work").scrollTop = 0;
   // ★ 「本当にそうなったか」は、文字でなく**表で**確かめられなければ意味がない。
   //   出せる先（j.out）は ailine が返したもの ── 画面が推測して探しに行かない。
@@ -325,12 +351,34 @@ async function call(path, body, msg){
 }
 function showPane(which){
   $("#pane1").style.display = which === 1 ? "" : "none";
-  $("#paneN").style.display = which === 1 ? "none" : "";
+  $("#paneN").style.display = which === 2 ? "" : "none";
+  $("#paneH").style.display = which === 3 ? "" : "none";
   $("#tab1").className = "tab" + (which === 1 ? " on" : "");
-  $("#tabN").className = "tab" + (which === 1 ? "" : " on");
+  $("#tabN").className = "tab" + (which === 2 ? " on" : "");
+  $("#tabH").className = "tab" + (which === 3 ? " on" : "");
+  $("#opslist").style.display = which === 3 ? "" : "none";
+  if (which === 3 && !$("#opslist").textContent) loadOps();
 }
 $("#tab1").onclick = () => showPane(1);
 $("#tabN").onclick = () => showPane(2);
+$("#tabH").onclick = () => showPane(3);
+
+async function loadOps(){
+  const r = await fetch("/api/ops");
+  $("#opslist").textContent = (await r.json()).text || "(出せませんでした)";
+  $("#opslist").style.display = "";
+}
+$("#aliaslist").onclick = async () => {
+  const r = await fetch("/api/aliases");
+  $("#aliaspre").textContent = (await r.json()).text || "";
+};
+$("#aliasadd").onclick = async () => {
+  const r = await fetch("/api/alias_add", {method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({book: bookPath() || "x", phrase: $("#aliasphrase").value,
+                           op: $("#aliasop").value})});
+  $("#aliaspre").textContent = (await r.json()).text || "";
+};
 
 // ★ 本物のエクスプローラを開く（サーバと画面が同じ機械だから成り立つ）。
 //   ブラウザの file input は**完全なパスを返さない**ので使えない。

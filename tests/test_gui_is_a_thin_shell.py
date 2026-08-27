@@ -261,3 +261,32 @@ def test_the_page_never_touches_an_element_that_does_not_exist():
     used = set(re.findall(r'\$\("#([\w-]+)"\)', js))
     missing = sorted(used - ids)
     assert not missing, f"JS が触るのに HTML に無い id: {missing}（null で以降が全部死ぬ）"
+
+
+# --- ⑨ 「何が頼めるか」と「登録」が画面から届く ------------------------------------------
+
+def test_the_page_shows_what_can_be_asked_from_the_tool_itself():
+    """★ 2026-08-27（Namakoo）:「ailine ops 一覧も見方が分からない」。
+
+    ★ 一覧は**本体から取る**（画面が別に持たない）── 持つと、op が増えた時に
+      画面だけ古くなる。今日 3 op 足したばかりで、その形は避けたい。
+    """
+    i = SERVER.index('if u.path == "/api/ops":')
+    block = _code_only(SERVER[i:i + 400])
+    assert '_ailine(["ops"])' in block, "本体の ops を呼んでいない（画面が一覧を持っている）"
+    js = _script(HTML, code_only=True)
+    assert "/api/ops" in js and "opslist" in js
+
+
+def test_a_refusal_points_at_the_place_to_register():
+    """★「できない操作も登録まで誘導されないし、登録画面も実装されていない」。
+
+    CLI には alias add が在るのに、画面からは一生辿り着けなかった
+    ── **在るのに届かない機能は、無いのと同じ**。
+    """
+    js = _script(HTML, code_only=True)
+    assert "/api/alias_add" in js, "登録の口が画面に無い"
+    assert "頼める操作の一覧" in js, "断られたことを画面が見ていない"
+    assert "aliasphrase" in HTML and "aliasop" in HTML, "登録の入力欄が無い"
+    i = SERVER.index('/api/alias_add')
+    assert '"alias", "add"' in SERVER[i:i + 900], "本体の alias add を呼んでいない"

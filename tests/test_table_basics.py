@@ -304,3 +304,48 @@ def test_when_insert_rows_should_be_re_read(tmp_path, task, fires):
     _p, meta = _anchor_meta(tmp_path)
     got = ailine.insert_rows_should_have_been_add_row(task, {}, meta, "売上")
     assert bool(got) is fires, f"{task} → {got}"
+
+
+# --- ⑨ 空行の挿入と record の追加を、言い回しで取り違えない ------------------------------
+#
+# ★ Namakoo「少なくとも空白行の追加は出来ないといけない」＋「揺れ無しで追加するには？」
+# ★ 実測で踏んだ俺の誤爆: 「みかんとぶどうの間に1行足して」を record の追加と誤解し、
+#   `商品=みかんとぶどう` という**値をでっち上げた**。
+#   → 足そうとしているのが「**行**」そのものなら、それは空行の挿入（読み直さない）。
+
+@pytest.mark.parametrize("task,should_reread", [
+    ("みかんとぶどうの間に1行足して", False),   # 足すのは「行」
+    ("みかんの下に1行挿入して", False),
+    ("みかんの下に空行を入れて", False),
+    ("みかんの下に空白行を追加して", False),
+    ("3行目に1行挿入して", False),
+    ("みかんの下に梨を追加して", True),         # 足すのは record
+    ("みかんとぶどうの間に梨を追加して", True),
+])
+def test_row_versus_record(tmp_path, task, should_reread):
+    _p, meta = _anchor_meta(tmp_path)
+    got = ailine.insert_rows_should_have_been_add_row(task, {}, meta, "売上")
+    assert bool(got) is should_reread, f"{task} → {got}"
+
+
+def test_blank_row_insertion_also_uses_the_machine_position(tmp_path):
+    """★ 位置は op に関係なく位置 ── INSERT_ROWS にも同じ解決を通す（片配線を作らない）。
+
+    実測: 「みかんの下に空行を入れて」で LLM が 3 行目と言った（みかんが 3 行目なので、
+    下は 4 行目）。
+    """
+    _p, meta = _anchor_meta(tmp_path)
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "INSERT_ROWS", {"at": 3, "count": 1}, meta, task="みかんの下に空行を入れて")
+    assert ok, err
+    assert resolved["at"] == 4, resolved
+    assert "みかん" in resolved.get("_at_basis", ""), resolved
+
+
+def test_plain_row_numbers_are_left_alone(tmp_path):
+    """誤爆防止: 相対の言い回しが無ければ、LLM の行番号をそのまま使う。"""
+    _p, meta = _anchor_meta(tmp_path)
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "INSERT_ROWS", {"at": 3, "count": 1}, meta, task="3行目に1行挿入して")
+    assert ok, err
+    assert resolved["at"] == 3 and "_at_basis" not in resolved, resolved
