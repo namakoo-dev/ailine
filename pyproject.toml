@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "ailine"
 # ★ 版はここが正（tagpr の版検出は `__version__` を厳密側で拾えず、ファイル中の最初の
 #   semver に落ちる ── ソース中の "3.10" 等を掴む事故を避けるため pyproject に置く）。
-version = "0.1.1"
+version = "0.1.2"
 description = "自然言語のタスクを、ローカル LLM が LibreOffice Basic に書き起こし、basrun で文書に適用し、効果を読み戻して検証する"
 readme = "README.md"
 requires-python = ">=3.10"
