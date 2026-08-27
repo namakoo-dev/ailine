@@ -286,6 +286,14 @@ async function showBefore(){
 
 function show(res){
   const j = res.json || {};
+  // ★ 前後は**同じファイル**で撮る（サーバが実行の直前に読んだもの）。
+  //   原本と下書きを並べていたせいで、正しく動いた操作が「できていない」に見えた。
+  if (res.before){
+    beforeCells = (res.before.cells) || null;
+    drawTable($("#before"), $("#beforenote"), res.before, null);
+    if (res.target) $("#beforenote").textContent =
+      baseName(res.target) + "  " + $("#beforenote").textContent;
+  }
   // ★ verdict 以外から印を導かない
   setBadge(j.verdict, "");
   const lines = $("#lines"); lines.innerHTML = "";

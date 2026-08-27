@@ -123,7 +123,15 @@ def _read_sheet(path: Path, sheet: str | None) -> dict:
     except Exception as e:
         return {"error": f"読み手を用意できません: {e}"}
     try:
-        names = openpyxl.load_workbook(path, read_only=True).sheetnames
+        # ★★ 2026-08-27（Namakoo が実測・俺が連れてきたバグ）:
+        #   read_only のブックは **close しないとファイルハンドルが残る**。
+        #   実行の直前に「前」を撮るようにしたら、その掴んだままのハンドルで
+        #   下書きを置換できなくなり、**毎回 exit 9 で失敗**していた
+        #   （画面には「できていない」としか見えない）。
+        #   ★ 見るために開いたものは、見終わったら必ず閉じる。
+        _wb0 = openpyxl.load_workbook(path, read_only=True)
+        names = list(_wb0.sheetnames)
+        _wb0.close()
     except Exception as e:
         return {"error": f"開けません: {type(e).__name__}: {e}"}
     try:
@@ -334,8 +342,12 @@ class Handler(BaseHTTPRequestHandler):
                 #   ★ ここは段取りであって判定ではない（verdict は本体の値をそのまま運ぶ）。
                 task = req.get("task") or ""
                 if not req.get("copy"):
+                    _before = _read_sheet(Path(book), None)
                     rc, out, payload = _ailine(["run", book, task, "--json"])
                     _DRAFTS.pop(book, None)     # 原本に反映したら下書きの役目は終わり
+                    self._json(200, {"rc": rc, "text": out, "json": payload,
+                                      "before": _before, "target": book})
+                    return
                 else:
                     # ★★ 2026-08-26（Namakoo が実測・俺の直しが連れてきたバグ）:
                     #   初版は `--copy` の成果物（<名前>.out.xlsx）に反映し続けた。すると
@@ -347,7 +359,17 @@ class Handler(BaseHTTPRequestHandler):
                     if not draft.exists():
                         shutil.copy2(book, draft)
                     _DRAFTS[book] = str(draft)
+                    # ★★ 2026-08-27（Namakoo が実測・俺の画面の壊れ方）:
+                    #   「操作する前」に**原本**を、「操作したあと」に**下書き**を出していた。
+                    #   別のファイル同士を並べていたので、差分も色も意味を成さない
+                    #   ── 正しく動いた操作が「できていない」に見えた。
+                    #   ★ 前後は**同じファイル**で撮る。実行の直前にここで読む（画面が
+                    #     後から取りに行くと、もう変わっている）。
+                    _before = _read_sheet(draft, None)
                     rc, out, payload = _ailine(["run", str(draft), task, "--json"])
+                    self._json(200, {"rc": rc, "text": out, "json": payload,
+                                      "before": _before, "target": str(draft)})
+                    return
             elif u.path == "/api/folder":
                 # ★ 複数ファイルの経路（scan / stack / run <フォルダ>）。
                 #   ★ 需要はここに寄っている（実測の需要地図: 上位 5 件中 4 件が複数ファイル）。

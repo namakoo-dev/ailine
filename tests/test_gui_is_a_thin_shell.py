@@ -290,3 +290,36 @@ def test_a_refusal_points_at_the_place_to_register():
     assert "aliasphrase" in HTML and "aliasop" in HTML, "登録の入力欄が無い"
     i = SERVER.index('/api/alias_add')
     assert '"alias", "add"' in SERVER[i:i + 900], "本体の alias add を呼んでいない"
+
+
+# --- ⑩ 前後は同じファイルで撮る / 見るために開いたら閉じる --------------------------------
+
+def test_before_and_after_come_from_the_same_file():
+    """★ 2026-08-27（Namakoo「できていない」）: 「操作する前」に**原本**を、
+       「操作したあと」に**下書き**を出していた ── 別のファイル同士を並べていたので、
+       差分も色も意味を成さず、**正しく動いた操作が「できていない」に見えた**。
+
+    ★ 前は**実行の直前にサーバが読む**（画面が後から取りに行くと、もう変わっている）。
+    """
+    i = SERVER.index('if u.path == "/api/run":')
+    block = _code_only(SERVER[i:i + 2600])
+    assert block.count("_read_sheet(") >= 2, "実行の直前に『前』を読んでいない"
+    assert '"before"' in block and '"target"' in block, "前と対象を返していない"
+    js = _script(HTML, code_only=True)
+    assert "res.before" in js, "画面が返された『前』を使っていない"
+
+
+def test_every_workbook_opened_for_looking_is_closed():
+    """★★ 2026-08-27（俺が連れてきたバグ）: read_only のブックは **close しないと
+       ファイルハンドルが残る**。実行の直前に「前」を撮ったら、その掴んだままの
+       ハンドルで下書きを置換できなくなり、**毎回 exit 9 で失敗**していた
+       ── 画面には「できていない」としか見えない。
+
+    ★ 見るために開いたものは、見終わったら必ず閉じる。機械で数える。
+    """
+    code = _code_only(SERVER)
+    opens = code.count("load_workbook(")
+    closes = code.count(".close()")
+    assert closes >= opens, (
+        f"開いた回数 {opens} に対して閉じた回数 {closes} ── "
+        "掴んだままのハンドルは、置換を静かに失敗させる")
