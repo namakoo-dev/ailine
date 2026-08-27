@@ -254,6 +254,27 @@ def _check_value_multiset(before: dict, after: dict, *, cell_ref: Callable, fmt_
     return f"★ 行を動かすだけのはずが、値が {total} 件消えました（{body}{more}）"
 
 
+def _check_single_cell(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable, **_kw):
+    """前提: **値が変わったセルはちょうど 1 つ**（宣言した 1 セルだけを書く op）。
+
+    ★ 2026-08-27: この種類が生まれた理由は、1 セル書きで「空欄への一括書き込み」の助言が
+      誤爆したこと。助言を黙らせるなら、**黙らせた分の保証をここで取り返す**
+      ── 鳴らなくした代わりに、宣言（1 セル）と実体（変わった数）を突き合わせる。
+    ★ 事後条件 check_set_cell_value も同じことを証明するが、あちらは**適用後のファイルを
+      読み直して**判定する。こちらは**差分の写真**から判定する ── 出どころが違う
+      2 つで見るのが要点で、片方が黙った時にもう片方が鳴る。
+    """
+    changed = [k for k in set(_values(before)) | set(_values(after))
+                if _values(before).get(k) != _values(after).get(k)]
+    if len(changed) <= 1:
+        return None
+    shown = "、".join(f"{s}!{cell_ref(r, c)}"
+                      for s, r, c in sorted(changed)[:_MAX_SAMPLES])
+    more = f"、ほか{len(changed) - _MAX_SAMPLES}件" if len(changed) > _MAX_SAMPLES else ""
+    return (f"★ 1 セルだけ書くはずが、値の変わったセルが {len(changed)} 個あります"
+            f"（{shown}{more}）")
+
+
 # 書き込み領域の種類 → その前提を確かめる関数。★ キーの文字列は ailine.py の WRITE_* 定数
 # （宣言表 OP_WRITE_TARGET が使う語彙）と一致していなければならない ── 一致は番人テスト
 # （tests/test_write_precondition_unit.py）が検査する。ここに載っていない種類は
@@ -265,6 +286,7 @@ PRECONDITIONS = {
     "format_only": _check_format_only,
     "row_shift": _check_value_multiset,
     "reorder": _check_value_multiset,
+    "single_cell": _check_single_cell,
 }
 
 # 前提を持たない種類（既存の破壊の関所＝書き込み先列の既存値検知が守る側）。

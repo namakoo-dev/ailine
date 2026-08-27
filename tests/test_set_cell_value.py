@@ -162,3 +162,32 @@ def test_the_gate_looks_at_one_cell_only(tmp_path):
     filled = ailine._maybe_warn_target_overwrite(
         "SET_CELL_VALUE", {"row": "みかん", "col": "売上", "_target_sheet": "売上"}, meta, p)
     assert filled and "みかん" in filled and "1 セルだけ" in filled, filled
+
+
+# --- ⑤ 「空欄への一括書き込み」の助言が、1 セル書きで誤爆しないこと（2026-08-27）--------
+#
+# ★ 実測: README の手順（みかんの下に梨を追加 → 梨の売上を 2000 に）をそのまま通したら、
+#   正しく 1 セルだけ書いたのに ★疑わしい が立ち、✓ が △ に落ちた。
+#   梨の行は追加されたばかりで売上が空欄 ── 「空欄に同じ値を入れた」に当たってしまう。
+# ★ 直しは op 名の if ではなく**宣言**（WRITE_SINGLE_CELL）。新しい op が増えても配線が要らない。
+# ★ ただし緩めっぱなしにはしない: 宣言が 1 セルでも、実際に 2 セル以上変わったら鳴る。
+
+def test_single_cell_write_does_not_raise_the_bulk_fill_advisory():
+    before = {"cells": {("売上", 4, 2): (None, None)}}
+    after = {"cells": {("売上", 4, 2): (2000, None)}}
+    assert ailine.detect_uniform_fill(before, after) is not None, "前提: 既定では鳴る"
+    assert ailine.detect_uniform_fill(before, after, single_cell=True) is None
+
+
+def test_the_advisory_still_fires_when_more_than_one_cell_was_filled():
+    """★ 恒真殺し: 宣言が 1 セルでも、実体が 2 セル以上なら鳴る（宣言と実体のずれ）。"""
+    before = {"cells": {("売上", 3, 2): (None, None), ("売上", 4, 2): (None, None)}}
+    after = {"cells": {("売上", 3, 2): (2000, None), ("売上", 4, 2): (2000, None)}}
+    assert ailine.detect_uniform_fill(before, after, single_cell=True) is not None
+
+
+def test_the_declaration_is_what_carries_it():
+    """★ 配線の実在: SET_CELL_VALUE が WRITE_SINGLE_CELL を宣言していること。
+       （助言の側だけ直して宣言を忘れると、本番では今までどおり鳴る＝片配線）"""
+    assert ailine._op_writes("SET_CELL_VALUE", ailine.WRITE_SINGLE_CELL)
+    assert not ailine._op_writes("SET_COLUMN_VALUE", ailine.WRITE_SINGLE_CELL)

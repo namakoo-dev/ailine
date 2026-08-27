@@ -48,14 +48,20 @@ def test_no_op_mixes_kinds_with_and_without_a_precondition():
        「実際に新規列が出現したか」を実測から判定するので、existing_column 側は
        PRECONDITIONS に無い（＝チェック関数が無く常に素通り）まま鳴らず、判定が割れることはない。
        それ以外の組み合わせが混ざるのは依然として判定不能なので禁止のまま。"""
-    allowed_mixed = {"new_column", "existing_column"}
+    # ★ 2026-08-27: 2 組目を許可した（single_cell + existing_column・SET_CELL_VALUE）。
+    #   理由は 1 組目と同型: existing_column は PRECONDITIONS に無く常に素通りなので、
+    #   判定するのは single_cell 側だけ ── 判定が割れることはない。
+    #   ★ 平らな集合だと {new_column, single_cell} のような**混ぜ合わせ**まで通ってしまう
+    #     ので、許可は「組」として持つ（緩めた範囲を、緩めた形のまま書く）。
+    allowed_mixed = [{"new_column", "existing_column"}, {"single_cell", "existing_column"}]
     for op, wt in ailine.OP_WRITE_TARGET.items():
         with_pre = [k for k in wt.writes if k in PRECONDITIONS]
         without = [k for k in wt.writes if k in NO_PRECONDITION]
         if with_pre and without:
-            assert set(with_pre) | set(without) <= allowed_mixed, (
+            mixed = set(with_pre) | set(without)
+            assert any(mixed <= ok for ok in allowed_mixed), (
                 f"{op}: 前提のある領域 {with_pre} と 前提のない領域 {without} を同時に宣言している"
-                f"（許可されている組み合わせは new_column/existing_column のみ）")
+                f"（許可されている組み合わせ: {allowed_mixed}）")
 
 
 # --- new_row_at_end -----------------------------------------------------------
@@ -297,3 +303,30 @@ def test_unit_h_absent_signature_keeps_unit_f_behaviour():
     after = _snap({"集計!1,1": "部門", "集計!1,2": "合計 - 売上"}, sheets=("Sheet", "集計"))
     out = _detail(("new_sheet",), before, after)
     assert out is not None and out[0] == "new_sheet", out
+
+
+# --- single_cell（2026-08-27）--------------------------------------------------
+#
+# ★ この種類が生まれた経緯: 1 セル書きで「空欄への一括書き込み」の助言が誤爆した。
+#   助言を黙らせた分の保証を、こちら（前提の側）で取り返している。
+#   ★ 黙らせるだけで終えると、次に本当に列を潰した時に誰も鳴らない。
+
+def test_single_cell_is_silent_when_exactly_one_value_changed():
+    before = _snap({"Sheet!2,1": "梨", "Sheet!2,2": None})
+    after = _snap({"Sheet!2,1": "梨", "Sheet!2,2": 2000})
+    assert _check(("single_cell",), before, after) is None
+
+
+def test_single_cell_fires_when_the_whole_column_was_flattened():
+    """★ この機能で最も起きやすい壊れ方（列全体の codegen を流用する）を捕まえる。"""
+    before = _snap({"Sheet!2,2": 800, "Sheet!3,2": 1500, "Sheet!4,2": None})
+    after = _snap({"Sheet!2,2": 2000, "Sheet!3,2": 2000, "Sheet!4,2": 2000})
+    msg = _check(("single_cell",), before, after)
+    assert msg and "3 個" in msg, msg
+
+
+def test_single_cell_ignores_format_only_changes():
+    """値が変わっていないセルは数えない（LibreOffice 往復の書式ゆれで誤爆しない）。"""
+    before = _snap({"Sheet!2,1": "梨", "Sheet!2,2": 800})
+    after = _snap({"Sheet!2,1": "梨", "Sheet!2,2": 2000})
+    assert _check(("single_cell",), before, after) is None

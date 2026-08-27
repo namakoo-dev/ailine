@@ -1188,7 +1188,7 @@ def _declared_new_column_letters(op: str, resolved: dict, book_meta: dict) -> se
     return letters
 
 
-def detect_uniform_fill(before: dict, after: dict) -> str | None:
+def detect_uniform_fill(before: dict, after: dict, single_cell: bool = False) -> str | None:
     """★ 一様埋め検出: 変更セルの全部で『変化前が空欄』かつ『変化後が全部同一値』
        （特に 0/空文字）の場合だけ疑わしい旨を返す（保守的）。
        ★ M2c: 判定対象は『値変更』の部分集合だけ（罫線・中央揃えなど書式のみが変わった
@@ -1212,6 +1212,10 @@ def detect_uniform_fill(before: dict, after: dict) -> str | None:
     val = after_vals[0]
     if val in (None, ""):
         return None  # 空欄→空欄は『埋めた』ことにならない
+    if single_cell and len(after_vals) == 1:
+        # ★ 宣言どおり 1 セルだけ書いた ── 「一括」ではないので疑う理由が無い。
+        #   1 セルを超えていたら鳴らす（宣言と実体がずれた時こそ言うべき場面）。
+        return None
     return f"★ 疑わしい: 空欄への同一値の一括書き込みです（値 {_fmt_cell_value(val)} × {len(after_vals)} セル）"
 
 
@@ -1576,7 +1580,8 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
     new_col_letter = _declared_new_column_letters(op, resolved, meta) or None \
         if (op and resolved is not None and meta is not None) else None
     new_row_at_end = _op_writes(op, WRITE_NEW_ROW_AT_END)   # ★ 単位C(D10): 合計行は宣言済みの効果
-    for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter, "new_row_at_end": new_row_at_end}), (detect_uniform_fill, {})):
+    for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter, "new_row_at_end": new_row_at_end}),
+                        (detect_uniform_fill, {"single_cell": _op_writes(op, WRITE_SINGLE_CELL)})):
         msg = fn(before, after, **kwargs)
         if msg:
             lines.append(msg)
@@ -2372,9 +2377,15 @@ WRITE_REORDER = "reorder"                   # 行を並べ替える（値の集�
 #   削除を row_shift と宣言したら、番人が「行を動かすだけのはずが値が 3 件消えた」と
 #   正しく怒った。宣言の側が嘘をついていた）。消すことを頼まれた op のための種別。
 WRITE_REMOVE = "remove"                     # 行/列ごと取り除く（値は減る・詰まる）
+# ★ 2026-08-27（Namakoo の手順を自分で通して気づいた）: 「空欄に同じ値を一括で書いた」と
+#   いう助言が、**1 セルだけ書く op でも鳴っていた**。空欄の 1 セルを埋めるのは
+#   SET_CELL_VALUE の**宣言そのもの**で、疑う理由が無い（事後条件が「変わったのは
+#   ちょうど 1 個・座標も宣言どおり」を別に証明している）。鳴らない理由を op 名の if で
+#   書かず、**宣言の種別**として持つ ── 新しい op が増えても配線が要らない。
+WRITE_SINGLE_CELL = "single_cell"           # 宣言した 1 セルだけを書く
 WRITE_KINDS = frozenset({
     WRITE_EXISTING_COLUMN, WRITE_NEW_COLUMN, WRITE_NEW_ROW_AT_END, WRITE_NEW_SHEET,
-    WRITE_FORMAT_ONLY, WRITE_ROW_SHIFT, WRITE_REORDER, WRITE_REMOVE})
+    WRITE_FORMAT_ONLY, WRITE_ROW_SHIFT, WRITE_REORDER, WRITE_REMOVE, WRITE_SINGLE_CELL})
 
 
 @dataclass(frozen=True)
@@ -2428,7 +2439,8 @@ OP_WRITE_TARGET = {
     "DELETE_COLUMN": WriteTarget(writes=(WRITE_REMOVE,)),
     # ★ 1 セルは既存列への上書き（前提なし側）。★ ただし「1 セルのはず」は
     #   check_set_cell_value が**変わったセルの数**で証明する（列全体を潰したら落ちる）。
-    "SET_CELL_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN,), col_key="col"),
+    "SET_CELL_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN, WRITE_SINGLE_CELL),
+                                    col_key="col"),
     "DRAW_BORDERS": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     "AUTOFIT": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     # 新規シート（DataPilot）を作るだけ。入力シートは読むだけ＝無変更が正常
@@ -5969,10 +5981,64 @@ def data_extent(ws, header_row: int = 1) -> tuple:
     return last, cols
 
 
-def _rows_of(ws, header_row: int, last_row: int, last_col: int) -> list:
-    """見出しより下の行を、そのまま値の組で読む（比較用）。"""
-    return [tuple(ws.cell(row=r, column=c).value for c in range(1, last_col + 1))
-             for r in range(header_row + 1, last_row + 1)]
+def _cells_for_shift(bv, sheet_name, header_row: int, last_row: int, last_col: int) -> list:
+    """行が**丸ごと動くだけ**のはずの操作（挿入・削除）で突き合わせるための読み。
+       セルごとに (式か, 式ビューの値, 比べる値) を持つ ── 式セルの「比べる値」は
+       **キャッシュ値**（計算後の値）。"""
+    ws = bv.sheet(sheet_name)
+    rows = []
+    for r in range(header_row + 1, last_row + 1):
+        row = []
+        for c in range(1, last_col + 1):
+            raw = ws.cell(row=r, column=c).value
+            is_f = isinstance(raw, str) and raw.startswith("=")
+            row.append((is_f, raw, bv.cell_value(r, c, sheet_name) if is_f else raw))
+        rows.append(tuple(row))
+    return rows
+
+
+def compare_moved_rows(after_rows: list, before_rows: list, label: str) -> tuple:
+    """**動いただけのはずの行**を突き合わせる ── 挿入も削除もここ 1 箇所を通す。
+
+    ★ 2026-08-27 に実測して分かったこと（デモの経路で × が出た）:
+      式は行が動くと**参照が自動で追随する**（`=B4-C4` が `=B5-C5` になる）。
+      だから式を**文字で比べると必ず食い違い**、正しく押し下げた操作を
+      「上書きした疑い」と誤って落とす。実際に落ちた。
+
+    ★ かといって式セルを見ないことにはしない（見ない範囲は嘘の温床）。
+      式セルは**キャッシュ値**（計算後の値）で見る:
+        ・値が同じ  → その行は本当に「動いただけ」。確かめられた
+        ・値が違う  → 落とさずに**開示する**。挿入した行を巻き込む合計式なら
+                      正当に変わるが、機械にその区別はつかない（断れない時は開示する）
+      式が消えた／増えたのは**壊れ**（落とす）。
+
+    返り値: ("broken", 理由) または ("ok", 開示すべき食い違いの一覧)
+    """
+    if len(after_rows) != len(before_rows):
+        return "broken", f"{label}: 行数が合いません"
+    disclosures = []
+    for i, (arow, brow) in enumerate(zip(after_rows, before_rows), start=1):
+        for j, (a, bcell) in enumerate(zip(arow, brow), start=1):
+            a_is_f, a_raw, a_val = a
+            b_is_f, b_raw, b_val = bcell
+            if a_is_f != b_is_f:
+                return "broken", (f"{label}: {i} 行目の {j} 列目で式が"
+                                   + ("消えました" if b_is_f else "増えました"))
+            if not a_is_f:
+                if a_raw != b_raw:
+                    return "broken", f"{label}: {i} 行目の {j} 列目の値が変わっています"
+                continue
+            if a_val != b_val:
+                disclosures.append(f"{i} 行目の {j} 列目（式の結果 {b_val!r}→{a_val!r}）")
+    return "ok", disclosures
+
+
+def _moved_rows_note(disclosures: list) -> str:
+    """開示の 1 行にまとめる（★ 決裁③: この文が付いた回は ✓ を出さない）。"""
+    head = "／".join(disclosures[:5])
+    more = f"（ほか {len(disclosures) - 5} 件）" if len(disclosures) > 5 else ""
+    return ("動いた行の式の結果が変わっています ── 追加/削除した行を参照する合計式なら"
+            f"正当ですが、機械には区別がつきません: {head}{more}")
 
 
 def check_add_row(path: Path, args: dict, header_row: int = 1,
@@ -6005,24 +6071,35 @@ def check_add_row(path: Path, args: dict, header_row: int = 1,
                 wrong.append(f"{name}: {want!r} のはずが {got!r}")
         if wrong:
             return "fail", f"{at}行目の値が宣言と違う（{'／'.join(wrong)}）"
-        after_rows = _rows_of(ws, header_row, _last_a, last_col)
-    if source_book is None or not Path(source_book).exists():
-        return "warn", f"{at}行目の値のみ確認（適用前ファイルとの突き合わせ無し）"
-    with BookView(source_book) as bv_b:
-        ws_b = bv_b.sheet(args.get("_target_sheet"))
-        _lb, _cb = data_extent(ws_b, header_row)
-        before_rows = _rows_of(ws_b, header_row, _lb, max(last_col, _cb))
+        if source_book is None or not Path(source_book).exists():
+            return "warn", f"{at}行目の値のみ確認（適用前ファイルとの突き合わせ無し）"
+        with BookView(source_book) as bv_b:
+            ws_b = bv_b.sheet(args.get("_target_sheet"))
+            _lb, _cb = data_extent(ws_b, header_row)
+            # ★ 前後で列幅を揃えてから読む（片方だけ広いと、ずれが「値の変化」に化ける）
+            cols = max(last_col, _cb)
+            after_rows = _cells_for_shift(bv, args.get("_target_sheet"),
+                                           header_row, _last_a, cols)
+            before_rows = _cells_for_shift(bv_b, args.get("_target_sheet"),
+                                            header_row, _lb, cols)
     if len(after_rows) != len(before_rows) + 1:
         return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行 → "
                          f"適用後 {len(after_rows)} 行・1 行増えるはず）")
     k = at - header_row - 1          # 挿入位置（データ行の 0 起点）
-    # ④ 上は不変
-    if after_rows[:k] != before_rows[:k]:
+    if k < 0 or k > len(before_rows):
+        return "fail", f"{at}行目は表の範囲外です（データは {len(before_rows)} 行）"
+    # ④ 上は不変 ── ★ 比べ方は 1 箇所（compare_moved_rows）にしか無い
+    st_up, info_up = compare_moved_rows(after_rows[:k], before_rows[:k], f"{at}行目より上")
+    if st_up == "broken":
         return "fail", f"{at}行目より上の行が変わっている（挿入で既存行を壊した疑い）"
     # ③ 下は 1 行ずれてそのまま
-    if after_rows[k + 1:] != before_rows[k:]:
+    st_dn, info_dn = compare_moved_rows(after_rows[k + 1:], before_rows[k:], f"{at}行目より下")
+    if st_dn == "broken":
         return "fail", (f"{at}行目より下の行が元のままでない ── "
                          "押し下げずに上書きした疑いがあります")
+    moved = list(info_up) + list(info_dn)
+    if moved:
+        return "warn", _moved_rows_note(moved)
     return "pass", f"{at}行目に 1 行追加（上下の行は元のまま・値は宣言どおり）"
 
 
@@ -6041,13 +6118,16 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
         _la, last_col = data_extent(ws, header_row)
-        after_rows = _rows_of(ws, header_row, _la, last_col)
-    if source_book is None or not Path(source_book).exists():
-        return "warn", "適用前ファイルが無いため、消えた行を確かめられていません"
-    with BookView(source_book) as bv_b:
-        ws_b = bv_b.sheet(args.get("_target_sheet"))
-        _lb2, _cb2 = data_extent(ws_b, header_row)
-        before_rows = _rows_of(ws_b, header_row, _lb2, max(last_col, _cb2))
+        if source_book is None or not Path(source_book).exists():
+            return "warn", "適用前ファイルが無いため、消えた行を確かめられていません"
+        with BookView(source_book) as bv_b:
+            ws_b = bv_b.sheet(args.get("_target_sheet"))
+            _lb2, _cb2 = data_extent(ws_b, header_row)
+            cols = max(last_col, _cb2)
+            after_rows = _cells_for_shift(bv, args.get("_target_sheet"),
+                                           header_row, _la, cols)
+            before_rows = _cells_for_shift(bv_b, args.get("_target_sheet"),
+                                            header_row, _lb2, cols)
     k = at - header_row - 1
     if k < 0 or k >= len(before_rows):
         return "fail", f"{at}行目は表の範囲外です（データは {len(before_rows)} 行）"
@@ -6055,9 +6135,14 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     if len(after_rows) != len(expected):
         return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行から {count} 行消えて "
                          f"{len(expected)} 行のはずが {len(after_rows)} 行）")
-    if after_rows != expected:
+    # ★ 削除でも式は上へ追随する ── 挿入と**同じ 1 箇所**で比べる（片配線を作らない）
+    st, info = compare_moved_rows(after_rows, expected, "残った行")
+    if st == "broken":
         return "fail", "残った行の並びが元と違う ── 詰め方が正しくない疑いがあります"
-    note_deleted(args, [before_rows[i] for i in range(k, min(k + count, len(before_rows)))])
+    note_deleted(args, [tuple(c[1] for c in before_rows[i])
+                         for i in range(k, min(k + count, len(before_rows)))])
+    if info:
+        return "warn", _moved_rows_note(info)
     return "pass", f"{at}行目から {count} 行を削除（残りは順序ごと元のまま）"
 
 
@@ -6141,24 +6226,31 @@ def check_delete_column(path: Path, args: dict, header_row: int = 1,
                           for c in range(1, last_col + 1)]
         if name in headers_after:
             return "fail", f"列『{name}』がまだ在ります（削除されていない）"
-        after_rows = _rows_of(ws, header_row, _lc, last_col)
-    if source_book is None or not Path(source_book).exists():
-        return "warn", f"列『{name}』が無いことのみ確認（適用前ファイルとの突き合わせ無し）"
-    with BookView(source_book) as bv_b:
-        ws_b = bv_b.sheet(args.get("_target_sheet"))
-        _lrb, lc_b = data_extent(ws_b, header_row)
-        headers_before = [str(ws_b.cell(row=header_row, column=c).value or "")
-                           for c in range(1, lc_b + 1)]
-        if name not in headers_before:
-            return "fail", f"適用前にも列『{name}』が無い（消した対象が特定できない）"
-        j = headers_before.index(name)
-        before_rows = _rows_of(ws_b, header_row, _lrb, lc_b)
+        if source_book is None or not Path(source_book).exists():
+            return "warn", f"列『{name}』が無いことのみ確認（適用前ファイルとの突き合わせ無し）"
+        with BookView(source_book) as bv_b:
+            ws_b = bv_b.sheet(args.get("_target_sheet"))
+            _lrb, lc_b = data_extent(ws_b, header_row)
+            headers_before = [str(ws_b.cell(row=header_row, column=c).value or "")
+                               for c in range(1, lc_b + 1)]
+            if name not in headers_before:
+                return "fail", f"適用前にも列『{name}』が無い（消した対象が特定できない）"
+            j = headers_before.index(name)
+            # ★ 列を消すと、右にあった列は左へ寄る ── 式の列参照も追随する。
+            #   行の挿入/削除と**同じ 1 箇所**で比べる（3 経路に同じ判断を書き写さない）。
+            after_rows = _cells_for_shift(bv, args.get("_target_sheet"),
+                                           header_row, _lc, last_col)
+            before_rows = _cells_for_shift(bv_b, args.get("_target_sheet"),
+                                            header_row, _lrb, lc_b)
     if headers_after != headers_before[:j] + headers_before[j + 1:]:
         return "fail", "見出しの並びが元と違う（別の列を巻き込んだ疑い）"
     expected = [r[:j] + r[j + 1:] for r in before_rows]
-    if after_rows != expected:
+    st, info = compare_moved_rows(after_rows, expected, "残った列")
+    if st == "broken":
         return "fail", "残った列の中身が元と違う ── 別の列を巻き込んだ疑いがあります"
-    note_deleted(args, [(r[j],) for r in before_rows])
+    note_deleted(args, [(r[j][1],) for r in before_rows])
+    if info:
+        return "warn", _moved_rows_note(info)
     return "pass", f"列『{name}』を削除（残りの列は 1 セルも変わらず）"
 
 

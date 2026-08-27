@@ -425,3 +425,103 @@ def test_row_numbers_are_not_content_anchors(tmp_path, task):
     """
     _p, meta = _gappy(tmp_path)
     assert ailine.resolve_row_anchor(task, meta, "売上") == (None, None), task
+
+
+# --- ⑧ 式の列がある表で、行を動かしても落ちないこと（2026-08-27・実測で出た欠陥）------
+#
+# ★ 実測: README の手順どおり ①利益列を作る → ②「みかんの下に梨を追加して」と続けたら、
+#   **正しく押し下げているのに ×**（「押し下げずに上書きした疑い」）が出た。
+#   原因は、式は行が動くと参照が追随する（`=B4-C4` → `=B5-C5`）のに、
+#   事後条件が**式を文字で比べていた**こと。デモの経路そのものだった。
+#
+# ★ 直しは 3 経路（追加・行削除・列削除）**すべて**に効く 1 箇所（compare_moved_rows）。
+#   だから試験も 3 経路ぶん置く ── 1 本だけ直すと、次に同じ形で刺される。
+
+_F_ROWS = [["商品", "売上", "原価", "利益"],
+            ["りんご", 1200, 700, "=B2-C2"],
+            ["みかん", 800, 300, "=B3-C3"],
+            ["ぶどう", 1500, 900, "=B4-C4"]]
+
+
+def test_add_row_does_not_fail_just_because_formulas_followed_the_shift(tmp_path):
+    before = _book(tmp_path, _F_ROWS, name="before.xlsx")
+    after = _book(tmp_path, [["商品", "売上", "原価", "利益"],
+                              ["りんご", 1200, 700, "=B2-C2"],
+                              ["みかん", 800, 300, "=B3-C3"],
+                              ["梨", 600, 300, None],          # ← 4 行目に挿さった
+                              ["ぶどう", 1500, 900, "=B5-C5"]])  # ← 式が追随した
+    args = {"at": 4, "values": {"商品": "梨", "売上": 600, "原価": 300}}
+    status, reason = ailine.check_add_row(after, args, source_book=before)
+    assert status == "pass", f"追随した式を「上書き」と誤断した: {reason}"
+
+
+def test_add_row_still_catches_an_overwrite_when_the_table_has_formulas(tmp_path):
+    """★ 恒真殺し: 緩めた分で、本当の上書きを見逃していないこと。"""
+    before = _book(tmp_path, _F_ROWS, name="before.xlsx")
+    after = _book(tmp_path, [["商品", "売上", "原価", "利益"],
+                              ["りんご", 1200, 700, "=B2-C2"],
+                              ["みかん", 800, 300, "=B3-C3"],
+                              ["梨", 600, 300, None]])          # ぶどうを潰した
+    args = {"at": 4, "values": {"商品": "梨", "売上": 600, "原価": 300}}
+    status, reason = ailine.check_add_row(after, args, source_book=before)
+    assert status == "fail", f"上書きを通した: {reason}"
+
+
+def test_delete_rows_does_not_fail_just_because_formulas_followed_the_shift(tmp_path):
+    before = _book(tmp_path, _F_ROWS, name="before.xlsx")
+    after = _book(tmp_path, [["商品", "売上", "原価", "利益"],
+                              ["りんご", 1200, 700, "=B2-C2"],
+                              ["ぶどう", 1500, 900, "=B3-C3"]])   # みかんを消して上へ詰めた
+    args = {"at": 3, "count": 1}
+    status, reason = ailine.check_delete_rows(after, args, source_book=before)
+    assert status == "pass", f"追随した式を「詰め方が正しくない」と誤断した: {reason}"
+
+
+def test_delete_column_does_not_fail_just_because_formulas_followed_the_shift(tmp_path):
+    before = _book(tmp_path, [["商品", "原価", "売上", "利益"],
+                               ["りんご", 700, 1200, "=C2-B2"],
+                               ["みかん", 300, 800, "=C3-B3"]], name="before.xlsx")
+    after = _book(tmp_path, [["商品", "売上", "利益"],
+                              ["りんご", 1200, "=B2-999"],
+                              ["みかん", 800, "=B3-999"]])        # 参照が左へ寄った（形は変わる）
+    args = {"col": "原価"}
+    status, reason = ailine.check_delete_column(after, args, source_book=before)
+    assert status == "pass", f"追随した式を「別の列を巻き込んだ」と誤断した: {reason}"
+
+
+# --- ⑨ 比べ方そのものの単体（判断は 1 箇所にしか無い）------------------------------
+def _cell(raw, cached=None):
+    is_f = isinstance(raw, str) and raw.startswith("=")
+    return (is_f, raw, cached if is_f else raw)
+
+
+def test_compare_moved_rows_is_strict_about_literals():
+    a = [(_cell("みかん"), _cell(800))]
+    b = [(_cell("みかん"), _cell(801))]
+    st, why = ailine.compare_moved_rows(a, b, "下")
+    assert st == "broken" and "2 列目" in why, why
+
+
+def test_compare_moved_rows_refuses_when_a_formula_disappears():
+    a = [(_cell("みかん"), _cell(500))]
+    b = [(_cell("みかん"), _cell("=B3-C3", 500))]
+    st, why = ailine.compare_moved_rows(a, b, "下")
+    assert st == "broken" and "消えました" in why, why
+
+
+def test_compare_moved_rows_accepts_a_formula_that_only_changed_shape():
+    """★ これが直したかった形: 式の文字は変わったが、計算後の値は同じ。"""
+    a = [(_cell("みかん"), _cell("=B5-C5", 500))]
+    b = [(_cell("みかん"), _cell("=B4-C4", 500))]
+    st, notes = ailine.compare_moved_rows(a, b, "下")
+    assert st == "ok" and notes == [], notes
+
+
+def test_compare_moved_rows_discloses_when_the_computed_value_changed():
+    """★ 落とさずに開示する ── 挿入した行を巻き込む合計式なら正当に変わりうる。
+       ただし ✓ は出さない（呼び側が warn を返す）。"""
+    a = [(_cell("合計"), _cell("=SUM(B2:B5)", 4100))]
+    b = [(_cell("合計"), _cell("=SUM(B2:B4)", 3500))]
+    st, notes = ailine.compare_moved_rows(a, b, "下")
+    assert st == "ok" and len(notes) == 1 and "3500" in notes[0], notes
+    assert "✓" not in ailine._moved_rows_note(notes)
