@@ -61,6 +61,7 @@ def _ailine(args: list) -> tuple:
 # ★ 下書きの続き（本 → 作業中の下書きファイル）。段取りだけを持つ・判定は持たない。
 _DRAFTS: dict = {}
 _LAST_MULTI: dict = {}
+_DRAFT_LAST_TASK: dict = {}
 DRAFT_SUFFIX = "（下書き）"
 
 
@@ -366,7 +367,18 @@ class Handler(BaseHTTPRequestHandler):
                     #   ★ 前後は**同じファイル**で撮る。実行の直前にここで読む（画面が
                     #     後から取りに行くと、もう変わっている）。
                     _before = _read_sheet(draft, None)
+                    # ★★ 2026-08-27（Namakoo「一つ追加すればいいのに複数追加してしまう」）:
+                    #   実測すると 1 回の実行は 1 行しか足していなかった ── 押した回数だけ
+                    #   増えていた（下書きは積み上げる設計にしたので、それ自体は正しい）。
+                    #   ★ 壊れていたのは**動作でなく、積み上げが見えないこと**。
+                    #     同じ依頼を繰り返したら、そう言う（黙って 2 つ目を作らない）。
+                    _same = _DRAFT_LAST_TASK.get(str(draft)) == task
+                    _DRAFT_LAST_TASK[str(draft)] = task
                     rc, out, payload = _ailine(["run", str(draft), task, "--json"])
+                    if _same and rc == 0:
+                        out = ("（同じ依頼をこの下書きに続けて実行しました ── "
+                                "1 回につき 1 つ増えます。やり直すなら「下書きを捨てる」）"
+                                + chr(10) + out)
                     self._json(200, {"rc": rc, "text": out, "json": payload,
                                       "before": _before, "target": str(draft)})
                     return
@@ -467,6 +479,7 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/draft_reset":
                 # 下書きを捨てて、次は原本からやり直す（消しはしない ── 残す）
                 dropped = _DRAFTS.pop(book, None)
+                _DRAFT_LAST_TASK.pop(str(_draft_path(Path(book))), None)
                 self._json(200, {"rc": 0, "json": {"verdict": "not_applied"},
                                   "text": (f"下書きを手放しました（{Path(dropped).name} は"
                                             "残っています）。次は原本から作り直します。"

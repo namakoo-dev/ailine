@@ -348,3 +348,21 @@ def test_the_comparison_basis_is_chosen_by_the_person():
     i = js.index("function redrawBasis")
     block = js[i:i + 700]
     assert "drawTable($(\"#after\")" in block, "基準を変えても色を塗り直していない"
+
+
+def test_repeating_the_same_request_is_disclosed():
+    """★ 2026-08-27（Namakoo「一つ追加すればいいのに複数追加してしまっている」）。
+
+    ★ 実測で切り分けた: **1 回の実行は 1 行しか足していなかった**（clean な下書きで確認）。
+      押した回数だけ増えていた ── 下書きは積み上げる設計なので、動作は正しい。
+    ★ 壊れていたのは動作でなく、**積み上げが見えないこと**。
+      同じ依頼を繰り返したら、そう言う（黙って 2 つ目を作らない）。
+    ★ ここは段取りの話で、判定は作らない（verdict は本体のまま）。
+    """
+    assert "_DRAFT_LAST_TASK" in SERVER, "同じ依頼の繰り返しを覚えていない"
+    i = SERVER.index("_DRAFT_LAST_TASK.get(")
+    block = SERVER[i:i + 700]
+    assert "1 回につき 1 つ増えます" in block, "積み上がることを言っていない"
+    assert "下書きを捨てる" in block, "やり直す道を示していない"
+    # 下書きを手放したら忘れる（古い記憶で誤って警告しない）
+    assert "_DRAFT_LAST_TASK.pop(" in SERVER
