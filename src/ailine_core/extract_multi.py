@@ -55,10 +55,17 @@ def predicate(cmp: str, threshold):
          None・bool は不一致（黙って型変換しない）
        - eq: 条件値が数値なら許容誤差 TOLERANCE で数値比較。数値でなければ文字列の完全一致
        - contains: 文字列セルのみ（数値セルを文字列化しない）
+       - in: 条件値は**一覧**。セルの値が一覧のどれかと**丸ごと**一致するか
+         （部分一致にしない ── 「りんご」が「青りんご」に当たると頼んでいない行が混じる）。
+         空欄は不一致
     """
     threshold_is_number = _is_number(threshold)
 
     def _match(cell_value) -> bool:
+        if cmp == "in":
+            if cell_value is None or cell_value == "":
+                return False
+            return str(cell_value) in {str(x) for x in (threshold or ())}
         if cmp == "contains":
             if threshold is None or not isinstance(cell_value, str):
                 return False

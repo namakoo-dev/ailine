@@ -55,6 +55,10 @@ _add("delete_rows_inferred", "DELETE_ROWS", {"at": 3, "count": 1}, inferred=("co
 _add("delete_column_one", "DELETE_COLUMN", {"col": "金額"})
 _add("set_cell_value_one", "SET_CELL_VALUE",
      {"row": "りんご", "col": "金額", "value": "2000"})
+_add("extract_columns", "EXTRACT_COLUMNS",
+     {"cols": ["商品", "売上"], "_new_sheet": "商品・売上だけ"})
+_add("extract_in_list", "EXTRACT",
+     {"col": "商品", "cmp": "in", "value": ["みかん", "りんご"]})
 _add("set_where", "SET_WHERE",
      {"col": "チェック", "value": "◎", "_cond_label": "『原価』が 500 以上",
       "_match_label": "2 行（2、4行目）"})

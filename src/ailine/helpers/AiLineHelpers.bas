@@ -707,11 +707,55 @@ Function RowMatches(oCell As Object, cmpCode As Integer, cmpValue As Variant) As
         Case 5   ' を含む（文字列セルのみ ── 数値/空欄は対象外）
             m = (oCell.getType() = com.sun.star.table.CellContentType.TEXT) _
                 And (InStr(oCell.getString(), CStr(cmpValue)) > 0)
+        Case 6   ' どれか（Chr(2) 区切りの一覧に**丸ごと一致**するものが在るか）
+            ' ★ 2026-08-27: 「みかんの行とりんごの行だけ抽出して」用。
+            '   ★ InStr の部分一致にしない ── 「りんご」が「青りんご」に当たると
+            '     頼んでいない行が黙って混じる（contains で実測した事故と同じ形）。
+            '     両端に区切りを足して、**区切りごと**探すことで丸ごと一致にする。
+            m = (InStr(Chr(2) & CStr(cmpValue) & Chr(2), _
+                        Chr(2) & oCell.getString() & Chr(2)) > 0)
         Case Else
             m = False
     End Select
     RowMatches = m
 End Function
+
+
+' 指定した列だけを新しいシートへ抜き出す（2026-08-27 追加）。
+' ★ Namakoo「特定行や特定列の抜き出しができない」── 行は ExtractRows が持っていたが、
+'   列を選ぶ手段が 1 つも無かった。
+' colIdxCsv: 0起点の列番号を並び順で "0,2" のように。★ 並びは Python 側が依頼文の順で決める。
+' ★ 型を保つ（ExtractRows と同じ規律）: 文字は setString・数値は setValue + NumberFormat・
+'   空欄は触らない。0 で埋めない。
+Sub ExtractColumns(oDoc As Object, headerRow As Integer, colIdxCsv As String, dstName As String)
+    Dim oSheet As Object, oOut As Object, oCur As Object
+    Dim cols() As String, i As Long, j As Integer
+    Dim lastRow As Long, oSrc As Object, oDst As Object
+    oSheet = oDoc.Sheets.getByIndex(0)
+    If Len(colIdxCsv) = 0 Then Exit Sub
+    cols = Split(colIdxCsv, ",")
+    oCur = oSheet.createCursor()
+    oCur.gotoEndOfUsedArea(False)
+    lastRow = oCur.RangeAddress.EndRow
+    If lastRow < headerRow Then Exit Sub
+    If oDoc.Sheets.hasByName(dstName) Then oDoc.Sheets.removeByName(dstName)
+    oDoc.Sheets.insertNewByName(dstName, oDoc.Sheets.Count)
+    oOut = oDoc.Sheets.getByName(dstName)
+    For i = headerRow To lastRow
+        For j = 0 To UBound(cols)
+            oSrc = oSheet.getCellByPosition(CInt(cols(j)), i)
+            oDst = oOut.getCellByPosition(j, i - headerRow)
+            If oSrc.getType() = com.sun.star.table.CellContentType.TEXT Then
+                oDst.setString(oSrc.getString())
+            ElseIf oSrc.getType() = com.sun.star.table.CellContentType.EMPTY Then
+                ' 何もしない（空欄のまま）
+            Else
+                oDst.setValue(oSrc.getValue())
+                oDst.NumberFormat = oSrc.NumberFormat
+            End If
+        Next j
+    Next i
+End Sub
 
 
 ' 条件に一致する行だけ、指定した列に同じ値を書く（2026-08-27 追加）。

@@ -513,6 +513,44 @@ _SC = {"row": "みかん", "col": "金額", "value": "2000",
 _add("set_cell_pass", "SET_CELL_VALUE", dict(_SC), _b_set_cell_pass)
 _add("set_cell_fail_whole_column", "SET_CELL_VALUE", dict(_SC), _b_set_cell_whole_column)
 
+# --- EXTRACT_COLUMNS（2026-08-27）---------------------------------------------
+def _book_with_extract(tmp_path, name, cols, rows):
+    p = tmp_path / name
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    for r in _TB:
+        ws.append(r)
+    out = wb.create_sheet("商品だけ")
+    out.append(cols)
+    for r in rows:
+        out.append(r)
+    wb.save(p)
+    return p
+
+
+def _b_extract_columns_pass(tmp_path):
+    return _book_with_extract(tmp_path, "after.xlsx", ["商品"],
+                               [["りんご"], ["みかん"], ["ぶどう"]]), None
+
+
+def _b_extract_columns_missing_row(tmp_path):
+    return _book_with_extract(tmp_path, "after.xlsx", ["商品"],
+                               [["りんご"], ["みかん"]]), None
+
+
+def _b_extract_columns_wrong_header(tmp_path):
+    return _book_with_extract(tmp_path, "after.xlsx", ["金額"],
+                               [["りんご"], ["みかん"], ["ぶどう"]]), None
+
+
+_XCG = {"cols": ["商品"], "_new_sheet": "商品だけ", "_header_row": 1}
+_add("extract_columns_pass", "EXTRACT_COLUMNS", dict(_XCG), _b_extract_columns_pass)
+_add("extract_columns_fail_missing_row", "EXTRACT_COLUMNS", dict(_XCG),
+     _b_extract_columns_missing_row)
+_add("extract_columns_fail_wrong_header", "EXTRACT_COLUMNS", dict(_XCG),
+     _b_extract_columns_wrong_header)
+
 # --- SET_WHERE（2026-08-27）---------------------------------------------------
 _TW = [["商品", "金額", "印"], ["りんご", 100, None], ["みかん", 700, None], ["ぶどう", 900, None]]
 

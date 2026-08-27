@@ -1583,5 +1583,45 @@
         "cmp": "lte"
       }
     }
+  ],
+  "items_v17": [
+    {
+      "id": 1701,
+      "book": "sample",
+      "text": "商品と金額の列だけ抜き出して",
+      "expect": {
+        "op": "EXTRACT_COLUMNS",
+        "cols": ["商品", "金額"]
+      }
+    },
+    {
+      "id": 1702,
+      "book": "sales",
+      "text": "商品と売上の列だけ取り出して",
+      "expect": {
+        "op": "EXTRACT_COLUMNS",
+        "cols": ["商品", "売上"]
+      }
+    },
+    {
+      "id": 1703,
+      "book": "sales",
+      "text": "みかんの行とりんごの行だけを抽出して",
+      "expect": {
+        "op": "EXTRACT",
+        "col": "商品",
+        "cmp": "in"
+      }
+    },
+    {
+      "id": 1704,
+      "book": "sales",
+      "text": "みかんとぶどうだけ抜き出して",
+      "expect": {
+        "op": "EXTRACT",
+        "col": "商品",
+        "cmp": "in"
+      }
+    }
   ]
 }

@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "商品",
+    "cmp": "eq",
+    "value": "みかん",
+    "_target_sheet": "Sheet",
+    "_warnings": [
+      "LLM が返した値『ミカン』は列『商品』に無いため、依頼文が名指しする実在の値（みかん）を採用しました"
+    ],
+    "_source_headers": [
+      "商品",
+      "金額"
+    ],
+    "_new_sheet": "商品みかん等しい"
+  },
+  "inferred": [],
+  "err": null
+}

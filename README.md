@@ -24,7 +24,7 @@
 |---|---|
 | repo 全体 | 2026-08-10 起点・200 commit 超 |
 | 課題期間にやったこと | ① 外部の目による盲検レビュー 5 面 → 出た**致命 10 件を全件処置** ② 表の基本操作（行の追加・削除／列の削除／1 セル書換） ③ 評価者が触れる GUI |
-| 課題期間に**やらなかったこと** | 新機能の拡張、単一ファイル（<!-- MAIN_FILE_LINES -->14245<!-- /MAIN_FILE_LINES --> 行）の分割（理由は「4. 判断・制約・学び」） |
+| 課題期間に**やらなかったこと** | 新機能の拡張、単一ファイル（<!-- MAIN_FILE_LINES -->14452<!-- /MAIN_FILE_LINES --> 行）の分割（理由は「4. 判断・制約・学び」） |
 
 土台が既存であることを踏まえて読んでいただくために、**何を今週やったか**は
 `git log --since=2026-08-26 --oneline` で追える形にしてあります。
@@ -134,13 +134,13 @@ Excel の定型作業を自動化したい。でも既存の AI ツールには 
 #### 主な機能
 
 `ailine ops` が出す一覧が正です（この表は登録簿から自動生成されるので、文書とずれません）。
-**28 操作**が登録されています。
+**29 操作**が登録されています。
 
 | 分類 | 操作 |
 |---|---|
 | 並べ替える | SORT |
 | 計算する | COMPUTE_COLUMN / AGGREGATE / APPEND_TOTAL / PIVOT |
-| 表を編集する | LOOKUP_FILL / MERGE / INSERT_ROWS / **ADD_ROW** / **DELETE_ROWS** / **DELETE_COLUMN** / SET_COLUMN_VALUE / **SET_CELL_VALUE** / **SWAP** / **ADD_COLUMN** / **SET_WHERE** / EXTRACT / SPLIT_CELL / DEDUP / REPORT_PER_ROW / FORMAT_MAP |
+| 表を編集する | LOOKUP_FILL / MERGE / INSERT_ROWS / **ADD_ROW** / **DELETE_ROWS** / **DELETE_COLUMN** / SET_COLUMN_VALUE / **SET_CELL_VALUE** / **SWAP** / **ADD_COLUMN** / **SET_WHERE** / EXTRACT / **EXTRACT_COLUMNS** / SPLIT_CELL / DEDUP / REPORT_PER_ROW / FORMAT_MAP |
 | 見た目を整える | BOLD / FILL_COLOR / NUMBER_FORMAT / CENTER_ALIGN / DRAW_BORDERS / AUTOFIT |
 | グラフを作る | CHART |
 
@@ -162,7 +162,7 @@ Excel の定型作業を自動化したい。でも既存の AI ツールには 
 
 #### 実装済み
 
-- 上の 28 操作（翻訳 → 検査 → 生成 → 適用 → 読み戻し検証 → 差分表示）
+- 上の 29 操作（翻訳 → 検査 → 生成 → 適用 → 読み戻し検証 → 差分表示）
 - 原本への直接反映と `ailine undo`（世代つき・復元自体も可逆）
 - フォルダ単位の処理（棚卸し / 縦積み / 条件抽出 / 検算の単独再実行）
 - CSV の読み取り検疫（0 落ちを作らない）と CSV / PDF への書き出し（書いたものを読み戻して照合）
@@ -193,7 +193,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->2432<!-- /TOTAL_TESTS --> 本のうち、実機が要る 21 本を除いた範囲）。
+期待: 全件緑（<!-- TOTAL_TESTS -->2481<!-- /TOTAL_TESTS --> 本のうち、実機が要る 22 本を除いた範囲）。
 ★ この 2 つの数は `tests/test_local_test_count.py` が実測と突き合わせています ──
 文書の数字を、人の記憶で守らないためです。
 
@@ -505,7 +505,7 @@ ailine run sample.xlsx "売上から原価を引いた利益の列を作って"
 ## 7. 補足
 
 - **技術詳細・全コマンド・設計判断の記録**: [docs/ENGINEERING.md](docs/ENGINEERING.md)
-  （この README の前身。全 28 操作の使い方、終了コード表、参照ライブラリ、限界の一覧）
+  （この README の前身。全 29 操作の使い方、終了コード表、参照ライブラリ、限界の一覧）
 - **土台となる別 repo**: [basrun](https://github.com/namakoo-dev/basrun)（MIT・自作）
 - **ライセンス**: MIT
 

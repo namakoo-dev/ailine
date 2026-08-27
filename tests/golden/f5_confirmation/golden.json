@@ -17,6 +17,8 @@
   "delete_rows_inferred": "解釈: 操作:行削除 削除位置:3 行数:1(推定)",
   "draw_borders_no_fields": "解釈: 操作:けい線",
   "extract": "解釈: 操作:抽出 対象列:金額 条件:以上 値:40000",
+  "extract_columns": "解釈: 操作:列抽出 残す列:商品・売上 出力シート:商品・売上だけ",
+  "extract_in_list": "解釈: 操作:抽出 対象列:商品 条件:のどれか 値:みかん・りんご",
   "fill_color_row": "解釈: 操作:背景色 対象:row:1 色:red",
   "format_map": "解釈: 操作:様式写像 雛形:様式",
   "insert_rows_count_inferred": "解釈: 操作:行挿入 挿入位置:3 行数:1(推定)",

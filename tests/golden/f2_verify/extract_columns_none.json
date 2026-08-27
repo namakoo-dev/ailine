@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "resolved": {
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "残す列が依頼文から読み取れません（ある列: 商品、金額、在庫）── 列名をそのまま書いてください"
+}

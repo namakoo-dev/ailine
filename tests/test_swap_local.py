@@ -159,3 +159,37 @@ def test_a_replace_touches_only_the_matching_rows_on_real_lo(tmp_path):
     out = openpyxl.load_workbook(_out(p))["売上"]
     got = [out.cell(i, 4).value for i in range(2, 5)]
     assert got == ["合格", None, "合格"], f"空欄の行を巻き込んだ: {got}"
+
+
+@pytest.mark.local
+def test_named_rows_and_columns_extract_on_real_lo(tmp_path):
+    """★ 名指しの抽出（行）と列の抽出を実機で。**空でも正しく見える**のが一番こわい形なので、
+       中身まで見る（0 行の抽出結果は「成功」に見えてしまう）。"""
+    p = tmp_path / "i.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "売上"
+    ws.append(["商品", "売上", "原価"])
+    for row in [["りんご", 1200, 700], ["みかん", 800, 300], ["ぶどう", 1500, 900]]:
+        ws.append(row)
+    wb.save(p)
+
+    r = _run(p, "みかんの行とりんごの行だけを抽出して")
+    assert r.returncode == 0, f"名指しの抽出が失敗:\n{r.stdout[-900:]}"
+    wb2 = openpyxl.load_workbook(_out(p))
+    dst = [s for s in wb2.sheetnames if "どれか" in s]
+    assert dst, wb2.sheetnames
+    got = [[wb2[dst[0]].cell(i, j).value for j in (1, 2)]
+            for i in range(2, wb2[dst[0]].max_row + 1)]
+    assert got == [["りんご", 1200], ["みかん", 800]], f"抽出の中身が違う: {got}"
+
+    p2 = tmp_path / "j.xlsx"
+    wb.save(p2)
+    r2 = _run(p2, "商品と原価の列だけ抜き出して")
+    assert r2.returncode == 0, f"列の抽出が失敗:\n{r2.stdout[-900:]}"
+    wb3 = openpyxl.load_workbook(_out(p2))
+    dst2 = [s for s in wb3.sheetnames if "だけ" in s]
+    assert dst2, wb3.sheetnames
+    out = wb3[dst2[0]]
+    assert [out.cell(1, j).value for j in (1, 2)] == ["商品", "原価"]
+    assert out.max_row == 4, f"行が減っている: {out.max_row}"

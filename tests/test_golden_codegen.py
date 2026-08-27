@@ -154,6 +154,11 @@ _add("set_cell_value_text", "SET_CELL_VALUE",
 _add("set_where_gte", "SET_WHERE",
      {"col": "在庫", "cond_col": "金額", "cmp": "gte", "cond_value": 40000.0, "value": "◎",
       "_headers": ["商品", "金額", "在庫"], "_header_row": 1})
+_add("extract_in_list", "EXTRACT",
+     {"col": "商品", "cmp": "in", "value": ["みかん", "りんご"], "_new_sheet": "商品みかん・りんごのどれか"})
+_add("extract_columns", "EXTRACT_COLUMNS",
+     {"cols": ["商品", "在庫"], "_headers": ["商品", "金額", "在庫"], "_header_row": 1,
+      "_new_sheet": "商品・在庫だけ"})
 _add("set_where_replace_text", "SET_WHERE",
      {"col": "商品", "cond_col": "商品", "cmp": "eq", "cond_value": "りんご",
       "value": "林檎", "_headers": ["商品", "金額", "在庫"], "_header_row": 1})

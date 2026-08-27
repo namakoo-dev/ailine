@@ -7,5 +7,5 @@
     "_target_sheet": "Sheet"
   },
   "inferred": [],
-  "err": "比較『between』は gte/lte/gt/lt/eq/contains のどれでもありません"
+  "err": "比較『between』は gte/lte/gt/lt/eq/contains/in のどれでもありません"
 }

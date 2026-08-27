@@ -2114,6 +2114,11 @@ OP_META = {
     # ★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）: 表計算のごく普通の操作
     #   なのに一覧に無かった（SET_COLUMN_VALUE は列を丸ごと同じ値にするだけ）。
     #   実測でも 4/4 で OUT_OF_VOCAB（「条件付き書式」と誤って読まれていた）。
+    # ★ 2026-08-27（Namakoo「特定行や特定列の抜き出しができない」）: 行は EXTRACT が
+    #   持っていたが、**列を選ぶ手段が 1 つも無かった**。
+    "EXTRACT_COLUMNS": {"category": "表を編集する", "label": "列抽出", "folder": False,
+                         "synonyms": ["列だけ抜き出す", "必要な列だけ取り出す", "列を選んで別シートへ"],
+                         "match_phrases": ["商品と売上の列だけ抜き出して", "必要な列だけ取り出して"]},
     "SET_WHERE": {"category": "表を編集する", "label": "条件つき書換", "folder": False,
                    "synonyms": ["条件に合う行だけ書き換える", "〜以上の行に印を付ける",
                                  "該当する行にだけ値を入れる"],
@@ -2374,6 +2379,8 @@ OP_SCHEMA = {
     "DELETE_COLUMN": ("col",),
     # ★ a/b = 入れ替える 2 つの名前。行名か列名かは機械が実表から決める（_axis）。
     "SWAP": ("a", "b"),
+    # ★ EXTRACT_COLUMNS: cols(残す列名の並び)。出力シート名は機械が決める（A' 原則）。
+    "EXTRACT_COLUMNS": ("cols",),
     # ★ SET_WHERE: col(書き込み先列)・cond_col(条件を見る列)・cmp(比較)。
     #   ★ 書き込む値と閾値は必須 slot に入れない（A' 原則）── 値は依頼文の引用符から、
     #     比較は依頼文の語から、機械が取る（SET_COLUMN_VALUE/EXTRACT と同じ作法）。
@@ -2520,6 +2527,8 @@ OP_WRITE_TARGET = {
     #   ✓ が △ に落ちる ── 宣言済みの効果を疑わない、という既存の仕組みに乗せる。
     "ADD_COLUMN": WriteTarget(writes=(WRITE_ROW_SHIFT, WRITE_NEW_COLUMN),
                                col_index_key="_at_col", proves_which_cells=True),
+    # ★ 新しいシートを作るだけ・入力シートは読むだけ（EXTRACT と同じ）。
+    "EXTRACT_COLUMNS": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
     # ★ 既存列の一部の行に書く＝破壊の関所の対象（宣言必須）。
     "SET_WHERE": WriteTarget(writes=(WRITE_EXISTING_COLUMN,), col_key="col",
                               proves_which_cells=True),
@@ -2621,6 +2630,8 @@ OP_SUBJECT_SLOTS = {
     #   SUBJ_COLUMN 側に置く（EXTRACT の col と同じ扱い・実在照合は verify_dsl_args）。
     "SWAP": (("a", SUBJ_COLUMN), ("b", SUBJ_COLUMN)),
     "SET_WHERE": (("col", SUBJ_COLUMN), ("cond_col", SUBJ_COLUMN)),
+    # ★ cols は列名の並び（DEDUP の keys と同じく list を 1 件ずつ展開する仕組みに乗る）。
+    "EXTRACT_COLUMNS": (("cols", SUBJ_COLUMN),),
     # ★ name は**これから作る**列なので実在照合の対象にしない（幻覚の封鎖は別口 ──
     #   verify_dsl_args が「同名の列が既に在る」を断る）。位置の基準列は _at_basis に出る。
     "ADD_COLUMN": (),
@@ -3144,6 +3155,8 @@ _OP_SCHEMA_NOTES = {
              "**そのまま**入れる（行の中身の名前でも、列の見出しでもよい）。"
              "どちらなのかは機械が実際の表を見て決めるので、当てなくてよい。"
              "行番号・列番号・A1 のような座標は入れない。",
+    "EXTRACT_COLUMNS": "cols は**残す列の名前の配列**（依頼文に書かれた順）。"
+                        "列番号や A1 のような座標は入れない。",
     "SET_WHERE": "col は**印を書き込む列**の名前、cond_col は**条件を見る列**の名前、"
                   "cmp は gte(以上)/lte(以下)/gt(超)/lt(未満)/eq(等しい)/contains(含む) の 1 つ。"
                   "書き込む値と閾値の数字は入れない（機械が依頼文から取る）。",
@@ -3857,6 +3870,35 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["col"] = name
         resolved["_headers"] = [str(h) for h in headers]
 
+    # --- ★ 2026-08-27: 列の抽出（残す列を依頼文の実在列から機械が拾う）------------
+    elif op == "EXTRACT_COLUMNS":
+        _sheet_x = resolved.get("_target_sheet") or first_sheet
+        _hdrs_x = [str(h) for h in (headers.get(_sheet_x) or [])]
+        # ★ 値は LLM に作らせない: **依頼文に現れる実在の列名**を、出現順に機械が拾う。
+        #   LLM の cols は「候補の当たり」としてだけ使い、実在照合を通ったものだけ採る。
+        _asked = [c for c in _hdrs_x if c and c in (task or "")]
+        _llm_cols = resolved.get("cols")
+        if isinstance(_llm_cols, str):
+            _llm_cols = [x.strip() for x in _llm_cols.split(",") if x.strip()]
+        _llm_cols = [str(c) for c in (_llm_cols or []) if str(c) in _hdrs_x]
+        _cols_x = _asked or _llm_cols
+        if not _cols_x:
+            return False, resolved, inferred, (
+                "残す列が依頼文から読み取れません"
+                f"（ある列: {'、'.join(_hdrs_x)}）── 列名をそのまま書いてください")
+        if len(_cols_x) >= len(_hdrs_x):
+            return False, resolved, inferred, (
+                "全部の列が指定されています（抜き出す意味がありません）")
+        # ★ 依頼文の出現順に並べる（人が書いた順で出す ── 表の順に勝手に直さない）
+        _cols_x = sorted(set(_cols_x), key=lambda c: (task or "").find(c))
+        resolved["cols"] = _cols_x
+        resolved["_cols_label"] = "・".join(_cols_x)
+        resolved["_headers"] = _hdrs_x
+        resolved["_header_row"] = int((book_meta.get("header_rows") or {}).get(_sheet_x, 1) or 1)
+        resolved["_source_headers"] = tuple(_hdrs_x)
+        resolved["_new_sheet"] = _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub(
+            "_", "・".join(_cols_x) + "だけ")[:31]
+
     # --- ★ 2026-08-27: 条件つき書換（値と比較は機械が依頼文から取る）--------------
     elif op == "SET_WHERE":
         if (err := resolve_in("col", first_sheet)):
@@ -4139,6 +4181,28 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     elif op == "EXTRACT":
         if (err := resolve_in("col", first_sheet)):
             return False, resolved, inferred, err
+        # ★★ 2026-08-27（Namakoo「みかんの行とりんごの行だけを抽出して」）:
+        #   実測で一段目は `contains "リンゴ"`（片仮名の幻覚）や `eq "みかんとりんご"`
+        #   （連結）を返していた。どちらも 0 行に当たり、**空の抽出結果が ✓ で出る**。
+        #   ★ 比較語（以上/以下/…）が依頼文に**無い**なら、それは条件でなく**名指し**。
+        #     表に実在する値のうち依頼文に現れるものを機械が拾い、「どれか」で抽出する。
+        #   ★ 比較語が在る時は触らない ── 「原価が500以上」の 500 を名前と読まない。
+        _hr_x = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+        if extract_cmp_from_task(task) is None:
+            _named_vals = task_names_real_values(task, book_meta, first_sheet,
+                                                  resolved["col"], _hr_x)
+            if _named_vals:
+                if str(resolved.get("value") or "") not in _named_vals:
+                    resolved["_warnings"] = resolved.get("_warnings", []) + [
+                        f"LLM が返した値『{resolved.get('value')}』は列『{resolved['col']}』に"
+                        f"無いため、依頼文が名指しする実在の値"
+                        f"（{'、'.join(_named_vals)}）を採用しました"]
+                resolved["cmp"] = "in" if len(_named_vals) > 1 else "eq"
+                resolved["value"] = _named_vals if len(_named_vals) > 1 else _named_vals[0]
+                resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
+                resolved["_new_sheet"] = _extract_output_sheet_name(
+                    resolved["col"], resolved["cmp"], resolved["value"])
+                return True, resolved, inferred, None
         llm_cmp_raw = str(resolved.get("cmp", "")).strip().lower()
         # ★ operator9 ①: cmp も A' 原則の中へ。依頼文からの機械抽出が非 None かつ LLM の cmp と
         #   食い違えば機械が勝つ（factor/value と同じ作法）。一致 or 機械 None なら現状どおり。
@@ -4544,6 +4608,9 @@ _CONFIRM_FIELDS = {
     "ADD_COLUMN": (("新しい列の名前", "_name_label", None), ("入れる位置", "_at_basis", None)),
     # ★ cond_col/cmp のラベルもここに要る ── `ailine ops` の「必要な情報」はこの登録簿から
     #   引くので、無いと英字（cond_col・cmp）のまま人に見える（SWAP で 1 度踏んだ）。
+    # ★ cols のラベルも要る（`ailine ops` の「必要な情報」はこの登録簿から引く）。
+    "EXTRACT_COLUMNS": (("残す列", "cols", lambda v: "・".join(map(str, v or []))),
+                         ("出力シート", "_new_sheet", None)),
     "SET_WHERE": (("書き込む列", "col", None), ("書き込む値", "value", None),
                    ("条件を見る列", "cond_col", None),
                    ("比べ方", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
@@ -4579,10 +4646,14 @@ PLAN_CHAIN_WARNING_OPS = ("EXTRACT", "DEDUP")
 
 # ★ EXTRACT: 比較の語彙（設計書どおり6種）。gte/lte/gt/lt は数値比較・eq は値の型に応じて
 #   数値/文字列どちらでも・contains は常に文字列の部分一致。
-_EXTRACT_CMPS = ("gte", "lte", "gt", "lt", "eq", "contains")
+# ★ 2026-08-27: "in"（どれか）を足した。値は**一覧**（複数の名前）。
+#   意味論は 3 箇所が同時に持つ: ここ / Basic の RowMatches Case 6 /
+#   Python の _extract_predicate。凍結した真理値表 tests/test_predicate_truth_table.py
+#   が 3 者の一致を縛る ── 変える時は必ず一緒に直すこと。
+_EXTRACT_CMPS = ("gte", "lte", "gt", "lt", "eq", "contains", "in")
 _EXTRACT_CMP_LABELS = {"gte": "以上", "lte": "以下", "gt": "超", "lt": "未満",
-                        "eq": "等しい", "contains": "を含む"}
-_EXTRACT_CMP_CODE = {"gte": 0, "lte": 1, "gt": 2, "lt": 3, "eq": 4, "contains": 5}
+                        "eq": "等しい", "contains": "を含む", "in": "のどれか"}
+_EXTRACT_CMP_CODE = {"gte": 0, "lte": 1, "gt": 2, "lt": 3, "eq": 4, "contains": 5, "in": 6}
 _EXTRACT_SHEET_NAME_FORBIDDEN_RE = re.compile(r'[:\\/?*\[\]]')
 
 # ★ operator9 ①: 比較語(cmp)も A' 原則の中に入れる ── value は機械が数値化するのに、cmp の
@@ -4668,7 +4739,11 @@ def extract_chart_kind_from_task(task: str) -> str | None:
 
 def _format_extract_value(value) -> str:
     """EXTRACT のシート名/確認行に使う値の表示形。整数相当の float は小数点を付けない
-       （40000.0 でなく 40000）。"""
+       （40000.0 でなく 40000）。
+       ★ 2026-08-27: 「どれか」の一覧は中黒で繋ぐ ── 解釈行に ['みかん', 'りんご'] と
+         Python の見た目が出ていた（人が読む行に機械の書き方を出さない）。"""
+    if isinstance(value, (list, tuple)):
+        return "・".join(_format_extract_value(v) for v in value)
     if isinstance(value, float):
         return str(int(value)) if value.is_integer() else f"{value:g}"
     return str(value)
@@ -4762,7 +4837,9 @@ def _extract_output_sheet_name(col: str, cmp: str, value) -> str:
        Excel が禁じる文字(: \\ / ? * [ ])は '_' に置き換え、31文字上限（Excel のシート名
        制限）で切り詰める。"""
     label = _EXTRACT_CMP_LABELS.get(cmp, cmp)
-    name = f"{col}{_format_extract_value(value)}{label}"
+    shown = ("・".join(str(v) for v in value) if isinstance(value, (list, tuple))
+              else _format_extract_value(value))
+    name = f"{col}{shown}{label}"
     return _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub("_", name)[:31]
 
 
@@ -5134,6 +5211,14 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         col0 = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
         return wrap(f"    Call DeleteColumn(oDoc, {col0})\n")
 
+    if op == "EXTRACT_COLUMNS":
+        hdrs = list(resolved_args.get("_headers") or [])
+        idx = ",".join(str(hdrs.index(c)) for c in resolved_args["cols"] if c in hdrs)
+        hr0x = int(resolved_args.get("_header_row", 1)) - 1
+        dst = str(resolved_args["_new_sheet"]).replace(chr(34), chr(34) * 2)
+        return wrap('    Call ExtractColumns(oDoc, %d, "%s", "%s")%s'
+                     % (hr0x, idx, dst, chr(10)))
+
     if op == "SET_WHERE":
         headers = list(resolved_args.get("_headers") or [])
         wcol = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
@@ -5229,7 +5314,12 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         # ★ 日付比較のときだけ、表示用の文字列でなくシリアル値を Basic へ渡す
         #   （resolved["value"] は解釈行と出力シート名のために元の文字列で残してある）。
         value = resolved_args.get("_value_serial", resolved_args["value"])
-        if isinstance(value, str):
+        if isinstance(value, (list, tuple)):
+            # ★「どれか」の一覧は Chr(2) 区切り（値にカンマ・タブが入りうる）。
+            #   Basic 側 RowMatches Case 6 が同じ区切りで**丸ごと一致**を見る。
+            joined = chr(2).join(str(v) for v in value)
+            value_lit = '"' + joined.replace('"', '""').replace(chr(2), '" & Chr(2) & "') + '"'
+        elif isinstance(value, str):
             value_lit = '"' + value.replace('"', '""') + '"'
         else:
             value_lit = f"{float(value):g}"
@@ -6505,6 +6595,59 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{at}行目から {count} 行を削除（残りは順序ごと元のまま）"
 
 
+def check_extract_columns(path: Path, args: dict, header_row: int = 1,
+                           source_book: Path | None = None) -> tuple:
+    """EXTRACT_COLUMNS の事後条件。**選んだ列だけが、値も型も保たれて写った**ことを見る。
+
+    ① 出力シートが在り、見出しが宣言した並びそのもの
+    ② 行数が元と同じ（列を選ぶ操作で行は減らない）
+    ③ 各行・各列の値が、元の対応するセルと一致（型ごと）
+    ④ 元シートは 1 セルも変わっていない（読むだけの操作）
+    """
+    cols = list(args.get("cols") or [])
+    dst = str(args.get("_new_sheet") or "")
+    src_sheet = args.get("_target_sheet")
+    if not cols or not dst:
+        return "warn", "残す列か出力シートが分からないため確かめられていません"
+    with BookView(path) as bv:
+        if dst not in bv.sheetnames:
+            return "fail", f"出力シート『{dst}』がありません"
+        out = bv.sheet(dst)
+        ws = bv.sheet(src_sheet)
+        last, wide = data_extent(ws, header_row)
+        hdrs = [str(ws.cell(row=header_row, column=c).value or "") for c in range(1, wide + 1)]
+        got_head = [str(out.cell(row=1, column=j + 1).value or "") for j in range(len(cols))]
+        if got_head != cols:
+            return "fail", (f"出力の見出しが宣言と違う（宣言: {'・'.join(cols)} / "
+                             f"実際: {'・'.join(got_head)}）")
+        idx = [hdrs.index(c) + 1 for c in cols if c in hdrs]
+        if len(idx) != len(cols):
+            return "fail", "元の表に無い列が宣言されています"
+        rows_src = last - header_row
+        rows_out = max(0, data_extent(out, 1)[0] - 1)
+        if rows_out != rows_src:
+            return "fail", (f"行数が合わない（元 {rows_src} 行 → 出力 {rows_out} 行・"
+                             "列を選ぶ操作で行は減らないはず）")
+        wrong = []
+        for r in range(header_row + 1, last + 1):
+            for j, ci in enumerate(idx):
+                a_v = bv.cell_value(r - header_row + 1, j + 1, dst)
+                b_v = bv.cell_value(r, ci, src_sheet)
+                if a_v != b_v:
+                    wrong.append(f"{r}行目の『{cols[j]}』")
+        if wrong:
+            return "fail", (f"写した値が元と違います（{'、'.join(wrong[:5])}）")
+    if source_book is not None and Path(source_book).exists():
+        with BookView(path) as bv2, BookView(source_book) as bvb:
+            after_rows = _cells_for_shift(bv2, src_sheet, header_row, last, wide)
+            before_rows = _cells_for_shift(bvb, src_sheet, header_row, last, wide)
+        st, info = compare_moved_rows(after_rows, before_rows, "元シート")
+        if st == "broken":
+            return "fail", f"元シートが変わっています（読むだけの操作のはず）── {info}"
+    return "pass", (f"『{'・'.join(cols)}』だけを『{dst}』へ写しました"
+                     f"（{rows_src} 行・値も型もそのまま・元シートは無変更）")
+
+
 def check_set_where(path: Path, args: dict, header_row: int = 1,
                      source_book: Path | None = None) -> tuple:
     """SET_WHERE の事後条件。**当てはまる行だけが変わった**ことを両側から証明する。
@@ -6912,6 +7055,44 @@ def insert_rows_should_have_been_add_row(task: str, resolved: dict,
 _re_bare_number = re.compile(r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:に|へ|と)?\s*(?:し|する|して|に)")
 
 
+def task_names_real_values(task: str, book_meta: dict, sheet: str | None,
+                            col: str, header_row: int = 1) -> list:
+    """依頼文が名指ししている、**その列に実在する値**を出現順に返す（重複は畳む）。
+
+    ★ 2026-08-27（Namakoo「みかんの行とりんごの行だけを抽出して」）: 一段目は
+      `contains "リンゴ"`（片仮名の幻覚）や `eq "みかんとりんご"`（連結）を返していた。
+      どちらも 0 行に当たり、**空の抽出結果が ✓ で出る**ところだった。
+    ★ 値は LLM に作らせない ── 表に在る値のうち、依頼文に現れるものだけを拾う。
+    ★ 部分文字列で取りこぼさない/拾いすぎないために、**長い値から**当てて位置を潰す
+      （「青りんご」と「りんご」が両方在る表で、短い方だけが当たるのを防ぐ）。
+    """
+    path = book_meta.get("path")
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    if not path or col not in headers:
+        return []
+    ci = headers.index(col) + 1
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, _c = data_extent(ws, header_row)
+            values = []
+            for r in range(header_row + 1, last + 1):
+                v = ws.cell(row=r, column=ci).value
+                s = str(v).strip() if v is not None else ""
+                if s and s not in values:
+                    values.append(s)
+    except Exception:
+        return []
+    text = task or ""
+    found = []
+    for v in sorted(values, key=len, reverse=True):
+        i = text.find(v)
+        if i >= 0:
+            found.append((i, v))
+            text = text[:i] + (chr(0) * len(v)) + text[i + len(v):]
+    return [v for _i, v in sorted(found)]
+
+
 def _task_names_a_row(task: str, book_meta: dict, sheet: str | None) -> str | None:
     """依頼文が**表に実在する行の名前**を指しているか。指していればその名前。
 
@@ -7065,6 +7246,15 @@ KEEP_FOR_COLUMN_REQUEST = ("COMPUTE_COLUMN", "LOOKUP_FILL")
 # ★ 条件つきの書き込みを求めているか（比較語があり、かつ書き込む値が引用されている）。
 #   ★ 2 つとも要る: 比較語だけなら EXTRACT（抜き出す）かもしれないし、引用だけなら
 #     SET_COLUMN_VALUE（列を丸ごと）。**両方揃った時だけ**この op を疑う。
+# ★ 「列だけ抜き出す」── 行の抽出（EXTRACT）と区別するのは**「列」という語**だけ。
+#   「〜の列だけ」「必要な列だけ」。抽出の動詞（抜き出す/抽出/取り出す）は EXTRACT と共通。
+_re_extract_cols_ask = re.compile(r"列[^。]{0,8}?(?:だけ|のみ)[^。]{0,8}?(?:抜き出|抽出|取り出|残)")
+
+
+def task_asks_to_extract_columns(task: str) -> bool:
+    return bool(_re_extract_cols_ask.search(task or ""))
+
+
 # ★ 置き換え「『A』を（全て）『B』に」の形。★ 動詞（書き換え/置換/直し…）は見ない ──
 #   並べ始めると並べ忘れた言い方が黙って落ちる。**助詞が意味を運ぶ**（A を … B に）。
 _re_replace_pair = re.compile(
@@ -7365,6 +7555,12 @@ def _extract_predicate(cmp: str, threshold, date_mode: bool = False):
        黙って "140000" に文字列化して『40 を含む』としない ── 型の保存の哲学）。
        単一ブック EXTRACT（check_extract）の挙動もこの線に揃う。"""
     def _match(cell_value) -> bool:
+        if cmp == "in":
+            # ★ 丸ごと一致の集合判定（部分一致にしない ── 「りんご」が「青りんご」に
+            #   当たると、頼んでいない行が黙って混じる）。空欄は一覧に入れない。
+            if cell_value is None or cell_value == "":
+                return False
+            return str(cell_value) in {str(x) for x in (threshold or ())}
         if cmp == "contains":
             return (isinstance(cell_value, str) and threshold is not None
                     and str(threshold) in cell_value)
@@ -7895,6 +8091,7 @@ POSTCONDITIONS = {
     "ADD_ROW": check_add_row, "DELETE_ROWS": check_delete_rows,
     "DELETE_COLUMN": check_delete_column, "SET_CELL_VALUE": check_set_cell_value,
     "SWAP": check_swap, "ADD_COLUMN": check_add_column, "SET_WHERE": check_set_where,
+    "EXTRACT_COLUMNS": check_extract_columns,
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
@@ -7966,7 +8163,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
                    "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE", "SWAP",
-                   "ADD_COLUMN", "SET_WHERE"):
+                   "ADD_COLUMN", "SET_WHERE",
+                   "EXTRACT_COLUMNS"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -10238,6 +10436,15 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
     #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
     #   人が欲しいのは**値**であって書式ではない）。断る側なので横取りして悪くならない。
+    # ★★ 2026-08-27（Namakoo「特定行や特定列の抜き出しができない」）: 列の抽出。
+    #   実測で一段目は OUT_OF_VOCAB（「複数条件の抽出」と誤読）を返していた。
+    if (not _reread_done and task_asks_to_extract_columns(a.task) and len(plan) == 1
+            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB",
+                                                "EXTRACT")):
+        print("（『列抽出』として読み直しました ── 依頼文が「列だけ」を指しています）")
+        plan = [{"op": "EXTRACT_COLUMNS", "args": {}}]
+        _reread_done = True
+
     # ★★ 2026-08-27（Namakoo「置き換えができない」）: 「チェック列の『◎』を全て『合格』に」は
     #   一段目が SET_COLUMN_VALUE（列を丸ごと『合格』に）を返していた ── 空欄の行まで
     #   潰す。機械は引用が 2 つあるので「値が一意に読み取れない」と正しく断っていたが、

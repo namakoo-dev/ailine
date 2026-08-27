@@ -229,6 +229,18 @@ def _make_where_book():
 _make_where_book()
 BM_CELL2 = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額", "在庫"]},
              "header_rows": {"Sheet": 1}, "path": str(_WHERE_BOOK)}
+# --- 名指しの抽出（2026-08-27）── 値も列も、表に在るものだけを機械が拾う ----------
+_add("extract_named_rows", "EXTRACT", {"col": "商品", "cmp": "contains", "value": "リンゴ"},
+     task="りんごの行とみかんの行だけ抽出して", book_meta=BM_CELL)
+_add("extract_named_single_row", "EXTRACT", {"col": "商品", "cmp": "eq", "value": "ミカン"},
+     task="みかんの行だけ抜き出して", book_meta=BM_CELL)
+_add("extract_columns_ok", "EXTRACT_COLUMNS", {"cols": ["在庫"]},
+     task="商品と金額の列だけ抜き出して", book_meta=BM_CELL2)
+_add("extract_columns_all", "EXTRACT_COLUMNS", {},
+     task="商品と金額と在庫の列だけ抜き出して", book_meta=BM_CELL2)
+_add("extract_columns_none", "EXTRACT_COLUMNS", {},
+     task="必要な列だけ抜き出して", book_meta=BM_CELL2)
+
 _add("set_where_ok", "SET_WHERE", {"col": "在庫", "cond_col": "金額", "cmp": "gte"},
      task="金額が40000以上の行の在庫列に「◎」を付けて", book_meta=BM_CELL2)
 _add("set_where_machine_beats_llm_cmp", "SET_WHERE",
