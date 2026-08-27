@@ -155,6 +155,14 @@
   <section class="work">
     <div id="working" class="working">ファイルを選んでください</div>
     <div id="badge" class="badge b-none">まだ実行していません</div>
+    <!-- ★ 2026-08-27（Namakoo「抽出で別シートができた。このシートに操作できないのか」）:
+         本体は最初から複数シートを扱えるのに、画面に選ぶ手段が無かった。 -->
+    <div id="sheetbar" style="display:none;margin:6px 0 2px">
+      <label style="font-size:13px">操作するシート
+        <select id="sheetsel" style="width:auto;padding:2px 6px;font-size:13px;margin-left:6px"></select>
+      </label>
+      <span class="sheetnote" style="margin-left:10px">抽出や縦積みで増えたシートも選べます</span>
+    </div>
     <p class="why" id="why">ファイルを選んで、日本語で頼んでください。</p>
     <div class="sheets">
       <div class="sheet"><h3>くらべる相手
@@ -295,10 +303,30 @@ function drawTable(host, noteEl, d, other){
   if (d.style_error) bits.push("書式を読めませんでした: " + d.style_error);
   noteEl.textContent = bits.join(" ／ ");
 }
-async function loadSheet(path){
+async function loadSheet(path, sheet){
   if (!path) return null;
-  const r = await fetch("/api/sheet?path=" + encodeURIComponent(path));
-  return await r.json();
+  let url = "/api/sheet?path=" + encodeURIComponent(path);
+  if (sheet) url += "&sheet=" + encodeURIComponent(sheet);
+  const r = await fetch(url);
+  const d = await r.json();
+  fillSheetPicker(d);
+  return d;
+}
+// ★ シートの一覧は**読んだ結果に付いてくるもの**をそのまま出す（画面が数え直さない）。
+function fillSheetPicker(d){
+  const sel = $("#sheetsel"), bar = $("#sheetbar");
+  if (!sel || !bar) return;
+  const names = (d && d.sheets) || [];
+  if (names.length < 2){ bar.style.display = "none"; return; }
+  const want = window._sheet || (d && d.sheet) || names[0];
+  if (sel.dataset.names !== JSON.stringify(names)){
+    sel.innerHTML = names.map(n => '<option></option>').join("");
+    names.forEach((n, i) => { sel.options[i].value = n; sel.options[i].textContent = n; });
+    sel.dataset.names = JSON.stringify(names);
+  }
+  sel.value = names.includes(want) ? want : names[0];
+  window._sheet = sel.value;
+  bar.style.display = "";
 }
 function setWorking(file, sheet, note){
   // ★ 2026-08-27（Namakoo「今どのシートに対して操作を行っているのか分かりにくい」）:
@@ -319,7 +347,7 @@ function redrawBasis(){
   if (lastAfter) drawTable($("#after"), $("#afternote"), lastAfter, beforeCells);
 }
 async function showBefore(){
-  const d = await loadSheet(bookPath());
+  const d = await loadSheet(bookPath(), window._sheet);
   window._origSheet = d; window._prevSheet = null; window._target = null; lastAfter = null;
   origCells = (d && d.cells) || null;
   beforeCells = origCells;
@@ -391,7 +419,7 @@ function show(res){
   $("#draftnote").textContent = (shown && shown !== bookPath())
     ? ("下書き " + baseName(shown) + " に積み上げています（原本は無変更）")
     : "";
-  loadSheet(shown).then(d => {
+  loadSheet(shown, window._sheet).then(d => {
     lastAfter = d;
     drawTable($("#after"), $("#afternote"), d, beforeCells);
     if (d && !d.error && shown !== bookPath())
@@ -404,7 +432,9 @@ async function call(path, body, msg){
   if (!picked){ setBadge("not_applied", "左の一覧からファイルを選んでください。"); return; }
   busy(true, msg);
   try{
-    const payload = Object.assign({book: bookPath()}, body);
+    // ★ 選んだシートは**そのまま**本体へ渡す（画面は既定を作らない ── 決める場所を
+    //   2 つにしない。空なら渡さず、本体の決め方［依頼文/1枚目］がそのまま生きる）。
+    const payload = Object.assign({book: bookPath(), sheet: window._sheet || ""}, body);
     if (path === "/api/run" && !body.overwrite) lastRunBody = body;
     const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
                                   body: JSON.stringify(payload)});
@@ -437,7 +467,17 @@ $("#aliaslist").onclick = async () => {
   const r = await fetch("/api/aliases");
   $("#aliaspre").textContent = (await r.json()).text || "";
 };
-$("#aliasadd").onclick = async () => {
+// ★ シートを切り替えたら、前後の表を**そのシートで**読み直す（表示だけ・判定はしない）。
+$("#sheetsel").onchange = async () => {
+  window._sheet = $("#sheetsel").value;
+  const d = await loadSheet(lastShown || bookPath(), window._sheet);
+  if (d && !d.error){ drawTable($("#after"), $("#afternote"), d, null); lastAfter = d; }
+  const o = await loadSheet(bookPath(), window._sheet);
+  if (o && !o.error){ window._origSheet = o; redrawBasis(); }
+  setWorking(baseName(bookPath()), window._sheet, "");
+};
+
+$("#aliasadd").onclick = async () => {$("#aliasadd").onclick = async () => {
   const r = await fetch("/api/alias_add", {method:"POST",
     headers:{"Content-Type":"application/json"},
     body: JSON.stringify({book: bookPath() || "x", phrase: $("#aliasphrase").value,

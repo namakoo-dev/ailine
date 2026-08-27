@@ -1123,6 +1123,41 @@ def _declared_new_column_letter(op: str, resolved: dict, book_meta: dict) -> str
     return get_column_letter(new_col_idx + 1)
 
 
+def resolve_new_column_placement(op: str, resolved: dict, book_meta: dict,
+                                  task: str, sheet: str | None) -> dict | None:
+    """新しい列を作る op に、依頼文の**位置の言い回し**を効かせる（横断層）。
+
+    ★ Namakoo「『〜の右側に』『〜と〜の間に』などは頻出だから全ての操作で有効に」。
+      そのとおりで、位置は op の性質でなく**依頼文の性質**。op ごとに if を書くと、
+      op が増えるたびに配線が要る（今日 4 回踏んだ形）。宣言を読んで 1 箇所で解く。
+    ★ 返り値: {"_move_new_col_to": 0起点の目的地, "_new_col_from": 0起点の作られる場所,
+               "_at_basis": 根拠の文}。動かす必要が無ければ None。
+    ★ 対象は「1 本の新しい列を右端に作る」と宣言した op だけ:
+      - ADD_COLUMN は自分で位置を決める（col_index_key を持つ）ので対象外
+      - SPLIT_CELL は 1 回で N 本作る（cols_key）ので対象外 ── 複数本の移動は
+        まだ測っていない。**測っていないものを黙って動かさない。**
+    """
+    wt = OP_WRITE_TARGET.get(op)
+    if not wt or WRITE_NEW_COLUMN not in wt.writes:
+        return None
+    if wt.col_index_key or wt.cols_key:
+        return None
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    if not headers:
+        return None
+    # 既存列への書き込みなら新しい列は生まれない（位置の話は起きない）
+    if wt.col_key and str(resolved.get(wt.col_key) or "") in headers:
+        return None
+    at, note = resolve_col_anchor(task, headers)
+    if at is None:
+        return None
+    src0 = len(headers)          # 0 起点・新規列は既存見出しの直後（右端）
+    to0 = int(at) - 1
+    if to0 == src0:
+        return None              # もともとそこに出来る（動かす必要が無い）
+    return {"_move_new_col_to": to0, "_new_col_from": src0, "_at_basis": note}
+
+
 def _letterlike_header_columns(book_meta: dict | None) -> set:
     """英字だけの**見出し名**（URL / ID / AB …）を、列文字として読んだ時の列番号の集合。
 
@@ -4570,6 +4605,13 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     if (fab := fabricated_subject_refusal(op, resolved, book_meta, task, first_sheet)):
         return False, resolved, inferred, fab
 
+    # ★★ 2026-08-27（Namakoo「『〜の右側に』『〜と〜の間に』は頻出だから全ての操作で」）:
+    #   位置の言い回しは op の性質ではなく**依頼文の性質**なので、op ごとに配線しない。
+    #   ここ（全経路が通る唯一の場所）で 1 回だけ解いて、宣言（WRITE_NEW_COLUMN）を持つ
+    #   op すべてに効かせる。codegen 側は wrap() が 1 箇所で MoveColumnTo を足す。
+    if (place := resolve_new_column_placement(op, resolved, book_meta, task, first_sheet)):
+        resolved.update(place)
+
     return True, resolved, inferred, None
 
 
@@ -4888,6 +4930,11 @@ def format_confirmation_line(op: str, resolved_args: dict, inferred: set,
         if key in sources:
             tag += f"（{sources[key]}）"
         parts.append(f"{label}:{shown}{tag}")
+    # ★★ 2026-08-27: 位置の言い回しを解いた回は、**どの op でも**根拠を出す。
+    #   op ごとの _CONFIRM_FIELDS に足して回ると、足し忘れた op が黙って位置を動かす
+    #   （見えない変更が一番こわい）。横断層で解いたものは横断層で見せる。
+    if resolved_args.get("_at_basis") and not any(p.startswith("入れる位置:") for p in parts):
+        parts.append(f"入れる位置:{resolved_args['_at_basis']}")
     return "解釈: " + " ".join(parts)
 
 
@@ -4945,6 +4992,18 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
     hr0 = header_row - 1   # Basic 0起点の見出し行
 
     def wrap(body: str) -> str:
+        # ★★ 2026-08-27（Namakoo「位置の言い回しは頻出だから全ての操作で有効に」）:
+        #   新しい列を作る op は、既定でデータの**右端**に作る。依頼文が位置を言っていて
+        #   機械がそれを解けたなら、作った**あとで動かす**（MoveColumnTo）。
+        #   ★ op ごとに codegen を書き換えない ── ここ 1 箇所で、宣言（WRITE_NEW_COLUMN）
+        #     を持つ op すべてに同じ手が付く。op が増えても配線が要らない。
+        #   ★ 実測（bench/swap_formula_spike_RESULTS.md）: insertByIndex も moveRange も
+        #     参照を自動で付け替えるので、動かしても式は壊れない。
+        move_to = resolved_args.get("_move_new_col_to")
+        if move_to is not None:
+            src0 = int(resolved_args.get("_new_col_from", 0))
+            body = body + ('    Call MoveColumnTo(oDoc, %d, %d)%s'
+                            % (src0, int(move_to), chr(10)))
         return _wrap_basic_for_sheet(body, book_meta, first_sheet)
 
     if op == "SORT":
@@ -7249,6 +7308,35 @@ KEEP_FOR_COLUMN_REQUEST = ("COMPUTE_COLUMN", "LOOKUP_FILL")
 # ★ 「列だけ抜き出す」── 行の抽出（EXTRACT）と区別するのは**「列」という語**だけ。
 #   「〜の列だけ」「必要な列だけ」。抽出の動詞（抜き出す/抽出/取り出す）は EXTRACT と共通。
 _re_extract_cols_ask = re.compile(r"列[^。]{0,8}?(?:だけ|のみ)[^。]{0,8}?(?:抜き出|抽出|取り出|残)")
+
+
+_re_extract_ask = re.compile(r"(?:抜き出|抽出|取り出)")
+
+
+def resolve_named_extraction(book_meta: dict, sheet: str | None, task: str,
+                              header_row: int = 1) -> tuple:
+    """依頼文が「どの列の、どの値の行を」抜き出したいのかを実表から決める。
+       決まらなければ (None, None)。
+
+    ★ 2026-08-27（実測）: 同じ依頼文で、一段目が EXTRACT を返す回と OUT_OF_VOCAB に
+      落ちる回があった（2/3 と 1/3）。落ちた回は「もしかして: 抽出？」の確認に回り、
+      **聞かれる回と聞かれない回が偶然で決まる**形になっていた。
+      ★ 機械が列も値も解けているなら、迷う理由が無い（実表を見た側が確かなことを知って
+        いる）── 他の読み直しと同じ線を引く。
+    ★ 列は「名指しされた値が一番多く在る列」。同数で並んだら**決めない**（推測しない）。
+    """
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    best = []
+    for col in headers:
+        vals = task_names_real_values(task, book_meta, sheet, col, header_row)
+        if vals:
+            best.append((len(vals), col, vals))
+    if not best:
+        return None, None
+    best.sort(key=lambda x: -x[0])
+    if len(best) > 1 and best[0][0] == best[1][0]:
+        return None, None
+    return best[0][1], best[0][2]
 
 
 def task_asks_to_extract_columns(task: str) -> bool:
@@ -10436,6 +10524,20 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
     #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
     #   人が欲しいのは**値**であって書式ではない）。断る側なので横取りして悪くならない。
+    # ★★ 2026-08-27（実測・同じ依頼で聞かれたり聞かれなかったり）: 名指しの行の抽出。
+    #   一段目は 2/3 で EXTRACT、1/3 で OUT_OF_VOCAB（→「もしかして」の確認）だった。
+    #   ★ 機械が列も値も解けているなら迷う理由が無い ── 他の読み直しと同じ線。
+    if (not _reread_done and _re_extract_ask.search(a.task or "")
+            and not task_asks_to_extract_columns(a.task) and len(plan) == 1
+            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB")):
+        _xcol, _xvals = resolve_named_extraction(book_meta, _sheet_h, a.task)
+        if _xcol and _xvals:
+            print(f"（『抽出』として読み直しました ── 『{_xcol}』が"
+                   f"{'・'.join(_xvals)} の行を抜き出します）")
+            plan = [{"op": "EXTRACT", "args": {"col": _xcol, "cmp": "eq",
+                                                "value": _xvals[0]}}]
+            _reread_done = True
+
     # ★★ 2026-08-27（Namakoo「特定行や特定列の抜き出しができない」）: 列の抽出。
     #   実測で一段目は OUT_OF_VOCAB（「複数条件の抽出」と誤読）を返していた。
     if (not _reread_done and task_asks_to_extract_columns(a.task) and len(plan) == 1
@@ -10729,9 +10831,13 @@ def _maybe_warn_write_precondition(op: str, before: dict, after: dict, resolved:
     write_target = OP_WRITE_TARGET.get(op)
     if not write_target:
         return None
-    return check_write_preconditions_detail(write_target.writes, before, after,
-                                             cell_ref=_cell_ref, fmt_value=_fmt_cell_value,
-                                             own_output_headers=_own_output_headers(op, resolved))
+    return check_write_preconditions_detail(
+        write_target.writes, before, after,
+        cell_ref=_cell_ref, fmt_value=_fmt_cell_value,
+        own_output_headers=_own_output_headers(op, resolved),
+        # ★ この回、新しい列を依頼文の位置へ動かしたなら、右側の列は 1 つずつずれる
+        #   ── 位置で比べる前提はその回だけ使えない（宣言でなく引数から分かる事実）。
+        positions_shifted=bool((resolved or {}).get("_move_new_col_to") is not None))
 
 
 def _maybe_own_prior_output_notice(op: str, before: dict, after: dict, resolved: dict | None = None) -> list:

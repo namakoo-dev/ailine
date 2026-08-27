@@ -297,9 +297,14 @@ PRECONDITIONS = {
 NO_PRECONDITION = frozenset({"existing_column", "remove"})
 
 
+# ★ 位置で比べる前提（列を**番号で**突き合わせるもの）。位置がずれる回は使えない。
+POSITION_BASED = frozenset({"new_column"})
+
+
 def check_write_preconditions_detail(writes, before: dict, after: dict, *,
                                      cell_ref: Callable, fmt_value: Callable,
-                                     own_output_headers=None):
+                                     own_output_headers=None,
+                                     positions_shifted: bool = False):
     """破れた前提を **(種類, 文言)** で返す（破れていなければ None）。
 
     ★ 単位G が種類を要る理由: 「前提が破れた」だけでは、どの宣言が嘘をついたのか分からない。
@@ -318,8 +323,11 @@ def check_write_preconditions_detail(writes, before: dict, after: dict, *,
     #   ★ 外した分の保証: ADD_COLUMN は verify_dsl_args が「同名の列が既に在る」を先に断り、
     #     check_add_column が「挿した位置・空であること・他の列の不変」を証明する。
     kinds = list(writes or ())
-    if "row_shift" in kinds and "new_column" in kinds:
-        kinds = [k for k in kinds if k != "new_column"]
+    #   ★ 2026-08-27（2 度目・実測）: 位置がずれるのは**宣言**からだけでなく、
+    #     その回の引数からも起きる（依頼文の位置指定で新しい列を動かした回）。
+    #     宣言（row_shift + new_column）と実測（positions_shifted）の**どちらでも**外す。
+    if positions_shifted or ("row_shift" in kinds and "new_column" in kinds):
+        kinds = [k for k in kinds if k not in POSITION_BASED]
     for kind in kinds:
         check = PRECONDITIONS.get(kind)
         if check is None:

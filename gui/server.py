@@ -225,6 +225,19 @@ def _read_styles(path: Path, sheet: str, rows: int, cols: int) -> dict:
     return out
 
 
+def _sheet_args(req: dict) -> list:
+    """画面で選んだシートを、そのまま `--sheet` として本体へ渡す。
+
+    ★★ 2026-08-27（Namakoo「抽出で別シートができた。このシートに対して操作できないのか」）:
+      本体は最初から複数シートを扱える（--sheet・依頼文中のシート名）のに、**画面に
+      選ぶ手段が無かった**。抽出や縦積みが作ったシートに触れないので、道具として片道だった。
+    ★ ここで既定を作らない: 空なら渡さない（本体側の決め方＝依頼文/1枚目 をそのまま生かす）。
+      画面が「たぶんこのシート」を足すと、決める場所が 2 つになる。
+    """
+    name = str(req.get("sheet") or "").strip()
+    return ["--sheet", name] if name else []
+
+
 def _cell_text(v) -> str:
     if v is None:
         return ""
@@ -368,6 +381,7 @@ class Handler(BaseHTTPRequestHandler):
                             rc, out, payload = 1, f"× 反映できませんでした: {e}", None
                     else:
                         _extra = ["--overwrite"] if req.get("overwrite") else []
+                        _extra += _sheet_args(req)
                         rc, out, payload = _ailine(["run", book, task, "--json"] + _extra,
                                                     answer=req.get("answer"))
                         _DRAFTS.pop(book, None)
@@ -425,6 +439,7 @@ class Handler(BaseHTTPRequestHandler):
                     #     同じ依頼を繰り返したら、そう言う（黙って 2 つ目を作らない）。
                     _DRAFT_LAST_TASK[str(draft)] = task
                     _extra = ["--overwrite"] if req.get("overwrite") else []
+                    _extra += _sheet_args(req)
                     rc, out, payload = _ailine(["run", str(draft), task, "--json"] + _extra,
                                                 answer=req.get("answer"))
                     if _note:

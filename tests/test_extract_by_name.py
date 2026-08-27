@@ -174,3 +174,21 @@ def test_wrong_headers_fail(tmp_path):
                    [["りんご", 700], ["みかん", 300], ["ぶどう", 900], ["青りんご", 100]])
     status, reason = ailine.check_extract_columns(p, dict(_XC))
     assert status == "fail" and "見出しが宣言と違う" in reason, reason
+
+
+def test_the_column_is_chosen_by_where_the_named_values_live(tmp_path):
+    """★ 実測（同じ依頼文で聞かれる回と聞かれない回があった）: 一段目は 2/3 で EXTRACT、
+       1/3 で OUT_OF_VOCAB → 「もしかして」の確認に回っていた。
+       **聞かれるかどうかが偶然で決まる**のは、道具の性格として悪い。
+       ★ 機械が列も値も解けているなら迷う理由が無い（実表を見た側が確かなことを知っている）。"""
+    meta = _meta(_book(tmp_path))
+    col, vals = ailine.resolve_named_extraction(meta, "売上", "みかんの行とりんごの行だけを抽出して")
+    assert (col, vals) == ("商品", ["みかん", "りんご"]), (col, vals)
+
+
+def test_it_refuses_to_choose_when_two_columns_tie(tmp_path):
+    """★ 同数で並んだら**決めない**（推測で別の列を抜き出すのが一番こわい）。"""
+    rows = [["商品", "担当"], ["りんご", "みかん"], ["みかん", "りんご"]]
+    meta = _meta(_book(tmp_path, rows), headers=("商品", "担当"))
+    col, vals = ailine.resolve_named_extraction(meta, "売上", "みかんとりんごを抜き出して")
+    assert (col, vals) == (None, None), (col, vals)

@@ -721,6 +721,36 @@ Function RowMatches(oCell As Object, cmpCode As Integer, cmpValue As Variant) As
 End Function
 
 
+' 1 本の列を、指定した位置へ動かす（2026-08-27 追加）。fromIdx/toIdx は 0 起点。
+' ★★ なぜ在るか: 位置の言い回し（「原価の右に」「AとBの間に」）は**どの操作でも**出る
+'   のに、位置を扱えるのが列追加だけだった。計算列・転記・分割が作る新しい列は右端固定。
+'   ★ op ごとに codegen を書き換えると、op が増えるたびに配線が要る（今日 4 回踏んだ形）。
+'   代わりに「作ったあとで動かす」1 本の手を全部の op が共有する。
+' ★ 実測（bench/swap_formula_spike_RESULTS.md）: insertByIndex も moveRange も
+'   **参照を自動で付け替える**ので、式は壊れない。値の書き写しでは絶対にやらない。
+' ★ 変数名に oR を使わないこと（予約語 Or と衝突してモジュールごと黙って死ぬ）。
+Sub MoveColumnTo(oDoc As Object, fromIdx As Integer, toIdx As Integer)
+    Dim oSheet As Object, oCur As Object, oRng As Object, oDst As Object
+    Dim src As Integer, lastRow As Long
+    If fromIdx = toIdx Then Exit Sub
+    oSheet = oDoc.Sheets.getByIndex(0)
+    oCur = oSheet.createCursor()
+    oCur.gotoEndOfUsedArea(False)
+    lastRow = oCur.RangeAddress.EndRow
+    ' ① 目的地に空きを作る（ここで右側の列は 1 つずつ右へずれる ── 参照は自動追随）
+    oSheet.Columns.insertByIndex(toIdx, 1)
+    ' ② 挿入で元の列がずれたか（目的地より右に在ったならずれる）
+    src = fromIdx
+    If fromIdx >= toIdx Then src = fromIdx + 1
+    ' ③ 中身を空きへ移す（moveRange も参照を付け替える）
+    oRng = oSheet.getCellRangeByPosition(src, 0, src, lastRow).RangeAddress
+    oDst = oSheet.getCellByPosition(toIdx, 0).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    ' ④ 空になった元の列を詰める
+    oSheet.Columns.removeByIndex(src, 1)
+End Sub
+
+
 ' 指定した列だけを新しいシートへ抜き出す（2026-08-27 追加）。
 ' ★ Namakoo「特定行や特定列の抜き出しができない」── 行は ExtractRows が持っていたが、
 '   列を選ぶ手段が 1 つも無かった。
