@@ -24,6 +24,18 @@ SERVER = (GUI / "server.py").read_text(encoding="utf-8")
 sys.path.insert(0, str(REPO / "src"))
 
 
+def _run_handler() -> str:
+    """`/api/run` の処理ブロックだけを取り出す。
+
+    ★ 実測で 2 度踏んだ: 固定の文字数で窓を切っていたので、コードが伸びるたびに
+      番人が**中身を見なくなって**赤くなった（あるいは黙って通した）。
+      ★ 窓は**構造で**切る ── 次の `elif u.path ==` までを 1 つの塊として読む。
+    """
+    i = SERVER.index('if u.path == "/api/run":')
+    j = SERVER.index('elif u.path ==', i)
+    return _code_only(SERVER[i:j])
+
+
 def _code_only(py: str) -> str:
     """Python の行コメントを落とす。
 
@@ -141,8 +153,7 @@ def test_a_draft_run_saves_on_top_and_undo_steps_back():
       ── 直し方は「やり直さない」ではなく「**戻せる**」。
       やり直したい時だけ「原本からやり直す」。
     """
-    i = SERVER.index('if u.path == "/api/run":')
-    block = _code_only(SERVER[i:i + 4200])
+    block = _run_handler()
     assert 'not bool(req.get("restart"))' in block, "既定が積み上げでない"
     assert "shutil.copy2(book, draft)" in block, "やり直す経路が無い"
     js = _script(HTML, code_only=True)
@@ -328,8 +339,7 @@ def test_before_and_after_come_from_the_same_file():
 
     ★ 前は**実行の直前にサーバが読む**（画面が後から取りに行くと、もう変わっている）。
     """
-    i = SERVER.index('if u.path == "/api/run":')
-    block = _code_only(SERVER[i:i + 4200])
+    block = _run_handler()
     assert block.count("_read_sheet(") >= 2, "実行の直前に『前』を読んでいない"
     assert '"before"' in block and '"target"' in block, "前と対象を返していない"
     js = _script(HTML, code_only=True)
@@ -384,8 +394,24 @@ def test_continuing_is_disclosed():
       文言が設計の言い換えになっているので、設計が動くたびにここも動く ──
       逆に言えば、**ここが古いままなら画面が嘘をついている**。
     """
-    i = SERVER.index('if u.path == "/api/run":')
-    block = SERVER[i:i + 4200]
+    block = _run_handler()
     assert "続けて保存しました" in block, "積み上げたことを言っていない"
     assert "もとに戻す" in block, "戻せることを言っていない"
     assert "_cont" in block
+
+
+def test_applying_to_the_original_copies_the_draft_instead_of_re_asking():
+    """★ 2026-08-27（Namakoo「基本的に操作は下書きに対して行いたい」）。
+
+    「原本に反映」は**原本に対して LLM を走らせ直して**いた ── 同じ依頼をもう一度
+    翻訳するので、下書きで確かめた結果と**別の物ができうる**
+    （LLM は揺れる。今日それで何度も踏んだ）。
+    ★ 反映は**下書きを清書する**こと。翻訳も適用もやり直さない ──
+      **人が目で確かめた物が、そのまま原本になる**。
+    ★ これは「✓ の意味」と同じ線の話: 確かめた物と渡す物が違ってはいけない。
+    """
+    block = _run_handler()
+    assert "shutil.copy2(_draft, book)" in block, "下書きを清書していない（翻訳し直している）"
+    assert "_DRAFTS.get(book)" in block
+    js = _script(HTML, code_only=True)
+    assert 'task: ""' in js, "画面が反映で依頼文を送っている（頼み直しになる）"

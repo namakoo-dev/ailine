@@ -343,9 +343,28 @@ class Handler(BaseHTTPRequestHandler):
                 #   ★ ここは段取りであって判定ではない（verdict は本体の値をそのまま運ぶ）。
                 task = req.get("task") or ""
                 if not req.get("copy"):
+                    # ★★ 2026-08-27（Namakoo「基本的に操作は下書きに対して行いたい」）:
+                    #   「原本に反映」は**原本に対して LLM を走らせ直して**いた ──
+                    #   同じ依頼をもう一度翻訳するので、下書きで確かめた結果と
+                    #   **別の物ができうる**（LLM は揺れる。今日それで何度も踏んだ）。
+                    #   ★ 反映は**下書きを清書する**こと。翻訳も適用もやり直さない。
+                    #     人が目で確かめた物が、そのまま原本になる。
+                    _draft = _DRAFTS.get(book)
                     _before = _read_sheet(Path(book), None)
-                    rc, out, payload = _ailine(["run", book, task, "--json"])
-                    _DRAFTS.pop(book, None)     # 原本に反映したら下書きの役目は終わり
+                    if _draft and Path(_draft).exists() and not task.strip():
+                        try:
+                            shutil.copy2(_draft, book)
+                            _DRAFTS.pop(book, None)
+                            _DRAFT_LAST_TASK.pop(_draft, None)
+                            out = (f"✓ 下書き {Path(_draft).name} の内容を原本 "
+                                    f"{Path(book).name} に反映しました"
+                                    "（下書きはそのまま残しています）")
+                            rc, payload = 0, {"verdict": "not_applied"}
+                        except OSError as e:
+                            rc, out, payload = 1, f"× 反映できませんでした: {e}", None
+                    else:
+                        rc, out, payload = _ailine(["run", book, task, "--json"])
+                        _DRAFTS.pop(book, None)
                     self._json(200, {"rc": rc, "text": out, "json": payload,
                                       "before": _before, "target": book})
                     return

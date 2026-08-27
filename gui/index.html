@@ -102,10 +102,12 @@
       <div class="row">
         <button id="runcopy" class="primary">下書きで実行</button>
         <button id="runrestart">原本からやり直す</button>
-        <button id="run">原本に反映</button>
+        <button id="run">下書きを原本に反映</button>
       </div>
       <div class="note"><b>下書きで実行</b>は前の結果に<b>続けて保存</b>します（原本は触りません）。
-        1 つ戻すなら <b>もとに戻す</b>、最初から試すなら <b>原本からやり直す</b>。</div>
+        1 つ戻すなら <b>もとに戻す</b>、最初から試すなら <b>原本からやり直す</b>。<br>
+        納得したら <b>下書きを原本に反映</b> ── <b>目で見た下書きがそのまま原本になります</b>
+        （もう一度 AI に頼み直しません）。</div>
       <div class="note" id="draftnote"></div>
       <div class="row"><button id="undo">もとに戻す</button>
         <button id="draftreset">下書きを捨てる</button></div>
@@ -481,7 +483,9 @@ $("#mstack").onclick   = () => multi("stack");
 $("#mverify").onclick  = () => multi("verify");
 $("#mextract").onclick = () => multi("extract", {task: $("#mtask").value});
 
-$("#run").onclick     = () => call("/api/run",  {task: $("#task").value, copy:false}, "実行中…");
+// ★ 反映は**下書きを清書する**こと（翻訳も適用もやり直さない）。
+//   依頼文を空にして送ることで「今の下書きをそのまま原本へ」を意味させる。
+$("#run").onclick     = () => call("/api/run",  {task: "", copy:false}, "原本に反映しています…");
 $("#runcopy").onclick = () => call("/api/run",  {task: $("#task").value, copy:true},  "下書きで実行中…");
 $("#runrestart").onclick = () => call("/api/run", {task: $("#task").value, copy:true, restart:true}, "原本からやり直しています…");
 $("#undo").onclick    = () => call("/api/undo", {}, "もとに戻しています…");
