@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.1.2](https://github.com/namakoo-dev/ailine/compare/v0.1.1...v0.1.2) - 2026-08-27
+
 ## [v0.1.1](https://github.com/namakoo-dev/ailine/compare/v0.1.0...v0.1.1) - 2026-08-24
 
 盲検のレビュー（役割を分けた 4 者に、過去の点数も直した箇所も渡さずに投げた）で出た
