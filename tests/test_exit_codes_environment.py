@@ -89,7 +89,8 @@ def test_verification_failure_stays_exit_1(tmp_path, monkeypatch, capsys):
 
 @needs_impl
 def test_readme_has_one_exit_code_table():
-    """③: 終了コードの意味が README の 1 つの表に集まっている（散らばった記述の集約）。"""
-    t = (REPO / "README.md").read_text(encoding="utf-8")
+    """③: 終了コードの意味が docs/ENGINEERING.md の 1 つの表に集まっている。
+       ★ 2026-08-27 に提出用 README を新設した際、表ごとこちらへ移した。"""
+    t = (REPO / "docs" / "ENGINEERING.md").read_text(encoding="utf-8")
     for code in ("1", "3", "4", "5", "6", "7", "8", "9"):
         assert re.search(rf"\|\s*{code}\s*\|", t), f"終了コード表に {code} の行が無い"

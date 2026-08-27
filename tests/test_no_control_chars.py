@@ -19,7 +19,10 @@ CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def _targets():
-    for pattern in ("*.md", "src/**/*.py", "src/**/*.bas", "tests/**/*.py", "bench/**/*.py"):
+    # ★ 2026-08-27: docs/ を足した。README を docs/ENGINEERING.md へ移した瞬間、
+    #   この番人の走査から外れていた ── 「在るのに、その事故の形では鳴らない」。
+    for pattern in ("*.md", "docs/**/*.md", "gui/*.html", "src/**/*.py",
+                     "src/**/*.bas", "tests/**/*.py", "bench/**/*.py"):
         for f in REPO.glob(pattern):
             if ".git" in f.parts or "__pycache__" in f.parts:
                 continue
@@ -70,15 +73,27 @@ def test_line_endings_are_not_rewritten():
        番人に変異試験が足りていなかった ── 両方向を見る。
        縛るのは「変えたこと」だけ（repo 全体の統一はしない）。"""
     import subprocess
+    # ★ 2026-08-27: 段階済みの変更も見る（git mv はその場で段階されるため、
+    #   --name-only だけだと改名してから改行を潰した形がすり抜ける）。
     changed = subprocess.run(["git", "diff", "--name-only"],
                               cwd=REPO, capture_output=True, text=True).stdout.split()
+    changed += subprocess.run(["git", "diff", "--cached", "--name-only"],
+                               cwd=REPO, capture_output=True, text=True).stdout.split()
     offenders = []
-    for name in changed:
+    for name in sorted(set(changed)):
         f = REPO / name
         if not f.exists():
             continue
-        head = subprocess.run(["git", "show", "HEAD:" + name],
-                               cwd=REPO, capture_output=True).stdout
+        # ★ 改名した直後は HEAD にその名前が無い ── 空を 0 件と数えると
+        #   「改行が変わった」と誤報する。段階（index）を下がりの基準にする。
+        head = None
+        for ref in ("HEAD:" + name, ":" + name):
+            r = subprocess.run(["git", "show", ref], cwd=REPO, capture_output=True)
+            if r.returncode == 0:
+                head = r.stdout
+                break
+        if head is None:
+            continue          # git がまだ知らない新規ファイル（比べる先が無い）
         head_crlf = head.count(CRLF_BYTES)
         now_crlf = f.read_bytes().count(CRLF_BYTES)
         if (head_crlf == 0) != (now_crlf == 0):

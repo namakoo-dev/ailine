@@ -13,3 +13,7 @@ dist/
 
 # 挙動の写真（scripts/behavior_snapshot.py）── 手元の作業用で共有しない
 .ailine_snapshots/
+
+# LibreOffice のロック / GUI が作る下書き（作業成果物・共有しない）
+.~lock.*#
+*（下書き）.xlsx

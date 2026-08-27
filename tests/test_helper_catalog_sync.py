@@ -17,7 +17,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPERS_BAS = REPO_ROOT / "src" / "ailine" / "helpers" / "AiLineHelpers.bas"
-README = REPO_ROOT / "README.md"
+# ★ 2026-08-27: 提出用 README を新設し、ヘルパ表を含む技術詳細は docs/ENGINEERING.md へ
+#   移した。番人の見る先も一緒に移す（見る先を移し忘れると「在るのに鳴らない」になる）。
+README = REPO_ROOT / "docs" / "ENGINEERING.md"
 
 import sys
 sys.path.insert(0, str(REPO_ROOT / "src"))
