@@ -349,3 +349,79 @@ def test_plain_row_numbers_are_left_alone(tmp_path):
         "INSERT_ROWS", {"at": 3, "count": 1}, meta, task="3行目に1行挿入して")
     assert ok, err
     assert resolved["at"] == 3 and "_at_basis" not in resolved, resolved
+
+
+# --- ⑩ 表の途中に空行があっても壊れない（Namakoo が実測・今日 3 箇所目）-------------------
+#
+# ★ `_scan_last_row` は 1 列目を上から見て**最初の空で止まる**。下書きに空行が 1 本
+#   あるだけで、その下が全部消えていた:
+#     ・位置の解決が「『みかん』が見つかりません」になり、黙って LLM の行番号へ落ちた
+#     ・事後条件が「検証対象が 0 件」になった
+# ★ 3 箇所で同じ穴を開けたので、**器官を 1 つにした**（data_extent）。
+
+def _gappy(tmp_path):
+    p = _book(tmp_path, [["商品", "売上", "原価"], [None, None, None],
+                          ["りんご", 1200, 700], ["みかん", 800, 300], ["ぶどう", 1500, 900]],
+               name="gappy.xlsx")
+    return p, {"sheets": ["売上"], "headers": {"売上": ["商品", "売上", "原価"]},
+                "header_rows": {"売上": 1}, "path": str(p)}
+
+
+def test_the_extent_organ_sees_past_a_blank_row(tmp_path):
+    p, _m = _gappy(tmp_path)
+    ws = openpyxl.load_workbook(p)["売上"]
+    assert ailine._scan_last_row(ws, header_row=1) == 1, "前提: 走査は 1 行で止まる"
+    last, cols = ailine.data_extent(ws, header_row=1)
+    assert (last, cols) == (5, 3), (last, cols)
+
+
+@pytest.mark.parametrize("task,expect_at", [
+    ("みかんの下に梨を追加して", 5),
+    ("みかんの下に新しい行を挿入して", 5),
+    ("りんごの行を削除して", 3),
+])
+def test_positions_resolve_past_a_blank_row(tmp_path, task, expect_at):
+    _p, meta = _gappy(tmp_path)
+    at, note = ailine.resolve_row_anchor(task, meta, "売上")
+    assert at == expect_at, f"{task} → {at} / {note}"
+
+
+def test_a_row_named_by_its_content(tmp_path):
+    """★「りんごの行を削除して」── 人は行を**中身**で指す。"""
+    _p, meta = _gappy(tmp_path)
+    at, note = ailine.resolve_row_anchor("りんごの行を削除して", meta, "売上")
+    assert at == 3 and "『りんご』の行" in note, note
+
+
+def test_a_column_deletion_is_not_mistaken_for_a_row(tmp_path):
+    """誤爆防止: 「金額の列を削除して」を行の指定と読まない。"""
+    _p, meta = _gappy(tmp_path)
+    assert ailine.resolve_row_anchor("原価の列を削除して", meta, "売上") == (None, None)
+
+
+def test_postconditions_do_not_report_zero_targets_on_a_gappy_sheet(tmp_path):
+    """★ 事後条件も同じ器官を通る（「検証対象が 0 件」で止まらない）。"""
+    before, _m = _gappy(tmp_path)
+    after = _book(tmp_path, [["商品", "売上", "原価"], [None, None, None],
+                              ["りんご", 1200, 700], ["みかん", 800, 300],
+                              ["梨", 600, 300], ["ぶどう", 1500, 900]], name="after.xlsx")
+    status, reason = ailine.check_add_row(
+        after, {"at": 5, "values": {"商品": "梨", "売上": 600, "原価": 300}},
+        source_book=before)
+    assert status == "pass", reason
+
+
+@pytest.mark.parametrize("task", [
+    "2行目の前に1行挿入して",
+    "3行目に1行挿入して",
+    "5行目を削除して",
+])
+def test_row_numbers_are_not_content_anchors(tmp_path, task):
+    """★ 2026-08-27（自分で入れた誤爆・既存の検体が捕まえた）。
+
+    「**2行目の前に**1行挿入して」の「2行目」を中身の名前として探し、見つからず
+    断っていた。**行番号は名前ではない** ── 数字の指定はそのまま通す。
+    ★ 相対の言い回しを足すと、絶対の言い回しを壊しうる。両方を同じ試験で見張る。
+    """
+    _p, meta = _gappy(tmp_path)
+    assert ailine.resolve_row_anchor(task, meta, "売上") == (None, None), task

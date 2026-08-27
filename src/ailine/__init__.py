@@ -3683,6 +3683,11 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         _sheet_i = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
         _hr_i = int((book_meta.get("header_rows") or {}).get(_sheet_i, 1) or 1)
         _at_i, _note_i = resolve_row_anchor(task, book_meta, _sheet_i, header_row=_hr_i)
+        # ★ 2026-08-27（実測）: 見つからなかった時に**黙って LLM の行番号へ落ちて**いた。
+        #   位置を名指しした依頼で場所が特定できないなら、推測で挿さずに断る
+        #   （静かに別の場所へ入るのが一番こわい ── ADD_ROW と同じ線に揃える）。
+        if _note_i and _at_i is None:
+            return False, resolved, inferred, _note_i
         if _at_i is not None:
             resolved["at"] = _at_i
             resolved["_at_basis"] = _note_i
@@ -5875,6 +5880,22 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
 #   openpyxl の生スキャン(_scan_last_row/_scan_last_col)で実データ範囲を都度見つける
 #   （header_row を渡しはするが、ヘルパが物理1行目前提で動く以上、通常は 1 のまま使う想定）。
 
+def data_extent(ws, header_row: int = 1) -> tuple:
+    """見出しより下のデータの**物理の**広がり (最終行, 最終列)。
+
+    ★★ 2026-08-27（Namakoo が実測・今日 3 箇所目）: `_scan_last_row` は 1 列目を上から
+      見て**最初の空で止まる**。表の途中に空行が 1 本あるだけで、その下が全部消える。
+      ・位置の解決が「みかんが見つかりません」になった
+      ・事後条件が「検証対象が 0 件」になった
+      ・分母が消えた（塊①で直したのと同じ形）
+      ★ 3 箇所で同じ穴を開けたので、**器官を 1 つにする**（それぞれに書き写さない）。
+    """
+    phys_r, phys_c = _used_extent(ws)
+    last = max(phys_r, _scan_last_row(ws, header_row=header_row))
+    cols = max(phys_c, _scan_last_col(ws, header_row=header_row), 1)
+    return last, cols
+
+
 def _rows_of(ws, header_row: int, last_row: int, last_col: int) -> list:
     """見出しより下の行を、そのまま値の組で読む（比較用）。"""
     return [tuple(ws.cell(row=r, column=c).value for c in range(1, last_col + 1))
@@ -5898,7 +5919,7 @@ def check_add_row(path: Path, args: dict, header_row: int = 1,
     values = args.get("values") or {}
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
-        last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+        _last_a, last_col = data_extent(ws, header_row)
         headers = [str(ws.cell(row=header_row, column=c).value or "")
                     for c in range(1, last_col + 1)]
         wrong = []
@@ -5911,14 +5932,13 @@ def check_add_row(path: Path, args: dict, header_row: int = 1,
                 wrong.append(f"{name}: {want!r} のはずが {got!r}")
         if wrong:
             return "fail", f"{at}行目の値が宣言と違う（{'／'.join(wrong)}）"
-        last_after = _scan_last_row(ws, header_row=header_row)
-        after_rows = _rows_of(ws, header_row, last_after, last_col)
+        after_rows = _rows_of(ws, header_row, _last_a, last_col)
     if source_book is None or not Path(source_book).exists():
         return "warn", f"{at}行目の値のみ確認（適用前ファイルとの突き合わせ無し）"
     with BookView(source_book) as bv_b:
         ws_b = bv_b.sheet(args.get("_target_sheet"))
-        last_before = _scan_last_row(ws_b, header_row=header_row)
-        before_rows = _rows_of(ws_b, header_row, last_before, last_col)
+        _lb, _cb = data_extent(ws_b, header_row)
+        before_rows = _rows_of(ws_b, header_row, _lb, max(last_col, _cb))
     if len(after_rows) != len(before_rows) + 1:
         return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行 → "
                          f"適用後 {len(after_rows)} 行・1 行増えるはず）")
@@ -5947,15 +5967,14 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     count = int(args.get("count", 1) or 1)
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
-        last_col = max(_scan_last_col(ws, header_row=header_row), 1)
-        after_rows = _rows_of(ws, header_row,
-                               _scan_last_row(ws, header_row=header_row), last_col)
+        _la, last_col = data_extent(ws, header_row)
+        after_rows = _rows_of(ws, header_row, _la, last_col)
     if source_book is None or not Path(source_book).exists():
         return "warn", "適用前ファイルが無いため、消えた行を確かめられていません"
     with BookView(source_book) as bv_b:
         ws_b = bv_b.sheet(args.get("_target_sheet"))
-        before_rows = _rows_of(ws_b, header_row,
-                                _scan_last_row(ws_b, header_row=header_row), last_col)
+        _lb2, _cb2 = data_extent(ws_b, header_row)
+        before_rows = _rows_of(ws_b, header_row, _lb2, max(last_col, _cb2))
     k = at - header_row - 1
     if k < 0 or k >= len(before_rows):
         return "fail", f"{at}行目は表の範囲外です（データは {len(before_rows)} 行）"
@@ -5975,25 +5994,23 @@ def check_delete_column(path: Path, args: dict, header_row: int = 1,
     name = str(args["col"])
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
-        last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+        _lc, last_col = data_extent(ws, header_row)
         headers_after = [str(ws.cell(row=header_row, column=c).value or "")
                           for c in range(1, last_col + 1)]
         if name in headers_after:
             return "fail", f"列『{name}』がまだ在ります（削除されていない）"
-        after_rows = _rows_of(ws, header_row,
-                               _scan_last_row(ws, header_row=header_row), last_col)
+        after_rows = _rows_of(ws, header_row, _lc, last_col)
     if source_book is None or not Path(source_book).exists():
         return "warn", f"列『{name}』が無いことのみ確認（適用前ファイルとの突き合わせ無し）"
     with BookView(source_book) as bv_b:
         ws_b = bv_b.sheet(args.get("_target_sheet"))
-        lc_b = max(_scan_last_col(ws_b, header_row=header_row), 1)
+        _lrb, lc_b = data_extent(ws_b, header_row)
         headers_before = [str(ws_b.cell(row=header_row, column=c).value or "")
                            for c in range(1, lc_b + 1)]
         if name not in headers_before:
             return "fail", f"適用前にも列『{name}』が無い（消した対象が特定できない）"
         j = headers_before.index(name)
-        before_rows = _rows_of(ws_b, header_row,
-                                _scan_last_row(ws_b, header_row=header_row), lc_b)
+        before_rows = _rows_of(ws_b, header_row, _lrb, lc_b)
     if headers_after != headers_before[:j] + headers_before[j + 1:]:
         return "fail", "見出しの並びが元と違う（別の列を巻き込んだ疑い）"
     expected = [r[:j] + r[j + 1:] for r in before_rows]
@@ -6014,6 +6031,8 @@ _ANCHOR_AFTER = ("の下に", "の下へ", "の後に", "の後ろに", "の次�
 _ANCHOR_BEFORE = ("の上に", "の上へ", "の前に")
 
 
+_re_row_number_word = re.compile(r"[0-9０-９]+\s*行(?:目)?")
+_re_row_of = re.compile(r"([^\s、。]+?)\s*の\s*行")
 _re_row_unit = re.compile(r"[0-9０-９]*\s*行\s*(?:を|も)?\s*(?:足|追加|入れ|挿入)")
 _re_value_assign = re.compile(r"[^\s、。]+\s*(?:は|を|＝|=)\s*[0-9０-９]")
 
@@ -6080,6 +6099,17 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
                     want_after, name = False, m.group(1).strip()
                     break
     if not name:
+        # ★ 2026-08-27（実測）:「りんごの行を削除して」── 人は行を**中身**で指す。
+        #   相対の言い回しが無くても、「<X>の行」なら X を実表で探す。
+        m2 = _re_row_of.search(text)
+        if m2:
+            want_after, name = None, m2.group(1).strip()
+    if not name:
+        return None, None
+    # ★ 2026-08-27（自分で入れた誤爆・既存の検体が捕まえた）:
+    #   「**2行目の前に**1行挿入して」の「2行目」を中身の名前として探し、
+    #   見つからず断っていた。**行番号は名前ではない** ── 数字の指定はそのまま通す。
+    if _re_row_number_word.fullmatch(name):
         return None, None
     path = book_meta.get("path")
     if not path:
@@ -6087,8 +6117,12 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
     try:
         with BookView(Path(path)) as bv:
             ws = bv.sheet(sheet)
-            last = _scan_last_row(ws, header_row=header_row)
-            last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+            # ★★ 2026-08-27（Namakoo が実測・俺が新しい所で開けた同じ穴）:
+            #   `_scan_last_row` は 1 列目を上から見て**最初の空で止まる**。
+            #   下書きに空行が 1 本あると、その下の「みかん」を探せず、位置解決が黙って
+            #   失敗して LLM の行番号がそのまま通っていた。
+            #   ★ **探す範囲は物理の使用範囲から取る**（今週この repo が 3 度直した形）。
+            last, last_col = data_extent(ws, header_row)
             hits = [r for r in range(header_row + 1, last + 1)
                      if any(str(ws.cell(row=r, column=c).value or "").strip() == name
                              for c in range(1, last_col + 1))]
@@ -6100,6 +6134,8 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
         return None, (f"『{name}』が {len(hits)} 行あります（{'、'.join(str(h) for h in hits)}行目）"
                        " ── どれの隣か決められません")
     row = hits[0]
+    if want_after is None:          # 「<X>の行」＝ その行そのもの
+        return row, f"『{name}』の行＝{row}行目"
     at = row + 1 if want_after else row
     where = "下" if want_after else "上"
     note = f"『{name}』（{row}行目）の{where}＝{at}行目"
@@ -6132,7 +6168,8 @@ def check_insert_rows(path: Path, args: dict, header_row: int = 1,
     if source_book is None or not Path(source_book).exists():
         with BookView(path) as bv:
             ws = bv.sheet(args.get("_target_sheet"))
-            last_col = max(_scan_last_col(ws, header_row=header_row), 1)
+            # ★ 2026-08-27: 空行が 1 本あると走査が止まって「検証対象が 0 件」になっていた。
+            _lr0, last_col = data_extent(ws, header_row)
             row_cells = [ws.cell(row=at, column=c).value for c in range(1, last_col + 1)]
         if all(v in (None, "") for v in row_cells):
             return "warn", "挿入位置が空欄であることのみ確認（適用前ファイルとの突き合わせ無し）"
@@ -6140,8 +6177,7 @@ def check_insert_rows(path: Path, args: dict, header_row: int = 1,
 
     with BookView(source_book) as bv_before, BookView(path) as bv_after:
         ws_before = bv_before.sheet(args.get("_target_sheet"))
-        last_before = _scan_last_row(ws_before, header_row=header_row)
-        last_col = _scan_last_col(ws_before, header_row=header_row)
+        last_before, last_col = data_extent(ws_before, header_row)
         if last_col < 1 or last_before < header_row + 1:
             return "fail", _ZERO_TARGET_REASON
 

@@ -99,11 +99,32 @@ def test_soffice_is_never_pointed_at_the_users_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(ailine, "find_office_dir", lambda: Path(sys.executable).parent,
                          raising=False)
     ok, why = ailine._soffice_to_pdf(book, dst / "2026年1月分.pdf")
-    if not ok and "soffice" in (why or ""):
-        pytest.skip(f"この環境では soffice の在り処を差し替えられない: {why}")
+    # ★ 2026-08-27（CI が赤くなって気づいた）: 手元には LibreOffice が在るので通っていたが、
+    #   CI には無い ── この repo が 5 度目に踏んだ「居るから見えない」。
+    #   ★ skip の条件が甘かった: 「soffice」を含む理由だけを見ていたが、実際の断りは
+    #     「LibreOffice の場所が分からない（basrun.py が見つかりません）」だった。
+    #   ★ **測れない環境では skip と言う**（skip は「守っている」ではない ── だから
+    #     この試験は -m local 側にも同じ契約を置かず、代わりに下の静的な番人で
+    #     「人のフォルダを --outdir に渡していないこと」をコードから直接縛る）。
+    if not ok and any(w in (why or "") for w in ("soffice", "LibreOffice", "basrun")):
+        pytest.skip(f"この環境では LibreOffice を差し替えられない: {why}")
     assert ok, why
     outdir = Path(seen["cmd"][seen["cmd"].index("--outdir") + 1])
     assert outdir != dst, "人のフォルダを soffice の出力先にした（同名 PDF が消える）"
     assert victim.read_bytes() == b"customer-final", "名指ししていない PDF を消した"
     assert (dst / "2026年1月分.pdf").read_bytes() == b"NEW-PDF"
     assert sorted(q.name for q in dst.iterdir()) == ["2026年1月分.pdf", "請求書.pdf"]
+
+
+def test_the_user_folder_is_never_the_outdir_by_construction():
+    """★ 実行できない環境でも守れる形（上の試験は LibreOffice が要る）。
+
+    「人のフォルダを soffice の出力先にしない」を**コードから直接**縛る ──
+    実測で踏んだ壊れ方は `--outdir <出力先の親>` を渡していたことだった。
+    """
+    import inspect
+    src = inspect.getsource(ailine._soffice_to_pdf)
+    code = chr(10).join(ln.split("#")[0] for ln in src.split(chr(10)))
+    assert "TemporaryDirectory" in code, "専用の一時フォルダを作っていない"
+    assert "out_dir = Path(_pdf_tmp.name)" in code, (
+        "出力先の親を --outdir に渡している ── 同名 PDF が予告なく消える")
