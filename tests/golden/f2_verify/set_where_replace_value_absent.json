@@ -1,0 +1,23 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "商品",
+    "_target_sheet": "Sheet",
+    "cond_col": "商品",
+    "cmp": "eq",
+    "cond_value": "すいか",
+    "value": "西瓜",
+    "_sources": {
+      "value": "依頼文: 「すいか」→「西瓜」"
+    },
+    "_headers": [
+      "商品",
+      "金額",
+      "在庫"
+    ],
+    "_header_row": 1,
+    "_cond_label": "『商品』が『すいか』の行（→『西瓜』に）"
+  },
+  "inferred": [],
+  "err": "『商品』に『すいか』の行がありません（ファイルには何も書いていません）"
+}

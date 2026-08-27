@@ -234,6 +234,11 @@ _add("set_where_ok", "SET_WHERE", {"col": "在庫", "cond_col": "金額", "cmp":
 _add("set_where_machine_beats_llm_cmp", "SET_WHERE",
      {"col": "在庫", "cond_col": "金額", "cmp": "lte"},
      task="金額が40000以上の行の在庫列に「◎」を付けて", book_meta=BM_CELL2)
+# ★ 置き換え「『A』を『B』に」── 条件も値も引用の対から機械が取る（新しい op を作らない）
+_add("set_where_replace_pair", "SET_WHERE", {"col": "商品"},
+     task="商品列の「りんご」を全て「林檎」に書き換えて", book_meta=BM_CELL2)
+_add("set_where_replace_value_absent", "SET_WHERE", {"col": "商品"},
+     task="商品列の「すいか」を「西瓜」に書き換えて", book_meta=BM_CELL2)
 _add("set_where_unquoted_value", "SET_WHERE", {"col": "在庫", "cond_col": "金額", "cmp": "gte"},
      task="金額が40000以上の行の在庫列に◎を付けて", book_meta=BM_CELL2)
 _add("set_where_two_numbers", "SET_WHERE", {"col": "在庫", "cond_col": "金額", "cmp": "gte"},

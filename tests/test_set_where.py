@@ -253,5 +253,65 @@ def test_a_reread_never_overwrites_another_reread():
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     body = src[src.index("def _translate_and_dispatch("):]
     body = body[:body.index("\ndef ", 10)]
-    assert body.count("_reread_done = True") == 5, "読み直しの塊と印の数が合わない"
-    assert body.count("not _reread_done") == 5, "印を見ていない塊がある"
+    sets = body.count("_reread_done = True")
+    guards = body.count("not _reread_done")
+    # ★ 数を固定しない（塊は増える）。**不変**は「印を立てる塊と、印を見る塊が同数」。
+    #   数で縛ると塊を足すたびに試験を直すことになり、直すついでに緩めてしまう。
+    assert sets >= 5 and sets == guards, (
+        f"読み直しの塊のうち、印を見ていないものがある（立てる {sets} / 見る {guards}）")
+
+
+# --- 置き換え「『A』を『B』に」（2026-08-27・Namakoo「置き換えができない」）------------
+#
+# ★ 実測: 「チェック列の『◎』を全て『合格』に書き換えて」は一段目が
+#   SET_COLUMN_VALUE（列を丸ごと『合格』に）を返していた ── **空欄の行まで潰す**。
+#   機械は引用が 2 つあるので「値が一意に読み取れない」と正しく断っていたが、
+#   **断って終わり**だった。★ 引用が 2 つある時の意味（置き換え）を読む。
+# ★ 新しい op は要らない: 同じ列の中で A の行だけ B にする＝条件つき書換の特別な場合
+#   （条件列＝書き込み先列・比較は「等しい」）。
+
+@pytest.mark.parametrize("task,pair", [
+    ("チェック列の「◎」を全て「合格」に書き換えて", ("◎", "合格")),
+    ("チェック列の「◎」を「合格」にして", ("◎", "合格")),
+    ("商品列の『りんご』を『林檎』に置き換えて", ("りんご", "林檎")),
+    ("備考列を全部「確認済み」にして", None),                       # 引用が 1 つ＝置き換えでない
+    ("原価が500以上の行のチェック列に「◎」を入れて", None),          # 条件つき書換の領分
+])
+def test_the_replace_pair_is_read_by_particles_not_verbs(task, pair):
+    """★ 動詞（書き換え/置換/直す…）を並べない ── 並べ忘れた言い方が黙って落ちる。
+       助詞が意味を運ぶ（『A』**を** … 『B』**に**）。"""
+    assert ailine.extract_replace_pair(task) == pair
+
+
+def test_a_replace_resolves_to_a_conditional_write(tmp_path):
+    rows = [["商品", "売上", "原価", "チェック"], ["りんご", 1200, 700, "◎"],
+             ["みかん", 800, 300, None], ["ぶどう", 1500, 900, "◎"]]
+    ok, r, _i, err = ailine.verify_dsl_args(
+        "SET_WHERE", {"col": "チェック"}, _meta(_book(tmp_path, rows)),
+        task="チェック列の「◎」を全て「合格」に書き換えて")
+    assert ok, err
+    assert (r["cmp"], r["cond_value"], r["value"]) == ("eq", "◎", "合格")
+    assert r["cond_col"] == "チェック", "条件列は書き込み先と同じ列のはず"
+    assert r["_match_rows"] == [2, 4], r["_match_rows"]     # 空欄のみかんは入らない
+
+
+def test_a_replace_of_a_value_that_is_not_there_is_refused(tmp_path):
+    rows = [["商品", "売上", "原価", "チェック"], ["りんご", 1200, 700, "◎"]]
+    ok, _r, _i, err = ailine.verify_dsl_args(
+        "SET_WHERE", {"col": "チェック"}, _meta(_book(tmp_path, rows)),
+        task="チェック列の「×」を「合格」に書き換えて")
+    assert not ok
+    assert "『×』の行がありません" in err and "何も書いていません" in err, err
+
+
+def test_codegen_uses_a_string_literal_for_a_text_threshold(tmp_path):
+    """★★ 実測で生の traceback を出した: 閾値が数値かどうかは **cmp ではなく値**で決まる。
+       eq は「金額が 100 と等しい」にも「チェックが『◎』と等しい」にも使う ──
+       cmp で分けると、置き換えの『◎』を float() に渡して落ちる。"""
+    rows = [["商品", "売上", "原価", "チェック"], ["りんご", 1200, 700, "◎"]]
+    meta = _meta(_book(tmp_path, rows))
+    ok, r, _i, err = ailine.verify_dsl_args(
+        "SET_WHERE", {"col": "チェック"}, meta, task="チェック列の「◎」を「合格」にして")
+    assert ok, err
+    code = ailine.codegen_dsl("SET_WHERE", r, meta)
+    assert 'SetColumnValueWhere(oDoc, 0, 3, 3, 4, "◎", "合格")' in code, code

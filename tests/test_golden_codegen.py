@@ -154,6 +154,9 @@ _add("set_cell_value_text", "SET_CELL_VALUE",
 _add("set_where_gte", "SET_WHERE",
      {"col": "在庫", "cond_col": "金額", "cmp": "gte", "cond_value": 40000.0, "value": "◎",
       "_headers": ["商品", "金額", "在庫"], "_header_row": 1})
+_add("set_where_replace_text", "SET_WHERE",
+     {"col": "商品", "cond_col": "商品", "cmp": "eq", "cond_value": "りんご",
+      "value": "林檎", "_headers": ["商品", "金額", "在庫"], "_header_row": 1})
 _add("set_where_contains", "SET_WHERE",
      {"col": "在庫", "cond_col": "商品", "cmp": "contains", "cond_value": "セット",
       "value": "×", "_headers": ["商品", "金額", "在庫"], "_header_row": 1})

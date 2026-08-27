@@ -136,3 +136,26 @@ def test_only_the_matching_rows_get_the_mark_on_real_lo(tmp_path):
     out = openpyxl.load_workbook(_out(p))["売上"]
     got = [out.cell(i, 4).value for i in range(2, 5)]
     assert got == ["◎", None, "◎"], f"当てはまる行だけ、が破れた: {got}"
+
+
+@pytest.mark.local
+def test_a_replace_touches_only_the_matching_rows_on_real_lo(tmp_path):
+    """★ 置き換え「『◎』を『合格』に」── 空欄の行を巻き込まないことを実機で見る
+       （一段目は「列を丸ごと『合格』に」を返していた ── そちらだと空欄まで潰れる）。"""
+    p = tmp_path / "h.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "売上"
+    ws.append(["商品", "売上", "原価", "チェック"])
+    for row in [["りんご", 1200, 700, "◎"], ["みかん", 800, 300, None],
+                 ["ぶどう", 1500, 900, "◎"]]:
+        ws.append(row)
+    wb.save(p)
+    r = subprocess.run(
+        [sys.executable, "-m", "ailine", "run", str(p), "チェック列の「◎」を全て「合格」に書き換えて",
+         "--copy", "--overwrite", "--timeout", "90"],
+        capture_output=True, text=True, timeout=420, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, f"実機の置き換えが失敗:\n{r.stdout[-900:]}"
+    out = openpyxl.load_workbook(_out(p))["売上"]
+    got = [out.cell(i, 4).value for i in range(2, 5)]
+    assert got == ["合格", None, "合格"], f"空欄の行を巻き込んだ: {got}"

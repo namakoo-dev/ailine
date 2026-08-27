@@ -3861,8 +3861,36 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     elif op == "SET_WHERE":
         if (err := resolve_in("col", first_sheet)):
             return False, resolved, inferred, err
+        # ★ 2026-08-27（Namakoo「置き換えができない」）: 「『A』を『B』に」の形は、
+        #   **同じ列の中で A の行だけを B にする**＝条件つき書換の特別な場合
+        #   （条件列＝書き込み先列・比較は「等しい」）。新しい op は要らない。
+        #   ★ 条件も値も**引用の対**から機械が取る（LLM に決めさせない）。
+        _pair = extract_replace_pair(task)
+        if _pair:
+            resolved.setdefault("cond_col", resolved["col"])
         if (err := resolve_in("cond_col", first_sheet)):
             return False, resolved, inferred, err
+        if _pair:
+            resolved["cmp"], resolved["cond_value"], resolved["value"] = "eq", _pair[0], _pair[1]
+            resolved["_sources"] = {**resolved.get("_sources", {}),
+                                     "value": f"依頼文: 「{_pair[0]}」→「{_pair[1]}」"}
+            resolved["_headers"] = [str(h) for h in (headers.get(first_sheet) or [])]
+            resolved["_header_row"] = int(
+                (book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+            resolved["_cond_label"] = (f"『{resolved['cond_col']}』が『{_pair[0]}』の行"
+                                        f"（→『{_pair[1]}』に）")
+            _hits_r = _rows_matching(book_meta, first_sheet, resolved["cond_col"], "eq",
+                                      _pair[0], resolved["_header_row"])
+            if _hits_r is not None:
+                if not _hits_r:
+                    return False, resolved, inferred, (
+                        f"『{resolved['cond_col']}』に『{_pair[0]}』の行がありません"
+                        "（ファイルには何も書いていません）")
+                resolved["_match_rows"] = _hits_r
+                resolved["_match_label"] = (
+                    f"{len(_hits_r)} 行（{'、'.join(str(r) for r in _hits_r[:5])}行目"
+                    + ("…）" if len(_hits_r) > 5 else "）"))
+            return True, resolved, inferred, None
         # ★ 比較は機械が勝つ（EXTRACT と同じ作法・LLM の写し間違いで境界行が混入する）
         _llm_cmp = str(resolved.get("cmp", "")).strip().lower()
         _mech_cmp = extract_cmp_from_task(task)
@@ -5114,8 +5142,12 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         hr0 = int(resolved_args.get("_header_row", 1)) - 1
         code = _EXTRACT_CMP_CODE[resolved_args["cmp"]]
         thr = resolved_args["cond_value"]
-        thr_lit = ('"%s"' % str(thr).replace(chr(34), chr(34) * 2)
-                    if resolved_args["cmp"] == "contains" else repr(float(thr)))
+        # ★ 2026-08-27（実測・生 traceback を出した）: 閾値が数値かどうかは **cmp ではなく
+        #   値そのもの**で決まる。eq は「金額が 100 と等しい」にも「チェックが『◎』と
+        #   等しい」にも使う ── cmp で分けると、置き換えの『◎』を float() に渡して落ちる。
+        _num = _is_number(thr) and not isinstance(thr, bool)
+        thr_lit = (repr(float(thr)) if _num
+                    else '"%s"' % str(thr).replace(chr(34), chr(34) * 2))
         val = str(resolved_args["value"]).replace(chr(34), chr(34) * 2)
         return wrap('    Call SetColumnValueWhere(oDoc, %d, %d, %d, %d, %s, "%s")%s'
                      % (hr0, wcol, ccol, code, thr_lit, val, chr(10)))
@@ -7033,6 +7065,27 @@ KEEP_FOR_COLUMN_REQUEST = ("COMPUTE_COLUMN", "LOOKUP_FILL")
 # ★ 条件つきの書き込みを求めているか（比較語があり、かつ書き込む値が引用されている）。
 #   ★ 2 つとも要る: 比較語だけなら EXTRACT（抜き出す）かもしれないし、引用だけなら
 #     SET_COLUMN_VALUE（列を丸ごと）。**両方揃った時だけ**この op を疑う。
+# ★ 置き換え「『A』を（全て）『B』に」の形。★ 動詞（書き換え/置換/直し…）は見ない ──
+#   並べ始めると並べ忘れた言い方が黙って落ちる。**助詞が意味を運ぶ**（A を … B に）。
+_re_replace_pair = re.compile(
+    r"[「『]([^」』]+)[」』]\s*を\s*[^。]{0,8}?[「『]([^」』]+)[」』]\s*に")
+
+
+def extract_replace_pair(task: str):
+    """依頼文から「『A』を … 『B』に」の A, B を取る。無ければ None。
+       ★ 引用が 2 つあると extract_quoted_literal は「一意に読み取れない」と断る（正しい）。
+         断るだけで終えず、**2 つある時の意味**（置き換え）をここで読む。"""
+    m = _re_replace_pair.search((task or "").replace("　", " "))
+    if not m:
+        return None
+    src, dst = m.group(1).strip(), m.group(2).strip()
+    return (src, dst) if src and dst and src != dst else None
+
+
+def task_asks_for_a_replace(task: str) -> bool:
+    return extract_replace_pair(task) is not None
+
+
 def task_asks_for_a_conditional_write(task: str) -> bool:
     return bool(task and extract_cmp_from_task(task)
                  and extract_quoted_literal(task) is not None)
@@ -10185,6 +10238,25 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
     #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
     #   人が欲しいのは**値**であって書式ではない）。断る側なので横取りして悪くならない。
+    # ★★ 2026-08-27（Namakoo「置き換えができない」）: 「チェック列の『◎』を全て『合格』に」は
+    #   一段目が SET_COLUMN_VALUE（列を丸ごと『合格』に）を返していた ── 空欄の行まで
+    #   潰す。機械は引用が 2 つあるので「値が一意に読み取れない」と正しく断っていたが、
+    #   **断って終わり**だった。★ 引用が 2 つある時の意味（置き換え）を読む。
+    #   ★ col は一段目が既に当てている（実測 3/3）ので、そのまま使って LLM を呼び直さない。
+    if (not _reread_done and task_asks_for_a_replace(a.task) and len(plan) == 1
+            and (plan[0] or {}).get("op") in ("SET_COLUMN_VALUE", "CLARIFY", "FREEFORM",
+                                                "OUT_OF_VOCAB", "SET_WHERE")):
+        _rp_args = dict((plan[0] or {}).get("args") or {})
+        if not _rp_args.get("col"):
+            _rp = translate_task_fixed_op(a.model, "SET_WHERE", a.task, book_meta)
+            _rp_args = dict((_rp or {}).get("args") or {})
+        if _rp_args.get("col"):
+            _src, _dst = extract_replace_pair(a.task)
+            print(f"（『置き換え』として読み直しました ── 『{_src}』の行だけを"
+                   f"『{_dst}』にします。列を丸ごとは書き換えません）")
+            plan = [{"op": "SET_WHERE", "args": {"col": _rp_args["col"]}}]
+            _reread_done = True
+
     if (not _reread_done and task_asks_for_a_conditional_write(a.task) and len(plan) == 1
             and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB",
                                                 "SET_COLUMN_VALUE")):

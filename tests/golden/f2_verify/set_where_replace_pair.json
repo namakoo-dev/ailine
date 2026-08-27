@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "商品",
+    "_target_sheet": "Sheet",
+    "cond_col": "商品",
+    "cmp": "eq",
+    "cond_value": "りんご",
+    "value": "林檎",
+    "_sources": {
+      "value": "依頼文: 「りんご」→「林檎」"
+    },
+    "_headers": [
+      "商品",
+      "金額",
+      "在庫"
+    ],
+    "_header_row": 1,
+    "_cond_label": "『商品』が『りんご』の行（→『林檎』に）",
+    "_match_rows": [
+      2
+    ],
+    "_match_label": "1 行（2行目）"
+  },
+  "inferred": [],
+  "err": null
+}
