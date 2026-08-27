@@ -57,3 +57,19 @@ def test_the_declared_number_matches_what_pytest_actually_collects():
     assert declared == actual, (
         f"docs/ENGINEERING.md は `pytest -m local` を {declared} 本と書いているが、"
         f"実測は {actual} 本 ── 文書を直すこと（この数は手で守れないから機械が見ている）")
+
+# ── 主ファイルの行数（README が「割らなかった」理由として名指しする数） ──────────
+LINES_MARK = re.compile(r"<!--\s*MAIN_FILE_LINES\s*-->\s*(\d+)\s*<!--\s*/MAIN_FILE_LINES\s*-->")
+BUDGET = REPO / "tests" / "ailine_py_line_budget.txt"
+
+
+def test_the_main_file_line_count_in_the_readme_is_not_stale():
+    """★ 同じ形の嘘を先回りして塞ぐ: 行数は毎回変わるのに、README には固定で書いてある。
+       分母は README 自身でも人の記憶でもなく、`test_line_budget` が縛っている
+       tests/ailine_py_line_budget.txt から取る（そちらは実ファイルと一致を強制される）。"""
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    found = LINES_MARK.findall(readme)
+    assert len(found) == 1, f"主ファイルの行数の宣言が 1 箇所ではない: {found}"
+    pinned = int(BUDGET.read_text(encoding="utf-8").splitlines()[0])
+    assert int(found[0]) == pinned, (
+        f"README は主ファイルを {found[0]} 行と書いているが、縛られている値は {pinned} 行")
