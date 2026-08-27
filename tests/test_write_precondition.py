@@ -149,6 +149,9 @@ def test_t2_existing_total_row_without_label_in_col_a_is_gated(tmp_path, monkeyp
     def fake(out_book, code, workdir, helper_files=(), timeout=None):
         wb = openpyxl.load_workbook(out_book)
         ws = wb.active
+        # ★ 2026-08-28: 本物の codegen はラベルを**1 列目**にも書く（旧: 対象列の左隣）。
+        #   治具が本物と違うと、関所の手前で事後条件が落ちて**関所そのものを試せない**。
+        ws["A4"] = "合計"
         ws["D4"] = "=SUM(D2:INDEX(D:D,ROW()-1))"   # 既存の手入力合計を潰す
         wb.save(out_book)
         _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"D4": 106000})

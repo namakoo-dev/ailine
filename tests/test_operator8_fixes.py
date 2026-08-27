@@ -88,7 +88,9 @@ def _tax_book(tmp_path):
 def _tax_apply(out_book, code, workdir, helper_files=(), timeout=None):
     wb = openpyxl.load_workbook(out_book)
     ws = wb.active
-    ws["C4"] = "税込み合計"
+    # ★ 2026-08-28: 合計行のラベルは**1 列目**に置く（旧: 対象列の左隣）。
+    #   旧位置は 1 列目を空のまま残し、道具自身の走査を止めていた。
+    ws["A4"] = "税込み合計"
     ws["D4"] = "=SUM(D2:INDEX(D:D,ROW()-1))*1.1"
     wb.save(out_book)
     _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"D4": 200 * 1.1})

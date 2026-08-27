@@ -248,7 +248,7 @@ def _cell_text(v) -> str:
 
 def _default_dir() -> Path:
     """最初に開くフォルダ。同梱のサンプルがあればそこ、無ければ repo 直下。"""
-    for cand in (REPO / "demo_gui", REPO / "demo"):
+    for cand in (REPO / "demo",):
         if cand.is_dir():
             return cand
     return REPO

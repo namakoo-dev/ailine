@@ -17,6 +17,7 @@
     ],
     "_header_row": 1,
     "_cond_label": "『商品』が『りんご』の行（→『林檎』に）",
+    "_skip_rows": [],
     "_match_rows": [
       2
     ],

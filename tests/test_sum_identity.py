@@ -243,7 +243,8 @@ def test_f7_running_total_column_stays_silent(tmp_path, monkeypatch, capsys):
         ["4/3", 150, 450],
         ["4/4", 300, 750],
     ])
-    fake = _append_total_fake(total_row=6, col_letter="C", cached=1600, label_cell="B6")
+    # ★ 2026-08-28: 合計行のラベルは 1 列目（旧: 対象列の左隣）。
+    fake = _append_total_fake(total_row=6, col_letter="C", cached=1600, label_cell="A6")
     rc = _run(tmp_path, monkeypatch, book, "累計の合計を一番下に出して",
               "APPEND_TOTAL", {"col": "累計"}, fake)
     out = capsys.readouterr().out

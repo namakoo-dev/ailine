@@ -11,6 +11,6 @@ Sub Run(oDoc As Object)
     lastRow = lastRow - 1
     If lastRow < 3 Then Exit Sub
     totalRow = lastRow + 1
-    oSheet.getCellByPosition(2, totalRow).setString("税込合計")
+    oSheet.getCellByPosition(0, totalRow).setString("税込合計")
     oSheet.getCellByPosition(3, totalRow).setFormula("=SUM(" & "D" & 4 & ":INDEX(" & "D" & ":" & "D" & ";ROW()-1))" & "*1.1")
 End Sub

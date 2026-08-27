@@ -3971,6 +3971,11 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 (book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
             resolved["_cond_label"] = (f"『{resolved['cond_col']}』が『{_pair[0]}』の行"
                                         f"（→『{_pair[1]}』に）")
+            # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
+            resolved["_skip_rows"] = total_rows_in(book_meta, first_sheet, resolved["_header_row"])
+            if resolved["_skip_rows"]:
+                resolved["_skip_label"] = ("合計行 " + "、".join(
+                    f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
             _hits_r = _rows_matching(book_meta, first_sheet, resolved["cond_col"], "eq",
                                       _pair[0], resolved["_header_row"])
             if _hits_r is not None:
@@ -4029,6 +4034,11 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["_cond_label"] = f"『{resolved['cond_col']}』が {_shown} {_lab}"
         # ★ 当てはまる行を**先に数えて画面に出す**（0 行なら、走らせる前に断る ──
         #   「何も起きなかった」を後から × で知らせるのは、正しくても不親切）。
+        # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
+        resolved["_skip_rows"] = total_rows_in(book_meta, first_sheet, resolved["_header_row"])
+        if resolved["_skip_rows"]:
+            resolved["_skip_label"] = ("合計行 " + "、".join(
+                f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
         _hits = _rows_matching(book_meta, first_sheet, resolved["cond_col"],
                                 _cmp, resolved["cond_value"], resolved["_header_row"])
         if _hits is not None:
@@ -5108,7 +5118,7 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
                 + _scan_last_row_basic(start_row=str(hr0 + 1))
                 + "    totalRow = lastRow + 1\n")
         if col_idx > 0:
-            body += f'    oSheet.getCellByPosition({col_idx - 1}, totalRow).setString("{label}")\n'
+            body += f'    oSheet.getCellByPosition(0, totalRow).setString("{label}")\n'
         body += (f'    oSheet.getCellByPosition({col_idx}, totalRow).setFormula('
                  f'"=SUM(" & "{col_letter}" & {start_excel_row} & ":INDEX(" & "{col_letter}" & '
                  f'":" & "{col_letter}" & ";ROW()-1))" & "{factor_tail}")\n')
@@ -5321,8 +5331,11 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         thr_lit = (repr(float(thr)) if _num
                     else '"%s"' % str(thr).replace(chr(34), chr(34) * 2))
         val = str(resolved_args["value"]).replace(chr(34), chr(34) * 2)
-        return wrap('    Call SetColumnValueWhere(oDoc, %d, %d, %d, %d, %s, "%s")%s'
-                     % (hr0, wcol, ccol, code, thr_lit, val, chr(10)))
+        # ★ 外す行は**構造の事実**なので Python が渡す（条件の判定は Basic が自分で行う ──
+        #   そこを渡すと事後条件が独立した検算でなくなる）。
+        skip = ",".join(str(int(r) - 1) for r in (resolved_args.get("_skip_rows") or []))
+        return wrap('    Call SetColumnValueWhere(oDoc, %d, %d, %d, %d, %s, "%s", "%s")%s'
+                     % (hr0, wcol, ccol, code, thr_lit, val, skip, chr(10)))
 
     if op == "ADD_COLUMN":
         # ★ 位置は Python が見出しから決めた 1 起点 → Basic は 0 起点。
@@ -6541,7 +6554,10 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
         want_label = str(args.get("label") or "合計")
         got_label = None
         if idx > 1:
-            got_label = ws.cell(row=total_row, column=idx - 1).value
+            # ★ 2026-08-28: ラベルは**1 列目**（codegen と同じ場所を見る）。
+            #   旧は対象列の左隣を見ていた ── その置き方が 1 列目を空にして、
+            #   道具自身の走査を止めていた（合計を出すと ✓ が永久に出なかった）。
+            got_label = ws.cell(row=total_row, column=1).value
             label_ok = got_label == want_label
         if not label_ok:
             return "fail", f"{total_row}行目: ラベルが期待『{want_label}』と不一致 (実際 {got_label!r})"
@@ -6839,9 +6855,17 @@ def check_set_where(path: Path, args: dict, header_row: int = 1,
             last = max(last_a, last_b)
             match = _extract_predicate(cmp, thr)
             wrong_hit, wrong_miss, hits = [], [], 0
+            skip_rows = set(int(x) for x in (args.get("_skip_rows") or []))
             for r in range(header_row + 1, last + 1):
                 # ★ 条件は**適用前**の値で見る（書いた後の値で見ると、書いた印そのものが
                 #   条件を変えてしまう op では恒真になりうる）
+                # ★ 合計行は「当てはまる」側から外す ── ただし**変わっていないこと**は
+                #   要求する（外した行が黙って書き換わるのは、外していないのと同じくらい悪い）。
+                if r in skip_rows:
+                    if (bv.cell_value(r, wi, args.get("_target_sheet"))
+                            != bv_b.cell_value(r, wi, args.get("_target_sheet"))):
+                        wrong_hit.append(r)
+                    continue
                 if match(bv_b.cell_value(r, ci, args.get("_target_sheet"))):
                     hits += 1
                     if str(bv.cell_value(r, wi, args.get("_target_sheet")) or "") != str(value):
@@ -7557,6 +7581,33 @@ _ZENKAKU_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
 _re_threshold_num = re.compile(r"\d+(?:\.\d+)?")
 
 
+def total_rows_in(book_meta: dict, sheet: str | None, header_row: int = 1) -> list:
+    """データ行ではない「合計行」の行番号（1 起点）。
+
+    ★★ 2026-08-28（Namakoo が請求書のデモで実測）: 「金額が10万以上の行に印を付けて」が
+      **合計行にも印を付けた**。条件としては真だが、合計行は請求の行ではない ── 意味が違う。
+    ★ 判定は既存の凍結規則を借りる（ailine_core.total_row.row_has_total_word:
+      合計/小計/総計は部分一致・『計』は完全一致・『設計部』等は誤爆しない断片ガードつき）。
+      ここで新しい規則を書かない ── 同じことを 2 箇所が別々に決めると必ずずれる。
+    ★ 見つけたら**必ず画面に出す**（黙って行を外さない）。
+    """
+    path = book_meta.get("path")
+    if not path:
+        return []
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, cols = data_extent(ws, header_row)
+            out = []
+            for r in range(header_row + 1, last + 1):
+                vals = [ws.cell(row=r, column=c).value for c in range(1, cols + 1)]
+                if total_row.row_has_total_word(vals):
+                    out.append(r)
+    except Exception:
+        return []
+    return out
+
+
 def _rows_matching(book_meta: dict, sheet: str | None, cond_col: str, cmp: str,
                     threshold, header_row: int = 1):
     """条件に当てはまるデータ行（1 起点の行番号）を、実表を読んで数える。
@@ -7566,10 +7617,12 @@ def _rows_matching(book_meta: dict, sheet: str | None, cond_col: str, cmp: str,
       「変化なし」で落ちる。正しいが、利用者には「動かなかった」としか見えない
       （列追加で同じ形を実測した）。★ 走らせる前に、当てはまる行数を画面に出す。
     ★ 走査は**物理の使用範囲**から（1 列目の空で止まる罠を避ける）。
+    ★ 合計行は**データ行ではない**ので外す（外したことは呼び側が画面に出す）。
     """
     path = book_meta.get("path")
     if not path:
         return None
+    skip = set(total_rows_in(book_meta, sheet, header_row))
     headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
     if cond_col not in headers:
         return None
@@ -7580,7 +7633,7 @@ def _rows_matching(book_meta: dict, sheet: str | None, cond_col: str, cmp: str,
             ws = bv.sheet(sheet)
             last, _cols = data_extent(ws, header_row)
             return [r for r in range(header_row + 1, last + 1)
-                     if match(bv.cell_value(r, ci, sheet))]
+                     if r not in skip and match(bv.cell_value(r, ci, sheet))]
     except Exception:
         return None
 

@@ -792,10 +792,16 @@ End Sub
 ' ★ Namakoo「原価が500以上の項目のチェック列に◎を付けて」── 表計算のごく普通の操作で、
 '   ここまで一覧に無かった（SET_COLUMN_VALUE は列を丸ごと同じ値にするだけ）。
 ' writeCol/condCol は 0 起点。sValue は書く文字（数値化はしない ── 印を付ける用途）。
+' skipRowsCsv: 対象から外す行（0 起点・カンマ区切り）。合計行など「データ行でない行」を
+'   Python 側が構造として見つけて渡す。★ **条件の判定は渡さない** ── そこは Basic が
+'   自分で決めるからこそ、Python の事後条件が独立した検算になる（片方に寄せない）。
 Sub SetColumnValueWhere(oDoc As Object, headerRow As Integer, writeCol As Integer, _
                          condCol As Integer, cmpCode As Integer, cmpValue As Variant, _
-                         sValue As String)
+                         sValue As String, Optional skipRowsCsv As Variant)
     Dim oSheet As Object, oCur As Object, lastRow As Long, i As Long
+    Dim skips As String
+    skips = ""
+    If Not IsMissing(skipRowsCsv) Then skips = "," & CStr(skipRowsCsv) & ","
     oSheet = oDoc.Sheets.getByIndex(0)
     ' ★ 走査範囲は**物理の使用範囲**から取る（1 列目の空で止まる罠を避ける ──
     '   Python 側で今週 3 度直した形。Basic 側は gotoEndOfUsedArea で素直に取れる）。
@@ -804,7 +810,9 @@ Sub SetColumnValueWhere(oDoc As Object, headerRow As Integer, writeCol As Intege
     lastRow = oCur.RangeAddress.EndRow
     If lastRow < headerRow + 1 Then Exit Sub
     For i = headerRow + 1 To lastRow
-        If RowMatches(oSheet.getCellByPosition(condCol, i), cmpCode, cmpValue) Then
+        If Len(skips) > 2 And InStr(skips, "," & CStr(i) & ",") > 0 Then
+            ' 対象外の行（合計行など）── 触らない
+        ElseIf RowMatches(oSheet.getCellByPosition(condCol, i), cmpCode, cmpValue) Then
             oSheet.getCellByPosition(writeCol, i).setString(sValue)
         End If
     Next i

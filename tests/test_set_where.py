@@ -129,7 +129,8 @@ def test_codegen(tmp_path):
                                              task=TASK)
     assert ok, err
     code = ailine.codegen_dsl("SET_WHERE", r, _meta(_book(tmp_path)))
-    assert 'Call SetColumnValueWhere(oDoc, 0, 3, 2, 0, 500.0, "◎")' in code, code
+    # ★ 末尾の "" は「対象から外す行」（合計行など）。この表には無いので空。
+    assert 'Call SetColumnValueWhere(oDoc, 0, 3, 2, 0, 500.0, "◎", "")' in code, code
 
 
 def test_the_comparison_lives_in_one_place_in_the_bas():
@@ -314,4 +315,40 @@ def test_codegen_uses_a_string_literal_for_a_text_threshold(tmp_path):
         "SET_WHERE", {"col": "チェック"}, meta, task="チェック列の「◎」を「合格」にして")
     assert ok, err
     code = ailine.codegen_dsl("SET_WHERE", r, meta)
-    assert 'SetColumnValueWhere(oDoc, 0, 3, 3, 4, "◎", "合格")' in code, code
+    assert 'SetColumnValueWhere(oDoc, 0, 3, 3, 4, "◎", "合格", "")' in code, code
+
+
+# --- 合計行はデータ行ではない（2026-08-28・Namakoo が請求書のデモで実測）------------
+
+def test_a_total_row_is_not_marked(tmp_path):
+    """★★ 実測: 「金額が10万以上の行に印を付けて」が**合計行にも印を付けた**。
+       条件としては真だが、合計行は請求の行ではない ── 意味が違う。
+       ★ 判定は既存の凍結規則（ailine_core.total_row）を借りる ── 新しい規則を書かない。
+       ★ 外したことは必ず画面に出す（黙って行を外さない）。"""
+    rows = [["商品", "売上", "原価", "チェック"], ["りんご", 1200, 700, None],
+             ["みかん", 800, 300, None], ["合計", 2000, 1000, None]]
+    meta = _meta(_book(tmp_path, rows))
+    assert ailine.total_rows_in(meta, "売上") == [4]
+    ok, r, _i, err = ailine.verify_dsl_args(
+        "SET_WHERE", {"col": "チェック", "cond_col": "売上", "cmp": "gte"}, meta,
+        task="売上が700以上の行のチェック列に「◎」を付けて")
+    assert ok, err
+    assert r["_match_rows"] == [2, 3], r["_match_rows"]      # 合計行(4)は入らない
+    assert r["_skip_rows"] == [4] and "合計行" in r["_skip_label"], r.get("_skip_label")
+    # ★ 外す行は Basic にも渡る（0 起点）── 書き手も同じ行を触らない
+    assert 'SetColumnValueWhere(oDoc, 0, 3, 1, 0, 700.0, "◎", "3")' in         ailine.codegen_dsl("SET_WHERE", r, meta), ailine.codegen_dsl("SET_WHERE", r, meta)
+
+
+def test_a_total_row_that_was_written_anyway_fails(tmp_path):
+    """★ 恒真殺し: 外した行が黙って書き換わるのは、外していないのと同じくらい悪い。
+       事後条件は「外した行は**変わっていない**」ことまで要求する。"""
+    rows = [["商品", "売上", "原価", "チェック"], ["りんご", 1200, 700, None],
+             ["みかん", 800, 300, None], ["合計", 2000, 1000, None]]
+    before = _book(tmp_path, rows, name="before.xlsx")
+    after = _book(tmp_path, [["商品", "売上", "原価", "チェック"],
+                              ["りんご", 1200, 700, "◎"], ["みかん", 800, 300, "◎"],
+                              ["合計", 2000, 1000, "◎"]])
+    args = {"col": "チェック", "cond_col": "売上", "cmp": "gte", "cond_value": 700.0,
+             "value": "◎", "_header_row": 1, "_skip_rows": [4]}
+    status, reason = ailine.check_set_where(after, args, source_book=before)
+    assert status == "fail" and "広がった疑い" in reason, reason

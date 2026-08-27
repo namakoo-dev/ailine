@@ -5442,14 +5442,21 @@ def test_format_confirmation_line_append_total_shows_factor_source():
 
 # --- ④ codegen（決定論） ------------------------------------------------------
 
-def test_codegen_dsl_append_total_places_label_left_of_value_and_formula_with_factor():
+def test_codegen_dsl_append_total_places_label_in_the_first_column_and_formula_with_factor():
+    """★★ 2026-08-28（Namakoo が請求書のデモを組んで実測・宣言つき挙動変更）:
+       ラベルの置き場所を「対象列の左隣」から**1 列目**へ変えた。
+       ★ 旧位置は 1 列目を空のまま残し、**この道具自身の走査を止めていた**
+         （走査は 1 列目の最初の空で終わる）。結果、合計を出した回は必ず
+         「1 行は検証できていません」が立って ✓ が永久に出ず、その後の全操作にも
+         同じ ⚠ が付いた ── 自分で自分を検証しにくくしていた。
+       ★ 日本の帳票では合計行のラベルは左端が普通なので、見た目でも困らない。"""
     # ★ B: 挿入耐性式（SUM(D2:INDEX(D:D;ROW()-1))型・LO方言のセミコロンで setFormula する。
     #   保存後はカンマ形に自動変換される・formula spike で実測済み）。
     meta = {"sheets": ["Sheet"], "headers": {"Sheet": ["品目", "数量", "単価", "小計"]}}
     code = ailine.codegen_dsl(
         "APPEND_TOTAL", {"col": "小計", "label": "税込み合計", "factor": 1.1}, meta)
     # 小計=列3(0起点)。ラベルはその左隣=列2に置く（既存構造を壊さない置き方）。
-    assert 'getCellByPosition(2, totalRow).setString("税込み合計")' in code
+    assert 'getCellByPosition(0, totalRow).setString("税込み合計")' in code
     assert 'getCellByPosition(3, totalRow).setFormula(' in code
     assert ('"=SUM(" & "D" & 2 & ":INDEX(" & "D" & ":" & "D" & ";ROW()-1))" & "*1.1"') in code
 
@@ -5475,7 +5482,10 @@ def test_check_append_total_passes_with_factor_and_label(tmp_path):
     ws.append(["a", 3, 50000, 150000])
     ws.append(["b", 1, 120000, 120000])
     ws.append(["c", 12, 8000, 96000])
-    ws["C5"] = "税込み合計"
+    # ★ 2026-08-28: 合計行のラベルは**1 列目**に置く（旧: 対象列の左隣）。
+    #   旧位置は 1 列目を空のまま残し、道具自身の走査を止めていた
+    #   （合計を出すと ✓ が永久に出なかった）。
+    ws["A5"] = "税込み合計"
     ws["D5"] = "=SUM(D2:INDEX(D:D,ROW()-1))*1.1"
     wb.save(p)
     _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"D5": 402600})
