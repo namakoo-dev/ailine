@@ -80,9 +80,10 @@ def test_a_named_column_at_a_relative_position(tmp_path):
 
 
 def test_a_column_without_a_name_is_allowed_and_disclosed(tmp_path):
-    """③ 「列を追加して」しか言わない依頼 ── 入れるが、空であることを画面に書く。"""
+    """③ 「列を追加して」しか言わない依頼 ── **途中に挿すなら**入れる（右の列がずれるので
+       目にも機械にも見える）。空であることは画面に書く。"""
     ok, resolved, _i, err = ailine.verify_dsl_args(
-        "ADD_COLUMN", {}, META, task="原価の右に列を追加して")
+        "ADD_COLUMN", {}, META, task="売上の右に列を追加して")
     assert ok, err
     assert resolved["name"] == ""
     assert "空のまま" in resolved["_name_label"], resolved["_name_label"]
@@ -212,7 +213,7 @@ def test_a_name_the_request_never_said_is_dropped():
        ★ 空欄は誤った名前より安い: 見出しが空なら △ になって人が気づく。もっともらしい
          名前が付くと、人は「自分がそう言った」と思ってしまう。"""
     ok, resolved, _i, err = ailine.verify_dsl_args(
-        "ADD_COLUMN", {"name": "新しい列"}, META, task="原価の右に列を追加して")
+        "ADD_COLUMN", {"name": "新しい列"}, META, task="売上の右に列を追加して")
     assert ok, err
     assert resolved["name"] == "", resolved["name"]
     assert "採りませんでした" in resolved["_name_label"], resolved["_name_label"]
@@ -233,3 +234,45 @@ def test_the_trigger_does_not_eat_a_swap_request():
     assert ailine.task_asks_for_a_swap("売上と原価の列を入れ替えて")
     # ★ 恒真殺し: 塞いだ側で、正当な「入れて」まで殺していないこと
     assert ailine.task_asks_to_add_a_column("原価の右に空の列を入れて")
+
+
+def test_an_invisible_no_op_is_refused_before_running(tmp_path):
+    """★★ Namakoo が GUI で実測: 見出しも値も無い列を**末尾**に足すと、セルが 1 つも
+       増えないので機械には何も変わって見えない（物理の使用範囲は値のあるセルで測る）。
+       事後条件は正しく × を出すが、利用者には「動かなかった」としか見えない。
+       ★ やる前に断って理由を言う ── 走らせてから × を出すのは、正しくても不親切。
+       ★ 途中に挿す場合は右の列がずれて見えるので、そちらは通す（上の試験）。"""
+    ok, _r, _i, err = ailine.verify_dsl_args(
+        "ADD_COLUMN", {}, META, task="原価の右に列を追加して")
+    assert not ok
+    assert "何も変わりません" in err and "名前を言ってください" in err, err
+
+
+# --- 宣言済みの効果を疑わない（誤爆した助言 2 件）--------------------------------------
+
+def test_the_new_column_position_is_declared():
+    """★ 実測（Namakoo の GUI）: 「変更が元データの範囲外です（D1）」が誤爆して ✓ が △ に
+       落ちていた。位置は機械が決めているのだから、その列は**宣言済みの効果**。
+       ★ op 名でなく「_at_col を持っているか」で見る（新しい op が増えても配線が要らない）。"""
+    letters = ailine._declared_new_column_letters(
+        "ADD_COLUMN", {"name": "チェック", "_at_col": 4}, META)
+    assert "D" in letters, letters
+
+
+def test_the_bulk_fill_advisory_ignores_the_declared_new_column():
+    """★ もう 1 件の誤爆: 挿した列の**見出し 1 セル**を書くのは「一括書き込み」ではない。"""
+    before = {"cells": {"売上!1,4": (None, None)}}
+    after = {"cells": {"売上!1,4": ("チェック", None)}}
+    assert ailine.detect_uniform_fill(before, after) is not None, "前提: 既定では鳴る"
+    assert ailine.detect_uniform_fill(before, after, new_col_letter={"D"}) is None
+    # ★ 恒真殺し: 宣言していない列に書いたら、今までどおり鳴る
+    assert ailine.detect_uniform_fill(before, after, new_col_letter={"E"}) is not None
+
+
+def test_only_content_producing_ops_survive_a_column_request():
+    """★★ 3 度目の実測で処方を裏返した: 除外する op を数え上げると、一段目が返しうる op が
+       増えるたびに穴が開く（INSERT_ROWS → SPLIT_CELL と 2 回開いた）。
+       ★ **残してよい op を挙げる**形にする ── 中身のある列を作る op だけ。"""
+    assert ailine.KEEP_FOR_COLUMN_REQUEST == ("COMPUTE_COLUMN", "LOOKUP_FILL")
+    for op in ("INSERT_ROWS", "SPLIT_CELL", "ADD_ROW", "SORT", "CLARIFY"):
+        assert op not in ailine.KEEP_FOR_COLUMN_REQUEST

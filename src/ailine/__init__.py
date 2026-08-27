@@ -1176,6 +1176,10 @@ def _declared_new_column_letters(op: str, resolved: dict, book_meta: dict) -> se
     if single:
         letters.add(single)
     wt = OP_WRITE_TARGET.get(op)
+    # ★ 2026-08-27: 位置を**機械が決めた**op は、右端決め打ちではなくその位置が宣言。
+    #   どのキーに入っているかは宣言(col_index_key)が持つ ── op 名の if は増やさない。
+    if wt and wt.col_index_key and (resolved or {}).get(wt.col_index_key):
+        letters.add(get_column_letter(int(resolved[wt.col_index_key])))
     if wt and wt.cols_key and resolved:
         names = resolved.get(wt.cols_key) or []
         sheets = book_meta.get("sheets") or []
@@ -1188,14 +1192,36 @@ def _declared_new_column_letters(op: str, resolved: dict, book_meta: dict) -> se
     return letters
 
 
-def detect_uniform_fill(before: dict, after: dict, single_cell: bool = False) -> str | None:
+def _cell_key_col(key) -> int:
+    """snapshot の cells のキー（"シート!行,列"）から列番号（1 起点）を取る。
+       読めない形なら 0（＝どの宣言にも当たらない＝疑いを消さない・安全側）。"""
+    try:
+        return int(str(key).rsplit("!", 1)[1].split(",")[1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def detect_uniform_fill(before: dict, after: dict, single_cell: bool = False,
+                         new_col_letter=None) -> str | None:
     """★ 一様埋め検出: 変更セルの全部で『変化前が空欄』かつ『変化後が全部同一値』
        （特に 0/空文字）の場合だけ疑わしい旨を返す（保守的）。
        ★ M2c: 判定対象は『値変更』の部分集合だけ（罫線・中央揃えなど書式のみが変わった
        セルは対象外にする — 混ざっていると後方の値だけ均一でも見逃していた実測不具合の修正）。"""
+    # ★ 2026-08-27: 宣言済みの新しい列に書いた分は疑わない（detect_ghost_data と同じ規則）。
+    #   ADD_COLUMN は挿した列の**見出し 1 セル**を書く ── それは「一括書き込み」ではない。
+    raw = ([new_col_letter] if isinstance(new_col_letter, str)
+            else list(new_col_letter or ()))
+    declared = set()
+    for letter in raw:
+        try:
+            declared.add(column_index_from_string(letter))
+        except (ValueError, AttributeError):
+            pass
     keys = set(before["cells"]) | set(after["cells"])
     after_vals = []
     for k in keys:
+        if declared and _cell_key_col(k) in declared:
+            continue
         b = before["cells"].get(k)
         a = after["cells"].get(k)
         b_val = b[0] if b is not None else None
@@ -1581,7 +1607,8 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
         if (op and resolved is not None and meta is not None) else None
     new_row_at_end = _op_writes(op, WRITE_NEW_ROW_AT_END)   # ★ 単位C(D10): 合計行は宣言済みの効果
     for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter, "new_row_at_end": new_row_at_end}),
-                        (detect_uniform_fill, {"single_cell": _op_writes(op, WRITE_SINGLE_CELL)})):
+                        (detect_uniform_fill, {"single_cell": _op_writes(op, WRITE_SINGLE_CELL),
+                                                 "new_col_letter": new_col_letter})):
         msg = fn(before, after, **kwargs)
         if msg:
             lines.append(msg)
@@ -2417,13 +2444,18 @@ class WriteTarget:
                  作る op のため・2026-08-24 SPLIT_CELL）。col_key が単数しか表せず、
                  「範囲外への書き込み」の免除が 1 列にしか効かなかった実測への対応。
        keeps_subject: 対象列を**意図して変えない** op（SPLIT_CELL は元の列を残すのが契約）。
-                 助言側が「言及された列が変更されていません」と誤って言うのを止める。"""
+                 助言側が「言及された列が変更されていません」と誤って言うのを止める。
+       col_index_key: 書き込み先列を**位置（1 起点の番号）**で指す resolved args のキー。
+                 名前でなく位置で決まる op（ADD_COLUMN・位置は機械が見出しから解決する）
+                 のため。col_key/cols_key と同じく、宣言を読むだけで新規列が分かる形に保つ
+                 ── op 名の if を増やさない。"""
     writes: tuple = ()
     col_key: str | None = None
     sheet_key: str | None = None
     reads_only: tuple = ()
     cols_key: str | None = None
     keeps_subject: bool = False
+    col_index_key: str | None = None
 
 
 OP_WRITE_TARGET = {
@@ -2458,7 +2490,11 @@ OP_WRITE_TARGET = {
     #   (_check_value_multiset) が「動かすだけのはずが値が消えた」を見る。
     "SWAP": WriteTarget(writes=(WRITE_REORDER,)),
     # ★ 途中に挿しても既存の値は消えない（右へずれるだけ）。行の挿入と同じ種別。
-    "ADD_COLUMN": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
+    # ★ 2026-08-27（Namakoo が実測）: **新しい列を作る**ことも宣言する。宣言しないと
+    #   「変更が元データの範囲外です（D1）」「空欄への一括書き込み」の 2 つが誤爆して
+    #   ✓ が △ に落ちる ── 宣言済みの効果を疑わない、という既存の仕組みに乗せる。
+    "ADD_COLUMN": WriteTarget(writes=(WRITE_ROW_SHIFT, WRITE_NEW_COLUMN),
+                               col_index_key="_at_col"),
     # ★ 1 セルは既存列への上書き（前提なし側）。★ ただし「1 セルのはず」は
     #   check_set_cell_value が**変わったセルの数**で証明する（列全体を潰したら落ちる）。
     "SET_CELL_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN, WRITE_SINGLE_CELL),
@@ -3815,6 +3851,16 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             # 位置の言い回しが無い＝末尾。**黙って決めない**ので根拠を必ず出す。
             _at_c = len(_headers_c) + 1
             _note_c = f"末尾＝{_at_c}列目（依頼文に位置の指定が無いため）"
+        # ★★ 2026-08-27（Namakoo が GUI で実測）: 見出しも値も無い列を**末尾**に足すと、
+        #   セルは 1 つも増えないので機械には**何も変わって見えない**（物理の使用範囲は
+        #   値のあるセルで測るため）。事後条件は正しく「列数が合わない」で × を出すが、
+        #   利用者には「動かなかった」としか見えない ── **やる前に断って理由を言う**。
+        #   ★ 途中に挿す場合は右の列がずれるので見える（そちらは通す）。
+        if not _name_c and int(_at_c) > len(_headers_c):
+            return False, resolved, inferred, (
+                "見出しも値も無い列を末尾に足しても、ファイルの中身は何も変わりません"
+                "（空の列はセルを持たないので機械にも見えません）── "
+                "見出しの名前を言ってください（例: 「原価の右にチェックという列を追加して」）")
         resolved["name"] = _name_c
         resolved["_at_col"] = int(_at_c)
         resolved["_at_basis"] = _note_c
@@ -6790,6 +6836,12 @@ _re_col_pair = re.compile(r"([^\s、。]+?)\s*と\s*([^\s、。]+?)\s*の\s*(右
 #   「入れ」に当たって列追加として横取りされ、入れ替えが動かなくなった。
 #   ★ 語の一部が別の語の一部でありうる ── 部分文字列の穴は、この repo で 2 度目。
 _re_add_col_ask = re.compile(r"列[^。]{0,6}?(?:を)?\s*(?:追加|足し|足す|挿入|入れ(?!替)|作)")
+
+
+# ★ 「列を追加して」という依頼に対して、一段目の答えを**そのまま残してよい** op。
+#   中身のある列を作る op だけ ── それ以外は軸か操作が違う（実測で INSERT_ROWS・
+#   SPLIT_CELL が返ってきた）。除外を数え上げると、返しうる op が増えるたび穴が開く。
+KEEP_FOR_COLUMN_REQUEST = ("COMPUTE_COLUMN", "LOOKUP_FILL")
 
 
 def task_asks_to_add_a_column(task: str) -> bool:
@@ -9905,14 +9957,28 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     ★ 依頼文が「列」と言っているなら、行の op は軸を間違えている ── 横取りする。
     #   ★ 計画が 1 段の時だけ差し替える（複合依頼の他の段を巻き添えにしない）。
     _headers_add = (book_meta.get("headers") or {}).get(_sheet_h) or []
+    #   ★★ 2026-08-27（Namakoo が GUI で実測・2 件目）: 一段目が **ADD_COLUMN を自分で
+    #     返す**回がある（実測 6 回中 5 回）。その場合ここを素通りするので、
+    #     一段目が名前を入れてこなかった依頼（「チェックという列を追加して」）で
+    #     **名前が空のまま**走り、見出しの無い列ができていた。
+    #     ★ 読み直しの対象に ADD_COLUMN 自身も入れる ── ただし**名前が空の時だけ**
+    #       第二段に聞き直す（実測で第二段は 6/6 で『チェック』を返す）。
+    #   ★★ 2026-08-27（3 件目・実測）: 除外する op を数え上げる書き方だと、一段目が
+    #     返しうる op が増えるたびに穴が開く（実測で SPLIT_CELL まで返ってきた ──
+    #     「列を追加して」に対してセルの分割を走らせるところだった）。
+    #     ★ **残してよい op を挙げる**形へ裏返す: 列を追加する依頼に対して正当なのは
+    #       「中身のある列を作る」op（計算列・転記）だけ。それ以外は軸か操作が違う。
     if (task_asks_to_add_a_column(a.task) and len(plan) == 1
-            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB",
-                                                "INSERT_ROWS", "ADD_ROW")):
-        _at_add, _note_add = resolve_col_anchor(a.task, _headers_add)
-        _ac = translate_task_fixed_op(a.model, "ADD_COLUMN", a.task, book_meta)
-        _ac_args = dict((_ac or {}).get("args") or {})
-        _where = _note_add or "末尾"
-        print(f"（『列追加』として読み直しました ── 依頼文が列の追加を指しています: {_where}）")
+            and (plan[0] or {}).get("op") not in KEEP_FOR_COLUMN_REQUEST):
+        _was_add_col = (plan[0] or {}).get("op") == "ADD_COLUMN"
+        _ac_args = dict((plan[0] or {}).get("args") or {}) if _was_add_col else {}
+        if not str(_ac_args.get("name") or "").strip():
+            _ac = translate_task_fixed_op(a.model, "ADD_COLUMN", a.task, book_meta)
+            _ac_args = dict((_ac or {}).get("args") or {})
+        if not _was_add_col:
+            _at_add, _note_add = resolve_col_anchor(a.task, _headers_add)
+            print(f"（『列追加』として読み直しました ── 依頼文が列の追加を指しています: "
+                   f"{_note_add or "末尾"}）")
         plan = [{"op": "ADD_COLUMN", "args": _ac_args}]
 
     # ★★ 2026-08-27（Namakoo「行や列の入れ替えを実装できるか」）:

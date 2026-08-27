@@ -1278,6 +1278,13 @@ def test_declared_new_column_letter_driven_by_op_write_target():
             letters = ailine._declared_new_column_letters(op, resolved, meta)
             assert letters == {"C", "D"}, f"{op}: 複数の新規列が返らなかった: {letters}"
             continue
+        # ★ 2026-08-27: 位置（番号）で新規列を宣言する op（ADD_COLUMN）。名前ではなく
+        #   位置が宣言なので、単数の関数ではなく複数版が宣言キーから列文字を出す。
+        if write_target.col_index_key:
+            resolved[write_target.col_index_key] = 3
+            letters = ailine._declared_new_column_letters(op, resolved, meta)
+            assert letters == {"C"}, f"{op}: 位置指定の新規列が返らなかった: {letters}"
+            continue
         letter = ailine._declared_new_column_letter(op, resolved, meta)
         assert letter == "C", f"{op}: 新規列作成のはずが列文字が返らなかった: {letter}"
 

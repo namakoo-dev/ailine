@@ -219,6 +219,9 @@ _add("add_column_no_name", "ADD_COLUMN", {}, task="金額の右に列を追加�
 _add("add_column_name_not_in_task", "ADD_COLUMN", {"name": "新しい列"},
      task="金額の右に列を追加して")
 _add("add_column_no_position", "ADD_COLUMN", {"name": "備考"}, task="備考という列を追加して")
+# ★ 名前なしでも**途中**に挿すなら通る（右の列がずれるので機械にも見える）。
+#   末尾（上の 2 件）との違いを凍結しておく ── 断りと受理の線はここにある。
+_add("add_column_unnamed_in_the_middle", "ADD_COLUMN", {}, task="数量の右に列を追加して")
 _add("add_column_duplicate", "ADD_COLUMN", {"name": "金額"}, task="金額の右に金額の列を追加して")
 _add("add_column_unknown_anchor", "ADD_COLUMN", {"name": "備考"},
      task="すいかの右に備考の列を追加して")
