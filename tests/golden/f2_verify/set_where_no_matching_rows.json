@@ -1,0 +1,23 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "在庫",
+    "cond_col": "金額",
+    "cmp": "gte",
+    "_target_sheet": "Sheet",
+    "cond_value": 9999999.0,
+    "value": "◎",
+    "_sources": {
+      "value": "依頼文: 「◎」"
+    },
+    "_headers": [
+      "商品",
+      "金額",
+      "在庫"
+    ],
+    "_header_row": 1,
+    "_cond_label": "『金額』が 9999999 以上"
+  },
+  "inferred": [],
+  "err": "『金額』が 9999999 以上 に当てはまる行がありません（条件か値を確かめてください・ファイルには何も書いていません）"
+}

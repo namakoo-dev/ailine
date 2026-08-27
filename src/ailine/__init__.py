@@ -1202,13 +1202,17 @@ def _cell_key_col(key) -> int:
 
 
 def detect_uniform_fill(before: dict, after: dict, single_cell: bool = False,
-                         new_col_letter=None) -> str | None:
+                         new_col_letter=None, proved: bool = False) -> str | None:
     """★ 一様埋め検出: 変更セルの全部で『変化前が空欄』かつ『変化後が全部同一値』
        （特に 0/空文字）の場合だけ疑わしい旨を返す（保守的）。
        ★ M2c: 判定対象は『値変更』の部分集合だけ（罫線・中央揃えなど書式のみが変わった
        セルは対象外にする — 混ざっていると後方の値だけ均一でも見逃していた実測不具合の修正）。"""
     # ★ 2026-08-27: 宣言済みの新しい列に書いた分は疑わない（detect_ghost_data と同じ規則）。
     #   ADD_COLUMN は挿した列の**見出し 1 セル**を書く ── それは「一括書き込み」ではない。
+    # ★ 2026-08-27: 事後条件が「どのセルが変わるべきか」を両方向で証明する op では、
+    #   この助言は何も足さない（証明の方が強い）── 助言は証明が届かない所にだけ要る。
+    if proved:
+        return None
     raw = ([new_col_letter] if isinstance(new_col_letter, str)
             else list(new_col_letter or ()))
     declared = set()
@@ -1607,8 +1611,11 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
         if (op and resolved is not None and meta is not None) else None
     new_row_at_end = _op_writes(op, WRITE_NEW_ROW_AT_END)   # ★ 単位C(D10): 合計行は宣言済みの効果
     for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter, "new_row_at_end": new_row_at_end}),
-                        (detect_uniform_fill, {"single_cell": _op_writes(op, WRITE_SINGLE_CELL),
-                                                 "new_col_letter": new_col_letter})):
+                        (detect_uniform_fill,
+                          {"single_cell": _op_writes(op, WRITE_SINGLE_CELL),
+                           "new_col_letter": new_col_letter,
+                           "proved": bool(getattr(OP_WRITE_TARGET.get(op), "proves_which_cells",
+                                                    False))})):
         msg = fn(before, after, **kwargs)
         if msg:
             lines.append(msg)
@@ -2104,6 +2111,13 @@ OP_META = {
     # ★ 2026-08-27（Namakoo「列の追加はできないの？」）: **削除だけあって追加が無かった。**
     #   行は空行(INSERT_ROWS)と値つき(ADD_ROW)の 2 つがあるのに、列は削除だけ。
     #   実測でも「備考という列を追加して」は語彙外で断られていた（GUI で本人が確認）。
+    # ★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）: 表計算のごく普通の操作
+    #   なのに一覧に無かった（SET_COLUMN_VALUE は列を丸ごと同じ値にするだけ）。
+    #   実測でも 4/4 で OUT_OF_VOCAB（「条件付き書式」と誤って読まれていた）。
+    "SET_WHERE": {"category": "表を編集する", "label": "条件つき書換", "folder": False,
+                   "synonyms": ["条件に合う行だけ書き換える", "〜以上の行に印を付ける",
+                                 "該当する行にだけ値を入れる"],
+                   "match_phrases": ["500以上の行に○を付けて", "条件に合う行だけ書き換えて"]},
     "ADD_COLUMN": {"category": "表を編集する", "label": "列追加", "folder": False,
                     "synonyms": ["列を追加", "列を足す", "列を挿入"],
                     "match_phrases": ["列を追加して", "列を足して", "空の列を入れて"]},
@@ -2360,6 +2374,10 @@ OP_SCHEMA = {
     "DELETE_COLUMN": ("col",),
     # ★ a/b = 入れ替える 2 つの名前。行名か列名かは機械が実表から決める（_axis）。
     "SWAP": ("a", "b"),
+    # ★ SET_WHERE: col(書き込み先列)・cond_col(条件を見る列)・cmp(比較)。
+    #   ★ 書き込む値と閾値は必須 slot に入れない（A' 原則）── 値は依頼文の引用符から、
+    #     比較は依頼文の語から、機械が取る（SET_COLUMN_VALUE/EXTRACT と同じ作法）。
+    "SET_WHERE": ("col", "cond_col", "cmp"),
     # ★ ADD_COLUMN の必須 slot は無い ── 「原価の右に列を追加して」のように**名前を
     #   言わない依頼が実在する**（Namakoo の実測）。位置も名前も機械が決める/受ける。
     "ADD_COLUMN": (),
@@ -2445,6 +2463,12 @@ class WriteTarget:
                  「範囲外への書き込み」の免除が 1 列にしか効かなかった実測への対応。
        keeps_subject: 対象列を**意図して変えない** op（SPLIT_CELL は元の列を残すのが契約）。
                  助言側が「言及された列が変更されていません」と誤って言うのを止める。
+       proves_which_cells: この op の事後条件が「どのセルが変わるべきか」を**両方向**
+                 （書かれるべき行は書かれ、それ以外は 1 セルも変わらない）で証明する。
+                 True の op では「空欄への同一値の一括書き込み」の助言は何も足さないので
+                 出さない ── 助言は**証明が届かない所**にだけ要る。
+                 ★ SET_COLUMN_VALUE は False のまま: あちらの事後条件は「全データ行が
+                   その値か」しか見ず、元が空欄だったかを問わないので助言が仕事をする。
        col_index_key: 書き込み先列を**位置（1 起点の番号）**で指す resolved args のキー。
                  名前でなく位置で決まる op（ADD_COLUMN・位置は機械が見出しから解決する）
                  のため。col_key/cols_key と同じく、宣言を読むだけで新規列が分かる形に保つ
@@ -2456,6 +2480,7 @@ class WriteTarget:
     cols_key: str | None = None
     keeps_subject: bool = False
     col_index_key: str | None = None
+    proves_which_cells: bool = False
 
 
 OP_WRITE_TARGET = {
@@ -2495,6 +2520,9 @@ OP_WRITE_TARGET = {
     #   ✓ が △ に落ちる ── 宣言済みの効果を疑わない、という既存の仕組みに乗せる。
     "ADD_COLUMN": WriteTarget(writes=(WRITE_ROW_SHIFT, WRITE_NEW_COLUMN),
                                col_index_key="_at_col"),
+    # ★ 既存列の一部の行に書く＝破壊の関所の対象（宣言必須）。
+    "SET_WHERE": WriteTarget(writes=(WRITE_EXISTING_COLUMN,), col_key="col",
+                              proves_which_cells=True),
     # ★ 1 セルは既存列への上書き（前提なし側）。★ ただし「1 セルのはず」は
     #   check_set_cell_value が**変わったセルの数**で証明する（列全体を潰したら落ちる）。
     "SET_CELL_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN, WRITE_SINGLE_CELL),
@@ -2592,6 +2620,7 @@ OP_SUBJECT_SLOTS = {
     # ★ a/b は行名にも列名にもなりうる ── 依頼文が直接名指す「対象」なので
     #   SUBJ_COLUMN 側に置く（EXTRACT の col と同じ扱い・実在照合は verify_dsl_args）。
     "SWAP": (("a", SUBJ_COLUMN), ("b", SUBJ_COLUMN)),
+    "SET_WHERE": (("col", SUBJ_COLUMN), ("cond_col", SUBJ_COLUMN)),
     # ★ name は**これから作る**列なので実在照合の対象にしない（幻覚の封鎖は別口 ──
     #   verify_dsl_args が「同名の列が既に在る」を断る）。位置の基準列は _at_basis に出る。
     "ADD_COLUMN": (),
@@ -3115,6 +3144,9 @@ _OP_SCHEMA_NOTES = {
              "**そのまま**入れる（行の中身の名前でも、列の見出しでもよい）。"
              "どちらなのかは機械が実際の表を見て決めるので、当てなくてよい。"
              "行番号・列番号・A1 のような座標は入れない。",
+    "SET_WHERE": "col は**印を書き込む列**の名前、cond_col は**条件を見る列**の名前、"
+                  "cmp は gte(以上)/lte(以下)/gt(超)/lt(未満)/eq(等しい)/contains(含む) の 1 つ。"
+                  "書き込む値と閾値の数字は入れない（機械が依頼文から取る）。",
     "ADD_COLUMN": "args は name（新しい列の見出しに書く名前）だけ。依頼文が名前を"
                    "言っていなければ args を空 {} にする（**作らない**）。"
                    "位置（右/左/末尾）は機械が実表の見出しから決めるので入れない。",
@@ -3825,6 +3857,69 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["col"] = name
         resolved["_headers"] = [str(h) for h in headers]
 
+    # --- ★ 2026-08-27: 条件つき書換（値と比較は機械が依頼文から取る）--------------
+    elif op == "SET_WHERE":
+        if (err := resolve_in("col", first_sheet)):
+            return False, resolved, inferred, err
+        if (err := resolve_in("cond_col", first_sheet)):
+            return False, resolved, inferred, err
+        # ★ 比較は機械が勝つ（EXTRACT と同じ作法・LLM の写し間違いで境界行が混入する）
+        _llm_cmp = str(resolved.get("cmp", "")).strip().lower()
+        _mech_cmp = extract_cmp_from_task(task)
+        if _mech_cmp is not None and _mech_cmp != _llm_cmp:
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"LLM が返した比較({_llm_cmp or '(空)'})と依頼文の機械抽出({_mech_cmp})が"
+                f"食い違うため機械抽出({_mech_cmp})を採用しました"]
+            _cmp = _mech_cmp
+        else:
+            _cmp = _llm_cmp
+        if _cmp not in _EXTRACT_CMPS:
+            return False, resolved, inferred, (
+                f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません")
+        resolved["cmp"] = _cmp
+        # ★ 閾値は**依頼文の数字**から機械が取る（LLM に確定させない）。
+        _nums = _re_threshold_num.findall((task or "").translate(_ZENKAKU_DIGITS))
+        if _cmp == "contains":
+            _thr = resolved.get("cond_value")
+            if _thr in (None, ""):
+                return False, resolved, inferred, "条件の値が依頼文から読み取れません"
+            resolved["cond_value"] = str(_thr)
+        else:
+            if len(set(_nums)) != 1:
+                return False, resolved, inferred, (
+                    "条件の数値が依頼文から一意に読み取れません"
+                    f"（見つかった数: {'、'.join(sorted(set(_nums))) or 'なし'}）── "
+                    "「原価が500以上の行の…」のように 1 つだけ書いてください")
+            resolved["cond_value"] = float(_nums[0])
+        # ★ 書き込む値は引用符から（SET_COLUMN_VALUE と同じ関所 ── LLM に作らせない）
+        _q = extract_quoted_literal(task)
+        if _q is None:
+            return False, resolved, inferred, (
+                "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで"
+                "書いてください（例:「原価が500以上の行のチェック列に『◎』を付けて」）")
+        resolved["value"] = _q
+        resolved["_sources"] = {**resolved.get("_sources", {}), "value": f"依頼文: 「{_q}」"}
+        resolved["_headers"] = [str(h) for h in (headers.get(first_sheet) or [])]
+        resolved["_header_row"] = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+        _lab = _EXTRACT_CMP_LABELS.get(_cmp, _cmp)
+        # ★ 500.0 でなく 500 と出す（人が依頼文に書いた形に近づける・整数なら整数で）
+        _cv = resolved["cond_value"]
+        _shown = (_cv if _cmp == "contains"
+                   else (str(int(_cv)) if float(_cv).is_integer() else _fmt_cell_value(_cv)))
+        resolved["_cond_label"] = f"『{resolved['cond_col']}』が {_shown} {_lab}"
+        # ★ 当てはまる行を**先に数えて画面に出す**（0 行なら、走らせる前に断る ──
+        #   「何も起きなかった」を後から × で知らせるのは、正しくても不親切）。
+        _hits = _rows_matching(book_meta, first_sheet, resolved["cond_col"],
+                                _cmp, resolved["cond_value"], resolved["_header_row"])
+        if _hits is not None:
+            if not _hits:
+                return False, resolved, inferred, (
+                    f"{resolved['_cond_label']} に当てはまる行がありません"
+                    "（条件か値を確かめてください・ファイルには何も書いていません）")
+            resolved["_match_label"] = f"{len(_hits)} 行（{'、'.join(str(r) for r in _hits[:5])}行目"
+            resolved["_match_label"] += "…）" if len(_hits) > 5 else "）"
+            resolved["_match_rows"] = _hits
+
     # --- ★ 2026-08-27: 列の追加（位置は機械が見出しから決める）--------------------
     elif op == "ADD_COLUMN":
         _sheet_c = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
@@ -4419,6 +4514,12 @@ _CONFIRM_FIELDS = {
     "SWAP": (("入れ替える一方", "a", None), ("もう一方", "b", None),
               ("何を入れ替えるか", "_axis_label", None)),
     "ADD_COLUMN": (("新しい列の名前", "_name_label", None), ("入れる位置", "_at_basis", None)),
+    # ★ cond_col/cmp のラベルもここに要る ── `ailine ops` の「必要な情報」はこの登録簿から
+    #   引くので、無いと英字（cond_col・cmp）のまま人に見える（SWAP で 1 度踏んだ）。
+    "SET_WHERE": (("書き込む列", "col", None), ("書き込む値", "value", None),
+                   ("条件を見る列", "cond_col", None),
+                   ("比べ方", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
+                   ("条件", "_cond_label", None), ("当てはまる行", "_match_label", None)),
     "SET_CELL_VALUE": (("対象の行", "row", None), ("対象列", "col", None),
                         ("書き込む値", "value", None)),
     "DRAW_BORDERS": (),
@@ -5004,6 +5105,20 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         headers = list(resolved_args.get("_headers") or [])
         col0 = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
         return wrap(f"    Call DeleteColumn(oDoc, {col0})\n")
+
+    if op == "SET_WHERE":
+        headers = list(resolved_args.get("_headers") or [])
+        wcol = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
+        ccol = (headers.index(resolved_args["cond_col"])
+                 if resolved_args["cond_col"] in headers else 0)
+        hr0 = int(resolved_args.get("_header_row", 1)) - 1
+        code = _EXTRACT_CMP_CODE[resolved_args["cmp"]]
+        thr = resolved_args["cond_value"]
+        thr_lit = ('"%s"' % str(thr).replace(chr(34), chr(34) * 2)
+                    if resolved_args["cmp"] == "contains" else repr(float(thr)))
+        val = str(resolved_args["value"]).replace(chr(34), chr(34) * 2)
+        return wrap('    Call SetColumnValueWhere(oDoc, %d, %d, %d, %d, %s, "%s")%s'
+                     % (hr0, wcol, ccol, code, thr_lit, val, chr(10)))
 
     if op == "ADD_COLUMN":
         # ★ 位置は Python が見出しから決めた 1 起点 → Basic は 0 起点。
@@ -6358,6 +6473,74 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{at}行目から {count} 行を削除（残りは順序ごと元のまま）"
 
 
+def check_set_where(path: Path, args: dict, header_row: int = 1,
+                     source_book: Path | None = None) -> tuple:
+    """SET_WHERE の事後条件。**当てはまる行だけが変わった**ことを両側から証明する。
+
+    ① 条件は**適用前のファイル**から独立に評価する（書き手が使った判定を借りない ──
+      同じ所から分母を作ると恒真になる。この repo が 8 月に 4 回踏んだ形）
+    ② 当てはまる行: 対象列がちょうど宣言した値になっている
+    ③ 当てはまらない行: 対象列が**1 セルも変わっていない**（広がっていないことの証明）
+    ④ 対象列以外は 1 セルも変わっていない
+    ★ ②③ の両方を見るのが要点 ── 「付いたか」だけ見ると、全行に付けても pass する。
+    """
+    col, cond_col = str(args.get("col", "")), str(args.get("cond_col", ""))
+    cmp, thr, value = args.get("cmp"), args.get("cond_value"), args.get("value")
+    if source_book is None or not Path(source_book).exists():
+        return "warn", "適用前ファイルが無いため、当てはまる行だけが変わったことを確かめられていません"
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last_a, cols_a = data_extent(ws, header_row)
+        headers = [str(ws.cell(row=header_row, column=c).value or "")
+                    for c in range(1, cols_a + 1)]
+        if col not in headers or cond_col not in headers:
+            return "fail", f"列『{col}』または『{cond_col}』が適用後の表にありません"
+        wi, ci = headers.index(col) + 1, headers.index(cond_col) + 1
+        with BookView(source_book) as bv_b:
+            ws_b = bv_b.sheet(args.get("_target_sheet"))
+            last_b, cols_b = data_extent(ws_b, header_row)
+            if [str(ws_b.cell(row=header_row, column=c).value or "")
+                 for c in range(1, cols_b + 1)] != headers:
+                return "fail", "見出しが変わっています（条件つき書換で見出しは動かないはず）"
+            last = max(last_a, last_b)
+            match = _extract_predicate(cmp, thr)
+            wrong_hit, wrong_miss, hits = [], [], 0
+            for r in range(header_row + 1, last + 1):
+                # ★ 条件は**適用前**の値で見る（書いた後の値で見ると、書いた印そのものが
+                #   条件を変えてしまう op では恒真になりうる）
+                if match(bv_b.cell_value(r, ci, args.get("_target_sheet"))):
+                    hits += 1
+                    if str(bv.cell_value(r, wi, args.get("_target_sheet")) or "") != str(value):
+                        wrong_miss.append(r)
+                else:
+                    before_v = bv_b.cell_value(r, wi, args.get("_target_sheet"))
+                    if bv.cell_value(r, wi, args.get("_target_sheet")) != before_v:
+                        wrong_hit.append(r)
+            after_rows = _cells_for_shift(bv, args.get("_target_sheet"), header_row, last,
+                                           max(cols_a, cols_b))
+            before_rows = _cells_for_shift(bv_b, args.get("_target_sheet"), header_row, last,
+                                            max(cols_a, cols_b))
+    if wrong_miss:
+        return "fail", (f"条件に当てはまるのに『{col}』が『{value}』になっていない行があります"
+                         f"（{'、'.join(map(str, wrong_miss[:5]))}行目）")
+    if wrong_hit:
+        return "fail", (f"条件に当てはまらない行の『{col}』が変わっています"
+                         f"（{'、'.join(map(str, wrong_hit[:5]))}行目）── 書き込みが広がった疑い")
+    if not hits:
+        return "fail", f"条件に当てはまる行が 1 つもありません（『{value}』はどこにも書かれていない）"
+    # ④ 対象列以外は不変 ── 対象列を両側から抜いて、残りを 1 箇所の比べ方に通す
+    j = wi - 1
+    st, info = compare_moved_rows([tuple(row[:j] + row[j + 1:]) for row in after_rows],
+                                   [tuple(row[:j] + row[j + 1:]) for row in before_rows],
+                                   "条件つき書換のあと")
+    if st == "broken":
+        return "fail", f"『{col}』以外の列が変わっています ── {info}"
+    if info:
+        return "warn", _moved_rows_note(info)
+    return "pass", (f"条件に当てはまる {hits} 行だけ『{col}』を『{value}』に"
+                     f"（当てはまらない行と他の列は 1 セルも変わらず）")
+
+
 def check_add_column(path: Path, args: dict, header_row: int = 1,
                       source_book: Path | None = None) -> tuple:
     """ADD_COLUMN の事後条件。**押し出したこと**を証明する（上書きしていないこと）。
@@ -6844,6 +7027,14 @@ _re_add_col_ask = re.compile(r"列[^。]{0,6}?(?:を)?\s*(?:追加|足し|足す
 KEEP_FOR_COLUMN_REQUEST = ("COMPUTE_COLUMN", "LOOKUP_FILL")
 
 
+# ★ 条件つきの書き込みを求めているか（比較語があり、かつ書き込む値が引用されている）。
+#   ★ 2 つとも要る: 比較語だけなら EXTRACT（抜き出す）かもしれないし、引用だけなら
+#     SET_COLUMN_VALUE（列を丸ごと）。**両方揃った時だけ**この op を疑う。
+def task_asks_for_a_conditional_write(task: str) -> bool:
+    return bool(task and extract_cmp_from_task(task)
+                 and extract_quoted_literal(task) is not None)
+
+
 def task_asks_to_add_a_column(task: str) -> bool:
     """依頼文が「列を追加」を求めているか（位置も名前もここでは決めない）。"""
     return bool(_re_add_col_ask.search(task or ""))
@@ -6860,6 +7051,40 @@ def _header_index(headers: list, name: str) -> tuple:
     if name.endswith("列") and name[:-1] in names:
         return names.index(name[:-1]) + 1, name[:-1]
     return None, name
+
+
+# ★ 条件の閾値を依頼文から取るための素材（EXTRACT の value を LLM に任せていたのと違い、
+#   こちらは**依頼文の数字**しか受け取らない ── 印を付ける操作は範囲を外すと静かに広がる）。
+_ZENKAKU_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+_re_threshold_num = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _rows_matching(book_meta: dict, sheet: str | None, cond_col: str, cmp: str,
+                    threshold, header_row: int = 1):
+    """条件に当てはまるデータ行（1 起点の行番号）を、実表を読んで数える。
+       読めなければ None（分からないことを 0 と言わない）。
+
+    ★ なぜ**適用前に**数えるか: 0 行なら書き込みは何も起こさず、事後条件は
+      「変化なし」で落ちる。正しいが、利用者には「動かなかった」としか見えない
+      （列追加で同じ形を実測した）。★ 走らせる前に、当てはまる行数を画面に出す。
+    ★ 走査は**物理の使用範囲**から（1 列目の空で止まる罠を避ける）。
+    """
+    path = book_meta.get("path")
+    if not path:
+        return None
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    if cond_col not in headers:
+        return None
+    ci = headers.index(cond_col) + 1
+    match = _extract_predicate(cmp, threshold)
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, _cols = data_extent(ws, header_row)
+            return [r for r in range(header_row + 1, last + 1)
+                     if match(bv.cell_value(r, ci, sheet))]
+    except Exception:
+        return None
 
 
 def resolve_col_anchor(task: str, headers: list) -> tuple:
@@ -7613,7 +7838,7 @@ POSTCONDITIONS = {
     # ★ 2026-08-26: 表の基本操作 3 種
     "ADD_ROW": check_add_row, "DELETE_ROWS": check_delete_rows,
     "DELETE_COLUMN": check_delete_column, "SET_CELL_VALUE": check_set_cell_value,
-    "SWAP": check_swap, "ADD_COLUMN": check_add_column,
+    "SWAP": check_swap, "ADD_COLUMN": check_add_column, "SET_WHERE": check_set_where,
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
@@ -7685,7 +7910,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
                    "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE", "SWAP",
-                   "ADD_COLUMN"):
+                   "ADD_COLUMN", "SET_WHERE"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -9944,6 +10169,19 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                 print(f"（『一括書換』でなく『1セル書換』として読み直しました ── "
                       f"依頼文が『{_named}』の行を名指ししています）")
                 plan = [{"op": "SET_CELL_VALUE", "args": _args}]
+
+    # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
+    #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
+    #   人が欲しいのは**値**であって書式ではない）。断る側なので横取りして悪くならない。
+    if (task_asks_for_a_conditional_write(a.task) and len(plan) == 1
+            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB",
+                                                "SET_COLUMN_VALUE")):
+        _sw2 = translate_task_fixed_op(a.model, "SET_WHERE", a.task, book_meta)
+        _sw2_args = dict((_sw2 or {}).get("args") or {})
+        if _sw2_args.get("col") and _sw2_args.get("cond_col"):
+            print("（『条件つき書換』として読み直しました ── "
+                   "依頼文が「条件に当てはまる行だけ」を指しています）")
+            plan = [{"op": "SET_WHERE", "args": _sw2_args}]
 
     # ★★ 2026-08-27（Namakoo「列の追加はできないの？」）:
     #   実測: 「備考という列を追加して」も「原価の右に列を追加して」も語彙外で断られていた

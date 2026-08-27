@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "在庫",
+    "cond_col": "金額",
+    "cmp": "gte",
+    "_target_sheet": "Sheet",
+    "cond_value": 40000.0,
+    "value": "◎",
+    "_sources": {
+      "value": "依頼文: 「◎」"
+    },
+    "_headers": [
+      "商品",
+      "金額",
+      "在庫"
+    ],
+    "_header_row": 1,
+    "_cond_label": "『金額』が 40000 以上",
+    "_match_label": "1 行（3行目）",
+    "_match_rows": [
+      3
+    ]
+  },
+  "inferred": [],
+  "err": null
+}

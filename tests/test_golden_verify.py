@@ -212,6 +212,35 @@ _add("set_cell_value_unknown_col", "SET_CELL_VALUE", {"row": "りんご", "col":
      task="りんごの利益を2000にして", book_meta=BM_CELL)
 _add("set_cell_value_no_value", "SET_CELL_VALUE", {"row": "りんご", "col": "金額"},
      task="りんごの金額を変えて", book_meta=BM_CELL)
+# --- SET_WHERE（2026-08-27）── 比較も閾値も値も、機械が依頼文から取る -------------
+_WHERE_BOOK = _CELL_DIR / "where_src.xlsx"
+
+
+def _make_where_book():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    ws.append(["商品", "金額", "在庫"])
+    ws.append(["りんご", 100, None])
+    ws.append(["みかん", 50000, None])
+    wb.save(_WHERE_BOOK)
+
+
+_make_where_book()
+BM_CELL2 = {"sheets": ["Sheet"], "headers": {"Sheet": ["商品", "金額", "在庫"]},
+             "header_rows": {"Sheet": 1}, "path": str(_WHERE_BOOK)}
+_add("set_where_ok", "SET_WHERE", {"col": "在庫", "cond_col": "金額", "cmp": "gte"},
+     task="金額が40000以上の行の在庫列に「◎」を付けて", book_meta=BM_CELL2)
+_add("set_where_machine_beats_llm_cmp", "SET_WHERE",
+     {"col": "在庫", "cond_col": "金額", "cmp": "lte"},
+     task="金額が40000以上の行の在庫列に「◎」を付けて", book_meta=BM_CELL2)
+_add("set_where_unquoted_value", "SET_WHERE", {"col": "在庫", "cond_col": "金額", "cmp": "gte"},
+     task="金額が40000以上の行の在庫列に◎を付けて", book_meta=BM_CELL2)
+_add("set_where_two_numbers", "SET_WHERE", {"col": "在庫", "cond_col": "金額", "cmp": "gte"},
+     task="金額が40000以上で在庫が10以上の行の在庫列に「◎」を付けて", book_meta=BM_CELL2)
+_add("set_where_no_matching_rows", "SET_WHERE", {"col": "在庫", "cond_col": "金額", "cmp": "gte"},
+     task="金額が9999999以上の行の在庫列に「◎」を付けて", book_meta=BM_CELL2)
+
 # --- ADD_COLUMN（2026-08-27）── 位置は機械・名前は依頼文に在るものだけ -----------
 _add("add_column_named_right_of", "ADD_COLUMN", {"name": "備考"},
      task="金額の右に備考の列を追加して")

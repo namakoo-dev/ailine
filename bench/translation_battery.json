@@ -1548,5 +1548,40 @@
         "op": "ADD_COLUMN"
       }
     }
+  ],
+  "items_v16": [
+    {
+      "id": 1601,
+      "book": "sample",
+      "text": "原価が500以上の項目の在庫列に「◎」を付けて",
+      "expect": {
+        "op": "SET_WHERE",
+        "col": "在庫",
+        "cond_col": "原価",
+        "cmp": "gte"
+      }
+    },
+    {
+      "id": 1602,
+      "book": "sample",
+      "text": "金額が10000未満の行の商品列を「要確認」にして",
+      "expect": {
+        "op": "SET_WHERE",
+        "col": "商品",
+        "cond_col": "金額",
+        "cmp": "lt"
+      }
+    },
+    {
+      "id": 1603,
+      "book": "sales",
+      "text": "売上が1000以下の行の原価列に「安」と書いて",
+      "expect": {
+        "op": "SET_WHERE",
+        "col": "原価",
+        "cond_col": "売上",
+        "cmp": "lte"
+      }
+    }
   ]
 }

@@ -55,6 +55,9 @@ _add("delete_rows_inferred", "DELETE_ROWS", {"at": 3, "count": 1}, inferred=("co
 _add("delete_column_one", "DELETE_COLUMN", {"col": "金額"})
 _add("set_cell_value_one", "SET_CELL_VALUE",
      {"row": "りんご", "col": "金額", "value": "2000"})
+_add("set_where", "SET_WHERE",
+     {"col": "チェック", "value": "◎", "_cond_label": "『原価』が 500 以上",
+      "_match_label": "2 行（2、4行目）"})
 _add("add_column_named", "ADD_COLUMN",
      {"name": "備考", "_name_label": "備考", "_at_basis": "『金額』（2列目）の右＝3列目"})
 _add("add_column_unnamed", "ADD_COLUMN",

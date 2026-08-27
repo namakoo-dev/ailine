@@ -680,11 +680,68 @@ End Sub
 '   dstName   : 出力先シート名（Python 側 codegen が col/cmp/value から決め打ちで組む。
 '               既に同名シートがあれば作り直す ―― 単位F/H が「前回の自分の出力の作り
 '               直しか、人の物の破壊か」を before/after の見出し署名で見分ける）
+' 1 セルが条件に一致するか（0=以上 1=以下 2=超 3=未満 4=等しい 5=含む）。
+' ★ 2026-08-27: ExtractRows の中にあった Select Case をここへ畳んだ。条件つきの書き込み
+'   （SetColumnValueWhere）が同じ判定を必要とし、**書き写すと必ず片方だけ直る**
+'   （この repo は今日それを 3 回踏んだ）。呼ぶ側は 2 つ、判定は 1 つ。
+' ★ Python 側 _extract_predicate が**別実装で同じ表**を持つ（tests/test_predicate_truth_table.py
+'   が凍結）。意味論を変える時は必ず両方＋その表を一緒に直すこと。
+Function RowMatches(oCell As Object, cmpCode As Integer, cmpValue As Variant) As Boolean
+    Dim isNumericCell As Boolean, m As Boolean
+    isNumericCell = (oCell.getType() <> com.sun.star.table.CellContentType.TEXT) And (oCell.getType() <> com.sun.star.table.CellContentType.EMPTY)
+    Select Case cmpCode
+        Case 0   ' 以上
+            m = (oCell.getValue() >= CDbl(cmpValue))
+        Case 1   ' 以下
+            m = (oCell.getValue() <= CDbl(cmpValue))
+        Case 2   ' 超
+            m = (oCell.getValue() > CDbl(cmpValue))
+        Case 3   ' 未満
+            m = (oCell.getValue() < CDbl(cmpValue))
+        Case 4   ' 等しい（数値セルは許容誤差 1e-6 の数値比較・それ以外は文字列比較）
+            If isNumericCell Then
+                m = (Abs(oCell.getValue() - CDbl(cmpValue)) <= 0.000001)
+            Else
+                m = (oCell.getString() = CStr(cmpValue))
+            End If
+        Case 5   ' を含む（文字列セルのみ ── 数値/空欄は対象外）
+            m = (oCell.getType() = com.sun.star.table.CellContentType.TEXT) _
+                And (InStr(oCell.getString(), CStr(cmpValue)) > 0)
+        Case Else
+            m = False
+    End Select
+    RowMatches = m
+End Function
+
+
+' 条件に一致する行だけ、指定した列に同じ値を書く（2026-08-27 追加）。
+' ★ Namakoo「原価が500以上の項目のチェック列に◎を付けて」── 表計算のごく普通の操作で、
+'   ここまで一覧に無かった（SET_COLUMN_VALUE は列を丸ごと同じ値にするだけ）。
+' writeCol/condCol は 0 起点。sValue は書く文字（数値化はしない ── 印を付ける用途）。
+Sub SetColumnValueWhere(oDoc As Object, headerRow As Integer, writeCol As Integer, _
+                         condCol As Integer, cmpCode As Integer, cmpValue As Variant, _
+                         sValue As String)
+    Dim oSheet As Object, oCur As Object, lastRow As Long, i As Long
+    oSheet = oDoc.Sheets.getByIndex(0)
+    ' ★ 走査範囲は**物理の使用範囲**から取る（1 列目の空で止まる罠を避ける ──
+    '   Python 側で今週 3 度直した形。Basic 側は gotoEndOfUsedArea で素直に取れる）。
+    oCur = oSheet.createCursor()
+    oCur.gotoEndOfUsedArea(False)
+    lastRow = oCur.RangeAddress.EndRow
+    If lastRow < headerRow + 1 Then Exit Sub
+    For i = headerRow + 1 To lastRow
+        If RowMatches(oSheet.getCellByPosition(condCol, i), cmpCode, cmpValue) Then
+            oSheet.getCellByPosition(writeCol, i).setString(sValue)
+        End If
+    Next i
+End Sub
+
+
 Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode As Integer, cmpValue As Variant, dstName As String)
     Dim oSheet As Object, oOut As Object
     Dim lastRow As Long, lastCol As Integer, i As Long, j As Integer
     Dim oCell As Object, oSrc As Object, oDst As Object
-    Dim outRow As Long, matched As Boolean, isNumericCell As Boolean
+    Dim outRow As Long, matched As Boolean
     oSheet = oDoc.Sheets.getByIndex(0)
 
     ' 最終データ行（A 列を見出しの直下から走査）
@@ -713,38 +770,7 @@ Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode
     outRow = 1
     For i = headerRow + 1 To lastRow
         oCell = oSheet.getCellByPosition(colIdx, i)
-        isNumericCell = (oCell.getType() <> com.sun.star.table.CellContentType.TEXT) And (oCell.getType() <> com.sun.star.table.CellContentType.EMPTY)
-
-        Select Case cmpCode
-            Case 0   ' 以上
-                matched = (oCell.getValue() >= CDbl(cmpValue))
-            Case 1   ' 以下
-                matched = (oCell.getValue() <= CDbl(cmpValue))
-            Case 2   ' 超
-                matched = (oCell.getValue() > CDbl(cmpValue))
-            Case 3   ' 未満
-                matched = (oCell.getValue() < CDbl(cmpValue))
-            Case 4   ' 等しい（数値セルは許容誤差 1e-6 の数値比較・それ以外は文字列比較）
-                ' ★ review3#2/#4 の直し: Python 側 _extract_predicate/extract_multi.predicate
-                '   （tests/test_predicate_truth_table.py の凍結した表）と同じ許容誤差に揃える。
-                '   完全一致だと同じ値でも浮動小数の丸めで書き手と検算が分裂しうる。
-                If isNumericCell Then
-                    matched = (Abs(oCell.getValue() - CDbl(cmpValue)) <= 0.000001)
-                Else
-                    matched = (oCell.getString() = CStr(cmpValue))
-                End If
-            Case 5   ' を含む（文字列セルのみ ── 数値/空欄は対象外）
-                ' ★ review3#2/#4 の直し: 旧仕様は getString() の部分一致で数値セルも
-                '   マッチしていた（140000 が "40" を含む、のように）。Python 側を
-                '   contains=文字列限定に直した（型を黙って文字列化しない）ため、
-                '   書き手（この Sub）が古い意味論のままだと数値列への contains が
-                '   必ず事後条件 fail になる（実機で再現・凍結: test_extract_e2e.py::
-                '   test_contains_on_numeric_column_agrees_between_basic_and_checker）。
-                matched = (oCell.getType() = com.sun.star.table.CellContentType.TEXT) _
-                          And (InStr(oCell.getString(), CStr(cmpValue)) > 0)
-            Case Else
-                matched = False
-        End Select
+        matched = RowMatches(oCell, cmpCode, cmpValue)
 
         If matched Then
             For j = 0 To lastCol

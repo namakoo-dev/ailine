@@ -513,6 +513,41 @@ _SC = {"row": "みかん", "col": "金額", "value": "2000",
 _add("set_cell_pass", "SET_CELL_VALUE", dict(_SC), _b_set_cell_pass)
 _add("set_cell_fail_whole_column", "SET_CELL_VALUE", dict(_SC), _b_set_cell_whole_column)
 
+# --- SET_WHERE（2026-08-27）---------------------------------------------------
+_TW = [["商品", "金額", "印"], ["りんご", 100, None], ["みかん", 700, None], ["ぶどう", 900, None]]
+
+
+def _b_set_where_pass(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TW)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額", "印"], ["りんご", 100, None], ["みかん", 700, "◎"],
+                    ["ぶどう", 900, "◎"]])
+    return after, before
+
+
+def _b_set_where_all_rows(tmp_path):
+    """★ 全行に付けた ── 「付いたか」だけ見る番人なら通ってしまう形。"""
+    before = _book(tmp_path, "before.xlsx", _TW)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額", "印"], ["りんご", 100, "◎"], ["みかん", 700, "◎"],
+                    ["ぶどう", 900, "◎"]])
+    return after, before
+
+
+def _b_set_where_missed(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TW)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額", "印"], ["りんご", 100, None], ["みかん", 700, "◎"],
+                    ["ぶどう", 900, None]])
+    return after, before
+
+
+_SWH = {"col": "印", "cond_col": "金額", "cmp": "gte", "cond_value": 500.0, "value": "◎",
+         "_header_row": 1}
+_add("set_where_pass", "SET_WHERE", dict(_SWH), _b_set_where_pass)
+_add("set_where_fail_all_rows", "SET_WHERE", dict(_SWH), _b_set_where_all_rows)
+_add("set_where_fail_missed_a_row", "SET_WHERE", dict(_SWH), _b_set_where_missed)
+
 # --- ADD_COLUMN（2026-08-27）--------------------------------------------------
 def _b_add_column_pass(tmp_path):
     before = _book(tmp_path, "before.xlsx", _TB)

@@ -115,3 +115,24 @@ def test_asking_for_a_column_never_inserts_a_row(tmp_path):
     ws = openpyxl.load_workbook(_out(book))["売上"]
     assert ws.max_row == 4, f"行が増えた（列の依頼に行で答えた）: {ws.max_row}"
     assert ws.max_column == 5, f"列が増えていない: {ws.max_column}"
+
+
+# --- 条件つき書換（2026-08-27・Namakoo「原価が500以上の項目に◎を付ける」）------------
+
+@pytest.mark.local
+def test_only_the_matching_rows_get_the_mark_on_real_lo(tmp_path):
+    """★ 芯: **当てはまらない行に付いていない**ことまで実機で見る。
+       「付いたか」だけ見る試験は、全行に付ける実装でも通ってしまう。"""
+    p = tmp_path / "g.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "売上"
+    ws.append(["商品", "売上", "原価", "チェック"])
+    for row in [["りんご", 1200, 700], ["みかん", 800, 300], ["ぶどう", 1500, 900]]:
+        ws.append(row)
+    wb.save(p)
+    r = _run(p, "原価が500以上の項目のチェック列に「◎」を付けて")
+    assert r.returncode == 0, f"実機の条件つき書換が失敗:\n{r.stdout[-900:]}"
+    out = openpyxl.load_workbook(_out(p))["売上"]
+    got = [out.cell(i, 4).value for i in range(2, 5)]
+    assert got == ["◎", None, "◎"], f"当てはまる行だけ、が破れた: {got}"
