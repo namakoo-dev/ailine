@@ -303,13 +303,17 @@ function drawTable(host, noteEl, d, other){
   if (d.style_error) bits.push("書式を読めませんでした: " + d.style_error);
   noteEl.textContent = bits.join(" ／ ");
 }
-async function loadSheet(path, sheet){
+async function loadSheet(path, sheet, isWorking){
   if (!path) return null;
   let url = "/api/sheet?path=" + encodeURIComponent(path);
   if (sheet) url += "&sheet=" + encodeURIComponent(sheet);
   const r = await fetch(url);
   const d = await r.json();
-  fillSheetPicker(d);
+  // ★★ 2026-08-27（Namakoo「操作できない」）: シートの一覧を**どのファイルからでも**
+  //   拾っていたら、原本（1 枚）を読んだ時に選択肢ごと消えていた。抽出で増えるのは
+  //   **下書き**の側なので、一覧は「いま作業している物」からしか取らない。
+  //   ★ 同じ画面部品を 2 つの出どころが書き換える形は、必ずどちらかが勝つ。
+  if (isWorking) fillSheetPicker(d);
   return d;
 }
 // ★ シートの一覧は**読んだ結果に付いてくるもの**をそのまま出す（画面が数え直さない）。
@@ -347,7 +351,7 @@ function redrawBasis(){
   if (lastAfter) drawTable($("#after"), $("#afternote"), lastAfter, beforeCells);
 }
 async function showBefore(){
-  const d = await loadSheet(bookPath(), window._sheet);
+  const d = await loadSheet(bookPath(), window._sheet, true);
   window._origSheet = d; window._prevSheet = null; window._target = null; lastAfter = null;
   origCells = (d && d.cells) || null;
   beforeCells = origCells;
@@ -419,7 +423,7 @@ function show(res){
   $("#draftnote").textContent = (shown && shown !== bookPath())
     ? ("下書き " + baseName(shown) + " に積み上げています（原本は無変更）")
     : "";
-  loadSheet(shown, window._sheet).then(d => {
+  loadSheet(shown, window._sheet, true).then(d => {
     lastAfter = d;
     drawTable($("#after"), $("#afternote"), d, beforeCells);
     if (d && !d.error && shown !== bookPath())
@@ -470,7 +474,7 @@ $("#aliaslist").onclick = async () => {
 // ★ シートを切り替えたら、前後の表を**そのシートで**読み直す（表示だけ・判定はしない）。
 $("#sheetsel").onchange = async () => {
   window._sheet = $("#sheetsel").value;
-  const d = await loadSheet(lastShown || bookPath(), window._sheet);
+  const d = await loadSheet(lastShown || bookPath(), window._sheet, true);
   if (d && !d.error){ drawTable($("#after"), $("#afternote"), d, null); lastAfter = d; }
   const o = await loadSheet(bookPath(), window._sheet);
   if (o && !o.error){ window._origSheet = o; redrawBasis(); }

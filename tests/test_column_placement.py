@@ -120,3 +120,35 @@ def test_the_basis_is_shown_for_any_op():
         "COMPUTE_COLUMN", {"operands": ["売上"], "operator": "-",
                             "_at_basis": "『商品』（1列目）の右＝2列目"}, set())
     assert "入れる位置:『商品』（1列目）の右＝2列目" in line, line
+
+
+# --- 人が選んだシートは、語の一致より強い証拠（2026-08-27・GUI で実測）------------------
+
+def test_an_explicitly_chosen_sheet_is_not_questioned():
+    """★★ 実測: 画面のシート選択から --sheet が来た回に「対象シートは依頼文の語と
+       機械照合できません」が立ち、確認（exit 7）に落ちて **操作できなかった**。
+       ★ 人が選択で名指ししたのは、文字列照合より**強い**証拠。黙らせるのではなく、
+         根拠が別に在ると認める（出どころを運んで、その回だけ問わない）。"""
+    sheets = ["売上", "抽出結果"]
+    resolved = {"col": "売上", "order": "desc", "_target_sheet": "抽出結果"}
+    slots = ailine._subject_slots("SORT", resolved, sheets)
+    assert any(s.key == "_target_sheet" for s in slots), "前提: 既定ではシートを問う"
+    resolved_cli = dict(resolved, _sheet_source="cli")
+    slots_cli = ailine._subject_slots("SORT", resolved_cli, sheets)
+    assert not any(s.key == "_target_sheet" for s in slots_cli), \
+        "人が選んだシートを、まだ問うている"
+    # ★ 恒真殺し: 出どころが依頼文/既定なら、今までどおり問う
+    for src in ("task", "default", None):
+        r = dict(resolved, _sheet_source=src) if src else dict(resolved)
+        assert any(s.key == "_target_sheet" for s in ailine._subject_slots("SORT", r, sheets)), src
+
+
+def test_the_gui_takes_the_sheet_list_only_from_the_working_file():
+    """★★ 実測（Namakoo「操作できない」）: シートの一覧を**どのファイルからでも**拾って
+       いたので、原本（1 枚）を読んだ瞬間に選択肢ごと消えていた。増えるのは下書きの側。
+       ★ 同じ画面部品を 2 つの出どころが書き換える形は、必ずどちらかが勝つ。"""
+    html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
+    assert "if (isWorking) fillSheetPicker(d);" in html, "一覧の出どころが絞れていない"
+    # 原本を読む呼び出しは isWorking を立てない（1 箇所だけ立てない呼びが在る）
+    calls = [l for l in html.splitlines() if "loadSheet(" in l and "async function" not in l]
+    assert any("bookPath(), window._sheet)" in c for c in calls), calls

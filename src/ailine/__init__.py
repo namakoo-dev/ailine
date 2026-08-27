@@ -2718,6 +2718,10 @@ def _subject_slots(op: str, resolved: dict, sheets: list) -> list:
             context = str(resolved.get("col") or "")
         slots.append(Slot(key=key, value=str(value), kind=kind, context=context))
     target_sheet = resolved.get("_target_sheet")
+    # ★ 出どころが「人の明示指定」（--sheet / 画面の選択）なら、依頼文との照合は問わない
+    #   ── 人が選んだという事実のほうが、語の一致より強い証拠。
+    if resolved.get("_sheet_source") == "cli":
+        target_sheet = None
     if target_sheet and len(sheets or []) > 1:
         slots.append(Slot(key="_target_sheet", value=str(target_sheet), kind=SUBJ_SHEET))
     return slots
@@ -3351,6 +3355,8 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     first_sheet = target_sheet if target_sheet in sheets else sheets[0]
     resolved = dict(args)
     resolved["_target_sheet"] = first_sheet
+    if book_meta.get("_sheet_source"):
+        resolved["_sheet_source"] = book_meta["_sheet_source"]
     inferred: set = set()
 
     def resolve_in(key: str, sheet_name: str):
@@ -10296,6 +10302,11 @@ def _cmd_run_dispatch(a: argparse.Namespace, book: Path, workdir: Path) -> int:
         print(f"？ {sheet_err}")
         return 3
     a._target_sheet = target_sheet
+    # ★★ 2026-08-27（Namakoo が GUI で実測）: 画面のシート選択から --sheet が来た回に
+    #   「対象シートは依頼文の語と機械照合できません」が立って ✓ が落ちていた。
+    #   ★ **人が選択で名指ししたのは、文字列照合より強い証拠**だ。出どころを運んで、
+    #     その回だけ問わない（黙らせるのではなく、根拠が別に在ると認める）。
+    a._sheet_source = sheet_source
     a._sheet_conflict = sheet_conflict      # ★ 挙動変更#3: 3択の関門(_sheet_conflict_gate)が読む
     a._rerun_ctx = (book, source_book, struct_dump, sheets)
     # ★ operator8 ①: sheet_source=="task" の推測（依頼文中の裸/マーカー付き言及）は、
@@ -10468,6 +10479,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     # ★ operator8 ③: 列解決が失敗した時の敗者復活（_header_row_hint_for_missing_col）用の
     #   材料。実ファイルからここで一度だけ読む（各シート先頭~10行・軽量）。
     book_meta["_row_scan"] = {s: _scan_first_rows(source_book, s) for s in sheets}
+    # ★ 対象シートの**出どころ**を運ぶ（cli=人が --sheet や画面で明示指定した）。
+    #   ここに載せれば verify_dsl_args の署名を変えずに全経路へ届く。
+    book_meta["_sheet_source"] = getattr(a, "_sheet_source", None)
     translation = getattr(a, "_reuse_translation", None)
     a._reuse_translation = None
     if translation is None:
