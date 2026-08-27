@@ -323,3 +323,28 @@ def test_every_workbook_opened_for_looking_is_closed():
     assert closes >= opens, (
         f"開いた回数 {opens} に対して閉じた回数 {closes} ── "
         "掴んだままのハンドルは、置換を静かに失敗させる")
+
+
+# --- ⑪ くらべる相手を人が選ぶ ------------------------------------------------------------
+
+def test_the_comparison_basis_is_chosen_by_the_person():
+    """★ 2026-08-27（Namakoo「操作前の表も書き換えられてしまう」）。
+
+    下書きを積み上げる作りにしたので「操作する前」が毎回変わる。人が期待するのは
+    **原本**（変わらないもの）だった ── 言葉の意味が俺の中で混ざっていた。
+
+    ★ 外部の作法に合わせた:
+      ・Google Sheets の版履歴は「どの版とくらべるか」を人に選ばせる
+      ・コード編集系（VS Code / Cursor）は編集をその場で確定させず Keep / Undo を出す
+    ★ そして**色は必ず、いま左に出ている物との差**にする ── 表示と基準がずれると
+      色が嘘になる（この repo が繰り返し潰してきた「分母が別の所から来る」形）。
+    """
+    js = _script(HTML, code_only=True)
+    assert "basis" in js and "redrawBasis" in js, "くらべる相手を選べない"
+    assert 'id="basis"' in HTML
+    for opt in ("原本", "直前"):
+        assert opt in HTML, f"選択肢『{opt}』が無い"
+    # ★ 恒真殺し: 基準を変えたら**色も塗り直す**（表示だけ変えて色が古いままにしない）
+    i = js.index("function redrawBasis")
+    block = js[i:i + 700]
+    assert "drawTable($(\"#after\")" in block, "基準を変えても色を塗り直していない"

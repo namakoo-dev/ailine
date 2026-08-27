@@ -146,7 +146,11 @@
     <div id="badge" class="badge b-none">まだ実行していません</div>
     <p class="why" id="why">ファイルを選んで、日本語で頼んでください。</p>
     <div class="sheets">
-      <div class="sheet"><h3>操作する前</h3>
+      <div class="sheet"><h3>くらべる相手
+        <select id="basis" style="width:auto;padding:2px 6px;font-size:12px;margin-left:8px">
+          <option value="orig">原本（選んだファイル）</option>
+          <option value="prev">直前（この操作の前）</option>
+        </select></h3>
         <div class="wrap" id="before"><div class="empty">ファイルを選ぶと出ます</div></div>
         <div class="sheetnote" id="beforenote"></div></div>
       <div class="sheet"><h3>操作したあと</h3>
@@ -220,6 +224,14 @@ async function loadFiles(){
 function bookPath(){ return picked ? picked.path : ""; }
 
 let beforeCells = null, lastShown = null, blockedPath = null;
+// ★ 2026-08-27（Namakoo「操作前の表も書き換えられてしまう」）:
+//   下書きを積み上げる作りにしたので、「操作する前」が毎回変わる。人が期待するのは
+//   **原本**（変わらないもの）だった ── 言葉の意味が俺の中で混ざっていた。
+//   ★ 外部の作法に合わせる: くらべる相手を**人が選ぶ**（Google Sheets の版履歴も
+//     「どの版とくらべるか」を選ばせる）。そして**色は必ず、いま左に出ている物との差**
+//     ── 表示と基準がずれると、色が嘘になる。
+let origCells = null, prevCells = null, lastAfter = null;
+function currentBasis(){ return $("#basis").value === "prev" ? prevCells : origCells; }
 function baseName(p){ const parts = p.split(String.fromCharCode(92)).join("/").split("/"); return parts[parts.length-1]; }
 function drawTable(host, noteEl, d, other){
   host.innerHTML = ""; noteEl.textContent = "";
@@ -276,9 +288,21 @@ async function loadSheet(path){
   const r = await fetch("/api/sheet?path=" + encodeURIComponent(path));
   return await r.json();
 }
+function redrawBasis(){
+  const useOrig = $("#basis").value === "orig";
+  const d = useOrig ? window._origSheet : (window._prevSheet || window._origSheet);
+  if (!d) return;
+  drawTable($("#before"), $("#beforenote"), d, null);
+  const who = useOrig ? ("原本 " + baseName(bookPath())) : ("直前 " + baseName(window._target || ""));
+  $("#beforenote").textContent = who + "  " + $("#beforenote").textContent;
+  beforeCells = d.cells || null;
+  if (lastAfter) drawTable($("#after"), $("#afternote"), lastAfter, beforeCells);
+}
 async function showBefore(){
   const d = await loadSheet(bookPath());
-  beforeCells = (d && d.cells) || null;
+  window._origSheet = d; window._prevSheet = null; window._target = null; lastAfter = null;
+  origCells = (d && d.cells) || null;
+  beforeCells = origCells;
   drawTable($("#before"), $("#beforenote"), d, null);
   $("#after").innerHTML = '<div class="empty">実行すると出ます</div>';
   $("#afternote").textContent = "";
@@ -288,12 +312,9 @@ function show(res){
   const j = res.json || {};
   // ★ 前後は**同じファイル**で撮る（サーバが実行の直前に読んだもの）。
   //   原本と下書きを並べていたせいで、正しく動いた操作が「できていない」に見えた。
-  if (res.before){
-    beforeCells = (res.before.cells) || null;
-    drawTable($("#before"), $("#beforenote"), res.before, null);
-    if (res.target) $("#beforenote").textContent =
-      baseName(res.target) + "  " + $("#beforenote").textContent;
-  }
+  if (res.before){ prevCells = res.before.cells || null; window._prevSheet = res.before; }
+  if (res.target) window._target = res.target;
+  redrawBasis();
   // ★ verdict 以外から印を導かない
   setBadge(j.verdict, "");
   const lines = $("#lines"); lines.innerHTML = "";
@@ -339,6 +360,7 @@ function show(res){
     ? ("下書き " + baseName(shown) + " に積み上げています（原本は無変更）")
     : "";
   loadSheet(shown).then(d => {
+    lastAfter = d;
     drawTable($("#after"), $("#afternote"), d, beforeCells);
     if (d && !d.error && shown !== bookPath())
       $("#afternote").textContent = "（下書き: " + baseName(shown) + "）  " + $("#afternote").textContent;
@@ -370,6 +392,7 @@ function showPane(which){
 $("#tab1").onclick = () => showPane(1);
 $("#tabN").onclick = () => showPane(2);
 $("#tabH").onclick = () => showPane(3);
+$("#basis").onchange = redrawBasis;
 
 async function loadOps(){
   const r = await fetch("/api/ops");
