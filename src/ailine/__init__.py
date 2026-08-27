@@ -3636,7 +3636,14 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                     return False, resolved, inferred, (
                         f"入れる値が {len(vals)} 個ありますが、列は {len(_headers_now)} 本です"
                         f"（ある列: {"、".join(map(str, _headers_now))}）")
-                vals = {str(h): v for h, v in zip(_headers_now, vals)}
+                # ★ 2026-08-27（実測・俺が入れた壊し方）: LLM は埋まらない列を None で
+                #   返すことがある（['梨', None, None]）。そのまま渡すと codegen が
+                #   `str(None)` を書き、セルに**文字列 "None"** が入った。
+                #   ★ 指定の無い列には**何も書かない**（空欄のままにする）。
+                #   ★ 事後条件はこの壊れ方を捕まえていた（rc=1）── 番人は効いていたが、
+                #     壊れた物を作ってから気づく形だったので、入口で落とす。
+                vals = {str(h): v for h, v in zip(_headers_now, vals)
+                         if v is not None and v != ""}
                 resolved["values"] = vals
                 inferred.add("values")
             if not isinstance(vals, dict) or not vals:
@@ -3649,7 +3656,9 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 return False, resolved, inferred, (
                     f"列『{"、".join(map(str, unknown))}』がこの表にありません"
                     f"（ある列: {"、".join(map(str, headers))}）")
-            resolved["values"] = {str(k): v for k, v in vals.items()}
+            # ★ 同上: 値が空の列は書かない（"None" という文字列を作らない）。
+            resolved["values"] = {str(k): v for k, v in vals.items()
+                                   if v is not None and v != ""}
             resolved["_headers"] = [str(h) for h in headers]
             resolved["_values_label"] = "／".join(
                 f"{k}={v}" for k, v in resolved["values"].items())
@@ -5998,7 +6007,9 @@ _ANCHOR_BEFORE = ("の上に", "の上へ", "の前に")
 _re_value_assign = re.compile(r"[^\s、。]+\s*(?:は|を|＝|=)\s*[0-9０-９]")
 
 
-def insert_rows_should_have_been_add_row(task: str, resolved: dict) -> str | None:
+def insert_rows_should_have_been_add_row(task: str, resolved: dict,
+                                          book_meta: dict | None = None,
+                                          sheet: str | None = None) -> str | None:
     """`INSERT_ROWS`（空行だけ）に読み取ったが、依頼文が**値も入れろ**と言っている形。
 
     ★ 2026-08-27（Namakoo が実測）:「みかんとぶどうの間に梨を追加して。売上は600 原価は300」
@@ -6007,9 +6018,21 @@ def insert_rows_should_have_been_add_row(task: str, resolved: dict) -> str | Non
       二段目翻訳（op を固定して args だけ埋め直す）へ回す判断材料にする。
     ★ 「言い換えてください」で終わらせない: 利用者の書き方は正しかった。
     """
-    if not _re_value_assign.search(task or ""):
+    text = (task or "")
+    # ★ 「空行が欲しい」と明示している依頼には触らない（誤爆させない）。
+    if any(w in text for w in ("空行", "行を挿入", "行を空け", "行間")):
         return None
-    return "依頼文に入れる値の指定があります（行挿入は空行を挿すだけです）"
+    if _re_value_assign.search(text):
+        return "依頼文に入れる値の指定があります（行挿入は空行を挿すだけです）"
+    # ★ 2026-08-27（2 度目の実測）: 初版は「値の代入」だけを証拠にしていたので、
+    #   「みかんとぶどうの間に梨を追加して」（数字が無い）で発火しなかった。
+    #   ★ **相対位置が実表で解けること自体**が強い証拠 ── 空行を「みかんとぶどうの
+    #     間に」挿してくれ、という依頼は考えにくい。人は record を置く話をしている。
+    if "追加" in text or "足し" in text or "入れ" in text:
+        at, note = resolve_row_anchor(text, book_meta or {}, sheet)
+        if at is not None:
+            return f"依頼文が場所を{note}と指しています（行挿入は空行を挿すだけです）"
+    return None
 
 
 def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
@@ -9091,7 +9114,8 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     そして**根拠を必ず画面に出す**（勝手に別の操作へすり替えない）。
     #   ★ 「言い換えてください」で終わらせない: 利用者の書き方は正しかった。
     if any((st or {}).get("op") == "INSERT_ROWS" for st in plan):
-        _why = insert_rows_should_have_been_add_row(a.task, {})
+        _sheet_hint = (book_meta.get("sheets") or [None])[0]
+        _why = insert_rows_should_have_been_add_row(a.task, {}, book_meta, _sheet_hint)
         if _why:
             _fixed = translate_task_fixed_op(a.model, "ADD_ROW", a.task, book_meta)
             if _fixed and (_fixed.get("args") or {}).get("values"):

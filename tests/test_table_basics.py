@@ -258,3 +258,49 @@ def test_insert_rows_with_values_in_the_task_is_re_read():
     """★ 「値の指定が在る」という証拠がある時だけ、行追加として読み直す（黙って変えない）。"""
     assert ailine.insert_rows_should_have_been_add_row("みかんの下に梨を追加して。売上は600", {})
     assert ailine.insert_rows_should_have_been_add_row("3行目に1行挿入して", {}) is None
+
+
+def test_empty_values_are_not_written_as_the_word_none(tmp_path):
+    """★ 2026-08-27（実測・俺が入れた壊し方）: LLM が埋まらない列を None で返すと、
+       codegen が `str(None)` を書き、セルに**文字列 "None"** が入った。
+
+    ★ 事後条件はこの壊れ方を捕まえていた（宣言と実物が食い違うので rc=1）── 番人は
+      効いていたが、**壊れた物を作ってから**気づく形だったので、入口で落とす。
+    ★ 指定の無い列には何も書かない（空欄のまま）。
+    """
+    _p, meta = _anchor_meta(tmp_path)
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "ADD_ROW", {"at": 3, "values": ["梨", None, None]}, meta, task="3行目に足して")
+    assert ok, err
+    assert resolved["values"] == {"商品": "梨"}, resolved["values"]
+    assert "None" not in resolved["_values_label"], resolved["_values_label"]
+
+
+def test_named_empty_values_are_dropped_too(tmp_path):
+    """名前つきで来た時も同じ（片配線を作らない）。"""
+    _p, meta = _anchor_meta(tmp_path)
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "ADD_ROW", {"at": 3, "values": {"商品": "梨", "売上": None, "原価": ""}},
+        meta, task="3行目に足して")
+    assert ok, err
+    assert resolved["values"] == {"商品": "梨"}, resolved["values"]
+
+
+@pytest.mark.parametrize("task,fires", [
+    ("みかんとぶどうの間に梨を追加して", True),      # 数字が無くても場所で分かる
+    ("みかんの下に梨を追加して。売上は600", True),   # 値の指定がある
+    ("3行目に1行挿入して", False),                  # 空行が欲しい
+    ("みかんの下に空行を入れて", False),            # 明示的に空行
+    ("行間を空けて", False),
+])
+def test_when_insert_rows_should_be_re_read(tmp_path, task, fires):
+    """★ 証拠がある時だけ読み直す（黙って op を書き換えない・誤爆させない）。
+
+    ★ 2 度直した: 初版は「値の代入がある」だけを証拠にしていたので、
+      「みかんとぶどうの間に梨を追加して」（数字が無い）で発火しなかった。
+      **相対位置が実表で解けること自体**を証拠に加えた ── 空行を「みかんとぶどうの
+      間に」挿してくれ、という依頼は考えにくい。
+    """
+    _p, meta = _anchor_meta(tmp_path)
+    got = ailine.insert_rows_should_have_been_add_row(task, {}, meta, "売上")
+    assert bool(got) is fires, f"{task} → {got}"
