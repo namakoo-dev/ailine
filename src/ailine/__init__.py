@@ -3669,8 +3669,17 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             resolved["target"] = f"col:{v}"
             if was_inferred:
                 inferred.add("target")
+        elif target.startswith("cell:"):
+            # ★ cell: は**機械が作る**形（LLM には出させない）。R,C は 1 起点。
+            try:
+                _r, _c = (int(x) for x in target[5:].split(","))
+            except ValueError:
+                return False, resolved, inferred, f"セルの指定『{target}』が読めません"
+            if _r < 1 or _c < 1:
+                return False, resolved, inferred, f"セルの指定『{target}』が範囲外です"
         else:
-            return False, resolved, inferred, f"対象『{target}』の形式が不明です（row:N / col:列名 / all）"
+            return False, resolved, inferred, (
+                f"対象『{target}』の形式が不明です（row:N / col:列名 / cell:行,列 / all）")
         if op == "FILL_COLOR":
             color = str(resolved.get("color", "")).lower()
             if color not in COLOR_MAP:
@@ -5106,6 +5115,11 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         return wrap(body)
 
     if op == "CENTER_ALIGN":
+        if str(resolved_args["target"]).startswith("cell:"):
+            _r, _c = (int(x) for x in str(resolved_args["target"])[5:].split(","))
+            return wrap('    oDoc.Sheets.getByIndex(0).getCellByPosition(%d, %d)'
+                         '.HoriJustify = com.sun.star.table.CellHoriJustify.CENTER%s'
+                         % (_c - 1, _r - 1, chr(10)))
         if resolved_args["target"] == "all":
             last_col = len(headers[first_sheet]) - 1
             return wrap(f"    Call AlignCenter(oDoc, {hr0}, {last_col})\n")
@@ -5120,6 +5134,10 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
 
     if op == "BOLD":
         target = resolved_args["target"]
+        if target.startswith("cell:"):
+            _r, _c = (int(x) for x in target[5:].split(","))
+            return wrap("    Call StyleBold(oDoc, %d, %d, %d, %d)%s"
+                         % (_c - 1, _r - 1, _c - 1, _r - 1, chr(10)))
         if target.startswith("row:"):
             row_idx = int(target[4:]) - 1
             # ★ W3: 列幅は Basic で走査せず、接地済みの見出し列数(headers)から決定論的に
@@ -5137,6 +5155,10 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
     if op == "FILL_COLOR":
         target = resolved_args["target"]
         hexcolor = COLOR_MAP[resolved_args["color"]]
+        if target.startswith("cell:"):
+            _r, _c = (int(x) for x in target[5:].split(","))
+            return wrap('    oDoc.Sheets.getByIndex(0).getCellByPosition(%d, %d)'
+                         '.CellBackColor = &H%s&%s' % (_c - 1, _r - 1, hexcolor, chr(10)))
         if target.startswith("row:"):
             row_idx = int(target[4:]) - 1
             # ★ W3: 列幅は Basic で走査せず、接地済みの見出し列数(headers)から決定論的に
@@ -6264,9 +6286,61 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
     return "pass", f"{len(expect)} グループを検証"
 
 
-def check_bold(path: Path, args: dict, header_row: int = 1) -> tuple:
+def _cell_target(args: dict):
+    """target が cell:R,C なら (行, 列)。そうでなければ None。"""
+    t = str(args.get("target") or "")
+    if not t.startswith("cell:"):
+        return None
+    try:
+        r, c = (int(x) for x in t[5:].split(","))
+        return r, c
+    except ValueError:
+        return None
+
+
+def _only_this_cell(path: Path, args: dict, rc: tuple, read, label: str,
+                     header_row: int = 1, source_book: Path | None = None) -> tuple:
+    """1 セルだけを飾る操作の事後条件（★ 両方向を見る ── ここが芯）。
+
+    ★ 2026-08-27（Namakoo「セル指定はできる？」）: 「『商品』セルに色を付けて」は
+      実測で毎回 `col:商品`（**列ぜんぶ**）に化けていた。頼んでいない範囲に静かに
+      広がる形で、この道具が最も嫌うもの。だから証明も両方向にする:
+      ① 宣言したセルが飾られている ② **他のセルの飾りが 1 つも変わっていない**
+    ★ ② は適用前と突き合わせる（元から飾ってあったセルを「広がった」と誤らない）。
+      適用前が無ければ ② は主張しない（warn ── 言えないことは言わない）。
+    read: ws とセルから「飾りの値」を取り出す関数（太字か・背景色か・寄せか）。
+    """
+    r, c = rc
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last, cols = data_extent(ws, header_row)
+        if r > last or c > cols:
+            return "fail", f"{label}の {r}行{c}列は表の外です（表は {last}行×{cols}列）"
+        if not read(ws.cell(row=r, column=c)):
+            return "fail", f"{r}行{c}列に{label}が付いていません"
+        after = {(rr, cc): read(ws.cell(row=rr, column=cc))
+                  for rr in range(header_row, last + 1) for cc in range(1, cols + 1)}
+    if source_book is None or not Path(source_book).exists():
+        return "warn", (f"{r}行{c}列に{label}が付いたことのみ確認"
+                         "（他のセルへ広がっていないかは、適用前ファイルが無いので未確認）")
+    with BookView(source_book) as bvb:
+        wsb = bvb.sheet(args.get("_target_sheet"))
+        spread = [(rr, cc) for (rr, cc), v in after.items()
+                   if (rr, cc) != (r, c) and v != read(wsb.cell(row=rr, column=cc))]
+    if spread:
+        where = "、".join(f"{rr}行{cc}列" for rr, cc in spread[:5])
+        return "fail", (f"{label}が {r}行{c}列 以外にも付いています（{where}）"
+                         " ── 1 セルのはずが広がった疑いがあります")
+    return "pass", f"{r}行{c}列 だけに{label}（他のセルは 1 つも変わらず）"
+
+
+def check_bold(path: Path, args: dict, header_row: int = 1,
+                source_book: Path | None = None) -> tuple:
     """★ W3: "col:" 対象は見出し(header_row)を含めて検証する（codegen の
        StyleBold(oDoc, col, hr0, col, lastRow) が見出しも含めて太字にするため）。"""
+    if (rc := _cell_target(args)):
+        return _only_this_cell(path, args, rc, lambda c: bool(c.font and c.font.bold),
+                                "太字", header_row, source_book)
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
         kind, val = args["target"].split(":", 1)
@@ -6290,9 +6364,23 @@ def check_bold(path: Path, args: dict, header_row: int = 1) -> tuple:
     return "pass", f"{len(cells)} セルが太字"
 
 
-def check_fill_color(path: Path, args: dict, header_row: int = 1) -> tuple:
+def _bg_hex(c) -> str:
+    """セルの背景色（16 進・無色は空）。openpyxl の書式表現の揺れをここ 1 箇所に閉じる。"""
+    f = getattr(c, "fill", None)
+    rgb = getattr(getattr(f, "fgColor", None), "rgb", None)
+    if not isinstance(rgb, str):
+        return ""
+    return rgb[-6:].upper()
+
+
+def check_fill_color(path: Path, args: dict, header_row: int = 1,
+                      source_book: Path | None = None) -> tuple:
     """★ W3: "col:" 対象は見出し(header_row)を含めて検証する（codegen が見出しも
        含めて塗るため）。"""
+    if (rc := _cell_target(args)):
+        want = COLOR_MAP[args["color"]].upper()
+        return _only_this_cell(path, args, rc, lambda c: _bg_hex(c) == want and _bg_hex(c),
+                                f"色（{args['color']}）", header_row, source_book)
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
         want_hex = COLOR_MAP[args["color"]].upper()
@@ -6354,9 +6442,15 @@ def check_chart(path: Path, before_charts: int) -> tuple:
     return "pass", f"グラフ数 {before_charts} → {after}"
 
 
-def check_center_align(path: Path, args: dict, header_row: int = 1) -> tuple:
+def check_center_align(path: Path, args: dict, header_row: int = 1,
+                       source_book: Path | None = None) -> tuple:
     """★ W3: "all"/"col:" とも見出し(header_row)を含めて検証する（codegen の
        AlignCenter/inline テンプレが見出しも含めて中央揃えにするため）。"""
+    if (rc := _cell_target(args)):
+        return _only_this_cell(
+            path, args, rc,
+            lambda c: str(getattr(getattr(c, "alignment", None), "horizontal", "")) == "center",
+            "中央揃え", header_row, source_book)
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
         target = args["target"]
@@ -7156,6 +7250,70 @@ def task_names_real_values(task: str, book_meta: dict, sheet: str | None,
             found.append((i, v))
             text = text[:i] + (chr(0) * len(v)) + text[i + len(v):]
     return [v for _i, v in sorted(found)]
+
+
+# ★ 「『商品』セル」「商品の見出しだけ」── **1 セル**を指す言い回し。
+#   ★ 実測（2026-08-27）: これらは全部 `col:商品`（列ぜんぶ）に化けていた。
+#     頼んでいない範囲に静かに広がる形で、この道具が最も嫌うもの。
+#   ★ 2026-08-27（既存の検体が捕まえた・自分で開けた穴）: 「見出しを太字にして」まで
+#     1 セルと読んでいた。それは**見出し行ぜんぶ**の意味でもありうる ── 曖昧。
+#     ★ 「セル」と書いてあるか、「見出し**だけ**」のように限定が付いた時だけ 1 セルと読む。
+#       曖昧なものを勝手に狭めない（広げないのと同じくらい大事）。
+_re_one_cell_ask = re.compile(
+    r"(?:セル[^。]{0,6}?(?:色|塗|太字|ボールド|強調|中央|センタ)"
+    r"|見出し[^。]{0,4}?(?:だけ|のみ)[^。]{0,6}?(?:色|塗|太字|ボールド|強調|中央|センタ))")
+
+
+def task_asks_for_one_cell(task: str) -> bool:
+    return bool(_re_one_cell_ask.search(task or ""))
+
+
+# ★ 「飾りの種類」だけは語で決まる（色/太字/中央）── これは**言い回しの揺れ**ではなく
+#   操作そのものの名前なので、一覧（OP_META の synonyms）と同じ語彙を機械が読む。
+_FORMAT_OP_WORDS = (("FILL_COLOR", ("色", "塗り", "塗っ", "ハイライト")),
+                     ("BOLD", ("太字", "ボールド", "強調")),
+                     ("CENTER_ALIGN", ("中央", "センタリング", "真ん中")))
+
+
+def format_op_from_task(task: str) -> str | None:
+    """依頼文から飾りの op を機械抽出する（見つからなければ None・断定しない）。"""
+    best = None
+    for op, words in _FORMAT_OP_WORDS:
+        for w in words:
+            i = (task or "").find(w)
+            if i >= 0 and (best is None or i < best[0]):
+                best = (i, op)
+    return best[1] if best else None
+
+
+def resolve_named_cell(book_meta: dict, sheet: str | None, name: str,
+                        header_row: int = 1) -> tuple:
+    """名前 → その値が入っている**1 つのセル**の (行, 列)（1 起点）。
+       決められなければ (None, None, 断りの文)。
+
+    ★ 見つからない・複数ある時は**決めない** ── 推測で別のセルを塗るのが一番こわい。
+    ★ 探す範囲は**物理の使用範囲**（走査が最初の空で止まる穴を避ける・今週 3 度直した形）。
+    ★ 見出し行も対象に含める（「『商品』セル」はふつう見出しを指す）。
+    """
+    path = book_meta.get("path")
+    if not path or not name:
+        return None, None, "表を読めないため、どのセルかを決められません"
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, cols = data_extent(ws, header_row)
+            hits = [(r, c) for r in range(header_row, last + 1)
+                     for c in range(1, cols + 1)
+                     if str(ws.cell(row=r, column=c).value or "").strip() == name]
+    except Exception as e:
+        return None, None, f"表を読めませんでした（{type(e).__name__}）"
+    if not hits:
+        return None, None, f"『{name}』というセルが見つかりません"
+    if len(hits) > 1:
+        where = "、".join(f"{r}行{c}列" for r, c in hits[:4])
+        return None, None, (f"『{name}』が {len(hits)} 箇所あります（{where}）"
+                             " ── どれか決められません")
+    return hits[0][0], hits[0][1], f"『{name}』＝{hits[0][0]}行{hits[0][1]}列"
 
 
 def _task_names_a_row(task: str, book_meta: dict, sheet: str | None) -> str | None:
@@ -8258,7 +8416,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
         if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
                    "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE", "SWAP",
                    "ADD_COLUMN", "SET_WHERE",
-                   "EXTRACT_COLUMNS"):
+                   "EXTRACT_COLUMNS", "BOLD", "FILL_COLOR", "CENTER_ALIGN"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -9651,7 +9809,16 @@ def cmd_doctor(a: argparse.Namespace) -> int:
 
 def cmd_ops(a: argparse.Namespace) -> int:
     """★ `ailine ops`: 頼める操作の一覧。盲検査定 2 本が独立に MISSING の筆頭へ置いた
-       「こう頼めばこれができる」の対応表。中身は登録簿から生成する（手書きしない）。"""
+       「こう頼めばこれができる」の対応表。中身は登録簿から生成する（手書きしない）。
+       ★ 2026-08-27（Namakoo「登録はドロップダウンで」）: --json を足した。
+         画面が一覧を**持たない**という線を守るため ── 人が読む表を画面側で
+         parse させると、そこが 2 つ目の一覧になる（形が変わった日に静かにずれる）。"""
+    if getattr(a, "json", False):
+        print(json.dumps({"ops": [{"op": op, "label": m["label"],
+                                    "category": m["category"],
+                                    "says": list(m.get("synonyms") or [])}
+                                   for op, m in OP_META.items()]}, ensure_ascii=False))
+        return 0
     for line in render_ops_table(OP_META, OP_SCHEMA, _CONFIRM_FIELDS):
         print(line)
     # ★ 第三波 S6: 複数ファイルの入口も見せる（argparse の登録簿から生成・手書きしない）。
@@ -10538,6 +10705,44 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
     #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
     #   人が欲しいのは**値**であって書式ではない）。断る側なので横取りして悪くならない。
+    # ★★ 2026-08-27（Namakoo「セル指定はできる？『商品』セルに色を付けて など」）:
+    #   実測 3/3 で `col:商品`（**列ぜんぶ**）に化けていた。頼んでいない範囲へ静かに
+    #   広がる形で、この道具が最も嫌うもの ── 「動かない」より悪い。
+    #   ★ 依頼文が「セル」「見出しだけ」と言い、機械がその値を**1 箇所に**特定できるなら、
+    #     それは列ではなく 1 セル。位置は機械が実表から決める（LLM に座標を出させない）。
+    #   ★ 一段目が断りに落ちる回もある（実測: 「みかんのセルを黄色にして」で OUT_OF_VOCAB）。
+    #     その時は飾りの種類を語から決めて、第二段に args だけ埋め直させる。
+    _fmt_op = (plan[0] or {}).get("op") if len(plan) == 1 else None
+    if (not _reread_done and task_asks_for_one_cell(a.task) and len(plan) == 1
+            and _fmt_op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN",
+                             "CLARIFY", "FREEFORM", "OUT_OF_VOCAB")):
+        if _fmt_op in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB"):
+            _guess = format_op_from_task(a.task)
+            _fmt2 = (translate_task_fixed_op(a.model, _guess, a.task, book_meta)
+                      if _guess else None)
+            _fmt_op = _guess if _fmt2 else _fmt_op
+            _fmt_args = dict((_fmt2 or {}).get("args") or {})
+        else:
+            _fmt_args = dict((plan[0] or {}).get("args") or {})
+        _tgt = str(_fmt_args.get("target") or "")
+        _nm = _tgt[4:] if _tgt.startswith("col:") else ""
+        if not _nm and _fmt_op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
+            # ★ 第二段が target を出さない回もある ── 依頼文が名指しする**実在の値**を探す。
+            _cands = [v for v in (task_names_real_values(a.task, book_meta, _sheet_h, col)
+                                   for col in ((book_meta.get("headers") or {}).get(_sheet_h) or []))
+                       for v in v]
+            _hdrs_f = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_h) or [])]
+            _cands += [h for h in _hdrs_f if h and h in (a.task or "")]
+            _nm = _cands[0] if len(set(_cands)) == 1 else ""
+        if _nm and _fmt_op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
+            _cr, _cc, _cnote = resolve_named_cell(book_meta, _sheet_h, _nm)
+            if _cr:
+                print(f"（『{_nm}』の**1 セル**として読み直しました ── {_cnote}。"
+                       "列ぜんぶには広げません）")
+                _fmt_args["target"] = f"cell:{_cr},{_cc}"
+                plan = [{"op": _fmt_op, "args": _fmt_args}]
+                _reread_done = True
+
     # ★★ 2026-08-27（実測・同じ依頼で聞かれたり聞かれなかったり）: 名指しの行の抽出。
     #   一段目は 2/3 で EXTRACT、1/3 で OUT_OF_VOCAB（→「もしかして」の確認）だった。
     #   ★ 機械が列も値も解けているなら迷う理由が無い ── 他の読み直しと同じ線。
@@ -14468,6 +14673,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.set_defaults(func=cmd_doctor)
 
     o = sub.add_parser("ops", help="頼める操作の一覧を表示する（何ができるか）")
+    o.add_argument("--json", action="store_true",
+                    help="機械可読で出す（画面や道具が一覧を自前で持たないため）")
     o.set_defaults(func=cmd_ops)
 
     cv = sub.add_parser("csv", help="CSV を検疫して隣に xlsx を作る（0落ち等を守って壊さず開ける形に）")

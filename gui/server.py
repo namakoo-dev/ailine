@@ -291,6 +291,16 @@ class Handler(BaseHTTPRequestHandler):
             rc, out, _payload = _ailine(["ops"])
             self._json(200, {"rc": rc, "text": out})
             return
+        if u.path == "/api/oplist":
+            # ★ 一覧は**本体から**取る（画面が持たない）。`ailine ops --json` は登録簿から
+            #   生成されるので、op を足した日に画面の選択肢も自動で増える。
+            rc, out, _p = _ailine(["ops", "--json"])
+            try:
+                data = json.loads((out or "").strip().splitlines()[-1])
+            except Exception as e:
+                data = {"ops": [], "error": f"{type(e).__name__}: {e}", "raw": out[-400:]}
+            self._json(200, data)
+            return
         if u.path == "/api/aliases":
             rc, out, _payload = _ailine(["alias", "list"])
             self._json(200, {"rc": rc, "text": out})

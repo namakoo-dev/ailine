@@ -128,8 +128,13 @@
 
       <label class="step">言い回しを登録する</label>
       <div class="note">思いついた言い方が通らなかったら、ここで操作に結び付けられます。</div>
+      <!-- ★ 2026-08-27（Namakoo「ドロップダウンで簡単に登録できるように」）:
+           op 名を手で打たせていた（SORT と打てる人はまず居ない）。一覧は本体の
+           `ailine ops --json` から取る ── 画面が選択肢を**持たない**。 -->
+      <div class="note">① 通らなかった言い方</div>
       <input id="aliasphrase" placeholder="例: 大きい順にして">
-      <input id="aliasop" placeholder="例: SORT" style="margin-top:8px">
+      <div class="note" style="margin-top:8px">② それはどの操作か</div>
+      <select id="aliasop"><option value="">読み込み中…</option></select>
       <div class="row"><button id="aliasadd" class="primary">登録する</button>
         <button id="aliaslist">登録済みを見る</button></div>
       <pre id="aliaspre" style="max-height:20vh"></pre>
@@ -483,7 +488,42 @@ $("#sheetsel").onchange = async () => {
   setWorking(baseName(bookPath()), window._sheet, "");
 };
 
+// ★ 選択肢は本体の登録簿から取る。op が増えた日に、ここも黙って増える。
+async function fillOpPicker(){
+  const sel = $("#aliasop");
+  try {
+    const d = await (await fetch("/api/oplist")).json();
+    const ops = d.ops || [];
+    if (!ops.length){ sel.innerHTML = '<option value="">一覧を取れませんでした</option>'; return; }
+    sel.innerHTML = "";
+    const blank = document.createElement("option");
+    blank.value = ""; blank.textContent = "— 選んでください —";
+    sel.appendChild(blank);
+    // ★ 分類ごとに 1 つだけ束ねる（登録簿の並び順は分類ごとに固まっていないので、
+    //   「変わったら新しい束」だと同じ分類が何度も出る ── 実測でそうなった）。
+    const order = [];
+    for (const o of ops) if (order.indexOf(o.category) < 0) order.push(o.category);
+    for (const cat of order){
+      const group = document.createElement("optgroup");
+      group.label = cat;
+      for (const o of ops.filter(x => x.category === cat)){
+        const opt = document.createElement("option");
+        opt.value = o.op;
+        opt.textContent = o.label + "（" + (o.says || []).slice(0, 2).join("／") + "）";
+        group.appendChild(opt);
+      }
+      sel.appendChild(group);
+    }
+  } catch(e){ sel.innerHTML = '<option value="">一覧を取れませんでした</option>'; }
+}
+fillOpPicker();
+
 $("#aliasadd").onclick = async () => {
+  // ★ 入れ忘れは**押す前に**言う（送ってから断られるのは不親切）。
+  if (!$("#aliasphrase").value.trim() || !$("#aliasop").value){
+    $("#aliaspre").textContent = "① 通らなかった言い方 と ② どの操作か の両方を入れてください。";
+    return;
+  }
   const r = await fetch("/api/alias_add", {method:"POST",
     headers:{"Content-Type":"application/json"},
     body: JSON.stringify({book: bookPath() || "x", phrase: $("#aliasphrase").value,

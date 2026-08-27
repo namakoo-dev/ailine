@@ -476,3 +476,21 @@ def test_no_line_repeats_the_same_handler_twice():
     for i, ln in enumerate(_gui_script().split("\n"), 1):
         for m in ("onclick = async", "onchange = async", "function "):
             assert ln.count(m) <= 1, f"{i} 行目に『{m}』が 2 回ある（挿入の二重書き込み）: {ln[:90]}"
+
+
+def test_the_op_picker_does_not_hardcode_the_list():
+    """★ 2026-08-27（Namakoo「登録はドロップダウンで」）: op 名を手で打たせていた
+       （SORT と打てる人はまず居ない）。
+       ★ ただし**画面が一覧を持たない**線は守る ── 選択肢は本体の `ailine ops --json`
+         から取る。ここに op 名を書き並べた瞬間、増えた op が黙って落ちる。"""
+    html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
+    assert 'id="aliasop"' in html and "<select id=\"aliasop\"" in html, "まだ入力欄のまま"
+    assert "/api/oplist" in html, "一覧を本体から取っていない"
+    js = _gui_script()
+    for op in ("SORT", "COMPUTE_COLUMN", "APPEND_TOTAL", "EXTRACT"):
+        assert op not in js, f"画面に op 名 {op} が焼き込まれている（一覧を持ってしまっている）"
+
+
+def test_the_server_asks_the_product_for_the_op_list():
+    src = (REPO / "gui" / "server.py").read_text(encoding="utf-8")
+    assert '_ailine(["ops", "--json"])' in src, "一覧を本体から取っていない"
