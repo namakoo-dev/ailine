@@ -2068,6 +2068,12 @@ OP_META = {
                         #   第二段専用のつもりでも、一覧（ailine ops）には出るので
                         #   **人が読める語**を持たせる ── 空にするなら免除簿に理由が要る。
                         "match_phrases": ["この行のこの値だけ変える", "1 セルだけ直す"]},
+    # ★ 2026-08-27: 入れ替え。**行と列で op を分けない** ── 依頼文（「みかんとぶどうを
+    #   入れ替えて」）は、その 2 つが行なのか列なのかを言わない。どちらかは**実表を見た
+    #   機械が決める**（verify_dsl_args が _axis を積む）。LLM に軸を当てさせない。
+    "SWAP": {"category": "表を編集する", "label": "入れ替え", "folder": False,
+              "synonyms": ["入れ替え", "交換", "順番を入れ替える"],
+              "match_phrases": ["AとBを入れ替えて", "2つの行を交換", "2つの列を交換"]},
     "DELETE_ROWS": {"category": "表を編集する", "label": "行削除", "folder": False,
                      "synonyms": ["行を削除", "行を消す", "行を取り除く"],
                      "match_phrases": ["行を削除して", "行を消して", "不要な行を除く"]},
@@ -2319,6 +2325,8 @@ OP_SCHEMA = {
     "ADD_ROW": ("at", "values"),
     "DELETE_ROWS": ("at",),
     "DELETE_COLUMN": ("col",),
+    # ★ a/b = 入れ替える 2 つの名前。行名か列名かは機械が実表から決める（_axis）。
+    "SWAP": ("a", "b"),
     # ★ row=行の名前（中身）・col=列名。値は LLM に決めさせず依頼文から機械が取る（A' 原則）。
     "SET_CELL_VALUE": ("row", "col"),
     "DRAW_BORDERS": (),
@@ -2437,6 +2445,9 @@ OP_WRITE_TARGET = {
     "ADD_ROW": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
     "DELETE_ROWS": WriteTarget(writes=(WRITE_REMOVE,)),
     "DELETE_COLUMN": WriteTarget(writes=(WRITE_REMOVE,)),
+    # ★ 入れ替えは値の多重集合が保存される（reorder）── 前提の番人
+    #   (_check_value_multiset) が「動かすだけのはずが値が消えた」を見る。
+    "SWAP": WriteTarget(writes=(WRITE_REORDER,)),
     # ★ 1 セルは既存列への上書き（前提なし側）。★ ただし「1 セルのはず」は
     #   check_set_cell_value が**変わったセルの数**で証明する（列全体を潰したら落ちる）。
     "SET_CELL_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN, WRITE_SINGLE_CELL),
@@ -2531,6 +2542,9 @@ OP_SUBJECT_SLOTS = {
     "ADD_ROW": (("at", SUBJ_ROW),),
     "DELETE_ROWS": (("at", SUBJ_ROW),),
     "DELETE_COLUMN": (("col", SUBJ_COLUMN),),
+    # ★ a/b は行名にも列名にもなりうる ── 依頼文が直接名指す「対象」なので
+    #   SUBJ_COLUMN 側に置く（EXTRACT の col と同じ扱い・実在照合は verify_dsl_args）。
+    "SWAP": (("a", SUBJ_COLUMN), ("b", SUBJ_COLUMN)),
     "SET_CELL_VALUE": (("col", SUBJ_COLUMN),),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
@@ -3043,12 +3057,25 @@ op を変えて返しても、呼び出し側は "{op}" を強制するのであ
 JSON のみ出力（説明・markdown 柵は禁止）。"""
 
 
+# ★ 第二段翻訳でだけ見せる補足（OPS_DOC は 1 文字も増やさない ── 実測で、OPS_DOC に
+#   16 行足したら op 一致が 98.1% → 94.2% に落ちた。語彙は増やすほど本流が濁る）。
+#   slot 名だけでは意味が伝わらない op にだけ 1 行足す。
+_OP_SCHEMA_NOTES = {
+    "SWAP": "a と b には、依頼文が『入れ替える』と言っている 2 つの名前を"
+             "**そのまま**入れる（行の中身の名前でも、列の見出しでもよい）。"
+             "どちらなのかは機械が実際の表を見て決めるので、当てなくてよい。"
+             "行番号・列番号・A1 のような座標は入れない。",
+}
+
+
 def _op_schema_doc(op: str) -> str:
     """固定した op 1 つ分だけのスキーマ文（OPS_DOC 全文でなく OP_SCHEMA[op] から機械生成）。"""
     required = OP_SCHEMA.get(op, ())
+    note = _OP_SCHEMA_NOTES.get(op)
     if not required:
         return f"{op} は引数不要"
-    return f"{op}: args: " + ", ".join(required)
+    line = f"{op}: args: " + ", ".join(required)
+    return line + (chr(10) + note if note else "")
 
 
 def build_translation_fixed_op_messages(op: str, task: str, book_meta: dict) -> list:
@@ -3746,6 +3773,60 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["col"] = name
         resolved["_headers"] = [str(h) for h in headers]
 
+    # --- ★ 2026-08-27: 入れ替え（行か列かは**機械が実表を見て**決める）------------
+    elif op == "SWAP":
+        _a = str(resolved.get("a", "")).strip()
+        _b = str(resolved.get("b", "")).strip()
+        if not _a or not _b:
+            return False, resolved, inferred, (
+                "入れ替える 2 つを取り出せませんでした"
+                "（『みかんとぶどうを入れ替えて』のように 2 つの名前を書いてください）")
+        if _a == _b:
+            return False, resolved, inferred, (
+                f"『{_a}』と『{_b}』が同じものです（入れ替えになりません）")
+        _sheet_s = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+        _hr_s = int((book_meta.get("header_rows") or {}).get(_sheet_s, 1) or 1)
+        _headers_s = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_s) or [])]
+        as_col = _a in _headers_s and _b in _headers_s
+        _ra, _note_a = _resolve_named_row(book_meta, _sheet_s, _a)
+        _rb, _note_b = _resolve_named_row(book_meta, _sheet_s, _b)
+        as_row = _ra is not None and _rb is not None
+        hint = _swap_axis_hint(task)
+        # ★ 三項（依頼・宣言・実体）: 依頼文の「行/列」という語と、LLM が挙げた 2 つの名前と、
+        #   実際の表。どれか 2 つだけで決めると、欠けた項を代用して恒真になる。
+        if as_col and as_row:
+            if hint is None:
+                return False, resolved, inferred, (
+                    f"『{_a}』『{_b}』は列の見出しにも、行の中身にも両方あります ── "
+                    "どちらを入れ替えるのか決められません"
+                    "（『〜の列を入れ替えて』『〜の行を入れ替えて』と書いてください）")
+            as_col, as_row = (hint == "column"), (hint == "row")
+        if hint == "row" and not as_row:
+            return False, resolved, inferred, f"行として決められません（{_note_a}／{_note_b}）"
+        if hint == "column" and not as_col:
+            return False, resolved, inferred, (
+                f"列として決められません（ある列: {"、".join(_headers_s)}）")
+        if not as_col and not as_row:
+            return False, resolved, inferred, (
+                f"入れ替える対象を決められません（{_note_a}／{_note_b}／"
+                f"ある列: {"、".join(_headers_s)}）")
+        resolved["_headers"] = _headers_s
+        resolved["_header_row"] = _hr_s
+        resolved["a"], resolved["b"] = _a, _b
+        if as_col:
+            resolved["_axis"] = "column"
+            resolved["_axis_label"] = "列（見出しで一致）"
+            resolved["_a_pos"] = _headers_s.index(_a) + 1
+            resolved["_b_pos"] = _headers_s.index(_b) + 1
+        else:
+            resolved["_axis"] = "row"
+            resolved["_axis_label"] = f"行（{_note_a}／{_note_b}）"
+            resolved["_a_pos"] = _ra
+            resolved["_b_pos"] = _rb
+            if min(_ra, _rb) <= _hr_s:
+                return False, resolved, inferred, (
+                    f"見出し行（{_hr_s}行目）を巻き込む入れ替えは受け付けません")
+
     # --- ★ W9: 検証済みヘルパ4種の語彙昇格 -----------------------------------
     elif op == "INSERT_ROWS":
         # ★ 2026-08-27（実測）:「みかんの下に空行を入れて」で LLM が 3 行目と言った
@@ -4231,6 +4312,10 @@ _CONFIRM_FIELDS = {
     "DELETE_ROWS": (("削除位置", "at", None), ("位置の根拠", "_at_basis", None),
                      ("行数", "count", None)),
     "DELETE_COLUMN": (("削除する列", "col", None),),
+    # ★ a/b をそのまま出す ── `ailine ops` の「必要な情報」はこの登録簿からラベルを引く
+    #   ので、ここに無い slot は生の英字（a・b）のまま人に見えてしまう。
+    "SWAP": (("入れ替える一方", "a", None), ("もう一方", "b", None),
+              ("何を入れ替えるか", "_axis_label", None)),
     "SET_CELL_VALUE": (("対象の行", "row", None), ("対象列", "col", None),
                         ("書き込む値", "value", None)),
     "DRAW_BORDERS": (),
@@ -4816,6 +4901,19 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         headers = list(resolved_args.get("_headers") or [])
         col0 = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
         return wrap(f"    Call DeleteColumn(oDoc, {col0})\n")
+
+    if op == "SWAP":
+        # ★ 位置は Basic 側にも**名前で**渡す（Python が数えた番号を渡さない）。
+        #   Basic は実文書を走査して自分で見つける ── Python の解決と食い違えば、
+        #   事後条件が「宣言した位置が入れ替わっていない」と落とす（独立な 2 実装）。
+        hr0 = int(resolved_args.get("_header_row", 1)) - 1
+        _a = str(resolved_args["a"]).replace(chr(34), chr(34) * 2)
+        _b = str(resolved_args["b"]).replace(chr(34), chr(34) * 2)
+        if resolved_args.get("_axis") == "column":
+            return wrap('    Call SwapColumnsByName(oDoc, "%s", "%s", %d)%s'
+                         % (_a, _b, hr0, chr(10)))
+        return wrap('    Call SwapRowsByName(oDoc, "%s", "%s", 0, %d)%s'
+                     % (_a, _b, hr0, chr(10)))
 
     if op == "SET_CELL_VALUE":
         headers = list(resolved_args.get("_headers") or [])
@@ -6146,6 +6244,79 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{at}行目から {count} 行を削除（残りは順序ごと元のまま）"
 
 
+def check_swap(path: Path, args: dict, header_row: int = 1,
+                source_book: Path | None = None) -> tuple:
+    """SWAP の事後条件。**入れ替わったこと**を、適用前との突き合わせで証明する。
+
+    ★★ 実測が設計を決めた（bench/swap_formula_spike_RESULTS.md）: 値を文字として交換すると
+      **式が壊れる**（各行の計算結果が他の行の値になる）。見た目は正しく並ぶので人は気づけない。
+      ★ だから「並びが入れ替わったか」だけを見てはいけない ── **中身が自分の値のまま
+        移ったか**まで見る。式セルは文字ではなく**計算後の値**で突き合わせる。
+    ★ 比べ方は 1 箇所（compare_moved_rows）── 追加・削除・入れ替えで同じ関数しか通らない。
+    ★ 入れ替えでは、動いていない行の計算結果が変わる理由が無い（挿入と違って行は増減しない）
+      ので、開示（warn）ではなく **fail** に倒す。ここが挿入と違う唯一の点。
+    """
+    axis = args.get("_axis") or "row"
+    a, bname = str(args.get("a", "")), str(args.get("b", ""))
+    if source_book is None or not Path(source_book).exists():
+        return "warn", "適用前ファイルが無いため、入れ替わったことを確かめられていません"
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last_a, cols_a = data_extent(ws, header_row)
+        with BookView(source_book) as bv_b:
+            ws_b = bv_b.sheet(args.get("_target_sheet"))
+            last_b, cols_b = data_extent(ws_b, header_row)
+            cols = max(cols_a, cols_b)
+            after_rows = _cells_for_shift(bv, args.get("_target_sheet"),
+                                           header_row, last_a, cols)
+            before_rows = _cells_for_shift(bv_b, args.get("_target_sheet"),
+                                            header_row, last_b, cols)
+            headers_after = [str(ws.cell(row=header_row, column=c).value or "")
+                              for c in range(1, cols + 1)]
+            headers_before = [str(ws_b.cell(row=header_row, column=c).value or "")
+                               for c in range(1, cols + 1)]
+    if len(after_rows) != len(before_rows):
+        return "fail", (f"行数が変わっています（適用前 {len(before_rows)} 行 → "
+                         f"適用後 {len(after_rows)} 行・入れ替えで増減はしないはず）")
+    if axis == "column":
+        try:
+            i, j = headers_before.index(a), headers_before.index(bname)
+        except ValueError:
+            return "fail", f"適用前に『{a}』『{bname}』の列が見つかりません"
+        want_headers = list(headers_before)
+        want_headers[i], want_headers[j] = want_headers[j], want_headers[i]
+        if headers_after != want_headers:
+            return "fail", (f"見出しが入れ替わっていません（適用後: "
+                             f"{"、".join(h for h in headers_after if h)}）")
+        expected = []
+        for row in before_rows:
+            r = list(row)
+            r[i], r[j] = r[j], r[i]
+            expected.append(tuple(r))
+        where = f"列『{a}』と列『{bname}』"
+    else:
+        ra, rb = args.get("_a_pos"), args.get("_b_pos")
+        if not ra or not rb:
+            return "warn", "入れ替える行の位置が分からないため確かめられていません"
+        i, j = int(ra) - header_row - 1, int(rb) - header_row - 1
+        if not (0 <= i < len(before_rows) and 0 <= j < len(before_rows)):
+            return "fail", "入れ替える行が表の範囲外です"
+        expected = list(before_rows)
+        expected[i], expected[j] = expected[j], expected[i]
+        if headers_after != headers_before:
+            return "fail", "見出しが変わっています（行の入れ替えで見出しは動かないはず）"
+        where = f"『{a}』の行と『{bname}』の行"
+    st, info = compare_moved_rows(after_rows, expected, "入れ替え後")
+    if st == "broken":
+        return "fail", f"{where} が入れ替わっていません ── {info}"
+    if info:
+        # ★ 入れ替えで計算結果が変わったら、それは実測した「静かに壊れる」形そのもの。
+        return "fail", (f"{where} を入れ替えたあと、式の計算結果が変わっています ── "
+                         f"式が別の行/列を指すようになった疑いがあります: "
+                         f"{_moved_rows_note(info)}")
+    return "pass", f"{where} を入れ替え（中身は自分の値のまま移動・他は 1 セルも変わらず）"
+
+
 def check_set_cell_value(path: Path, args: dict, header_row: int = 1,
                           source_book: Path | None = None) -> tuple:
     """SET_CELL_VALUE の事後条件。**1 セルであることを証明する**。
@@ -6252,6 +6423,49 @@ def check_delete_column(path: Path, args: dict, header_row: int = 1,
     if info:
         return "warn", _moved_rows_note(info)
     return "pass", f"列『{name}』を削除（残りの列は 1 セルも変わらず）"
+
+
+# ★ 2026-08-27: 入れ替えの依頼を見分ける（第二段翻訳へ回すための**証拠**であって、
+#   名前をここから取るためのものではない ── 名前は LLM が言い、機械が実表で確かめる）。
+_re_swap_ask = re.compile(
+    r"(?:入れ?替え|入替|交換|逆に\s*し|前後を\s*入れ)")
+# 依頼文が軸（行/列）をはっきり書いている場合だけ、その語を採る。
+_re_swap_axis_row = re.compile(r"行\s*(?:同士\s*)?(?:を|の|で)?\s*[^。]{0,6}?(?:入れ?替え|入替|交換)")
+_re_swap_axis_col = re.compile(r"列\s*(?:同士\s*)?(?:を|の|で)?\s*[^。]{0,6}?(?:入れ?替え|入替|交換)")
+
+
+def task_asks_for_a_swap(task: str) -> bool:
+    """依頼文が「入れ替え」を求めているか（軸も対象もここでは決めない）。"""
+    return bool(_re_swap_ask.search(task or ""))
+
+
+def _swap_pair_resolves(book_meta: dict, sheet: str | None, a: str, b: str) -> bool:
+    """2 つの名前が、実表で**行としても列としても**ちょうど 1 つに解けるか（どちらかでよい）。
+
+    ★ なぜ「読み直す前」に確かめるのか: 一段目が SORT を返す言い方があり（実測:
+      「順番を逆にして」）、黙って横取りすると**正当な並べ替えを壊す**。
+      読み直してよいのは、機械が対象を解けている時だけ ── ADD_ROW で同じ線を引いた。
+    ★ ここでは軸を決めない（決めるのは verify_dsl_args 1 箇所）。解けるかだけを見る。
+    """
+    if not a or not b or a == b:
+        return False
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    if a in headers and b in headers:
+        return True
+    ra, _ = _resolve_named_row(book_meta, sheet, a)
+    rb, _ = _resolve_named_row(book_meta, sheet, b)
+    return ra is not None and rb is not None
+
+
+def _swap_axis_hint(task: str) -> str | None:
+    """依頼文が『行を』『列を』とはっきり書いているときだけ "row"/"column" を返す。
+       ★ 両方書いてある／どちらも無いなら None ── 推測しない（機械が実表で決める側へ回す）。"""
+    t = task or ""
+    row = bool(_re_swap_axis_row.search(t))
+    col = bool(_re_swap_axis_col.search(t))
+    if row == col:
+        return None
+    return "row" if row else "column"
 
 
 _re_between = re.compile(r"([^\s、。]+?)\s*と\s*([^\s、。]+?)\s*の\s*間")
@@ -7148,6 +7362,7 @@ POSTCONDITIONS = {
     # ★ 2026-08-26: 表の基本操作 3 種
     "ADD_ROW": check_add_row, "DELETE_ROWS": check_delete_rows,
     "DELETE_COLUMN": check_delete_column, "SET_CELL_VALUE": check_set_cell_value,
+    "SWAP": check_swap,
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
@@ -7218,7 +7433,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
-                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE"):
+                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE", "SWAP"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -9477,6 +9692,29 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                 print(f"（『一括書換』でなく『1セル書換』として読み直しました ── "
                       f"依頼文が『{_named}』の行を名指ししています）")
                 plan = [{"op": "SET_CELL_VALUE", "args": _args}]
+
+    # ★★ 2026-08-27（Namakoo「行や列の入れ替えを実装できるか」）:
+    #   実測すると「みかんとぶどうを入れ替えて」は CLARIFY（「どちらの列ですか」）、
+    #   「売上と原価を入れ替えて」は OUT_OF_VOCAB に落ちていた ── **断る側**なので、
+    #   ここで読み直しても悪くなりようがない（成功していた経路を横取りしない）。
+    #   ★ 軸（行か列か）は LLM に当てさせない: 依頼文はたいてい言わないし、
+    #     **実表を見た機械のほうが確かなことを知っている**（verify_dsl_args が決める）。
+    #   ★ SORT も読み直しの対象に入れる（実測: 「みかんとぶどうの順番を逆にして」で
+    #     一段目が SORT を返した ── そのまま走れば**表全体を並べ替えて ✓ を出す**。
+    #     間違った操作を自信をもって実行する形で、断るより悪い）。
+    #   ★ ただし SORT を横取りする以上、条件を厳しくする: **2 つの名前が実表で
+    #     ちょうど 1 つに解ける時だけ**読み直す（解けないなら元の計画のまま進める）。
+    if task_asks_for_a_swap(a.task) and any(
+            (st or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB", "SORT")
+            for st in plan):
+        _sw = translate_task_fixed_op(a.model, "SWAP", a.task, book_meta)
+        _sw_args = (_sw or {}).get("args") or {}
+        if (str(_sw_args.get("a", "")).strip() and str(_sw_args.get("b", "")).strip()
+                and _swap_pair_resolves(book_meta, _sheet_h,
+                                         str(_sw_args["a"]).strip(), str(_sw_args["b"]).strip())):
+            print(f"（『入れ替え』として読み直しました ── 依頼文が"
+                   f"『{_sw_args["a"]}』と『{_sw_args["b"]}』の入れ替えを指しています）")
+            plan = [{"op": "SWAP", "args": dict(_sw_args)}]
 
     _reread_ops = ("INSERT_ROWS", "CLARIFY", "FREEFORM", "OUT_OF_VOCAB")
     if any((st or {}).get("op") in _reread_ops for st in plan):

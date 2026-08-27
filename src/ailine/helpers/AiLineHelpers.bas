@@ -227,6 +227,102 @@ Sub AddRowWithValues(oDoc As Object, atRow As Integer, colIdxCsv As String, _
 End Sub
 
 
+' 名前で指した 2 行を入れ替える（2026-08-27 追加）。
+' ★★ 実測で設計が決まった（bench/swap_formula_spike_RESULTS.md）:
+'   セルの値を「文字として交換」すると **式が壊れる** ── みかんの行の =B3*C3 が
+'   りんごの金額を出すようになり、見た目は正しく並んでいるので人が気づけない。
+'   この repo が最も嫌う「静かに壊れる」形。だから値の交換では実装しない。
+' ★ moveRange を使う: LibreOffice 自身が参照を付け替えるので、式は自分の行を指し続ける。
+'
+' ★★ 2026-08-27 に実測した落とし穴（黙って壊れる）:
+'   **変数名 oR は使えない。** Basic は大文字小文字を区別しないので **予約語 Or** と
+'   衝突し、**モジュールごとコンパイルに失敗**する。すると Call は何も起こさず、
+'   basrun は「適用した」と言う ── **エラーが 1 行も出ないまま何も起きない**。
+'   （事後条件が「変化なし」で落としたので嘘の ✓ にはならなかった。命綱は効いた）
+'   ★ 切り分けの記録: 初めは createUnoStruct / Dim ... As New を疑ったが、**それは無実**
+'     だった（このファイルは PivotSum 等 8 箇所で As New を使っていて動いている）。
+'     1 行ずつ足して切り分けたら、犯人は名前だった。疑う順番を間違えていた。
+' ★ ここではアドレスを生きたオブジェクトから貰う（.RangeAddress / .CellAddress）──
+'   Sheet 番号を自分で埋めなくて済むので、対象シートの取り違えが構造的に起きない。
+' ★ 空き地は使用範囲の外に取れない ── 先に insertByIndex で行を作り、最後に消す。
+Sub SwapRowsByName(oDoc As Object, sA As String, sB As String, _
+                    nKeyCol As Integer, nHeaderRow As Integer)
+    Dim oSheet As Object, oCur As Object, oRng As Object, oDst As Object
+    Dim r1 As Integer, r2 As Integer, park As Integer, lastCol As Integer
+    oSheet = oDoc.Sheets.getByIndex(0)
+    r1 = FindRowByName(oSheet, sA, nKeyCol, nHeaderRow)
+    r2 = FindRowByName(oSheet, sB, nKeyCol, nHeaderRow)
+    ' 見つからない(-1)/複数(-2)/同じ行 は何もしない ── Python 側の関所が先に断るが、
+    ' ここでも黙って別の行を動かさない（二重の歯止め）。
+    If r1 < 0 Or r2 < 0 Or r1 = r2 Then Exit Sub
+    oCur = oSheet.createCursor()
+    oCur.gotoEndOfUsedArea(False)
+    lastCol = oCur.RangeAddress.EndColumn
+    park = oCur.RangeAddress.EndRow + 1
+    oSheet.Rows.insertByIndex(park, 1)
+    ' ① A を空き地へ ② B を A の跡地へ ③ 空き地の A を B の跡地へ
+    oRng = oSheet.getCellRangeByPosition(0, r1, lastCol, r1).RangeAddress
+    oDst = oSheet.getCellByPosition(0, park).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oRng = oSheet.getCellRangeByPosition(0, r2, lastCol, r2).RangeAddress
+    oDst = oSheet.getCellByPosition(0, r1).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oRng = oSheet.getCellRangeByPosition(0, park, lastCol, park).RangeAddress
+    oDst = oSheet.getCellByPosition(0, r2).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oSheet.Rows.removeByIndex(park, 1)
+End Sub
+
+
+' 名前（見出し）で指した 2 列を入れ替える（2026-08-27 追加）。行版と同じ理屈・同じ手順。
+Sub SwapColumnsByName(oDoc As Object, sA As String, sB As String, nHeaderRow As Integer)
+    Dim oSheet As Object, oCur As Object, oRng As Object, oDst As Object
+    Dim c1 As Integer, c2 As Integer, park As Integer, lastRow As Long
+    oSheet = oDoc.Sheets.getByIndex(0)
+    c1 = FindColByNameAt(oSheet, sA, nHeaderRow)
+    c2 = FindColByNameAt(oSheet, sB, nHeaderRow)
+    If c1 < 0 Or c2 < 0 Or c1 = c2 Then Exit Sub
+    oCur = oSheet.createCursor()
+    oCur.gotoEndOfUsedArea(False)
+    lastRow = oCur.RangeAddress.EndRow
+    park = oCur.RangeAddress.EndColumn + 1
+    oSheet.Columns.insertByIndex(park, 1)
+    oRng = oSheet.getCellRangeByPosition(c1, 0, c1, lastRow).RangeAddress
+    oDst = oSheet.getCellByPosition(park, 0).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oRng = oSheet.getCellRangeByPosition(c2, 0, c2, lastRow).RangeAddress
+    oDst = oSheet.getCellByPosition(c1, 0).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oRng = oSheet.getCellRangeByPosition(park, 0, park, lastRow).RangeAddress
+    oDst = oSheet.getCellByPosition(c2, 0).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oSheet.Columns.removeByIndex(park, 1)
+End Sub
+
+
+' 見出し行から列名を探す（0起点の列番号。見つからない=-1・複数=-2）。
+' ★ FindRowByName の列版。見出し行を引数で受ける（多段見出しでも呼び側が決められる）。
+Function FindColByNameAt(oSheet As Object, sName As String, nHeaderRow As Integer) As Integer
+    Dim oCur As Object, lastCol As Integer, c As Integer, hit As Integer, n As Integer
+    oCur = oSheet.createCursor()
+    oCur.gotoEndOfUsedArea(False)
+    lastCol = oCur.RangeAddress.EndColumn
+    hit = -1 : n = 0
+    For c = 0 To lastCol
+        If Trim(oSheet.getCellByPosition(c, nHeaderRow).getString()) = sName Then
+            hit = c : n = n + 1
+        End If
+    Next c
+    If n = 0 Then
+        FindColByNameAt = -1
+    ElseIf n > 1 Then
+        FindColByNameAt = -2
+    Else
+        FindColByNameAt = hit
+    End If
+End Function
+
+
 ' 行をまとめて消す（2026-08-26 追加）。atRow は 0起点、count は本数。
 Sub DeleteRows(oDoc As Object, atRow As Integer, count As Integer)
     Dim oSheet As Object

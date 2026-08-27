@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "resolved": {
+    "a": "りんご",
+    "b": "みかん",
+    "_target_sheet": "Sheet",
+    "_headers": [
+      "商品",
+      "金額"
+    ],
+    "_header_row": 1,
+    "_axis": "row",
+    "_axis_label": "行（『りんご』の行＝2行目／『みかん』の行＝3行目）",
+    "_a_pos": 2,
+    "_b_pos": 3
+  },
+  "inferred": [],
+  "err": null
+}

@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "a": "りんご",
+    "b": "りんご",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "『りんご』と『りんご』が同じものです（入れ替えになりません）"
+}

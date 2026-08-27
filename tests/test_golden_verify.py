@@ -212,6 +212,18 @@ _add("set_cell_value_unknown_col", "SET_CELL_VALUE", {"row": "りんご", "col":
      task="りんごの利益を2000にして", book_meta=BM_CELL)
 _add("set_cell_value_no_value", "SET_CELL_VALUE", {"row": "りんご", "col": "金額"},
      task="りんごの金額を変えて", book_meta=BM_CELL)
+# --- SWAP（2026-08-27）── 軸の決定と、決められない時の断り ------------------
+_add("swap_rows_ok", "SWAP", {"a": "りんご", "b": "みかん"},
+     task="りんごとみかんを入れ替えて", book_meta=BM_CELL)
+_add("swap_columns_ok", "SWAP", {"a": "商品", "b": "金額"},
+     task="商品と金額の列を入れ替えて", book_meta=BM_CELL)
+_add("swap_unknown_name", "SWAP", {"a": "りんご", "b": "すいか"},
+     task="りんごとすいかを入れ替えて", book_meta=BM_CELL)
+_add("swap_same_name", "SWAP", {"a": "りんご", "b": "りんご"},
+     task="りんごとりんごを入れ替えて", book_meta=BM_CELL)
+_add("swap_missing_name", "SWAP", {"a": "", "b": "みかん"},
+     task="入れ替えて", book_meta=BM_CELL)
+
 _add("insert_rows_bad_count", "INSERT_ROWS", {"at": "3", "count": "abc"})
 
 # --- DRAW_BORDERS / AUTOFIT（引数無し） ------------------------------------

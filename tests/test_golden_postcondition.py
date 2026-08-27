@@ -513,6 +513,34 @@ _SC = {"row": "みかん", "col": "金額", "value": "2000",
 _add("set_cell_pass", "SET_CELL_VALUE", dict(_SC), _b_set_cell_pass)
 _add("set_cell_fail_whole_column", "SET_CELL_VALUE", dict(_SC), _b_set_cell_whole_column)
 
+# --- SWAP（2026-08-27）--------------------------------------------------------
+def _b_swap_pass(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額"], ["りんご", 100], ["ぶどう", 300], ["みかん", 200]])
+    return after, before
+
+
+def _b_swap_not_done(tmp_path):
+    """入れ替えを頼まれて何も動いていない（マクロが走っていない形）。"""
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx", _TB)
+    return after, before
+
+
+def _b_swap_only_names(tmp_path):
+    """★ 名前だけ入れ替えて金額を置いていった ── 数字の意味が入れ替わる最悪の形。"""
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額"], ["りんご", 100], ["ぶどう", 200], ["みかん", 300]])
+    return after, before
+
+
+_SW = {"a": "みかん", "b": "ぶどう", "_axis": "row", "_a_pos": 3, "_b_pos": 4}
+_add("swap_pass", "SWAP", dict(_SW), _b_swap_pass)
+_add("swap_fail_not_done", "SWAP", dict(_SW), _b_swap_not_done)
+_add("swap_fail_only_names_moved", "SWAP", dict(_SW), _b_swap_only_names)
+
 # --- DRAW_BORDERS -----------------------------------------------------------
 def _b_borders_pass(tmp_path):
     p = tmp_path / "b.xlsx"

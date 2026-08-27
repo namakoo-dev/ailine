@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "resolved": {
+    "a": "商品",
+    "b": "金額",
+    "_target_sheet": "Sheet",
+    "_headers": [
+      "商品",
+      "金額"
+    ],
+    "_header_row": 1,
+    "_axis": "column",
+    "_axis_label": "列（見出しで一致）",
+    "_a_pos": 1,
+    "_b_pos": 2
+  },
+  "inferred": [],
+  "err": null
+}

@@ -55,6 +55,11 @@ _add("delete_rows_inferred", "DELETE_ROWS", {"at": 3, "count": 1}, inferred=("co
 _add("delete_column_one", "DELETE_COLUMN", {"col": "金額"})
 _add("set_cell_value_one", "SET_CELL_VALUE",
      {"row": "りんご", "col": "金額", "value": "2000"})
+_add("swap_rows", "SWAP",
+     {"a": "みかん", "b": "ぶどう", "_axis": "row",
+      "_axis_label": "行（『みかん』の行＝3行目／『ぶどう』の行＝4行目）"})
+_add("swap_columns", "SWAP",
+     {"a": "売上", "b": "原価", "_axis": "column", "_axis_label": "列（見出しで一致）"})
 _add("draw_borders_no_fields", "DRAW_BORDERS", {})
 _add("autofit_no_fields", "AUTOFIT", {})
 _add("pivot", "PIVOT", {"group_col": "商品", "value_col": "金額"})
