@@ -192,3 +192,15 @@ def test_it_refuses_to_choose_when_two_columns_tie(tmp_path):
     meta = _meta(_book(tmp_path, rows), headers=("商品", "担当"))
     col, vals = ailine.resolve_named_extraction(meta, "売上", "みかんとりんごを抜き出して")
     assert (col, vals) == (None, None), (col, vals)
+
+
+def test_a_condition_request_is_never_stolen_by_the_named_extraction_reread():
+    """★★ 許可の列挙へ裏返した時に開けかけた穴（今日 3 度目の同じ形）:
+       「原価が500以上の行を抜き出して」で 500 が実表にも在ると、条件の抽出を
+       **名指しの抽出**として横取りしかねない。比較語が在る依頼には触らない。"""
+    assert ailine.extract_cmp_from_task("原価が500以上の行を抜き出して") == "gte"
+    assert ailine.extract_cmp_from_task("みかんの行とりんごの行だけを抽出して") is None
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("_re_extract_ask.search(a.task")
+    assert "extract_cmp_from_task(a.task) is None" in src[i:i + 400], \
+        "名指しの読み直しが、比較語のある依頼まで拾う形になっている"

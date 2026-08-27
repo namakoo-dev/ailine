@@ -10541,9 +10541,17 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     # ★★ 2026-08-27（実測・同じ依頼で聞かれたり聞かれなかったり）: 名指しの行の抽出。
     #   一段目は 2/3 で EXTRACT、1/3 で OUT_OF_VOCAB（→「もしかして」の確認）だった。
     #   ★ 機械が列も値も解けているなら迷う理由が無い ── 他の読み直しと同じ線。
+    #   ★★ 2026-08-27（GUI で実測・除外の列挙が 3 度目に破れた）: 一段目は同じ依頼文で
+    #     EXTRACT / OUT_OF_VOCAB / CLARIFY を返し分ける。**どれを数え上げても抜ける** ──
+    #     今日 3 度目なので、ここも許可の列挙へ裏返す。
+    #     依頼文が「抜き出す」と言い、機械が列も値も解けているなら、他の op は当たっていない
+    #     （列の抽出だけは別の op が担当するので、そこだけ残す）。
+    #     ★ ただし比較語（以上/以下…）が在る依頼には触らない ── それは条件であって
+    #       名指しではない（「原価が500以上の行を抜き出して」の 500 を名前と読まない）。
     if (not _reread_done and _re_extract_ask.search(a.task or "")
+            and extract_cmp_from_task(a.task) is None
             and not task_asks_to_extract_columns(a.task) and len(plan) == 1
-            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB")):
+            and (plan[0] or {}).get("op") != "EXTRACT_COLUMNS"):
         _xcol, _xvals = resolve_named_extraction(book_meta, _sheet_h, a.task)
         if _xcol and _xvals:
             print(f"（『抽出』として読み直しました ── 『{_xcol}』が"

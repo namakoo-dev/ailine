@@ -368,7 +368,9 @@ function show(res){
   if (res.before){ prevCells = res.before.cells || null; window._prevSheet = res.before; }
   if (res.target) window._target = res.target;
   redrawBasis();
-  const sh = (res.before && res.before.sheet) || (lastAfter && lastAfter.sheet) || "";
+  // ★ 選んだシートが在るならそれを出す（選択と表示が食い違うと、人は自分が何を
+  //   触っているのか分からなくなる ── 実測で「シート 売上」と出たまま別シートを触っていた）。
+  const sh = window._sheet || (res.before && res.before.sheet) || (lastAfter && lastAfter.sheet) || "";
   setWorking(baseName(res.target || bookPath()), sh,
              (res.target && res.target !== bookPath()) ? "（原本は無変更）" : "（原本に反映）");
   // ★ verdict 以外から印を導かない
@@ -481,7 +483,7 @@ $("#sheetsel").onchange = async () => {
   setWorking(baseName(bookPath()), window._sheet, "");
 };
 
-$("#aliasadd").onclick = async () => {$("#aliasadd").onclick = async () => {
+$("#aliasadd").onclick = async () => {
   const r = await fetch("/api/alias_add", {method:"POST",
     headers:{"Content-Type":"application/json"},
     body: JSON.stringify({book: bookPath() || "x", phrase: $("#aliasphrase").value,

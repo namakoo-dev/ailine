@@ -439,3 +439,40 @@ def test_the_gate_is_not_bypassed_by_default():
     block = _run_handler()
     assert 'if req.get("overwrite") else []' in block, (
         "無条件に上書きを許している疑い ── 関所は人が押した時だけ開く")
+
+
+# --- 画面のスクリプトが**そもそも動くか**（2026-08-27・実測で 30 分溶かした）------------
+
+def _gui_script() -> str:
+    t = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
+    return t[t.index("<script>") + len("<script>"):t.index("</script>")]
+
+
+def test_the_page_script_is_balanced():
+    """★★ 実測（Namakoo「操作ができない」が 2 回）: 挿入の仕方を間違えて
+       `$("#aliasadd").onclick = async () => {` を**二重に**書き込み、`{` が 1 つ余った。
+       すると **script 全体が構文エラーで、関数が 1 つも定義されない**。
+       画面は普通に描画されるので、**壊れているように見えない**のが最悪だった。
+       ★ 同じ形（アンカーの二重書き込み）は今日 3 回踏んだ ── 人の目では見つからない。
+       ★ 括弧の釣り合いだけなら外部の道具が要らない（CI に node は無い）。
+    """
+    import re
+    src = _gui_script()
+    # 文字列とコメントを潰してから数える（雑でよい ── 目的は「釣り合い」だけ）
+    bs = chr(92)
+    code = re.sub('"(?:[^"' + bs + bs + ']|' + bs + bs + '.)*"', '""', src)
+    code = re.sub("'(?:[^'" + bs + bs + ']|' + bs + bs + ".)*'", "''", code)
+    code = re.sub("`(?:[^`" + bs + bs + ']|' + bs + bs + ".)*`", "``", code)
+    code = re.sub("//[^" + chr(10) + "]*", "", code)
+    for open_c, close_c in (("{", "}"), ("(", ")"), ("[", "]")):
+        assert code.count(open_c) == code.count(close_c), (
+            f"画面のスクリプトで {open_c}{close_c} が釣り合っていない"
+            f"（{code.count(open_c)} 対 {code.count(close_c)}）── "
+            "構文エラーだと関数が 1 つも定義されず、画面は動かないのに壊れて見えない")
+
+
+def test_no_line_repeats_the_same_handler_twice():
+    """★ 二重書き込みそのものを名指しで捕まえる（釣り合いが偶然合う書き間違いもある）。"""
+    for i, ln in enumerate(_gui_script().split("\n"), 1):
+        for m in ("onclick = async", "onchange = async", "function "):
+            assert ln.count(m) <= 1, f"{i} 行目に『{m}』が 2 回ある（挿入の二重書き込み）: {ln[:90]}"
