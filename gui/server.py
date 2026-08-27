@@ -363,7 +363,15 @@ class Handler(BaseHTTPRequestHandler):
                     #     積むのは人が明示した時だけ（continue=true）。
                     #     VS Code 系の作法（編集をその場で確定させず人が受け入れる）と同じ線。
                     draft = _draft_path(Path(book))
-                    _cont = bool(req.get("continue"))
+                    # ★★ 2026-08-27（3 度目の設計変更・Namakoo が正した）:
+                    #   08-26 夜 積み上げ → 08-27 昼 原本から → 今ここ。
+                    #   「原本から」にしたら、**続きの依頼で前の結果が消えた**
+                    #   （「梨を追加」→「梨の売上を2000に」で梨の行ごと消える）── 08-26 夜と
+                    #   同じ困りごとを俺が作り直した。
+                    #   ★ 正しい形: **逐次保存（積み上げ）が既定**。繰り返して増えた分は
+                    #     **undo で 1 つ戻す** ── 直し方は「やり直さない」ではなく「戻せる」。
+                    #     やり直したい時だけ「原本からやり直す」を押す。
+                    _cont = not bool(req.get("restart"))
                     _note = ""
                     if not _cont or not draft.exists():
                         if draft.exists() and draft.read_bytes() != Path(book).read_bytes():
@@ -395,8 +403,8 @@ class Handler(BaseHTTPRequestHandler):
                     if _note:
                         out = _note + chr(10) + out
                     if _cont:
-                        out = ("（この下書きに**続けて**実行しました ── "
-                                "1 回につき 1 つ増えます）" + chr(10) + out)
+                        out = ("（下書きに続けて保存しました ── 1 つ戻すなら「もとに戻す」）"
+                                + chr(10) + out)
                     self._json(200, {"rc": rc, "text": out, "json": payload,
                                       "before": _before, "target": str(draft)})
                     return
@@ -504,7 +512,13 @@ class Handler(BaseHTTPRequestHandler):
                                             if dropped else "手放す下書きはありません。")})
                 return
             elif u.path == "/api/undo":
-                rc, out, payload = _ailine(["undo", book])
+                # ★★ 2026-08-27（Namakoo「1つ前の操作まで undo で戻れるように」）:
+                #   画面の「もとに戻す」は**原本**を対象にしていた。原本には
+                #   バックアップが無い（触っていないので当然）ので、何も戻せなかった。
+                #   ★ 戻す相手は**いま触っている物** ── 下書きがあれば下書き。
+                _target_undo = _DRAFTS.get(book) or book
+                rc, out, payload = _ailine(["undo", _target_undo])
+                out = f"（戻す相手: {Path(_target_undo).name}）" + chr(10) + out
             elif u.path == "/api/history":
                 rc, out, payload = _ailine(["undo", book, "--list"])
             else:

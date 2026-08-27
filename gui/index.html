@@ -51,6 +51,9 @@
   summary{cursor:pointer;color:var(--dim);font-size:13px}
   .note{color:var(--dim);font-size:12.5px;margin-top:4px}
   .spin{color:var(--accent)}
+  .working{position:sticky;top:0;z-index:3;background:var(--bg);padding:2px 0 10px;
+           color:var(--accent);font-size:13.5px;font-weight:600;letter-spacing:.02em}
+  .working b{color:var(--ink)}
   .tabs{display:flex;gap:8px;margin-bottom:16px}
   .tab{flex:1;text-align:center;padding:8px 6px;font-size:13.5px}
   .tab.on{border-color:var(--accent);color:var(--accent);background:#16242e}
@@ -98,11 +101,11 @@
       <label class="step">③ 実行する</label>
       <div class="row">
         <button id="runcopy" class="primary">下書きで実行</button>
-        <button id="runcont">この結果に続けて</button>
+        <button id="runrestart">原本からやり直す</button>
         <button id="run">原本に反映</button>
       </div>
-      <div class="note"><b>下書きで実行</b>は毎回<b>原本から</b>やり直します（同じことを何度試しても増えません）。
-        前の結果に重ねたいときだけ <b>この結果に続けて</b> を押してください。</div>
+      <div class="note"><b>下書きで実行</b>は前の結果に<b>続けて保存</b>します（原本は触りません）。
+        1 つ戻すなら <b>もとに戻す</b>、最初から試すなら <b>原本からやり直す</b>。</div>
       <div class="note" id="draftnote"></div>
       <div class="row"><button id="undo">もとに戻す</button>
         <button id="draftreset">下書きを捨てる</button></div>
@@ -145,6 +148,7 @@
   </section>
 
   <section class="work">
+    <div id="working" class="working">ファイルを選んでください</div>
     <div id="badge" class="badge b-none">まだ実行していません</div>
     <p class="why" id="why">ファイルを選んで、日本語で頼んでください。</p>
     <div class="sheets">
@@ -290,6 +294,14 @@ async function loadSheet(path){
   const r = await fetch("/api/sheet?path=" + encodeURIComponent(path));
   return await r.json();
 }
+function setWorking(file, sheet, note){
+  // ★ 2026-08-27（Namakoo「今どのシートに対して操作を行っているのか分かりにくい」）:
+  //   ファイル名もシート名も、表の下の小さい注記にしか出ていなかった。
+  //   **触っている物は一番上に、常に出す。**
+  $("#working").innerHTML = "いま触っている: <b>" + (file || "?") + "</b>"
+    + (sheet ? "  シート <b>" + sheet + "</b>" : "")
+    + (note ? "  " + note : "");
+}
 function redrawBasis(){
   const useOrig = $("#basis").value === "orig";
   const d = useOrig ? window._origSheet : (window._prevSheet || window._origSheet);
@@ -305,6 +317,7 @@ async function showBefore(){
   window._origSheet = d; window._prevSheet = null; window._target = null; lastAfter = null;
   origCells = (d && d.cells) || null;
   beforeCells = origCells;
+  setWorking(baseName(bookPath()), d && d.sheet, "（まだ下書きはありません）");
   drawTable($("#before"), $("#beforenote"), d, null);
   $("#after").innerHTML = '<div class="empty">実行すると出ます</div>';
   $("#afternote").textContent = "";
@@ -317,6 +330,9 @@ function show(res){
   if (res.before){ prevCells = res.before.cells || null; window._prevSheet = res.before; }
   if (res.target) window._target = res.target;
   redrawBasis();
+  const sh = (res.before && res.before.sheet) || (lastAfter && lastAfter.sheet) || "";
+  setWorking(baseName(res.target || bookPath()), sh,
+             (res.target && res.target !== bookPath()) ? "（原本は無変更）" : "（原本に反映）");
   // ★ verdict 以外から印を導かない
   setBadge(j.verdict, "");
   const lines = $("#lines"); lines.innerHTML = "";
@@ -354,7 +370,10 @@ function show(res){
   document.querySelector(".work").scrollTop = 0;
   // ★ 「本当にそうなったか」は、文字でなく**表で**確かめられなければ意味がない。
   //   出せる先（j.out）は ailine が返したもの ── 画面が推測して探しに行かない。
-  const shown = j.out || bookPath();
+  // ★★ 2026-08-27（実測）: 断られた回に `j.out` が原本を指すことがあり、**下書きの表が
+  //   原本に差し替わって**「梨の行が消えた」ように見えた（ファイルは無事だった）。
+  //   ★ 出すのは**いま触っている物**（サーバが返した target）── j.out は補助でしかない。
+  const shown = window._target || j.out || bookPath();
   lastShown = shown;
   // ★ 黙って別のファイルを触らない ── 今どこに書いているかを必ず見せる。
   //   （下書きは 2 回目から**下書き自身**に積み上げる: 原本から作り直すと前の操作が消える）
@@ -464,7 +483,7 @@ $("#mextract").onclick = () => multi("extract", {task: $("#mtask").value});
 
 $("#run").onclick     = () => call("/api/run",  {task: $("#task").value, copy:false}, "実行中…");
 $("#runcopy").onclick = () => call("/api/run",  {task: $("#task").value, copy:true},  "下書きで実行中…");
-$("#runcont").onclick = () => call("/api/run",  {task: $("#task").value, copy:true, "continue":true}, "続けて実行中…");
+$("#runrestart").onclick = () => call("/api/run", {task: $("#task").value, copy:true, restart:true}, "原本からやり直しています…");
 $("#undo").onclick    = () => call("/api/undo", {}, "もとに戻しています…");
 $("#draftreset").onclick = () => call("/api/draft_reset", {}, "下書きを手放しています…");
 // ★ 表に映らないもの（グラフ・図形）は本物のアプリで見る。画面で再現しようとしない。

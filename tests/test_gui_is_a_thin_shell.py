@@ -130,27 +130,54 @@ def test_no_blocking_modal():
 
 # --- ⑥ 下書きは積み上がる（原本から作り直さない）----------------------------------------
 
-def test_a_draft_run_starts_from_the_original_unless_asked_to_continue():
-    """★★ 2026-08-27 に**契約を反転させた**（Namakoo が 2 度実測）。
+def test_a_draft_run_saves_on_top_and_undo_steps_back():
+    """★★ 2026-08-27 に**3 度目の設計変更**（Namakoo が正した）。
 
-    経緯を残す（どちらの困りごとも本物だったから）:
-      08-26 夜: 「梨を追加して」→「梨の売上を2000に」で **1 つ目が消えた**
-                → 下書きを積み上げる形にした
-      08-27 昼: 同じ依頼を試すたびに **梨が増え続けた**
-                → 「試す」と「積む」を分けていなかったのが根
-
-    ★ 分け方: **下書きで実行＝毎回原本から**（何度試しても増えない）／
-      前の結果に重ねたい時だけ「この結果に続けて」。
-      VS Code 系の作法（編集をその場で確定させず、人が受け入れる）と同じ線。
-    ★ 前の下書きは黙って捨てない ── 1 つだけ退避して残す。
+    経緯を全部残す（どの困りごとも本物だったから）:
+      08-26 夜 「梨を追加」→「梨の売上を2000に」で **1 つ目が消えた** → 積み上げにした
+      08-27 昼 同じ依頼を試すたびに **梨が増えた** → 原本からに変えた
+      08-27 昼 すると続きの依頼でまた **梨が消えた**（08-26 夜の再演・俺が作り直した）
+    ★ 正しい形: **逐次保存（積み上げ）が既定**。増えた分は **undo で 1 つ戻す**
+      ── 直し方は「やり直さない」ではなく「**戻せる**」。
+      やり直したい時だけ「原本からやり直す」。
     """
     i = SERVER.index('if u.path == "/api/run":')
-    block = _code_only(SERVER[i:i + 3000])
-    assert 'req.get("continue")' in block, "『続けて』を人が選べない"
-    assert "shutil.copy2(book, draft)" in block, "原本から作り直す経路が無い"
-    assert "（前回）" in SERVER, "前の下書きを黙って捨てている"
+    block = _code_only(SERVER[i:i + 4200])
+    assert 'not bool(req.get("restart"))' in block, "既定が積み上げでない"
+    assert "shutil.copy2(book, draft)" in block, "やり直す経路が無い"
     js = _script(HTML, code_only=True)
-    assert "runcont" in js and '"continue":true' in js, "画面に『続けて』が無い"
+    assert "runrestart" in js and "restart:true" in js, "画面に『原本からやり直す』が無い"
+
+
+def test_undo_targets_the_thing_being_worked_on():
+    """★ 「もとに戻す」が**原本**を対象にしていた。原本にはバックアップが無い
+       （触っていないので当然）ので、**何も戻せなかった**。
+    ★ 戻す相手は「いま触っている物」── 下書きがあれば下書き。
+    """
+    i = SERVER.index('elif u.path == "/api/undo":')
+    block = _code_only(SERVER[i:i + 700])
+    assert "_DRAFTS.get(book)" in block, "下書きを戻せない"
+    assert "戻す相手" in SERVER, "どれを戻したか言っていない"
+
+
+def test_the_page_says_which_file_and_sheet_it_is_touching():
+    """★ 2026-08-27（Namakoo「今どのシートに対して操作を行っているのか分かりにくい」）:
+       ファイル名もシート名も、表の下の小さい注記にしか出ていなかった。
+    ★ 触っている物は**一番上に、常に**出す。
+    """
+    assert 'id="working"' in HTML
+    js = _script(HTML, code_only=True)
+    assert "setWorking(" in js and "いま触っている" in js
+    assert "シート" in js, "シート名を出していない"
+
+
+def test_the_result_pane_shows_the_file_actually_worked_on():
+    """★ 実測: 断られた回に `j.out` が原本を指し、**下書きの表が原本に差し替わって**
+       「梨の行が消えた」ように見えた（ファイルは無事だった）。
+    ★ 出すのは**いま触っている物**（サーバが返した target）── j.out は補助でしかない。
+    """
+    js = _script(HTML, code_only=True)
+    assert "window._target || j.out" in js, "j.out を先に信じている"
 
 
 def test_the_draft_name_never_stacks():
@@ -351,13 +378,14 @@ def test_the_comparison_basis_is_chosen_by_the_person():
 
 
 def test_continuing_is_disclosed():
-    """★ 積むのは人が選んだ時だけ ── 選んだことを画面でも言う。
+    """★ 積み上げたことと、**1 つ戻せる**ことを同時に言う。
 
-    ★ 2026-08-27 に一度「同じ依頼を繰り返したら警告する」を入れたが、**既定を
-      原本からに変えたので要らなくなった**（増えないので）。対症療法を根治で
-      置き換えた形 ── 残しておくと嘘の警告になる。
+    ★ この文言は 1 日で 3 回変えた（積む → やり直す → 積む+戻せる）。
+      文言が設計の言い換えになっているので、設計が動くたびにここも動く ──
+      逆に言えば、**ここが古いままなら画面が嘘をついている**。
     """
     i = SERVER.index('if u.path == "/api/run":')
     block = SERVER[i:i + 4200]
-    assert "1 回につき 1 つ増えます" in block, "積むことを言っていない"
+    assert "続けて保存しました" in block, "積み上げたことを言っていない"
+    assert "もとに戻す" in block, "戻せることを言っていない"
     assert "_cont" in block
