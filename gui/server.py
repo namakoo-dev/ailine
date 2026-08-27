@@ -28,7 +28,7 @@ PAGE = HERE / "index.html"
 RUN_TIMEOUT = 300
 
 
-def _ailine(args: list) -> tuple:
+def _ailine(args: list, answer: str | None = None) -> tuple:
     """ailine を子プロセスで動かす。戻り値 (returncode, stdout, json or None)。
 
     ★ import して呼ばない: 画面の都合で本体の内部状態を触らないため
@@ -44,8 +44,12 @@ def _ailine(args: list) -> tuple:
     src = str(REPO / "src")
     env["PYTHONPATH"] = src + _os.pathsep + env.get("PYTHONPATH", "")
     env.setdefault("PYTHONUTF8", "1")
+    # ★★ 2026-08-27（Namakoo「y/N の入力ができない」）: 子プロセスに端末が無いので、
+    #   道具が [y/N] を聞く場面に画面から答えられなかった（関所の前で行き止まり）。
+    #   ★ 関所は 1 ミリも緩めない ── **人の答えを運ぶ道**を作る。
     proc = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=RUN_TIMEOUT, env=env)
+                           encoding="utf-8", errors="replace", timeout=RUN_TIMEOUT, env=env,
+                           input=(answer + chr(10)) if answer else None)
     out = (proc.stdout or "") + (proc.stderr or "")
     payload = None
     for line in (proc.stdout or "").splitlines():
@@ -363,7 +367,9 @@ class Handler(BaseHTTPRequestHandler):
                         except OSError as e:
                             rc, out, payload = 1, f"× 反映できませんでした: {e}", None
                     else:
-                        rc, out, payload = _ailine(["run", book, task, "--json"])
+                        _extra = ["--overwrite"] if req.get("overwrite") else []
+                        rc, out, payload = _ailine(["run", book, task, "--json"] + _extra,
+                                                    answer=req.get("answer"))
                         _DRAFTS.pop(book, None)
                     self._json(200, {"rc": rc, "text": out, "json": payload,
                                       "before": _before, "target": book})
@@ -418,7 +424,9 @@ class Handler(BaseHTTPRequestHandler):
                     #   ★ 壊れていたのは**動作でなく、積み上げが見えないこと**。
                     #     同じ依頼を繰り返したら、そう言う（黙って 2 つ目を作らない）。
                     _DRAFT_LAST_TASK[str(draft)] = task
-                    rc, out, payload = _ailine(["run", str(draft), task, "--json"])
+                    _extra = ["--overwrite"] if req.get("overwrite") else []
+                    rc, out, payload = _ailine(["run", str(draft), task, "--json"] + _extra,
+                                                answer=req.get("answer"))
                     if _note:
                         out = _note + chr(10) + out
                     if _cont:

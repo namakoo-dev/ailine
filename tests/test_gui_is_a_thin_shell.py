@@ -415,3 +415,27 @@ def test_applying_to_the_original_copies_the_draft_instead_of_re_asking():
     assert "_DRAFTS.get(book)" in block
     js = _script(HTML, code_only=True)
     assert 'task: ""' in js, "画面が反映で依頼文を送っている（頼み直しになる）"
+
+
+def test_confirmations_can_be_answered_from_the_page():
+    """★ 2026-08-27（Namakoo「y/N の入力ができない」）。
+
+    子プロセスに端末が無いので、道具が `[y/N]` を聞く場面で**行き止まり**になっていた
+    （上書きに限らず、確認を求める全部）。
+    ★ 関所は 1 ミリも緩めない ── **人の答えを運ぶ道**を作る。
+      押した時だけ `--overwrite` を付けて**もう一度**走らせる（黙って先に進めない）。
+    """
+    js = _script(HTML, code_only=True)
+    assert "confirmrow" in js and "confirmyes" in js, "画面から答えられない"
+    assert "overwrite: true" in js, "承知のうえで、を渡していない"
+    assert 'id="confirmyes"' in HTML and 'id="confirmno"' in HTML
+    block = _run_handler()
+    assert '"--overwrite"' in block, "サーバが承知の合図を本体へ渡していない"
+    assert "req.get(\"answer\")" in block, "答えを子プロセスへ運んでいない"
+
+
+def test_the_gate_is_not_bypassed_by_default():
+    """★ 恒真殺し: 既定では**絶対に** --overwrite を付けない（関所を素通りさせない）。"""
+    block = _run_handler()
+    assert 'if req.get("overwrite") else []' in block, (
+        "無条件に上書きを許している疑い ── 関所は人が押した時だけ開く")

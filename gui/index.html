@@ -116,6 +116,9 @@
       <div class="note">グラフ・図形・印刷の見え方は表に映りません ── 本物のアプリで見てください。</div>
       <div class="row" id="leftoverrow" style="display:none">
         <button id="clearleftover">前回の作業結果を片づける</button></div>
+      <div class="row" id="confirmrow" style="display:none">
+        <button id="confirmyes" class="primary">承知のうえで続ける</button>
+        <button id="confirmno">やめる</button></div>
     </div>
 
     <div id="paneH" style="display:none">
@@ -231,7 +234,8 @@ async function loadFiles(){
 }
 function bookPath(){ return picked ? picked.path : ""; }
 
-let beforeCells = null, lastShown = null, blockedPath = null;
+let beforeCells = null, lastShown = null, blockedPath = null, needsConfirm = false;
+let lastRunBody = null;
 // ★ 2026-08-27（Namakoo「操作前の表も書き換えられてしまう」）:
 //   下書きを積み上げる作りにしたので、「操作する前」が毎回変わる。人が期待するのは
 //   **原本**（変わらないもの）だった ── 言葉の意味が俺の中で混ざっていた。
@@ -359,6 +363,11 @@ function show(res){
     .find(l => l.indexOf("出力先に書けません") >= 0);
   blockedPath = blocked ? blocked.split(": ").slice(1).join(": ").trim() : null;
   $("#leftoverrow").style.display = blockedPath ? "flex" : "none";
+  // ★ 2026-08-27（Namakoo「y/N の入力ができない」）: 子プロセスに端末が無いので、
+  //   道具が確認を求める場面で行き止まりになっていた。**関所は緩めず、答える道を作る。**
+  //   ★ 押した時だけ --overwrite を付けて**もう一度**走らせる（黙って先に進めない）。
+  needsConfirm = /\[y\/N\]|--overwrite/.test(text);
+  $("#confirmrow").style.display = needsConfirm ? "flex" : "none";
   // ★ 断られたら**登録まで誘導する**（在るのに届かない機能は無いのと同じ）。
   //   実測: 「できない操作も登録まで誘導されない」（Namakoo・2026-08-27）
   const refused = text.indexOf("頼める操作の一覧") >= 0 || text.indexOf("照合できません") >= 0;
@@ -395,8 +404,10 @@ async function call(path, body, msg){
   if (!picked){ setBadge("not_applied", "左の一覧からファイルを選んでください。"); return; }
   busy(true, msg);
   try{
+    const payload = Object.assign({book: bookPath()}, body);
+    if (path === "/api/run" && !body.overwrite) lastRunBody = body;
     const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
-                                  body: JSON.stringify(Object.assign({book: bookPath()}, body))});
+                                  body: JSON.stringify(payload)});
     show(await r.json());
   } catch(e){
     setBadge("unobservable", "画面から実行できませんでした: " + e);
@@ -495,6 +506,15 @@ $("#openlo").onclick  = () => call("/api/open", {path: lastShown || bookPath()},
 // ★ 断り文が「別の場所へ移すか削除してから」と言っている作業を、人が 1 手でできるようにする。
 //   （消さずに改名する ── 取り返しを残す）
 $("#clearleftover").onclick = () => call("/api/clear_leftover", {path: blockedPath}, "片づけています…");
+$("#confirmyes").onclick = () => {
+  if (!lastRunBody) return;
+  call("/api/run", Object.assign({}, lastRunBody, {overwrite: true, answer: "y"}),
+        "承知のうえで続けています…");
+};
+$("#confirmno").onclick = () => {
+  $("#confirmrow").style.display = "none";
+  setBadge("not_applied", "やめました（何も変えていません）。");
+};
 loadFiles();
 </script>
 </body>
