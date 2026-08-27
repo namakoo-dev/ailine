@@ -222,3 +222,36 @@ def test_the_bulk_fill_advisory_is_silent_when_the_postcondition_proves_the_rows
     after = {"cells": {"売上!2,4": ("◎", None), "売上!4,4": ("◎", None)}}
     assert ailine.detect_uniform_fill(before, after) is not None, "前提: 既定では鳴る"
     assert ailine.detect_uniform_fill(before, after, proved=True) is None
+
+
+# --- 表記の揺れ（2026-08-27・Namakoo「◎を入れて では動作しない」）--------------------
+
+def test_the_trigger_does_not_depend_on_the_verb():
+    """★ 引き金は**比較語と引用**だけで、動詞（付ける/入れる/書き込む/記入する）を見ない。
+       動詞を並べ始めると、並べ忘れた言い方が黙って落ちる。"""
+    for verb in ["「◎」を付けて", "「◎」を入れて", "「◎」を書き込んで", "「◎」と記入して",
+                  "「◎」を記入して", "「◎」にして"]:
+        task = "原価が500以上の行のチェック列に" + verb
+        assert ailine.task_asks_for_a_conditional_write(task), task
+
+
+def test_writing_into_a_column_is_not_adding_a_column():
+    """★★ 実測した事故: 「列**に**『◎』を入れて」を**列追加**が横取りし、条件つき書換が
+       上書きされていた（「入れ」の 1 語で当たっていた）。
+       ★ 助詞が意味を運ぶ: 「列**を**入れる」＝列そのもの／「列**に**…を入れる」＝行き先。"""
+    task = "原価が500以上の項目のチェック列に「◎」を入れて"
+    assert ailine.task_asks_for_a_conditional_write(task)
+    assert not ailine.task_asks_to_add_a_column(task)
+    # ★ 恒真殺し: 塞いだ側で、正当な列追加まで殺していないこと
+    assert ailine.task_asks_to_add_a_column("原価の右に空の列を入れて")
+
+
+def test_a_reread_never_overwrites_another_reread():
+    """★★ 構造側の真因: 読み直しの塊が 5 つ並び、**後の塊が前の結果を上書き**していた。
+       ★ 個々の条件をいくら賢くしてもこの形の事故は消えない ── 塊が増えるたびに
+         「まだ上書きされない」ことを人が確かめる羽目になる。1 回に縛る。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    body = src[src.index("def _translate_and_dispatch("):]
+    body = body[:body.index("\ndef ", 10)]
+    assert body.count("_reread_done = True") == 5, "読み直しの塊と印の数が合わない"
+    assert body.count("not _reread_done") == 5, "印を見ていない塊がある"

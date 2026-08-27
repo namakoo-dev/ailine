@@ -276,3 +276,30 @@ def test_only_content_producing_ops_survive_a_column_request():
     assert ailine.KEEP_FOR_COLUMN_REQUEST == ("COMPUTE_COLUMN", "LOOKUP_FILL")
     for op in ("INSERT_ROWS", "SPLIT_CELL", "ADD_ROW", "SORT", "CLARIFY"):
         assert op not in ailine.KEEP_FOR_COLUMN_REQUEST
+
+
+# --- 位置がずれる op では、位置で比べる前提は使えない（2026-08-27・実測）--------------
+
+def test_the_position_based_precondition_is_skipped_across_a_shift():
+    """★★ 実測: 途中に列を挿すと右の列が 1 つずつずれるので、new_column の前提
+       （「同じ内容の列が既に在るか」を位置で見る）が**ずれた既存列**を毎回
+       『同じ列を 2 回作った』と誤報し、✓ が △ に落ちていた。
+       ★ 前提そのものが壊れている ── 宣言（row_shift と new_column の同居）で外す。
+       ★ 外した分の保証は在る: 同名の列は verify_dsl_args が先に断り、挿した位置と
+         他の列の不変は check_add_column が証明する。"""
+    from ailine_core.write_precondition import check_write_preconditions
+    before = {"sheets": ["売上"], "cells": {"売上!1,3": ("チェック", "General", None, False, None, None)}}
+    after = {"sheets": ["売上"], "cells": {"売上!1,3": ("備考", "General", None, False, None, None),
+                                            "売上!1,4": ("チェック", "General", None, False, None, None)}}
+    only_new = check_write_preconditions(("new_column",), before, after,
+                                          cell_ref=ailine._cell_ref, fmt_value=ailine._fmt_cell_value)
+    assert only_new is not None, "前提: new_column 単独なら（ずれを知らないので）鳴る"
+    both = check_write_preconditions(("row_shift", "new_column"), before, after,
+                                      cell_ref=ailine._cell_ref, fmt_value=ailine._fmt_cell_value)
+    assert both is None, f"ずれる op で位置比較の前提が外れていない: {both}"
+
+
+def test_add_column_declares_that_it_proves_which_cells_changed():
+    """★ 助言は証明が届かない所にだけ要る ── check_add_column は「挿した位置・空・
+       他の列の不変」を両方向で証明するので、一括書き込みの助言は何も足さない。"""
+    assert ailine.OP_WRITE_TARGET["ADD_COLUMN"].proves_which_cells is True

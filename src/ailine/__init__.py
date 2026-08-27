@@ -2519,7 +2519,7 @@ OP_WRITE_TARGET = {
     #   「変更が元データの範囲外です（D1）」「空欄への一括書き込み」の 2 つが誤爆して
     #   ✓ が △ に落ちる ── 宣言済みの効果を疑わない、という既存の仕組みに乗せる。
     "ADD_COLUMN": WriteTarget(writes=(WRITE_ROW_SHIFT, WRITE_NEW_COLUMN),
-                               col_index_key="_at_col"),
+                               col_index_key="_at_col", proves_which_cells=True),
     # ★ 既存列の一部の行に書く＝破壊の関所の対象（宣言必須）。
     "SET_WHERE": WriteTarget(writes=(WRITE_EXISTING_COLUMN,), col_key="col",
                               proves_which_cells=True),
@@ -7018,7 +7018,10 @@ _re_col_pair = re.compile(r"([^\s、。]+?)\s*と\s*([^\s、。]+?)\s*の\s*(右
 # ★ 2026-08-27（自分で開けた穴・実機の検体が捕まえた）: 「列を**入れ替え**て」が
 #   「入れ」に当たって列追加として横取りされ、入れ替えが動かなくなった。
 #   ★ 語の一部が別の語の一部でありうる ── 部分文字列の穴は、この repo で 2 度目。
-_re_add_col_ask = re.compile(r"列[^。]{0,6}?(?:を)?\s*(?:追加|足し|足す|挿入|入れ(?!替)|作)")
+# ★ 2026-08-27（Namakoo「◎を入れて では動作しない」）: 「列**に**『◎』を入れて」まで
+#   列追加として拾っていた。★ 列の直後の助詞で分かれる ── 「列**を**追加/入れる」は
+#   列そのものが対象、「列**に**…を入れる」は列が**行き先**。助詞は意味を運んでいる。
+_re_add_col_ask = re.compile(r"列\s*(?:を|の)\s*[^。]{0,4}?(?:追加|足し|足す|挿入|入れ(?!替)|作)")
 
 
 # ★ 「列を追加して」という依頼に対して、一段目の答えを**そのまま残してよい** op。
@@ -10159,7 +10162,15 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   ★ 行の名前が実表で 1 つに決まるなら、狙いは 1 セル ── 第二段で読み直す。
     #     （OPS_DOC は 1 文字も増やさない ── 第二段は op を固定してスキーマだけ見せる）
     _sheet_h = (book_meta.get("sheets") or [None])[0]
-    if any((st or {}).get("op") == "SET_COLUMN_VALUE" for st in plan):
+    # ★★ 2026-08-27（Namakoo「◎を入れて では動作しない」の**構造側**の真因）:
+    #   読み直しの塊が 5 つ並んでいて、**後の塊が前の塊の結果を上書きしていた**。
+    #   実測: 「チェック列に『◎』を入れて」は正しく条件つき書換に読み直された直後、
+    #   列追加の塊がそれを奪って「見出しの無い列を末尾に」に化けていた。
+    #   ★ 読み直しは**1 回だけ**。先に決まったものが勝つ（下へ行くほど証拠が弱い順に並べる）。
+    #   ★ 個々の塊の条件をいくら賢くしても、この形の事故は消えない ── 塊が増えるたび
+    #     「まだ上書きされない」ことを人が確かめる羽目になる。機械で 1 回に縛る。
+    _reread_done = False
+    if not _reread_done and any((st or {}).get("op") == "SET_COLUMN_VALUE" for st in plan):
         _named = _task_names_a_row(a.task, book_meta, _sheet_h)
         if _named:
             _fx = translate_task_fixed_op(a.model, "SET_CELL_VALUE", a.task, book_meta)
@@ -10169,11 +10180,12 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                 print(f"（『一括書換』でなく『1セル書換』として読み直しました ── "
                       f"依頼文が『{_named}』の行を名指ししています）")
                 plan = [{"op": "SET_CELL_VALUE", "args": _args}]
+                _reread_done = True
 
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
     #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
     #   人が欲しいのは**値**であって書式ではない）。断る側なので横取りして悪くならない。
-    if (task_asks_for_a_conditional_write(a.task) and len(plan) == 1
+    if (not _reread_done and task_asks_for_a_conditional_write(a.task) and len(plan) == 1
             and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB",
                                                 "SET_COLUMN_VALUE")):
         _sw2 = translate_task_fixed_op(a.model, "SET_WHERE", a.task, book_meta)
@@ -10182,6 +10194,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             print("（『条件つき書換』として読み直しました ── "
                    "依頼文が「条件に当てはまる行だけ」を指しています）")
             plan = [{"op": "SET_WHERE", "args": _sw2_args}]
+            _reread_done = True
 
     # ★★ 2026-08-27（Namakoo「列の追加はできないの？」）:
     #   実測: 「備考という列を追加して」も「原価の右に列を追加して」も語彙外で断られていた
@@ -10206,7 +10219,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     「列を追加して」に対してセルの分割を走らせるところだった）。
     #     ★ **残してよい op を挙げる**形へ裏返す: 列を追加する依頼に対して正当なのは
     #       「中身のある列を作る」op（計算列・転記）だけ。それ以外は軸か操作が違う。
-    if (task_asks_to_add_a_column(a.task) and len(plan) == 1
+    if (not _reread_done and task_asks_to_add_a_column(a.task) and len(plan) == 1
             and (plan[0] or {}).get("op") not in KEEP_FOR_COLUMN_REQUEST):
         _was_add_col = (plan[0] or {}).get("op") == "ADD_COLUMN"
         _ac_args = dict((plan[0] or {}).get("args") or {}) if _was_add_col else {}
@@ -10218,6 +10231,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             print(f"（『列追加』として読み直しました ── 依頼文が列の追加を指しています: "
                    f"{_note_add or "末尾"}）")
         plan = [{"op": "ADD_COLUMN", "args": _ac_args}]
+        _reread_done = True
 
     # ★★ 2026-08-27（Namakoo「行や列の入れ替えを実装できるか」）:
     #   実測すると「みかんとぶどうを入れ替えて」は CLARIFY（「どちらの列ですか」）、
@@ -10230,7 +10244,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     間違った操作を自信をもって実行する形で、断るより悪い）。
     #   ★ ただし SORT を横取りする以上、条件を厳しくする: **2 つの名前が実表で
     #     ちょうど 1 つに解ける時だけ**読み直す（解けないなら元の計画のまま進める）。
-    if (task_asks_for_a_swap(a.task) and len(plan) == 1
+    if (not _reread_done and task_asks_for_a_swap(a.task) and len(plan) == 1
             and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB", "SORT")):
         _sw = translate_task_fixed_op(a.model, "SWAP", a.task, book_meta)
         _sw_args = (_sw or {}).get("args") or {}
@@ -10240,9 +10254,10 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             print(f"（『入れ替え』として読み直しました ── 依頼文が"
                    f"『{_sw_args["a"]}』と『{_sw_args["b"]}』の入れ替えを指しています）")
             plan = [{"op": "SWAP", "args": dict(_sw_args)}]
+            _reread_done = True
 
     _reread_ops = ("INSERT_ROWS", "CLARIFY", "FREEFORM", "OUT_OF_VOCAB")
-    if any((st or {}).get("op") in _reread_ops for st in plan):
+    if not _reread_done and any((st or {}).get("op") in _reread_ops for st in plan):
         _sheet_hint = (book_meta.get("sheets") or [None])[0]
         _why = insert_rows_should_have_been_add_row(a.task, {}, book_meta, _sheet_hint)
         if _why:
@@ -10250,6 +10265,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             if _fixed and (_fixed.get("args") or {}).get("values"):
                 print(f"（『行挿入』でなく『行追加』として読み直しました ── {_why}）")
                 plan = [{"op": "ADD_ROW", "args": _fixed["args"]}]
+                _reread_done = True
 
     if len(plan) == 1:
         step = plan[0]

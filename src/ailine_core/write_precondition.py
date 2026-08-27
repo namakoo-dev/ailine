@@ -310,7 +310,17 @@ def check_write_preconditions_detail(writes, before: dict, after: dict, *,
     ★ 検査の順は writes の宣言順に従う（最初に破れたものを返す）。1 op が複数の前提を
     破ったときに 2 行出すことはしない ── 関所に渡すのは 1 行という約束を変えないため。
     """
-    for kind in writes or ():
+    # ★★ 2026-08-27（Namakoo が実測）: **位置がずれる op では、位置で比べる前提は使えない。**
+    #   列を途中に挿すと右の列が 1 つずつずれるので、new_column の前提（「同じ内容の列が
+    #   既に在るか」を位置で見る）が「ずれた既存列」を毎回『同じ列を 2 回作った』と誤報する。
+    #   ★ 前提そのものが壊れているので、宣言（row_shift と new_column の同居）で外す ──
+    #     op 名の if ではなく、**なぜ使えないか**が読める形で。
+    #   ★ 外した分の保証: ADD_COLUMN は verify_dsl_args が「同名の列が既に在る」を先に断り、
+    #     check_add_column が「挿した位置・空であること・他の列の不変」を証明する。
+    kinds = list(writes or ())
+    if "row_shift" in kinds and "new_column" in kinds:
+        kinds = [k for k in kinds if k != "new_column"]
+    for kind in kinds:
         check = PRECONDITIONS.get(kind)
         if check is None:
             continue
