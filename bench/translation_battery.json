@@ -1511,5 +1511,42 @@
         "b": "在庫"
       }
     }
+  ],
+  "items_v15": [
+    {
+      "id": 1501,
+      "book": "sample",
+      "text": "原価の右に備考の列を追加して",
+      "expect": {
+        "op": "ADD_COLUMN",
+        "name": "備考"
+      }
+    },
+    {
+      "id": 1502,
+      "book": "sample",
+      "text": "備考という列を追加して",
+      "expect": {
+        "op": "ADD_COLUMN",
+        "name": "備考"
+      }
+    },
+    {
+      "id": 1503,
+      "book": "sales",
+      "text": "売上の左に区分の列を追加して",
+      "expect": {
+        "op": "ADD_COLUMN",
+        "name": "区分"
+      }
+    },
+    {
+      "id": 1504,
+      "book": "sales",
+      "text": "原価の右に列を追加して",
+      "expect": {
+        "op": "ADD_COLUMN"
+      }
+    }
   ]
 }

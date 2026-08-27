@@ -223,6 +223,13 @@ def _freeform_setup(monkeypatch, op="FREEFORM", about=""):
     #   ローカルでだけ緑に見える。この golden 群の目的は「断りの顔」の凍結であり、
     #   提案の顔は test_suggest_flow.py が担う。
     monkeypatch.setattr(ailine, "judge_ops_via_llm", lambda task, about=None: [])
+    # ★ 2026-08-27: 第二段翻訳(translate_task_fixed_op)も止める。
+    #   ★ 実測した抜け: 列追加(ADD_COLUMN)を足した日、この治具は translate_task しか
+    #     mock しておらず、依頼文が「列を足して」だったため**本物の ollama を叩いていた**
+    #     （CI には ollama が居ないので、手元だけ通る形になりかける）。
+    #   治具は「外に触らない」ことまで固定する ── 窒息点を 1 つ残すと、そこから漏れる。
+    monkeypatch.setattr(ailine, "translate_task_fixed_op",
+                         lambda model, op, task, book_meta, temperature=0.1: None)
 
 
 def _t_freeform_gate_yes(tmp_path, monkeypatch, capsys):
@@ -230,14 +237,14 @@ def _t_freeform_gate_yes(tmp_path, monkeypatch, capsys):
        断りの中身は変えない・廃止告知が足される）。"""
     book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
     _freeform_setup(monkeypatch)
-    return _run_main(["run", str(book), "何か列を足して", "--copy", "--allow-freeform"], capsys)
+    return _run_main(["run", str(book), "セルに画像を貼って", "--copy", "--allow-freeform"], capsys)
 
 
 def _t_freeform_gate_no(tmp_path, monkeypatch, capsys):
     """素の断り（--allow-freeform 無し）。"""
     book = _book(tmp_path, [["商品", "金額"], ["a", 100]])
     _freeform_setup(monkeypatch)
-    return _run_main(["run", str(book), "何か列を足して", "--copy"], capsys)
+    return _run_main(["run", str(book), "セルに画像を貼って", "--copy"], capsys)
 
 
 def _t_freeform_noninteractive(tmp_path, monkeypatch, capsys):
@@ -249,7 +256,7 @@ def _t_freeform_noninteractive(tmp_path, monkeypatch, capsys):
     def _boom(prompt=""):
         raise AssertionError("★ 廃止後は input() を呼んではいけない（確認そのものが無い）")
     monkeypatch.setattr("builtins.input", _boom)
-    return _run_main(["run", str(book), "何か列を足して", "--copy"], capsys)
+    return _run_main(["run", str(book), "セルに画像を貼って", "--copy"], capsys)
 
 
 def _t_freeform_helper_sweep_detected(tmp_path, monkeypatch, capsys):
@@ -423,7 +430,7 @@ def _t_dry_freeform(tmp_path, monkeypatch, capsys):
        無いが、クラッシュせず同じ断りになることを固定する。"""
     book = _book(tmp_path, [["商品", "金額"], ["a", 100], ["b", 200]])
     _freeform_setup(monkeypatch)
-    return _run_main(["run", str(book), "何か列を足して", "--dry"], capsys)
+    return _run_main(["run", str(book), "セルに画像を貼って", "--dry"], capsys)
 
 
 # ===========================================================================

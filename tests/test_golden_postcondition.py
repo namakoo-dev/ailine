@@ -513,6 +513,35 @@ _SC = {"row": "みかん", "col": "金額", "value": "2000",
 _add("set_cell_pass", "SET_CELL_VALUE", dict(_SC), _b_set_cell_pass)
 _add("set_cell_fail_whole_column", "SET_CELL_VALUE", dict(_SC), _b_set_cell_whole_column)
 
+# --- ADD_COLUMN（2026-08-27）--------------------------------------------------
+def _b_add_column_pass(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額", "備考"], ["りんご", 100], ["みかん", 200], ["ぶどう", 300]])
+    return after, before
+
+
+def _b_add_column_overwrote(tmp_path):
+    """★ 押し出さずに既存列を潰した（列数は増えているが中身が違う）。"""
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額", "備考"], ["りんご", 999], ["みかん", 200], ["ぶどう", 300]])
+    return after, before
+
+
+def _b_add_column_filled(tmp_path):
+    before = _book(tmp_path, "before.xlsx", _TB)
+    after = _book(tmp_path, "after.xlsx",
+                   [["商品", "金額", "備考"], ["りんご", 100, "?"], ["みかん", 200, "?"],
+                    ["ぶどう", 300, "?"]])
+    return after, before
+
+
+_AC = {"name": "備考", "_at_col": 3, "_header_row": 1}
+_add("add_column_pass", "ADD_COLUMN", dict(_AC), _b_add_column_pass)
+_add("add_column_fail_overwrote", "ADD_COLUMN", dict(_AC), _b_add_column_overwrote)
+_add("add_column_fail_filled", "ADD_COLUMN", dict(_AC), _b_add_column_filled)
+
 # --- SWAP（2026-08-27）--------------------------------------------------------
 def _b_swap_pass(tmp_path):
     before = _book(tmp_path, "before.xlsx", _TB)

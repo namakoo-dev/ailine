@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "resolved": {
+    "name": "備考",
+    "_target_sheet": "Sheet",
+    "_at_col": 5,
+    "_at_basis": "『金額』（4列目）の右＝5列目",
+    "_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_header_row": 1,
+    "_name_label": "備考"
+  },
+  "inferred": [],
+  "err": null
+}

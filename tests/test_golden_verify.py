@@ -212,6 +212,17 @@ _add("set_cell_value_unknown_col", "SET_CELL_VALUE", {"row": "りんご", "col":
      task="りんごの利益を2000にして", book_meta=BM_CELL)
 _add("set_cell_value_no_value", "SET_CELL_VALUE", {"row": "りんご", "col": "金額"},
      task="りんごの金額を変えて", book_meta=BM_CELL)
+# --- ADD_COLUMN（2026-08-27）── 位置は機械・名前は依頼文に在るものだけ -----------
+_add("add_column_named_right_of", "ADD_COLUMN", {"name": "備考"},
+     task="金額の右に備考の列を追加して")
+_add("add_column_no_name", "ADD_COLUMN", {}, task="金額の右に列を追加して")
+_add("add_column_name_not_in_task", "ADD_COLUMN", {"name": "新しい列"},
+     task="金額の右に列を追加して")
+_add("add_column_no_position", "ADD_COLUMN", {"name": "備考"}, task="備考という列を追加して")
+_add("add_column_duplicate", "ADD_COLUMN", {"name": "金額"}, task="金額の右に金額の列を追加して")
+_add("add_column_unknown_anchor", "ADD_COLUMN", {"name": "備考"},
+     task="すいかの右に備考の列を追加して")
+
 # --- SWAP（2026-08-27）── 軸の決定と、決められない時の断り ------------------
 _add("swap_rows_ok", "SWAP", {"a": "りんご", "b": "みかん"},
      task="りんごとみかんを入れ替えて", book_meta=BM_CELL)

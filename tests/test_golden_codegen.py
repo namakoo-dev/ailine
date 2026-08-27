@@ -151,6 +151,11 @@ _add("set_cell_value_number", "SET_CELL_VALUE",
 _add("set_cell_value_text", "SET_CELL_VALUE",
      {"row": "りんご", "col": "商品", "value": "洋梨", "_headers": ["商品", "金額"]})
 
+_add("add_column_named", "ADD_COLUMN",
+     {"name": "備考", "_at_col": 3, "_header_row": 1, "_headers": ["商品", "金額"]})
+_add("add_column_unnamed", "ADD_COLUMN",
+     {"name": "", "_at_col": 1, "_header_row": 1, "_headers": ["商品", "金額"]})
+
 # --- SWAP（2026-08-27）── Basic には**名前**を渡す（番号を渡さない）------------
 _add("swap_rows_by_name", "SWAP",
      {"a": "みかん", "b": "ぶどう", "_axis": "row", "_header_row": 1,

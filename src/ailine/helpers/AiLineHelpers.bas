@@ -331,6 +331,21 @@ Sub DeleteRows(oDoc As Object, atRow As Integer, count As Integer)
 End Sub
 
 
+' 列を1本、指定の位置に挿す（2026-08-27 追加）。colIdx は 0起点＝新しい列が入る位置。
+' ★ Columns.insertByIndex を使う ── 実測で、右にあった列を参照する式は
+'   **LibreOffice が自動で付け替える**（=B2*C2 → =B2*D2）。値の書き写しでは絶対にやらない。
+' ★ sName が空なら見出しも空のまま入れる（人が「列を追加して」としか言わない場合）。
+' ★ 変数名に oR のような予約語（Or）を使わないこと ── モジュールごと黙って死ぬ。
+Sub InsertColumnAt(oDoc As Object, colIdx As Integer, sName As String, nHeaderRow As Integer)
+    Dim oSheet As Object
+    oSheet = oDoc.Sheets.getByIndex(0)
+    oSheet.Columns.insertByIndex(colIdx, 1)
+    If Len(sName) > 0 Then
+        oSheet.getCellByPosition(colIdx, nHeaderRow).setString(sName)
+    End If
+End Sub
+
+
 ' 列を1本消す（2026-08-26 追加）。colIdx は 0起点。
 Sub DeleteColumn(oDoc As Object, colIdx As Integer)
     Dim oSheet As Object

@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "resolved": {
+    "name": "備考",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "『すいか』という列がありません（ある列: 商品、数量、単価、金額）"
+}

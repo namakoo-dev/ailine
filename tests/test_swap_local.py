@@ -85,3 +85,33 @@ def test_the_generated_basic_actually_runs(tmp_path):
     assert _out(book).read_bytes() != before, (
         "出力が原本と同一 ── マクロが 1 行も走っていない疑い"
         "（Basic のコンパイル失敗は basrun からは『適用した』に見える）")
+
+
+# --- 列の追加（2026-08-27・Namakoo「列の追加はできないの？」）------------------------
+#
+# ★ 一段目は**同じ依頼文で回ごとに違う op** を返す（実測）。「原価列の右に列を追加して」で
+#   INSERT_ROWS が返る回があり、そのまま走れば**列を頼まれて行を挿す**。
+#   軸そのものを間違える形なので、実機で通しておく。
+
+@pytest.mark.local
+def test_a_column_really_gets_inserted_at_the_named_position(tmp_path):
+    book = _book(tmp_path, "e.xlsx")
+    p = _run(book, "原価の右に備考の列を追加して")
+    assert p.returncode == 0, f"実機の列追加が失敗:\n{p.stdout[-900:]}"
+    raw = openpyxl.load_workbook(_out(book))["売上"]
+    val = openpyxl.load_workbook(_out(book), data_only=True)["売上"]
+    assert [raw.cell(1, c).value for c in range(1, 6)] == ["商品", "売上", "原価", "備考", "利益"]
+    # 利益は D → E へずれるが、参照する 売上/原価 は動いていないので式も値もそのまま
+    assert val.cell(2, 5).value == 500, val.cell(2, 5).value
+    assert raw.cell(2, 4).value is None, "挿した列に値が入っている"
+
+
+@pytest.mark.local
+def test_asking_for_a_column_never_inserts_a_row(tmp_path):
+    """★ 軸の取り違えを実機で縛る ── 行数が増えたら、それは列の依頼に行で答えている。"""
+    book = _book(tmp_path, "f.xlsx")
+    p = _run(book, "原価列の右に列を追加して")
+    assert p.returncode == 0, p.stdout[-600:]
+    ws = openpyxl.load_workbook(_out(book))["売上"]
+    assert ws.max_row == 4, f"行が増えた（列の依頼に行で答えた）: {ws.max_row}"
+    assert ws.max_column == 5, f"列が増えていない: {ws.max_column}"

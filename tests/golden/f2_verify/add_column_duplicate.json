@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "resolved": {
+    "name": "金額",
+    "_target_sheet": "Sheet"
+  },
+  "inferred": [],
+  "err": "列『金額』は既にあります（4列目）"
+}

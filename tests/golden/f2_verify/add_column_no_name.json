@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "resolved": {
+    "_target_sheet": "Sheet",
+    "name": "",
+    "_at_col": 5,
+    "_at_basis": "『金額』（4列目）の右＝5列目",
+    "_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_header_row": 1,
+    "_name_label": "（名前なし・見出しは空のまま ── 右にある列も走査できなくなり、判定は △ になります）"
+  },
+  "inferred": [],
+  "err": null
+}

@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "resolved": {
+    "name": "",
+    "_target_sheet": "Sheet",
+    "_name_dropped": "新しい列",
+    "_at_col": 5,
+    "_at_basis": "『金額』（4列目）の右＝5列目",
+    "_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_header_row": 1,
+    "_name_label": "（依頼文に無い名前『新しい列』は採りませんでした・見出しは空のまま ── 右にある列も走査できなくなり、判定は △ になります）"
+  },
+  "inferred": [],
+  "err": null
+}

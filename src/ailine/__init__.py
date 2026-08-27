@@ -2074,6 +2074,12 @@ OP_META = {
     "SWAP": {"category": "表を編集する", "label": "入れ替え", "folder": False,
               "synonyms": ["入れ替え", "交換", "順番を入れ替える"],
               "match_phrases": ["AとBを入れ替えて", "2つの行を交換", "2つの列を交換"]},
+    # ★ 2026-08-27（Namakoo「列の追加はできないの？」）: **削除だけあって追加が無かった。**
+    #   行は空行(INSERT_ROWS)と値つき(ADD_ROW)の 2 つがあるのに、列は削除だけ。
+    #   実測でも「備考という列を追加して」は語彙外で断られていた（GUI で本人が確認）。
+    "ADD_COLUMN": {"category": "表を編集する", "label": "列追加", "folder": False,
+                    "synonyms": ["列を追加", "列を足す", "列を挿入"],
+                    "match_phrases": ["列を追加して", "列を足して", "空の列を入れて"]},
     "DELETE_ROWS": {"category": "表を編集する", "label": "行削除", "folder": False,
                      "synonyms": ["行を削除", "行を消す", "行を取り除く"],
                      "match_phrases": ["行を削除して", "行を消して", "不要な行を除く"]},
@@ -2327,6 +2333,9 @@ OP_SCHEMA = {
     "DELETE_COLUMN": ("col",),
     # ★ a/b = 入れ替える 2 つの名前。行名か列名かは機械が実表から決める（_axis）。
     "SWAP": ("a", "b"),
+    # ★ ADD_COLUMN の必須 slot は無い ── 「原価の右に列を追加して」のように**名前を
+    #   言わない依頼が実在する**（Namakoo の実測）。位置も名前も機械が決める/受ける。
+    "ADD_COLUMN": (),
     # ★ row=行の名前（中身）・col=列名。値は LLM に決めさせず依頼文から機械が取る（A' 原則）。
     "SET_CELL_VALUE": ("row", "col"),
     "DRAW_BORDERS": (),
@@ -2448,6 +2457,8 @@ OP_WRITE_TARGET = {
     # ★ 入れ替えは値の多重集合が保存される（reorder）── 前提の番人
     #   (_check_value_multiset) が「動かすだけのはずが値が消えた」を見る。
     "SWAP": WriteTarget(writes=(WRITE_REORDER,)),
+    # ★ 途中に挿しても既存の値は消えない（右へずれるだけ）。行の挿入と同じ種別。
+    "ADD_COLUMN": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
     # ★ 1 セルは既存列への上書き（前提なし側）。★ ただし「1 セルのはず」は
     #   check_set_cell_value が**変わったセルの数**で証明する（列全体を潰したら落ちる）。
     "SET_CELL_VALUE": WriteTarget(writes=(WRITE_EXISTING_COLUMN, WRITE_SINGLE_CELL),
@@ -2545,6 +2556,9 @@ OP_SUBJECT_SLOTS = {
     # ★ a/b は行名にも列名にもなりうる ── 依頼文が直接名指す「対象」なので
     #   SUBJ_COLUMN 側に置く（EXTRACT の col と同じ扱い・実在照合は verify_dsl_args）。
     "SWAP": (("a", SUBJ_COLUMN), ("b", SUBJ_COLUMN)),
+    # ★ name は**これから作る**列なので実在照合の対象にしない（幻覚の封鎖は別口 ──
+    #   verify_dsl_args が「同名の列が既に在る」を断る）。位置の基準列は _at_basis に出る。
+    "ADD_COLUMN": (),
     "SET_CELL_VALUE": (("col", SUBJ_COLUMN),),
     "DRAW_BORDERS": (),
     "AUTOFIT": (),
@@ -3065,6 +3079,9 @@ _OP_SCHEMA_NOTES = {
              "**そのまま**入れる（行の中身の名前でも、列の見出しでもよい）。"
              "どちらなのかは機械が実際の表を見て決めるので、当てなくてよい。"
              "行番号・列番号・A1 のような座標は入れない。",
+    "ADD_COLUMN": "args は name（新しい列の見出しに書く名前）だけ。依頼文が名前を"
+                   "言っていなければ args を空 {} にする（**作らない**）。"
+                   "位置（右/左/末尾）は機械が実表の見出しから決めるので入れない。",
 }
 
 
@@ -3072,9 +3089,8 @@ def _op_schema_doc(op: str) -> str:
     """固定した op 1 つ分だけのスキーマ文（OPS_DOC 全文でなく OP_SCHEMA[op] から機械生成）。"""
     required = OP_SCHEMA.get(op, ())
     note = _OP_SCHEMA_NOTES.get(op)
-    if not required:
-        return f"{op} は引数不要"
-    line = f"{op}: args: " + ", ".join(required)
+    line = (f"{op} は必須の引数なし" if not required
+             else f"{op}: args: " + ", ".join(required))
     return line + (chr(10) + note if note else "")
 
 
@@ -3773,6 +3789,46 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["col"] = name
         resolved["_headers"] = [str(h) for h in headers]
 
+    # --- ★ 2026-08-27: 列の追加（位置は機械が見出しから決める）--------------------
+    elif op == "ADD_COLUMN":
+        _sheet_c = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+        _hr_c = int((book_meta.get("header_rows") or {}).get(_sheet_c, 1) or 1)
+        _headers_c = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_c) or [])]
+        _name_c = str(resolved.get("name") or "").strip()
+        # ★★ 2026-08-27（実測）: 名前を言っていない依頼に対し、LLM が「新しい列」という
+        #   **依頼文に無い名前を作って**返す回があった（3 回中 1 回）。A' 原則の違反 ──
+        #   値は LLM に確定させない。**依頼文に現れない名前は採らない**（空欄に倒す）。
+        #   ★ 空欄は誤った名前より安い: 見出しが空なら △ になり、人が気づける。
+        #     もっともらしい名前が付くと、人は「自分がそう言った」と思ってしまう。
+        if _name_c and _name_c not in (task or ""):
+            resolved["_name_dropped"] = _name_c
+            _name_c = ""
+        # ★ 同名の列が既に在るなら断る（黙って 2 本目を作らない ── 後で列名の解決が
+        #   「2 つあります」で詰まる形を、作る側で防ぐ）。
+        if _name_c and _name_c in _headers_c:
+            return False, resolved, inferred, (
+                f"列『{_name_c}』は既にあります（{_headers_c.index(_name_c) + 1}列目）")
+        _at_c, _note_c = resolve_col_anchor(task, _headers_c)
+        if _at_c is None and _note_c:
+            return False, resolved, inferred, _note_c
+        if _at_c is None:
+            # 位置の言い回しが無い＝末尾。**黙って決めない**ので根拠を必ず出す。
+            _at_c = len(_headers_c) + 1
+            _note_c = f"末尾＝{_at_c}列目（依頼文に位置の指定が無いため）"
+        resolved["name"] = _name_c
+        resolved["_at_col"] = int(_at_c)
+        resolved["_at_basis"] = _note_c
+        resolved["_headers"] = _headers_c
+        resolved["_header_row"] = _hr_c
+        # ★ 名前が無いなら「空のまま」と画面に書く（黙って空欄を作らない）。
+        # ★ 見出しが空の列を作ると、**その右にある列も走査できなくなる**
+        #   （走査は見出し行の最初の空で止まる）── 作る前に言う。判定は △ に落ちる。
+        _dropped = resolved.get("_name_dropped")
+        resolved["_name_label"] = _name_c or (
+            ("（依頼文に無い名前『%s』は採りませんでした・" % _dropped if _dropped
+              else "（名前なし・")
+            + "見出しは空のまま ── 右にある列も走査できなくなり、判定は △ になります）")
+
     # --- ★ 2026-08-27: 入れ替え（行か列かは**機械が実表を見て**決める）------------
     elif op == "SWAP":
         _a = str(resolved.get("a", "")).strip()
@@ -4316,6 +4372,7 @@ _CONFIRM_FIELDS = {
     #   ので、ここに無い slot は生の英字（a・b）のまま人に見えてしまう。
     "SWAP": (("入れ替える一方", "a", None), ("もう一方", "b", None),
               ("何を入れ替えるか", "_axis_label", None)),
+    "ADD_COLUMN": (("新しい列の名前", "_name_label", None), ("入れる位置", "_at_basis", None)),
     "SET_CELL_VALUE": (("対象の行", "row", None), ("対象列", "col", None),
                         ("書き込む値", "value", None)),
     "DRAW_BORDERS": (),
@@ -4902,6 +4959,14 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         col0 = headers.index(resolved_args["col"]) if resolved_args["col"] in headers else 0
         return wrap(f"    Call DeleteColumn(oDoc, {col0})\n")
 
+    if op == "ADD_COLUMN":
+        # ★ 位置は Python が見出しから決めた 1 起点 → Basic は 0 起点。
+        #   名前は Basic 側で書く（空なら見出しも空のまま）。
+        at0 = int(resolved_args["_at_col"]) - 1
+        hr0 = int(resolved_args.get("_header_row", 1)) - 1
+        nm = str(resolved_args.get("name") or "").replace(chr(34), chr(34) * 2)
+        return wrap('    Call InsertColumnAt(oDoc, %d, "%s", %d)%s' % (at0, nm, hr0, chr(10)))
+
     if op == "SWAP":
         # ★ 位置は Basic 側にも**名前で**渡す（Python が数えた番号を渡さない）。
         #   Basic は実文書を走査して自分で見つける ── Python の解決と食い違えば、
@@ -5398,9 +5463,12 @@ def note_extent_gap(out_book: Path, resolved_args: dict, header_row: int = 1) ->
         note_unverified(resolved_args, gap["rows_missing"],
                         "1 列目が空のため走査がそこで止まり、この行を見ていない")
     if gap["cols_missing"]:
+        # ★ 2026-08-27 に文言を正した: 「見出しの無い列が N 列」は不正確だった。
+        #   走査は見出し行を左から見て**最初の空で止まる**ので、空きの右にある列は
+        #   （見出しが在っても）まとめて見えない ── 数えているのはその「見えない列」の数。
         note_unverified(resolved_args, gap["rows_physical"],
-                        f"見出しの無い列が {gap['cols_missing']} 列あり、"
-                        "その列については何も確かめていない")
+                        f"見出し行に空きがあるため、その右の {gap['cols_missing']} 列は"
+                        "走査できておらず、何も確かめていない")
 
 
 def note_unverified(args: dict, count: int, why: str) -> None:
@@ -6244,6 +6312,68 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{at}行目から {count} 行を削除（残りは順序ごと元のまま）"
 
 
+def check_add_column(path: Path, args: dict, header_row: int = 1,
+                      source_book: Path | None = None) -> tuple:
+    """ADD_COLUMN の事後条件。**押し出したこと**を証明する（上書きしていないこと）。
+
+    ① 列がちょうど 1 本増えている
+    ② 宣言した位置に、宣言した名前の見出しが在る（名前が空なら見出しも空）
+    ③ **他の列が 1 セルも変わっていない** ── ただし式は列が動けば参照が追随する
+      （`=B2*C2` → `=B2*D2`）ので、比べ方は compare_moved_rows に任せる（追加・削除・
+      入れ替えと**同じ 1 箇所**）。
+    ④ 挿した列のデータ行は空（見出し以外を勝手に埋めていない）
+    """
+    at = int(args.get("_at_col") or 0)
+    name = str(args.get("name") or "")
+    if at < 1:
+        return "warn", "挿す位置が分からないため確かめられていません"
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last_a, cols_a = data_extent(ws, header_row)
+        headers_after = [str(ws.cell(row=header_row, column=c).value or "")
+                          for c in range(1, cols_a + 1)]
+        if source_book is None or not Path(source_book).exists():
+            return "warn", f"{at}列目に列を挿したことのみ確認（適用前ファイルとの突き合わせ無し）"
+        with BookView(source_book) as bv_b:
+            ws_b = bv_b.sheet(args.get("_target_sheet"))
+            last_b, cols_b = data_extent(ws_b, header_row)
+            headers_before = [str(ws_b.cell(row=header_row, column=c).value or "")
+                               for c in range(1, cols_b + 1)]
+            after_rows = _cells_for_shift(bv, args.get("_target_sheet"),
+                                           header_row, max(last_a, last_b), cols_a)
+            before_rows = _cells_for_shift(bv_b, args.get("_target_sheet"),
+                                            header_row, max(last_a, last_b), cols_b)
+    if len(headers_after) != len(headers_before) + 1:
+        return "fail", (f"列数が合わない（適用前 {len(headers_before)} 列 → "
+                         f"適用後 {len(headers_after)} 列・1 本増えるはず）")
+    j = at - 1
+    if j > len(headers_before):
+        return "fail", f"{at}列目は表の外です（適用前は {len(headers_before)} 列）"
+    if headers_after[j] != name:
+        return "fail", (f"{at}列目の見出しが『{headers_after[j]}』で、"
+                         f"宣言した『{name}』と違います")
+    want = headers_before[:j] + [name] + headers_before[j:]
+    if headers_after != want:
+        return "fail", (f"見出しの並びが宣言と違う（適用後: "
+                         f"{"、".join(h or "（空）" for h in headers_after)}）")
+    # ④ 挿した列のデータ行は空
+    filled = [i + header_row + 1 for i, row in enumerate(after_rows)
+               if j < len(row) and row[j][1] not in (None, "")]
+    if filled:
+        return "fail", (f"挿した{at}列目に値が入っています（{'、'.join(map(str, filled[:5]))}行目）"
+                         " ── 空の列を作るはずです")
+    # ③ 他の列は元のまま（式は追随してよい）
+    expected = [tuple(list(row[:j]) + [(False, None, None)] + list(row[j:]))
+                 for row in before_rows]
+    st, info = compare_moved_rows(after_rows, expected, "挿したあと")
+    if st == "broken":
+        return "fail", f"{at}列目に列を挿したとき、他の列が変わっています ── {info}"
+    if info:
+        return "warn", _moved_rows_note(info)
+    label = f"『{name}』" if name else "見出しの無い列"
+    return "pass", f"{at}列目に{label}を挿入（他の列は 1 セルも変わらず）"
+
+
 def check_swap(path: Path, args: dict, header_row: int = 1,
                 source_book: Path | None = None) -> tuple:
     """SWAP の事後条件。**入れ替わったこと**を、適用前との突き合わせで証明する。
@@ -6647,6 +6777,75 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
     if second:
         note += f"（『{second}』との間）"
     return at, note
+
+
+# ★ 2026-08-27: 列の相対位置。行（_ANCHOR_AFTER/_BEFORE）と**同じ形**で持つ ──
+#   「位置は op に依らず位置」なので、片方だけ賢くしない。
+_COL_AFTER = ("の右に", "の右へ", "の右側に", "の後ろに", "のうしろに", "の次に")
+_COL_BEFORE = ("の左に", "の左へ", "の左側に", "の前に", "の手前に")
+# 「原価と売上の右側に」＝ 2 つのうち右の方の隣（Namakoo が挙げた実例）。
+_re_col_pair = re.compile(r"([^\s、。]+?)\s*と\s*([^\s、。]+?)\s*の\s*(右|左)")
+# 依頼文が「列を追加/足す/挿入」と言っているか（第二段へ回すための証拠）。
+# ★ 2026-08-27（自分で開けた穴・実機の検体が捕まえた）: 「列を**入れ替え**て」が
+#   「入れ」に当たって列追加として横取りされ、入れ替えが動かなくなった。
+#   ★ 語の一部が別の語の一部でありうる ── 部分文字列の穴は、この repo で 2 度目。
+_re_add_col_ask = re.compile(r"列[^。]{0,6}?(?:を)?\s*(?:追加|足し|足す|挿入|入れ(?!替)|作)")
+
+
+def task_asks_to_add_a_column(task: str) -> bool:
+    """依頼文が「列を追加」を求めているか（位置も名前もここでは決めない）。"""
+    return bool(_re_add_col_ask.search(task or ""))
+
+
+def _header_index(headers: list, name: str) -> tuple:
+    """列名 → (1 起点の位置, 実際の見出し名)。『原価列』のように「列」が付いた言い方も受ける。
+       決まらなければ (None, name)（推測しない）。
+       ★ 実際の見出し名も返すのは、解釈行に**表に在る名前**を出すため
+         （『原価列』と書かれても『原価』と表示する ── 人が突き合わせられる形にする）。"""
+    names = [str(h) for h in headers]
+    if name in names:
+        return names.index(name) + 1, name
+    if name.endswith("列") and name[:-1] in names:
+        return names.index(name[:-1]) + 1, name[:-1]
+    return None, name
+
+
+def resolve_col_anchor(task: str, headers: list) -> tuple:
+    """依頼文の「**原価の右に**」「**原価と売上の右側に**」から、新しい列が入る位置
+       （1 起点）を決める。
+
+    ★ 分担は行と同じ: **LLM は「誰の隣か」を言うだけ／位置は機械が実表の見出しから決める。**
+    ★ 見つからない・決められない時は**決めない**（黙って末尾に付けない ── 静かに
+      違う場所へ入るのが一番こわい、を列でも同じに扱う）。
+    戻り値: (位置 or None, 説明 or 断りの理由 or None)。
+            (None, None) = 位置の言い回しが**そもそも無い**（呼び側が末尾を選べる）
+    """
+    text = (task or "").replace("　", " ")
+    names = [str(h) for h in headers]
+    m = _re_col_pair.search(text)
+    if m:
+        a, c, side = m.group(1).strip(), m.group(2).strip(), m.group(3)
+        ia, a = _header_index(names, a)
+        ic, c = _header_index(names, c)
+        if ia is None or ic is None:
+            missing = [x for x, i in ((a, ia), (c, ic)) if i is None]
+            return None, (f"『{"』『".join(missing)}』という列がありません"
+                           f"（ある列: {"、".join(names)}）")
+        lo, hi = min(ia, ic), max(ia, ic)
+        at = hi + 1 if side == "右" else lo
+        return at, f"『{a}』と『{c}』の{side}＝{at}列目"
+    for suf in _COL_AFTER + _COL_BEFORE:
+        m = _re_anchor(suf).search(text)
+        if not m:
+            continue
+        idx, name = _header_index(names, m.group(1).strip())
+        if idx is None:
+            return None, (f"『{name}』という列がありません"
+                           f"（ある列: {"、".join(names)}）")
+        after = suf in _COL_AFTER
+        at = idx + 1 if after else idx
+        return at, f"『{name}』（{idx}列目）の{"右" if after else "左"}＝{at}列目"
+    return None, None
 
 
 def note_deleted(args: dict, rows) -> None:
@@ -7362,7 +7561,7 @@ POSTCONDITIONS = {
     # ★ 2026-08-26: 表の基本操作 3 種
     "ADD_ROW": check_add_row, "DELETE_ROWS": check_delete_rows,
     "DELETE_COLUMN": check_delete_column, "SET_CELL_VALUE": check_set_cell_value,
-    "SWAP": check_swap,
+    "SWAP": check_swap, "ADD_COLUMN": check_add_column,
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
     # ★ 致命3(W10e):
     "SET_COLUMN_VALUE": check_set_column_value,
@@ -7433,7 +7632,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
-                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE", "SWAP"):
+                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE", "SWAP",
+                   "ADD_COLUMN"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
@@ -9693,6 +9893,28 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                       f"依頼文が『{_named}』の行を名指ししています）")
                 plan = [{"op": "SET_CELL_VALUE", "args": _args}]
 
+    # ★★ 2026-08-27（Namakoo「列の追加はできないの？」）:
+    #   実測: 「備考という列を追加して」も「原価の右に列を追加して」も語彙外で断られていた
+    #   （削除だけあって追加が無い ── 行の時と同じ形の欠け）。
+    #   ★ 横取りするのは**断る側**だけ（CLARIFY/FREEFORM/OUT_OF_VOCAB）。
+    #     「利益の列を追加して」は一段目が COMPUTE_COLUMN を返す ── そちらの方が
+    #     良い答えなので触らない（計算できるなら計算列にする）。
+    #   ★★ 2026-08-27（自分で実測）: 一段目は**同じ依頼文で回ごとに違う op** を返す。
+    #     「原価列の右に列を追加して」で INSERT_ROWS（行挿入）が返り、そのまま走れば
+    #     **列を頼まれて行を挿す**。断るより悪い（軸そのものが違う）。
+    #     ★ 依頼文が「列」と言っているなら、行の op は軸を間違えている ── 横取りする。
+    #   ★ 計画が 1 段の時だけ差し替える（複合依頼の他の段を巻き添えにしない）。
+    _headers_add = (book_meta.get("headers") or {}).get(_sheet_h) or []
+    if (task_asks_to_add_a_column(a.task) and len(plan) == 1
+            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB",
+                                                "INSERT_ROWS", "ADD_ROW")):
+        _at_add, _note_add = resolve_col_anchor(a.task, _headers_add)
+        _ac = translate_task_fixed_op(a.model, "ADD_COLUMN", a.task, book_meta)
+        _ac_args = dict((_ac or {}).get("args") or {})
+        _where = _note_add or "末尾"
+        print(f"（『列追加』として読み直しました ── 依頼文が列の追加を指しています: {_where}）")
+        plan = [{"op": "ADD_COLUMN", "args": _ac_args}]
+
     # ★★ 2026-08-27（Namakoo「行や列の入れ替えを実装できるか」）:
     #   実測すると「みかんとぶどうを入れ替えて」は CLARIFY（「どちらの列ですか」）、
     #   「売上と原価を入れ替えて」は OUT_OF_VOCAB に落ちていた ── **断る側**なので、
@@ -9704,9 +9926,8 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     間違った操作を自信をもって実行する形で、断るより悪い）。
     #   ★ ただし SORT を横取りする以上、条件を厳しくする: **2 つの名前が実表で
     #     ちょうど 1 つに解ける時だけ**読み直す（解けないなら元の計画のまま進める）。
-    if task_asks_for_a_swap(a.task) and any(
-            (st or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB", "SORT")
-            for st in plan):
+    if (task_asks_for_a_swap(a.task) and len(plan) == 1
+            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB", "SORT")):
         _sw = translate_task_fixed_op(a.model, "SWAP", a.task, book_meta)
         _sw_args = (_sw or {}).get("args") or {}
         if (str(_sw_args.get("a", "")).strip() and str(_sw_args.get("b", "")).strip()

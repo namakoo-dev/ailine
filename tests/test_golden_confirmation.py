@@ -55,6 +55,10 @@ _add("delete_rows_inferred", "DELETE_ROWS", {"at": 3, "count": 1}, inferred=("co
 _add("delete_column_one", "DELETE_COLUMN", {"col": "金額"})
 _add("set_cell_value_one", "SET_CELL_VALUE",
      {"row": "りんご", "col": "金額", "value": "2000"})
+_add("add_column_named", "ADD_COLUMN",
+     {"name": "備考", "_name_label": "備考", "_at_basis": "『金額』（2列目）の右＝3列目"})
+_add("add_column_unnamed", "ADD_COLUMN",
+     {"name": "", "_name_label": "（名前なし・見出しは空のまま）", "_at_basis": "末尾＝3列目"})
 _add("swap_rows", "SWAP",
      {"a": "みかん", "b": "ぶどう", "_axis": "row",
       "_axis_label": "行（『みかん』の行＝3行目／『ぶどう』の行＝4行目）"})
