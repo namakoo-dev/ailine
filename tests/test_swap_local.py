@@ -241,3 +241,76 @@ def test_the_a1_column_letter_form_reaches_the_same_one_cell(tmp_path):
     assert out.max_row == 3, f"行が増えた（列への書き込みに行で答えた）: {out.max_row}"
     assert [out.cell(i, 3).value for i in (2, 3)] == ["田中", "佐藤"], \
         [out.cell(i, 3).value for i in (2, 3)]
+
+
+# --- 請求書を 1 枚にまとめる（2026-08-28・Namakoo「同名の取引先から複数の発注」）------
+#
+# ★ sandbox では Basic が走らない ── 明細行の**増殖**（insertByIndex + copyRange）は
+#   実機でしか確かめられない。設計査読が「唯一の未知」と名指しした所なので、
+#   書式つき・結合ありの雛形で通す。
+
+@pytest.mark.local
+def test_orders_for_the_same_customer_land_on_one_invoice(tmp_path):
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    p = tmp_path / "inv.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "請求"
+    ws.append(["取引先", "項目", "件数", "単価", "金額", "締め日", "担当"])
+    for row in [["丸和物流", "配送業務一式", 12, 4800, 57600, "2026/08/31", "田中"],
+                 ["ヤマノ食品", "食品仕入", 28, 1500, 42000, "2026/08/31", "田中"],
+                 ["ヤマノ食品", "冷蔵配送", 6, 3000, 18000, "2026/08/31", "田中"]]:
+        ws.append(row)
+    thin = Side(style="thin")
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    tp = wb.create_sheet("雛形")
+    tp["A1"] = "請　求　書"
+    tp["A1"].font = Font(size=18, bold=True)
+    tp.merge_cells("A1:D1")                     # ★ 横の結合（崩れてはいけない）
+    tp["A3"] = "{{取引先}}"
+    tp["B3"] = "御中"
+    tp["A7"] = "ご請求金額"
+    tp["B7"] = "{{合計:金額}}"
+    tp["B7"].fill = PatternFill("solid", fgColor="FFF3D6")
+    for c, t in zip("ABCD", ["項目", "数量", "単価", "金額"]):
+        tp[f"{c}10"] = t
+        tp[f"{c}10"].font = Font(bold=True)
+        tp[f"{c}10"].alignment = Alignment(horizontal="center")
+    tp["A11"] = "{{明細:項目}}"
+    tp["B11"] = "{{明細:件数}}"
+    tp["C11"] = "{{明細:単価}}"
+    tp["D11"] = "{{明細:金額}}"
+    for c in "ABCD":
+        tp[f"{c}11"].border = box            # ★ 罫線が複製先まで乗ること
+    tp["C11"].number_format = "#,##0"
+    tp["D11"].number_format = "#,##0"
+    tp["A13"] = "お支払期限"
+    tp["B13"] = "{{締め日}}"
+    tp["A16"] = "備考"
+    tp["B16"] = "毎度ありがとうございます。"
+    wb.save(p)
+
+    r = _run(p, "取引先ごとに請求書を作って")
+    assert r.returncode == 0, f"まとめ版の帳票が失敗:\n{r.stdout[-1200:]}"
+    out = openpyxl.load_workbook(_out(p))
+    assert "ヤマノ食品_2" not in out.sheetnames, f"2 枚に割れた: {out.sheetnames}"
+    ya = out["ヤマノ食品"]
+    # ★ 明細が 2 行に増え、それぞれ自分の値
+    assert [ya.cell(11, c).value for c in range(1, 5)] == ["食品仕入", 28, 1500, 42000]
+    assert [ya.cell(12, c).value for c in range(1, 5)] == ["冷蔵配送", 6, 3000, 18000]
+    # ★ 合計は足した値（宣言値でなく実際の和）
+    assert ya["B7"].value == 60000, ya["B7"].value
+    # ★ 増やした分だけ下がずれ、固定文は無傷（ここが一番静かに壊れる）
+    assert ya.cell(14, 1).value == "お支払期限" and ya.cell(14, 2).value == "2026/08/31"
+    assert ya.cell(17, 2).value == "毎度ありがとうございます。"
+    # ★ 書式が複製先まで乗っている／横の結合が残っている
+    assert ya.cell(12, 1).border.left.style == "thin", "複製した明細行に罫線が無い"
+    assert ya.cell(12, 4).number_format == "#,##0", "複製した明細行の桁区切りが落ちた"
+    assert "A1:D1" in [str(m) for m in ya.merged_cells.ranges], "横の結合が崩れた"
+    # ★ 1 件だけの取引先は増えない
+    assert out["丸和物流"].cell(13, 1).value == "お支払期限"
+    # ★ 検分に「どの発注が 1 枚に入ったか」が出る
+    ins = out["検分"]
+    got = {ins.cell(i, 1).value: (ins.cell(i, 2).value, ins.cell(i, 3).value)
+            for i in range(2, ins.max_row + 1)}
+    assert got["ヤマノ食品"] == ("3,4", 2), got

@@ -139,6 +139,7 @@ from ailine_core.report_per_row import (  # noqa: F401
     cells_with_multiple_placeholders,   # ★ 帳票段: REPORT_PER_ROW の純ロジック部品
     sanitize_sheet_name, unique_sheet_name, scan_placeholders, compare_report_cells,   # noqa: F401 ── 再輸出/在否確認のため残す
 )
+from ailine_core import report_group   # ★ 帳票段（まとめ版）: 同じ取引先を 1 枚にまとめる純ロジック
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
 from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
@@ -1617,6 +1618,12 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
             lines.append(f"★ 依頼で言及された『行{row}』は存在しません/変更されていません")
     for sheet in sorted(mentions["sheets"]):
         if sheet in exclude_sheets:
+            continue
+        # ★ 2026-08-28（雛形を 2 種類置いた実測）: 「英文の**雛形**で請求書を作って」で
+        #   『雛形』（今回使わなかった方）に誤警報が出て ✓ が △ に落ちた。
+        #   人が言った語が、読むだけと宣言済みのシート名の**一部**である回は黙る
+        #   （『雛形』は『雛形_英文』の一部 ── 言及は当たっていて、変わらないのが正常）。
+        if any(sheet in ex for ex in exclude_sheets):
             continue
         if sheet not in changed_sheets:
             lines.append(f"★ 依頼で言及された『{sheet}』は存在しません/変更されていません")
@@ -4467,6 +4474,10 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         try:
             tpl_ws = wb_tpl[template_sheet]
             placeholders = scan_placeholders(tpl_ws, tpl_ws.max_row or 1, tpl_ws.max_column or 1)
+            # ★ 縦の結合セルは、明細行を増やすと崩れる（値は合うので事後条件は通ってしまう）。
+            #   日本の請求書の雛形は結合だらけなので、起きる方に賭けるべき事象（設計査読）。
+            tpl_vmerges = [(m.min_row, m.max_row, m.coord)
+                            for m in tpl_ws.merged_cells.ranges if m.min_row != m.max_row]
         finally:
             wb_tpl.close()
 
@@ -4485,15 +4496,36 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 f"（{chr(12539).join(names)}）。1 つのセルに置ける印は 1 つまでです ── "
                 f"別々のセルに分けてください")
 
+        # ★★ 2026-08-28（Namakoo「同名の取引先から複数の発注があるケースでは
+        #   請求書を一枚にまとめないといけない」）: 印を 3 種類に仕分ける。
+        #   {{列名}} / {{明細:列名}} / {{合計:列名}}。**雛形が形を決める**ので、
+        #   依頼文にも一段目の語彙（OPS_DOC）にも 1 文字も足さない。
+        mark_layout, layout_err = report_group.classify_placeholders(placeholders)
+        if layout_err:
+            return False, resolved, inferred, f"雛形『{template_sheet}』: {layout_err}"
+        if mark_layout.detail_row is not None:
+            crossing = [c for lo, hi, c in tpl_vmerges if lo <= mark_layout.detail_row <= hi]
+            if crossing:
+                return False, resolved, inferred, (
+                    f"雛形『{template_sheet}』の明細行（{mark_layout.detail_row}行目）を、"
+                    f"縦に結合したセルが横切っています（{'・'.join(crossing[:3])}）。"
+                    "明細行は件数ぶん増えるので、この結合は崩れます ── "
+                    "結合を解くか、明細行の外へずらしてください")
+
         resolved_placeholders = []
         for ph in placeholders:
-            if ph.column_name not in data_headers:
+            ph_kind, ph_col = report_group.mark_kind(ph.column_name)
+            if ph_col not in data_headers:
                 return False, resolved, inferred, (
                     f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
-                    f"（{ph.cell}）が指す列『{ph.column_name}』は、データシート"
+                    f"（{ph.cell}）が指す列『{ph_col}』は、データシート"
                     f"『{first_sheet}』に見つかりません。実在する列名を印にしてください"
                 )
-            col_idx = data_headers.index(ph.column_name) + 1
+            col_idx = data_headers.index(ph_col) + 1
+            if ph_kind == "total" and not ph.whole:
+                return False, resolved, inferred, (
+                    f"雛形『{template_sheet}』の合計の印『{{{{{ph.column_name}}}}}』"
+                    f"（{ph.cell}）は、セル全体を印にしてください（合計は数値です）")
             if not ph.whole:
                 # ★ 訂正3: 部分一致の印は原理的に文字列にしかなれない ── 数値列には使わせない
                 #   （検体には無いが自分の検体で固定する境界。設計文書の指示どおり）。
@@ -4505,14 +4537,14 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 if is_numeric:
                     return False, resolved, inferred, (
                         f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
-                        f"（{ph.cell}）はセルの一部分（部分一致）ですが、列『{ph.column_name}』は"
+                        f"（{ph.cell}）はセルの一部分（部分一致）ですが、列『{ph_col}』は"
                         "数値です。数値列には部分一致の印を使えません"
                         "（セル全体を印にしてください: 例 " + "{{" + ph.column_name + "}}）"
                     )
             resolved_placeholders.append({
                 "cell": ph.cell, "row": ph.row, "col": ph.col,
-                "column_name": ph.column_name, "whole": ph.whole, "raw": ph.raw,
-                "col_idx": col_idx,
+                "column_name": ph_col, "kind": ph_kind, "mark": ph.column_name,
+                "whole": ph.whole, "raw": ph.raw, "col_idx": col_idx,
             })
         resolved["_placeholders"] = resolved_placeholders
 
@@ -4535,13 +4567,36 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             excluded=[], adopted_rows=[], mismatches=[])
         row_values = {r: v for r, _l, v in rows_in}
 
+        # ★★ まとめるか、1 行 1 枚か ── **雛形と実表の両方**が決める（人に選ばせない）:
+        #   ・雛形に明細/合計の印が在る → まとめる（1 件でも同じ道を通る）
+        #   ・印は無いが同じ名前が 2 行以上ある → **断る**（2 枚に割れた紙は仕事にならない）
+        name_col_here = resolved["name_col"]
+        name_idx = data_headers.index(name_col_here) + 1
+        groups = report_group.build_groups(
+            [(r, [row_values[r].get(h) for h in data_headers]) for r in verdict.adopted_rows],
+            name_idx)
+        grouped = mark_layout.detail_row is not None or bool(mark_layout.total)
+        # ★★ 2026-08-28（設計査読で名指しされた・自分で開けかけた穴）:
+        #   ここで**断って**はいけない。同名が 2 行あっても正しい帳票がある ──
+        #   領収書・納品書は取引ごとに 1 枚だし、締め日違いの月別請求も同じ形
+        #   （OPS_DOC 自身が REPORT_PER_ROW の用途に領収書を挙げている）。
+        #   既に在る処方は「断ること」ではなく「✓ を出さないこと」だった（2026-08-24）。
+        #   ★ 反転させずに、△ の警告文へ**まとめ方への道**を足すだけにする。
+
         used = set(sheets) | {template_sheet}
         report_rows = []
-        for r in verdict.adopted_rows:
-            raw_name = row_values[r].get(resolved["name_col"])
-            sheet_name = unique_sheet_name(str(raw_name), used)
-            used.add(sheet_name)
-            report_rows.append({"row": r, "sheet": sheet_name})
+        if grouped:
+            for g in groups:
+                sheet_name = unique_sheet_name(str(g.name), used)
+                used.add(sheet_name)
+                report_rows.append({"row": g.rows[0], "sheet": sheet_name,
+                                     "name": g.name, "rows": list(g.rows)})
+        else:
+            for r in verdict.adopted_rows:
+                raw_name = row_values[r].get(name_col_here)
+                sheet_name = unique_sheet_name(str(raw_name), used)
+                used.add(sheet_name)
+                report_rows.append({"row": r, "sheet": sheet_name})
         if not report_rows:
             return False, resolved, inferred, (
                 "帳票にするデータ行がありません（表が空か、全行が合計行と判定されました）"
@@ -4549,13 +4604,37 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         inspection_sheet = unique_sheet_name(inspection.SHEET_NAME, used)
         used.add(inspection_sheet)
 
-        # ★ 2026-08-24: 重複を知った瞬間に言う（`_2` を付けたのがその瞬間）。
-        #   実測: 3 社の売上表（4 行）で請求書 4 枚・同じ取引先が 2 枚に分かれて ✓ が出た。
-        #   ★ 付きなので count_suspicious_advisories が拾い、決裁③で ✓→△ に降格する。
-        if (dup := duplicate_name_warning(
-                resolved["name_col"],
-                [row_values[r].get(resolved["name_col"]) for r in verdict.adopted_rows])):
-            resolved["_warnings"] = resolved.get("_warnings", []) + [dup]
+        if grouped:
+            # ★ 1 枚に 1 つしか書けない欄が、グループの中で食い違っていないか。
+            #   食い違ったら**埋めずに断る** ── 推測で選ぶと、別の担当者の名前が客に届く。
+            by_name = {g.name: g for g in groups}
+            for rr in report_rows:
+                g = by_name[rr["name"]]
+                for ph in resolved_placeholders:
+                    if ph["kind"] == "value":
+                        vals = report_group.value_conflicts(g, row_values, ph["column_name"])
+                        if vals:
+                            return False, resolved, inferred, (
+                                f"『{g.name}』の {list(g.rows)}行目で"
+                                f"『{ph['column_name']}』が食い違っています（{vals}）。"
+                                f"1 枚の紙には 1 つしか書けません ── 明細に出すなら"
+                                f"『{{{{明細:{ph['column_name']}}}}}』、"
+                                f"足すなら『{{{{合計:{ph['column_name']}}}}}』にしてください")
+                    elif ph["kind"] == "total":
+                        _s, serr = report_group.sum_for(g, row_values, ph["column_name"])
+                        if serr:
+                            return False, resolved, inferred, f"『{g.name}』: {serr}"
+            resolved["_groups"] = [{"sheet": rr["sheet"], "name": rr["name"],
+                                     "rows": rr["rows"]} for rr in report_rows]
+            resolved["_detail_row"] = mark_layout.detail_row
+        else:
+            # ★ 2026-08-24: 重複を知った瞬間に言う（`_2` を付けたのがその瞬間）。
+            #   実測: 3 社の売上表（4 行）で請求書 4 枚・同じ取引先が 2 枚に分かれて ✓ が出た。
+            #   ★ 付きなので count_suspicious_advisories が拾い、決裁③で ✓→△ に降格する。
+            if (dup := duplicate_name_warning(
+                    name_col_here,
+                    [row_values[r].get(name_col_here) for r in verdict.adopted_rows])):
+                resolved["_warnings"] = resolved.get("_warnings", []) + [dup]
         resolved["_report_rows"] = report_rows
         resolved["_report_sheet_names"] = [rr["sheet"] for rr in report_rows]
         resolved["_inspection_sheet"] = inspection_sheet
@@ -5519,7 +5598,20 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         template_sheet = str(resolved_args["template_sheet"]).replace('"', '""')
         src_sheet = str(first_sheet).replace('"', '""')
         lines = []
-        for rr in resolved_args.get("_report_rows", []):
+        groups = resolved_args.get("_groups")
+        if groups:
+            # ★★ まとめ版（2026-08-28）: 1 グループ = 1 枚。明細行が件数ぶん増える。
+            #   行を増やすと下がずれる ── ずれの数え方は report_group.output_rows_for に
+            #   1 箇所だけ置き、確かめる側もそこを使う（埋める側と数え方が割れない）。
+            det0 = resolved_args.get("_detail_row")
+            det0 = -1 if det0 is None else int(det0) - 1
+            for g in groups:
+                gname = str(g["sheet"]).replace('"', '""')
+                rows_csv = ",".join(str(int(r) - 1) for r in g["rows"])
+                lines.append(
+                    f'    Call FillGroupReportSheet(oDoc, "{template_sheet}", "{gname}", '
+                    f'"{src_sheet}", "{rows_csv}", {hr0}, {det0})' + chr(10))
+        for rr in ([] if groups else resolved_args.get("_report_rows", [])):
             new_name = str(rr["sheet"]).replace('"', '""')
             src_row0 = int(rr["row"]) - 1   # Excel(1起点) → Basic(0起点)
             lines.append(
@@ -5532,7 +5624,14 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         #   LO 側で書けば往復そのものが無くなる ── 追加の LO 起動も要らない。
         insp = resolved_args.get("_inspection_sheet")
         report_rows = resolved_args.get("_report_rows") or []
-        if insp and report_rows:
+        if insp and groups:
+            # ★ まとめた回は「元の行」が複数 ── 何行をまとめたかまで検分に出す
+            #   （どの発注が 1 枚に入ったかを、後から人が追えること）。
+            lines.append(inspection_sheet_basic_call(
+                insp, ["シート名", "元の行", "まとめた件数"],
+                [[g["sheet"], ",".join(str(r) for r in g["rows"]), len(g["rows"])]
+                 for g in groups], "ssn"))
+        elif insp and report_rows:
             n_ph = len(resolved_args.get("_placeholders") or [])
             lines.append(inspection_sheet_basic_call(
                 insp, ["シート名", "元の行", "埋めた印の数"],
@@ -5685,9 +5784,14 @@ def duplicate_name_warning(col: str, values) -> str | None:
     head = "・".join(f"『{k}』{n} 行" for k, n in dupes[:3])
     more = f" ほか {len(dupes) - 3} 件" if len(dupes) > 3 else ""
     # ★ 印（⚠）は _warnings を印字する側が付ける ── ここで ★ を足すと「⚠ ★」と二重になる。
+    # ★ 2026-08-28: 「先に集計してから」は**行き止まり**だった（この道具の中に道が無い）。
+    #   まとめ方は在る ── 雛形に明細の印を置けば 1 枚にまとまる。出口を名指しする。
+    #   ★ 断らないのは、取引ごとに 1 枚が正しい帳票（領収書・納品書）があるから。
     return (f"列『{col}』に同じ値が複数あります（{head}{more}）。"
              f"1 行につき 1 枚ずつ作るので、同じ相手の書類が別々の枚に分かれます"
-             f"（1 枚にまとめたい場合は、先に集計してからお試しください）")
+             f"（1 枚にまとめるなら、雛形の明細行に『{{{{明細:列名}}}}』の印を、"
+             f"合計欄に『{{{{合計:金額}}}}』の印を置いてください。"
+             f"取引ごとに 1 枚が正しい書類 ── 領収書・納品書 ── ならこのままで大丈夫です）")
 
 
 def detect_first_column_gap(ws, header_row: int = 1, look_ahead: int = 200) -> str | None:
@@ -8439,6 +8543,149 @@ def check_report_per_row(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{denom}（印の値・型とも保存。雛形/データシートとの突き合わせ無し）"
 
 
+def check_report_per_group(path: Path, args: dict, header_row: int = 1,
+                            source_book: Path | None = None) -> tuple:
+    """まとめ版の事後条件。**REPORT_PER_ROW とは別の証明**（同じ関数に混ぜない ──
+       混ぜた側の分岐が恒真になっているのが、この repo で一番こわい壊れ方）。
+
+    証明するもの:
+      ①グループの完全会計 ── データ行の集合が、グループの行の直和とちょうど一致
+        （合計行の除外は total_row.py で**独立に**数え直す）
+      ②明細 ── 件数ぶんの行が在り、k 件目が元の k 番目の行と型込みで一致
+      ③合計 ── 画面の値が、**別実装（ここで足し直した値）**と一致
+        （書いたのは Basic の UNO 側なので、ここは本当に別の実装）
+      ④グループ値 ── そのグループ全行で同じ値であることを確かめたうえで一致
+      ⑤**印でないセル**が、行を増やしたあとも雛形のまま（ずれで壊れていない）
+      ⑥雛形・データシートが無変更（source_book が在る回だけ）
+    ★ ⑤が芯: 行の挿入は「増やした所」より「押し下げた所」が静かに壊れる。
+    """
+    groups = args.get("_groups") or []
+    placeholders = args.get("_placeholders") or []
+    inspection_sheet = args.get("_inspection_sheet")
+    template_sheet = args.get("template_sheet")
+    src_sheet_name = args.get("_target_sheet")
+    detail_row = args.get("_detail_row")
+    if not groups:
+        return "fail", "まとめる単位が決まっていません（verify_dsl_args を経由していない可能性）"
+    if not inspection_sheet:
+        return "fail", "検分シート名が決まっていません（verify_dsl_args を経由していない可能性）"
+
+    with BookView(path) as bv:
+        for need, what in ((src_sheet_name, "データシート"), (template_sheet, "雛形"),
+                            (inspection_sheet, "検分シート")):
+            if need not in bv.sheetnames:
+                return "fail", f"{what}『{need}』がありません"
+        src = bv.sheet(src_sheet_name)
+        tpl = bv.sheet(template_sheet)
+        last_col = _scan_last_col(src, header_row=header_row)
+        if last_col < 1:
+            return "fail", _ZERO_TARGET_REASON
+
+        # ① グループの完全会計（合計行の除外を独立に数え直す）
+        last_row = _scan_last_row(src, header_row=header_row)
+        rows_in = [(r, src.cell(row=r, column=1).value,
+                     {c: src.cell(row=r, column=c).value for c in range(2, last_col + 1)})
+                    for r in range(header_row + 1, last_row + 1)]
+        verdict = (total_row.split_total_rows_multi(rows_in) if rows_in
+                    else total_row.TotalRowVerdict(excluded=[], adopted_rows=[], mismatches=[]))
+        expected = set(verdict.adopted_rows)
+        got, seen = set(), []
+        for g in groups:
+            for r in g["rows"]:
+                if r in got:
+                    return "fail", f"{r}行目が 2 つのグループに入っています"
+                got.add(r)
+            seen.append(g["sheet"])
+        if expected != got:
+            return "fail", (f"データ{len(expected)}行のうち、まとめたのは{len(got)}行"
+                             f"（欠落 {sorted(expected - got)}・余剰 {sorted(got - expected)}）")
+        if len(set(seen)) != len(seen):
+            return "fail", "同じ名前のシートを 2 回宣言しています"
+
+        tpl_last_row, tpl_last_col = _used_extent(tpl)
+        mark_cells = {(ph["row"], ph["col"]) for ph in placeholders}
+        for g in groups:
+            if g["sheet"] not in bv.sheetnames:
+                return "fail", f"シート『{g['sheet']}』がありません"
+            out = bv.sheet(g["sheet"])
+            n = len(g["rows"])
+            # ②③④ 印
+            for ph in placeholders:
+                for out_row in report_group.output_rows_for(ph["row"], detail_row, n):
+                    got_v = out.cell(row=out_row, column=ph["col"]).value
+                    ref = f"{ph['cell']}→{out_row}行目"
+                    if ph["kind"] == "total":
+                        want = sum(float(src.cell(row=r, column=ph["col_idx"]).value or 0)
+                                    for r in g["rows"])
+                        if isinstance(got_v, bool) or not isinstance(got_v, (int, float)):
+                            return "fail", (f"『{g['sheet']}』の合計 {ref} が数値ではありません"
+                                             f"（{got_v!r}）")
+                        if abs(float(got_v) - want) > 1e-9:
+                            return "fail", (f"『{g['sheet']}』の合計 {ref} が {got_v!r} ですが、"
+                                             f"{list(g['rows'])}行目を足すと {want!r} です")
+                        continue
+                    if ph["kind"] == "detail":
+                        k = report_group.detail_index_for(out_row, detail_row, n)
+                        src_row = g["rows"][k]
+                    else:
+                        src_row = g["rows"][0]
+                    want_v = src.cell(row=src_row, column=ph["col_idx"]).value
+                    if ph["kind"] == "value":
+                        for r in g["rows"]:
+                            if src.cell(row=r, column=ph["col_idx"]).value != want_v:
+                                return "fail", (f"『{g['sheet']}』の『{ph['column_name']}』が"
+                                                 f"元の行で食い違っています（{list(g['rows'])}行目）")
+                    if ph["whole"]:
+                        if got_v != want_v:
+                            return "fail", (f"『{g['sheet']}』の {ref} が {got_v!r} ですが、"
+                                             f"元{src_row}行目は {want_v!r} です")
+                    else:
+                        filler = "" if want_v is None else str(want_v)
+                        want_s = ph["raw"].replace("{{" + ph["mark"] + "}}", filler)
+                        if str(got_v if got_v is not None else "") != want_s:
+                            return "fail", (f"『{g['sheet']}』の {ref} が {got_v!r} ですが、"
+                                             f"{want_s!r} のはずです")
+            # ⑤ 印でないセルが、押し下げられた先で雛形のまま
+            for r in range(1, tpl_last_row + 1):
+                for c in range(1, tpl_last_col + 1):
+                    if (r, c) in mark_cells:
+                        continue
+                    want_v = tpl.cell(row=r, column=c).value
+                    for out_row in report_group.output_rows_for(r, detail_row, n):
+                        got_v = out.cell(row=out_row, column=c).value
+                        if got_v != want_v:
+                            return "fail", (
+                                f"『{g['sheet']}』の {_cell_ref(out_row, c)} が {got_v!r} ですが、"
+                                f"雛形の {_cell_ref(r, c)} は {want_v!r} です"
+                                "（明細行を増やしたときに、印でないセルが壊れています）")
+
+    denom = (f"取引先{len(groups)}件 → 請求書{len(groups)}枚"
+              f"（明細 {sum(len(g['rows']) for g in groups)} 行ぶん・印{len(placeholders)}種）")
+
+    # ⑥ 雛形とデータシートが無変更・この操作が作った宣言外のシートが無い
+    if source_book is not None and Path(source_book).exists():
+        with BookView(source_book) as bv_before, BookView(path) as bv_after:
+            for sheet_name in (template_sheet, src_sheet_name):
+                sb = bv_before.sheet(sheet_name)
+                sa = bv_after.sheet(sheet_name)
+                br, bc = _used_extent(sb)
+                ar, ac = _used_extent(sa)
+                lr, lc = max(br, ar), max(bc, ac)
+                bad = sum(1 for r in range(1, lr + 1) for c in range(1, lc + 1)
+                           if sb.cell(row=r, column=c).value != sa.cell(row=r, column=c).value)
+                if bad:
+                    return "fail", (f"{denom} でしたが、シート『{sheet_name}』が {bad} セル"
+                                     "変更されています（雛形・データシートは読むだけのはず）")
+            born = set(bv_after.sheetnames) - set(bv_before.sheetnames)
+            orphans = sorted(born - {g["sheet"] for g in groups} - {inspection_sheet})
+            if orphans:
+                return "fail", ("この操作が作ったのに宣言していないシートがあります"
+                                 f"（孤児シートの疑い {orphans}）")
+        return "pass", f"{denom}（明細・合計・固定文とも検算済み・雛形/データシート無変更）"
+
+    return "pass", f"{denom}（明細・合計とも検算済み。雛形/データシートとの突き合わせ無し）"
+
+
 def check_format_map(path: Path, args: dict, header_row: int = 1,
                       source_book: Path | None = None) -> tuple:
     """FORMAT_MAP の事後条件。REPORT_PER_ROW の兄弟（縦の展開）で同じ4本柱を機械で確かめる:
@@ -8542,6 +8789,17 @@ def check_format_map(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{denom}（印の値・型とも保存。雛形/データシートとの突き合わせ無し）"
 
 
+def _check_report_router(path: Path, args: dict, header_row: int = 1,
+                          source_book: Path | None = None) -> tuple:
+    """帳票段の事後条件は**2 つある**（1 行 1 枚 / 取引先ごとに 1 枚）。
+       どちらを使うかは op 名でなく、**解決済みの宣言**が持っている:
+       `_groups` が在る回はまとめ版 ── まとめ版の証明は別関数（混ぜない）。
+       ★ 混ぜると、片方の分岐が恒真でも全体は緑に見える（この repo で一番こわい形）。"""
+    if args.get("_groups"):
+        return check_report_per_group(path, args, header_row, source_book=source_book)
+    return check_report_per_row(path, args, header_row, source_book=source_book)
+
+
 POSTCONDITIONS = {
     "SORT": check_sort, "COMPUTE_COLUMN": check_compute_column,
     "LOOKUP_FILL": check_lookup_fill, "AGGREGATE": check_aggregate,
@@ -8562,7 +8820,7 @@ POSTCONDITIONS = {
     "SPLIT_CELL": check_split_cell,
     "DEDUP": check_dedup,
     # ★ 帳票段:
-    "REPORT_PER_ROW": check_report_per_row,
+    "REPORT_PER_ROW": _check_report_router,
     # ★ 様式写像段:
     "FORMAT_MAP": check_format_map,
 }

@@ -10,6 +10,8 @@
         "row": 1,
         "col": 2,
         "column_name": "商品",
+        "kind": "value",
+        "mark": "商品",
         "whole": true,
         "raw": "{{商品}}",
         "col_idx": 1
@@ -19,6 +21,8 @@
         "row": 2,
         "col": 2,
         "column_name": "金額",
+        "kind": "value",
+        "mark": "金額",
         "whole": true,
         "raw": "{{金額}}",
         "col_idx": 2

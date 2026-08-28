@@ -1253,3 +1253,121 @@ Sub WriteInspectionSheet(oDoc As Object, sheetName As String, payload As String,
         Next c
     End If
 End Sub
+
+
+' 帳票段（まとめ版）: REPORT_PER_GROUP。同じ取引先の発注が複数行あるとき、請求書を
+' **1 枚にまとめる**（REPORT_PER_ROW は 1 行 = 1 枚なので 2 枚になってしまう）。
+' ★ 憲法の適用は REPORT_PER_ROW と同じ: 雛形には一切書き込まない。触るのは新シートの
+'   印の在るセルだけ。シート名は Python 側(unique_sheet_name)が呼ぶ前に確定済み。
+' ★ 印は 3 種類（人が雛形に書く）:
+'     {{列名}}      … そのグループで同じはずの値（Python 側が食い違いを先に断っている）
+'     {{明細:列名}} … 発注 1 件ごと。この行が件数ぶん増える
+'     {{合計:列名}} … そのグループの合計（ここで足す。Python 側は別実装で足し直して検算する）
+' ★ 予約語との衝突を避けるため変数名は接頭辞つき（実測: oR が Or と衝突してモジュールごと
+'   黙って落ちた ── basrun からは「適用した」に見える）。
+' srcRowsCsv: このグループの元行（0起点）をカンマ区切り。detailRow0: 雛形の明細行（0起点・
+' 明細の印が無ければ -1）。
+Sub FillGroupReportSheet(oDoc As Object, templateSheet As String, newSheetName As String, _
+                          srcSheet As String, srcRowsCsv As String, headerRow As Long, _
+                          detailRow0 As Long)
+    Dim oGrp As Object, oGSrc As Object
+    Dim oGCur As Object, oGAddr As Object
+    Dim oGRng As Object, oGDst As Object
+    Dim gRow As Long, gCol As Long, gLastRow As Long, gLastCol As Long
+    Dim gSrcLastCol As Long, gHc As Long
+    Dim sCell As String, sInner As String, sColName As String
+    Dim pA As Long, pB As Long
+    Dim oCellG As Object, oCellS As Object
+    Dim rowStrs() As String
+    Dim nRows As Long, k As Long, lIdx As Long, srcRow As Long
+    Dim dTotal As Double
+    Dim isDetail As Boolean, isTotal As Boolean
+
+    rowStrs = Split(srcRowsCsv, ",")
+    nRows = UBound(rowStrs) - LBound(rowStrs) + 1
+
+    oDoc.Sheets.copyByName(templateSheet, newSheetName, oDoc.Sheets.Count)
+    oGrp = oDoc.Sheets.getByName(newSheetName)
+    oGSrc = oDoc.Sheets.getByName(srcSheet)
+
+    ' 明細行を件数ぶんに増やす（1 件なら何もしない）。
+    ' ★ 先に行を挿してから雛形の明細行をコピーする ── 書式も印の文字も一緒に運ぶ。
+    If detailRow0 >= 0 And nRows > 1 Then
+        oGCur = oGrp.createCursor()
+        oGCur.gotoEndOfUsedArea(False)
+        gLastCol = oGCur.RangeAddress.EndColumn
+        oGrp.Rows.insertByIndex(detailRow0 + 1, nRows - 1)
+        oGRng = oGrp.getCellRangeByPosition(0, detailRow0, gLastCol, detailRow0).RangeAddress
+        For k = 1 To nRows - 1
+            oGDst = oGrp.getCellByPosition(0, detailRow0 + k).CellAddress
+            oGrp.copyRange(oGDst, oGRng)
+        Next k
+    End If
+
+    oGCur = oGrp.createCursor()
+    oGCur.gotoEndOfUsedArea(True)
+    oGAddr = oGCur.RangeAddress
+    gLastRow = oGAddr.EndRow
+    gLastCol = oGAddr.EndColumn
+
+    gSrcLastCol = 0
+    Do While oGSrc.getCellByPosition(gSrcLastCol, headerRow).getString() <> ""
+        gSrcLastCol = gSrcLastCol + 1
+    Loop
+    gSrcLastCol = gSrcLastCol - 1
+
+    For gRow = 0 To gLastRow
+        For gCol = 0 To gLastCol
+            oCellG = oGrp.getCellByPosition(gCol, gRow)
+            sCell = oCellG.getString()
+            pA = InStr(sCell, "{{")
+            If pA > 0 Then
+                pB = InStr(pA, sCell, "}}")
+                If pB > 0 Then
+                    sInner = Mid(sCell, pA + 2, pB - pA - 2)
+                    isDetail = (Left(sInner, 3) = "明細:")
+                    isTotal = (Left(sInner, 3) = "合計:")
+                    If isDetail Or isTotal Then
+                        sColName = Trim(Mid(sInner, 4))
+                    Else
+                        sColName = Trim(sInner)
+                    End If
+                    ' 何件目の明細か（明細行の何行下にいるか）。明細以外は 1 件目を使う。
+                    If isDetail Then
+                        lIdx = gRow - detailRow0
+                    Else
+                        lIdx = 0
+                    End If
+                    If lIdx < 0 Then lIdx = 0
+                    If lIdx > nRows - 1 Then lIdx = nRows - 1
+                    srcRow = CLng(Trim(rowStrs(lIdx)))
+                    For gHc = 0 To gSrcLastCol
+                        If oGSrc.getCellByPosition(gHc, headerRow).getString() = sColName Then
+                            If isTotal Then
+                                dTotal = 0
+                                For k = 0 To nRows - 1
+                                    dTotal = dTotal + oGSrc.getCellByPosition(gHc, CLng(Trim(rowStrs(k)))).getValue()
+                                Next k
+                                oCellG.setValue(dTotal)
+                            Else
+                                oCellS = oGSrc.getCellByPosition(gHc, srcRow)
+                                If sCell = "{{" & sInner & "}}" Then
+                                    If oCellS.getType() = com.sun.star.table.CellContentType.TEXT Then
+                                        oCellG.setString(oCellS.getString())
+                                    ElseIf oCellS.getType() = com.sun.star.table.CellContentType.EMPTY Then
+                                        oCellG.setString("")
+                                    Else
+                                        oCellG.setValue(oCellS.getValue())
+                                    End If
+                                Else
+                                    oCellG.setString(Left(sCell, pA - 1) & oCellS.getString() & Mid(sCell, pB + 2))
+                                End If
+                            End If
+                            Exit For
+                        End If
+                    Next gHc
+                End If
+            End If
+        Next gCol
+    Next gRow
+End Sub
