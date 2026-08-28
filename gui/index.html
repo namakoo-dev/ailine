@@ -104,6 +104,20 @@
         <button id="runrestart">原本からやり直す</button>
         <button id="run">下書きを原本に反映</button>
       </div>
+      <div id="readpanel" style="display:none;border:1px solid #3b4252;border-radius:6px;
+           padding:10px;margin:8px 0;background:#1b1f27">
+        <div class="step" style="margin-top:0">こう読みました ── 合っていますか？</div>
+        <div id="readline" style="font-size:13px;line-height:1.6;word-break:break-all"></div>
+        <div class="row" style="margin-top:8px">
+          <button id="readgo" class="primary">このまま実行</button>
+          <button id="readcancel">やめる</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <select id="readop" style="flex:1"><option value="">操作が違うなら選び直す…</option></select>
+        </div>
+        <div class="note">まだ<b>ファイルは 1 バイトも変わっていません</b>。
+          操作を選び直すと、その操作として読み直します。</div>
+      </div>
       <div class="note"><b>下書きで実行</b>は前の結果に<b>続けて保存</b>します（原本は触りません）。
         1 つ戻すなら <b>もとに戻す</b>、最初から試すなら <b>原本からやり直す</b>。<br>
         納得したら <b>下書きを原本に反映</b> ── <b>目で見た下書きがそのまま原本になります</b>
@@ -513,15 +527,15 @@ $("#sheetsel").onchange = async () => {
 };
 
 // ★ 選択肢は本体の登録簿から取る。op が増えた日に、ここも黙って増える。
-async function fillOpPicker(){
-  const sel = $("#aliasop");
+async function fillOpPicker(sel, blankLabel){
+  sel = sel || $("#aliasop");
   try {
     const d = await (await fetch("/api/oplist")).json();
     const ops = d.ops || [];
     if (!ops.length){ sel.innerHTML = '<option value="">一覧を取れませんでした</option>'; return; }
     sel.innerHTML = "";
     const blank = document.createElement("option");
-    blank.value = ""; blank.textContent = "— 選んでください —";
+    blank.value = ""; blank.textContent = blankLabel || "— 選んでください —";
     sel.appendChild(blank);
     // ★ 分類ごとに 1 つだけ束ねる（登録簿の並び順は分類ごとに固まっていないので、
     //   「変わったら新しい束」だと同じ分類が何度も出る ── 実測でそうなった）。
@@ -541,6 +555,7 @@ async function fillOpPicker(){
   } catch(e){ sel.innerHTML = '<option value="">一覧を取れませんでした</option>'; }
 }
 fillOpPicker();
+fillOpPicker($("#readop"), "操作が違うなら選び直す…");
 
 $("#aliasadd").onclick = async () => {
   // ★ 入れ忘れは**押す前に**言う（送ってから断られるのは不親切）。
@@ -607,7 +622,59 @@ $("#mextract").onclick = () => multi("extract", {task: $("#mtask").value});
 // ★ 反映は**下書きを清書する**こと（翻訳も適用もやり直さない）。
 //   依頼文を空にして送ることで「今の下書きをそのまま原本へ」を意味させる。
 $("#run").onclick     = () => call("/api/run",  {task: "", copy:false}, "原本に反映しています…");
-$("#runcopy").onclick = () => call("/api/run",  {task: $("#task").value, copy:true},  "下書きで実行中…");
+// ★★ 2026-08-28: 実行の**前**に「こう読みました」を挟む。
+//   ★ この道具の一番悪い壊れ方は、**依頼と違う操作が ✓ で通る**こと
+//     （「7行目の担当を『佐藤』に」で担当列が全行書き換わって ✓ が出た）。
+//     事後条件は宣言と実体しか照らせない ── 依頼と宣言を照らせるのは人だけ。
+//     言い回しの揺れを 1 つずつ矯正しても、別の言い方でまた外れる。
+//     **人が照らす機会を、書く前に渡す**のが構造的な答え。
+let pendingRun = null;
+function hideRead(){ $("#readpanel").style.display = "none"; pendingRun = null; }
+async function readFirst(body){
+  if (!picked){ setBadge("not_applied", "左の一覧からファイルを選んでください。"); return; }
+  if (!String(body.task || "").trim()){
+    setBadge("not_applied", "② に、してほしいことを日本語で書いてください。"); return;
+  }
+  busy(true, "読んでいます…");
+  try{
+    const payload = Object.assign({book: bookPath(), sheet: window._sheet || ""}, body);
+    const r = await fetch("/api/read", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)});
+    const d = await r.json();
+    pendingRun = body;
+    // ★ 本体が出した行だけを見せる（画面で言い換えない ── 言い換えた瞬間に嘘が入る）。
+    const lines = String(d.text || "").split(String.fromCharCode(10))
+      .map(s => s.trim())
+      .filter(s => s.startsWith("解釈:") || s.startsWith("？") || s.startsWith("★")
+                   || s.indexOf("読み直しました") >= 0);
+    $("#readline").innerHTML = "";
+    for (const ln of (lines.length ? lines : ["（読み取れませんでした）"])){
+      const el = document.createElement("div");
+      el.textContent = ln;
+      if (ln.charAt(0) === "？") el.style.color = "#e6b800";
+      $("#readline").appendChild(el);
+    }
+    // ★ 断られた回は「このまま実行」を押させない（押しても同じ所で止まるだけ）。
+    const refused = lines.some(s => s.charAt(0) === "？");
+    $("#readgo").disabled = refused;
+    $("#readpanel").style.display = "block";
+  } catch(e){
+    setBadge("unobservable", "読み取りに失敗しました: " + e);
+  } finally { busy(false); }
+}
+$("#runcopy").onclick = () => readFirst({task: $("#task").value, copy:true});
+$("#readgo").onclick = () => {
+  if (!pendingRun) return;
+  const body = pendingRun;
+  hideRead();
+  call("/api/run", body, "下書きで実行中…");
+};
+$("#readcancel").onclick = hideRead;
+// ★ 選び直したら、**その操作として読み直して**もう一度見せる（黙って実行しない）。
+$("#readop").onchange = () => {
+  if (!pendingRun) return;
+  readFirst(Object.assign({}, pendingRun, {op: $("#readop").value}));
+};
 $("#runrestart").onclick = () => call("/api/run", {task: $("#task").value, copy:true, restart:true}, "原本からやり直しています…");
 $("#undo").onclick    = () => call("/api/undo", {}, "もとに戻しています…");
 $("#draftreset").onclick = () => call("/api/draft_reset", {}, "下書きを手放しています…");

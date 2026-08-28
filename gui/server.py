@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import subprocess
@@ -238,6 +239,17 @@ def _sheet_args(req: dict) -> list:
     return ["--sheet", name] if name else []
 
 
+def _op_args(req: dict) -> list:
+    """人が画面で選び直した操作を、そのまま `--op` として本体へ渡す。
+
+    ★★ 2026-08-28（表記ゆれの treadmill を降りるための配線）: 言い回しの揺れを 1 つずつ
+      矯正しても、別の言い方でまた外れる。**人が「これだ」と言える道**を常設する。
+    ★ ここでも既定を作らない: 空なら渡さない（当てる段は本体に任せたまま）。
+    """
+    name = str(req.get("op") or "").strip()
+    return ["--op", name] if name else []
+
+
 def _cell_text(v) -> str:
     if v is None:
         return ""
@@ -359,6 +371,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "ファイルが選ばれていません"})
             return
         try:
+            if u.path == "/api/read":
+                # ★★ 2026-08-28: 実行の**前**に「こう読みました」を返すだけの入口。
+                #   ★ この道具の一番悪い壊れ方は、**依頼と違う操作が ✓ で通る**こと
+                #     （「7行目の担当を…」で担当列が全行書き換わって ✓ が出た）。
+                #     事後条件は宣言と実体しか見られない ── 依頼と宣言を照らせるのは人だけ。
+                #     だから人に照らす機会を、**書く前に**渡す。
+                #   ★ --dry なのでファイルは 1 バイトも変わらない。
+                _t = _DRAFTS.get(book)
+                _target = _t if (_t and Path(_t).exists()) else book
+                _extra = ["--dry", "--json"] + _sheet_args(req) + _op_args(req)
+                rc, out, payload = _ailine(["run", _target, req.get("task") or ""] + _extra)
+                self._json(200, {"rc": rc, "text": out, "json": payload, "target": _target})
+                return
             if u.path == "/api/run":
                 # ★★ 2026-08-26（Namakoo が実測）: 「梨を追加して」→「梨の売上を2000に」と
                 #   続けると、**1 つ目の操作が消えた**。
@@ -391,7 +416,7 @@ class Handler(BaseHTTPRequestHandler):
                             rc, out, payload = 1, f"× 反映できませんでした: {e}", None
                     else:
                         _extra = ["--overwrite"] if req.get("overwrite") else []
-                        _extra += _sheet_args(req)
+                        _extra += _sheet_args(req) + _op_args(req)
                         rc, out, payload = _ailine(["run", book, task, "--json"] + _extra,
                                                     answer=req.get("answer"))
                         _DRAFTS.pop(book, None)
@@ -449,7 +474,7 @@ class Handler(BaseHTTPRequestHandler):
                     #     同じ依頼を繰り返したら、そう言う（黙って 2 つ目を作らない）。
                     _DRAFT_LAST_TASK[str(draft)] = task
                     _extra = ["--overwrite"] if req.get("overwrite") else []
-                    _extra += _sheet_args(req)
+                    _extra += _sheet_args(req) + _op_args(req)
                     rc, out, payload = _ailine(["run", str(draft), task, "--json"] + _extra,
                                                 answer=req.get("answer"))
                     if _note:
@@ -584,11 +609,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    port = 8760
+    # ★ 2026-08-28: ポートと自動起動を外から決められるようにした（2 つ動かして
+    #   比べる／別の窓を開かずに試す、が実際に要った）。既定は今までどおり。
+    ap = argparse.ArgumentParser(description="ailine GUI（ローカルのみ）")
+    ap.add_argument("--port", type=int, default=8760)
+    ap.add_argument("--no-browser", action="store_true", help="ブラウザを開かない")
+    ns = ap.parse_args()
+    port = ns.port
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"ailine GUI: {url}  （終了は Ctrl+C）")
-    threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    if not ns.no_browser:
+        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

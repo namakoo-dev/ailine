@@ -1,6 +1,6 @@
 usage: ailine run [-h] [--model MODEL] [--refs REFS] [--helpers HELPERS]
                   [--repair REPAIR] [--temperature TEMPERATURE] [--dry]
-                  [--inplace] [--json] [--timeout TIMEOUT] [--ask]
+                  [--op OP] [--inplace] [--json] [--timeout TIMEOUT] [--ask]
                   [--keep-backups KEEP_BACKUPS] [--values]
                   [--header-row HEADER_ROW] [--sheet SHEET] [--accept-loss]
                   [--copy] [--overwrite] [--allow-freeform]
@@ -18,6 +18,7 @@ options:
   --repair REPAIR       修復の最大回数 (既定 2)
   --temperature TEMPERATURE
   --dry                 生成して見せるだけ（適用しない）
+  --op OP               操作を人が固定する（言い回しから当てる段を飛ばす・一覧: ailine ops）
   --inplace             （廃止・後方互換のため受理のみ）既定で原本に直接適用するため不要。旧 .out 挙動が欲しければ
                         --copy
   --json                結果を JSON でも出す

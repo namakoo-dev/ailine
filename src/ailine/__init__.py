@@ -11120,7 +11120,42 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     book_meta["_sheet_source"] = getattr(a, "_sheet_source", None)
     translation = getattr(a, "_reuse_translation", None)
     a._reuse_translation = None
-    if translation is None:
+    # ★★ 2026-08-28（表記ゆれの treadmill を降りるための入口）: --op で操作を**人が固定**
+    #   できるようにした。一段目（言い回しから op を当てる段）を飛ばして、第二段に args
+    #   だけを埋め直させる ── 既に在る器官（translate_task_fixed_op）へ配線するだけ。
+    #   ★ 揺れを 1 つずつ矯正しても、別の言い方でまた外れる。人が「これだ」と言える道を
+    #     常設するのが構造的な答えで、画面の「こう読みました→選び直す」もここを通る。
+    forced_op = getattr(a, "op", None)
+    if forced_op:
+        if forced_op not in OP_SCHEMA:
+            print(f"？ そんな操作はありません: 『{forced_op}』（一覧: ailine ops）")
+            return 3
+        t0 = progress_start(f"⏳ 翻訳中（操作は『{OP_LABELS[forced_op]}』に固定）…")
+        fixed = translate_task_fixed_op(a.model, forced_op, a.task, book_meta)
+        progress_end(t0)
+        if not fixed:
+            print(f"？ 『{OP_LABELS[forced_op]}』として読み取れませんでした"
+                   "（依頼文に、対象の列や値が書かれているか確かめてください）")
+            return 3
+        _fargs = dict(fixed.get("args") or {})
+        # ★ 人が固定した回でも、**依頼文から機械が読める事実**は足す（A' 原則）。
+        #   行番号は「row を名前で探す」実装では拾えないので、ここで渡す。
+        _frow = task_names_a_row_number(a.task)
+        if _frow and "row" in OP_SCHEMA[forced_op]:
+            _fargs["row_number"] = _frow
+        # ★★ 人の選択は尊重する ── 別の op へ**黙って読み直さない**。
+        #   ただし「1 行を指す依頼」を列ぜんぶ書き換える op で実行するのは、
+        #   画面に出した「こう読みました」と結果が食い違う ── 断って選び直させる。
+        if plan_writes_beyond_one_cell([{"op": forced_op}]) and task_quotes_a_value(a.task):
+            _pts = task_points_at_one_row(a.task, book_meta, target_sheet)
+            if _pts:
+                print(f"？ {_pts}が、『{OP_LABELS[forced_op]}』は"
+                       "その列のデータ行を**全部**書き換えます。"
+                       "1 か所だけ直すなら『1セル書換』を選んでください")
+                return 3
+        translation = {"plan": [{"op": forced_op, "args": _fargs}]}
+        a._forced_op = forced_op
+    elif translation is None:
         t0 = progress_start(f"⏳ 翻訳中 ({a.model})…")
         translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
         progress_end(t0)
@@ -11158,7 +11193,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   ★ 読み直しは**1 回だけ**。先に決まったものが勝つ（下へ行くほど証拠が弱い順に並べる）。
     #   ★ 個々の塊の条件をいくら賢くしても、この形の事故は消えない ── 塊が増えるたび
     #     「まだ上書きされない」ことを人が確かめる羽目になる。機械で 1 回に縛る。
-    _reread_done = False
+    #   ★★ 人が op を固定した回は、読み直しを**一切しない**（画面に出した
+    #     「こう読みました」と、実際に走る操作が食い違わないため）。
+    _reread_done = bool(getattr(a, "_forced_op", None))
     #   ★★ 2026-08-28（Namakoo が実測・今日いちばん悪い形）: 「7行目の担当を『佐藤』に」で
     #     **担当列が全行『佐藤』になり ✓ が出た**。一括書換の契約としては ✓ は正しいが、
     #     依頼は 1 行だった ── 三項（依頼・宣言・実体）のうち**依頼を見ていなかった**。
@@ -15126,6 +15163,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--repair", type=int, default=2, help="修復の最大回数 (既定 2)")
     r.add_argument("--temperature", type=float, default=0.2)
     r.add_argument("--dry", action="store_true", help="生成して見せるだけ（適用しない）")
+    r.add_argument("--op", default=None,
+                    help="操作を人が固定する（言い回しから当てる段を飛ばす・一覧: ailine ops）")
     r.add_argument("--inplace", action="store_true",
                    help="（廃止・後方互換のため受理のみ）既定で原本に直接適用するため不要。"
                         "旧 .out 挙動が欲しければ --copy")
