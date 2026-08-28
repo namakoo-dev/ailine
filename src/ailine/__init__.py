@@ -8376,13 +8376,24 @@ def check_report_per_row(path: Path, args: dict, header_row: int = 1,
                              f"（欠落行 {missing}・余剰行 {extra}）")
 
         declared_sheet_names = {rr["sheet"] for rr in report_rows}
-        actual_extra_sheets = {s for s in bv.sheetnames
-                                if s not in (src_sheet_name, template_sheet, inspection_sheet)}
-        if actual_extra_sheets != declared_sheet_names:
-            missing_sheets = sorted(declared_sheet_names - actual_extra_sheets)
-            surplus_sheets = sorted(actual_extra_sheets - declared_sheet_names)
-            return "fail", (f"報告シートの枚数が合いません（欠落 {missing_sheets}・"
-                             f"余剰(孤児シートの疑い) {surplus_sheets}）")
+        missing_sheets = sorted(declared_sheet_names - set(bv.sheetnames))
+        if missing_sheets:
+            return "fail", f"宣言した報告シートがありません（欠落 {missing_sheets}）"
+        # ★★ 2026-08-28（Namakoo が実測・別レイアウトの雛形を 2 枚目として置いた回）:
+        #   「孤児シート」の分母を**出力側から**作っていた ── データ/雛形/検分**以外は
+        #   全部この操作が作ったはず、という決めつけ。ブックに前から在るシート
+        #   （2 つ目の雛形・メモ・参照表）が丸ごと『余剰(孤児シートの疑い)』になり、
+        #   正しく 5 枚作れているのに × が出ていた。
+        #   ★ 分母は入力側から取る: **前に無くて後に在る**シートだけが、この操作の産物。
+        #   ★ 適用前が無い回は断定しない（この柱だけ落として、他の柱は今までどおり見る）。
+        if source_book is not None and Path(source_book).exists():
+            with BookView(source_book) as bv_b:
+                before_sheets = set(bv_b.sheetnames)
+            born = set(bv.sheetnames) - before_sheets
+            orphans = sorted(born - declared_sheet_names - {inspection_sheet})
+            if orphans:
+                return "fail", ("この操作が作ったのに宣言していないシートがあります"
+                                 f"（孤児シートの疑い {orphans}）")
         if inspection_sheet not in bv.sheetnames:
             return "fail", f"検分シート『{inspection_sheet}』がありません"
 
