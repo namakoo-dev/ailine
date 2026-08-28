@@ -172,8 +172,8 @@
     <div class="sheets">
       <div class="sheet"><h3>くらべる相手
         <select id="basis" style="width:auto;padding:2px 6px;font-size:12px;margin-left:8px">
-          <option value="orig">原本（選んだファイル）</option>
           <option value="prev">直前（この操作の前）</option>
+          <option value="orig">原本（選んだファイル）</option>
         </select></h3>
         <div class="wrap" id="before"><div class="empty">ファイルを選ぶと出ます</div></div>
         <div class="sheetnote" id="beforenote"></div></div>
@@ -257,6 +257,20 @@ let lastRunBody = null;
 //     ── 表示と基準がずれると、色が嘘になる。
 let origCells = null, prevCells = null, lastAfter = null;
 function currentBasis(){ return $("#basis").value === "prev" ? prevCells : origCells; }
+// ★ 見た目の補助の数え（判定ではない）。行数が違う分も 1 セルずつ数える。
+function countDiff(a, b){
+  if (!a || !b) return 0;
+  let n = 0;
+  const rows = Math.max(a.length, b.length);
+  for (let r = 0; r < rows; r++){
+    const ra = a[r] || [], rb = b[r] || [];
+    const cols = Math.max(ra.length, rb.length);
+    for (let c = 0; c < cols; c++){
+      if (JSON.stringify(ra[c]) !== JSON.stringify(rb[c])) n++;
+    }
+  }
+  return n;
+}
 function baseName(p){ const parts = p.split(String.fromCharCode(92)).join("/").split("/"); return parts[parts.length-1]; }
 function drawTable(host, noteEl, d, other){
   host.innerHTML = ""; noteEl.textContent = "";
@@ -352,6 +366,16 @@ function redrawBasis(){
   drawTable($("#before"), $("#beforenote"), d, null);
   const who = useOrig ? ("原本 " + baseName(bookPath())) : ("直前 " + baseName(window._target || ""));
   $("#beforenote").textContent = who + "  " + $("#beforenote").textContent;
+  // ★★ 2026-08-28（Namakoo が実測）: 「7行目にヤマノ食品を追加して」で 8 行目まで
+  //   増えたように見えた。増やしたのは 1 行で、8 行目は**前の操作**の結果だった。
+  //   下書きは続きに積む設計なのに、色は原本との差で塗っていたので、積んだ分まで
+  //   「この操作が作った」ように見えていた ── 表示が依頼の範囲を偽っていた。
+  //   既定を「直前」にしたうえで、原本を選んだ時は**積んである**ことを画面で言う。
+  const carried = countDiff(origCells, prevCells);
+  if (useOrig && carried > 0){
+    $("#beforenote").textContent += "  ／ この下書きには前の操作の結果が入っています（"
+      + carried + " セル）。この操作だけを見るなら「直前」を選んでください";
+  }
   beforeCells = d.cells || null;
   if (lastAfter) drawTable($("#after"), $("#afternote"), lastAfter, beforeCells);
 }

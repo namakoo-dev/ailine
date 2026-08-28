@@ -2550,7 +2550,16 @@ OP_WRITE_TARGET = {
     # 行を挿入するだけ・既存値は下にずれるだけで残る
     "INSERT_ROWS": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
     # ★ 2026-08-26: 追加も削除も既存行を**ずらす**（削除は詰める）。
-    "ADD_ROW": WriteTarget(writes=(WRITE_ROW_SHIFT,)),
+    # ★★ 2026-08-28（Namakoo が請求書のデモで実測）: 末尾に 1 行足すと毎回 △ に落ちていた。
+    #   「変更が元データの範囲外です（A7）」と「空欄への同一値の一括書き込み（× 1 セル）」の
+    #   2 件が誤爆する ── どちらも**この op がやると宣言していること**そのものなのに、
+    #   宣言に書いていなかったので助言側が知りようがなかった（APPEND_TOTAL・ADD_COLUMN で
+    #   同じ形を 2 度直している。3 度目なので宣言を足す側で直す）。
+    #   ・末尾に足す回は WRITE_NEW_ROW_AT_END（途中に挿す回は範囲内なので助言は元々出ない）
+    #   ・check_add_row は「上は 1 セルも動かず・下は 1 行ずれてそのまま」を両方向で証明する
+    #     ＝助言は何も足さない（助言は証明が届かない所にだけ要る）
+    "ADD_ROW": WriteTarget(writes=(WRITE_ROW_SHIFT, WRITE_NEW_ROW_AT_END),
+                            proves_which_cells=True),
     "DELETE_ROWS": WriteTarget(writes=(WRITE_REMOVE,)),
     "DELETE_COLUMN": WriteTarget(writes=(WRITE_REMOVE,)),
     # ★ 入れ替えは値の多重集合が保存される（reorder）── 前提の番人
