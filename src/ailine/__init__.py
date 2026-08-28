@@ -4614,12 +4614,17 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                     if ph["kind"] == "value":
                         vals = report_group.value_conflicts(g, row_values, ph["column_name"])
                         if vals:
+                            # ★ 「足すなら {{合計:担当}}」は、担当のような文字列の列では
+                            #   意味を成さない ── 出せる道だけを名指しする。
+                            _way = f"『{{{{明細:{ph['column_name']}}}}}』にしてください"
+                            if all(report_group.is_numeric(v) for v in vals):
+                                _way = (f"『{{{{明細:{ph['column_name']}}}}}』、"
+                                         f"足すなら『{{{{合計:{ph['column_name']}}}}}』"
+                                         "にしてください")
                             return False, resolved, inferred, (
                                 f"『{g.name}』の {list(g.rows)}行目で"
                                 f"『{ph['column_name']}』が食い違っています（{vals}）。"
-                                f"1 枚の紙には 1 つしか書けません ── 明細に出すなら"
-                                f"『{{{{明細:{ph['column_name']}}}}}』、"
-                                f"足すなら『{{{{合計:{ph['column_name']}}}}}』にしてください")
+                                f"1 枚の紙には 1 つしか書けません ── 明細に出すなら{_way}")
                     elif ph["kind"] == "total":
                         _s, serr = report_group.sum_for(g, row_values, ph["column_name"])
                         if serr:

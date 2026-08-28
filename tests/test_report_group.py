@@ -341,3 +341,15 @@ def test_a_changed_data_sheet_fails(tmp_path):
     wb.save(out)
     status, reason = ailine.check_report_per_group(out, dict(_GARGS), source_book=src)
     assert status == "fail" and "読むだけのはず" in reason, reason
+
+
+def test_the_way_out_is_only_offered_when_it_exists(tmp_path):
+    """★ 「足すなら {{合計:担当}}」は担当のような文字列の列では意味を成さない
+       ── 出せる道だけを名指しする（行き止まりに出口を置く、の逆側の作法）。"""
+    p = _plain_book(tmp_path, marks=dict(_DETAIL, A10="{{担当}}"))
+    wb = openpyxl.load_workbook(p)
+    wb["売上"].cell(4, 4).value = "佐藤"
+    wb.save(p)
+    _ok, _r, _i, err = ailine.verify_dsl_args(
+        "REPORT_PER_ROW", {"template_sheet": "雛形", "name_col": "取引先"}, _meta(p))
+    assert "{{明細:担当}}" in err and "{{合計:担当}}" not in err, err
