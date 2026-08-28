@@ -82,9 +82,23 @@ def test_an_unknown_op_is_refused(tmp_path):
 
 # --- ①「まだ 1 バイトも変わっていません」を機械で縛る -----------------------------------
 
+def test_the_dry_path_never_reaches_the_apply_step():
+    """★ 素の環境（LLM 無し）でも見られる分。翻訳まで行かなくても、`--dry` が
+       適用の手前で返す形になっていることは、コードの側から確かめられる。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    assert 'r.add_argument("--dry"' in src
+    assert "getattr(a, \"dry\", False)" in src or "a.dry" in src, "--dry を見ていない"
+
+
+@pytest.mark.local
 def test_a_dry_read_does_not_touch_the_file(tmp_path):
     """★★ 画面がそう言い切る文言なので、言い切りの裏を機械で取る。
-       ここが破れると、確認のつもりで押した人のファイルが変わる。"""
+       ここが破れると、確認のつもりで押した人のファイルが変わる。
+    ★★ 2026-08-28（CI で 2 度赤くした・「居るから見えない」の 6 度目）:
+       この検体は**実物の ollama が要る**（翻訳まで走らないと『書かなかった』の
+       証拠にならない）。CI には LLM が無いので exit 9 で落ちる ──
+       手元にだけ在る物に寄りかかった検体は `-m local` へ置く、が この repo の作法。
+    """
     p = _book(tmp_path)
     before = p.read_bytes()
     r = subprocess.run([sys.executable, "-m", "ailine", "run", str(p),

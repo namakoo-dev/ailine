@@ -104,7 +104,19 @@ def main() -> int:
         #   存在しない。手元では site-packages から自動読み込みされて anyio 等を
         #   引くため、遮断器が正しく怒る ── 自動読み込みを切って条件を揃える。
         env['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'
-        return subprocess.run([sys.executable, str(runner)], cwd=str(ROOT), env=env).returncode
+        # ★★ 2026-08-28（CI を 2 度赤くして気づいた・「居るから見えない」の 6 度目）:
+        #   ここが遮断していたのは**宣言外のパッケージ**だけだった。
+        #   ・俺のホームに溜まった状態（~/.ailine の初回告知の印）
+        #   ・手元で動いている ollama
+        #   はどちらも素通りで、それに寄りかかった検体が手元で緑・CI で赤になった。
+        #   ★ CI に無い物は**全部**無いことにする。ここに在る物に寄りかかった検体は、
+        #     `-m local`（実物が要る側）へ置くのが この repo の作法。
+        import tempfile
+        env['OLLAMA_HOST'] = 'http://127.0.0.1:9'      # 使われないポート（必ず届かない）
+        with tempfile.TemporaryDirectory(prefix='ailine_ci_home_') as home:
+            env['AILINE_HOME'] = home
+            return subprocess.run([sys.executable, str(runner)], cwd=str(ROOT),
+                                   env=env).returncode
     finally:
         runner.unlink(missing_ok=True)
 
