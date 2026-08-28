@@ -193,3 +193,51 @@ def test_named_rows_and_columns_extract_on_real_lo(tmp_path):
     out = wb3[dst2[0]]
     assert [out.cell(1, j).value for j in (1, 2)] == ["商品", "原価"]
     assert out.max_row == 4, f"行が減っている: {out.max_row}"
+
+
+# --- 行番号で 1 セル（2026-08-28・Namakoo「指示文が通らない」）------------------------
+#
+# ★★ sandbox の試験は「宣言と実体」しか見られない ── 今日の事故は**依頼**を見て
+#   いなかったことなので、実機で「頼んだ 1 セル以外が動いていない」ところまで見る。
+
+@pytest.mark.local
+def test_a_row_number_writes_exactly_one_cell_on_real_lo(tmp_path):
+    p = tmp_path / "k.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "請求"
+    ws.append(["取引先", "件数", "担当"])
+    for row in [["丸和物流", 10, "田中"], ["ヤマノ食品", 20, "鈴木"],
+                 ["北斗精機", 30, "田中"], ["ヤマノ食品", 40, None]]:
+        ws.append(row)
+    wb.save(p)
+    before = [[ws.cell(r, c).value for c in range(1, 4)] for r in range(2, 6)]
+
+    r = _run(p, "5行目の担当を「佐藤」にして")
+    assert r.returncode == 0, f"行番号の 1 セル書換が失敗:\n{r.stdout[-900:]}"
+    out = openpyxl.load_workbook(_out(p))["請求"]
+    got = [[out.cell(i, c).value for c in range(1, 4)] for i in range(2, 6)]
+    # ★ 芯: 5 行目だけ。「佐藤が入ったか」だけ見る試験は、列を潰す実装でも通る。
+    assert got[3][2] == "佐藤", f"5行目に入っていない: {got[3]}"
+    assert [g[2] for g in got] == ["田中", "鈴木", "田中", "佐藤"], \
+        f"頼んでいない行まで変わった（列を潰した）: {[g[2] for g in got]}"
+    assert [g[:2] for g in got] == [b[:2] for b in before], "他の列が変わった"
+
+
+@pytest.mark.local
+def test_the_a1_column_letter_form_reaches_the_same_one_cell(tmp_path):
+    """★ 一段目は 3/3 で **ADD_ROW**（行の追加）を返していた形。行が増えないこと。"""
+    p = tmp_path / "l.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "請求"
+    ws.append(["取引先", "件数", "担当"])
+    for row in [["丸和物流", 10, "田中"], ["ヤマノ食品", 20, "鈴木"]]:
+        ws.append(row)
+    wb.save(p)
+    r = _run(p, "3 行C列に「佐藤」を追加")
+    assert r.returncode == 0, f"A1 の列名が通らない:\n{r.stdout[-900:]}"
+    out = openpyxl.load_workbook(_out(p))["請求"]
+    assert out.max_row == 3, f"行が増えた（列への書き込みに行で答えた）: {out.max_row}"
+    assert [out.cell(i, 3).value for i in (2, 3)] == ["田中", "佐藤"], \
+        [out.cell(i, 3).value for i in (2, 3)]

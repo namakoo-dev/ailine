@@ -200,6 +200,23 @@ Sub SetCellByName(oDoc As Object, sName As String, nKeyCol As Integer, _
 End Sub
 
 
+' 行番号と列番号で指した**1 セル**に書く（2026-08-28 追加）。どちらも 0 起点。
+' ★ 名前で指す SetCellByName と別に在る理由: 人が「7行目のF列」と**座標で**言った時は、
+'   探し直す相手が無い（番号そのものが依頼）。同名の行が 2 つある表でも狙いが定まる。
+' ★ 名前で指された時は今までどおり SetCellByName を使う ── あちらは Basic が実文書を
+'   走査して自分で位置を見つけるので、Python の事後条件が独立した検算になる。
+Sub SetCellAt(oDoc As Object, nRow As Integer, nCol As Integer, _
+               sValue As String, sKind As String)
+    Dim oSheet As Object
+    oSheet = oDoc.Sheets.getByIndex(0)
+    If sKind = "n" Then
+        oSheet.getCellByPosition(nCol, nRow).setValue(CDbl(sValue))
+    Else
+        oSheet.getCellByPosition(nCol, nRow).setString(sValue)
+    End If
+End Sub
+
+
 ' 行を1本挿し、指定した列に値を書く（2026-08-26 追加）。
 ' ★ 既存の InsertRows は**空行を挿すだけ**で、値を入れる手段が 1 つも無かった
 '   （21 op のどれにも「データを 1 行足す」が無いことを実測で確認）。

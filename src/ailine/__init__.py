@@ -3287,6 +3287,19 @@ def resolve_col_ref(raw, headers: list) -> tuple:
         return cands[0], True, None
     if len(cands) > 1:
         return None, False, f"列『{s}』は複数の解釈が可能で一意に決まりません: {cands}"
+    # ★★ 2026-08-28（Namakoo が請求書のデモで実測）: 「F列に…」が断られていた。
+    #   人は表計算の座標（A1 方式の列文字）で当たり前に指す。**断るのでなく解ける。**
+    #   ★ 見出しに同じ名前が在れば**そちらが勝つ**（上の s in headers が先に返る）ので、
+    #     『URL』のような英字の見出しを列文字と誤読する事故は起きない。
+    #   ★ 解けたら「推定」として返す（呼び側が解釈行に (推定) を付ける＝黙って決めない）。
+    letter = s[:-1] if s.endswith("列") else s
+    if letter and re.fullmatch(r"[A-Za-z]{1,2}", letter):
+        try:
+            idx = column_index_from_string(letter.upper())
+        except ValueError:
+            idx = 0
+        if 1 <= idx <= len(headers):
+            return headers[idx - 1], True, None
     known = ", ".join(headers) if headers else "(無し)"
     return None, False, f"列『{s}』がありません。ある列: {known}"
 
@@ -3872,16 +3885,56 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                        ((book_meta.get("headers") or {}).get(_sheet_c) or [])]
         _row_name = str(resolved.get("row", "")).strip()
         _col_name = str(resolved.get("col", "")).strip()
-        if not _row_name:
-            return False, resolved, inferred, "どの行かが読み取れません（行の名前で指してください）"
+        _row_no = resolved.get("row_number")
+        # ★ 2026-08-28: 列は**列文字でも**指せる（「F列に」）── resolve_col_ref が解く。
         if _col_name not in _headers_c:
+            _v, _inf, _err = resolve_col_ref(_col_name, _headers_c)
+            if _err:
+                return False, resolved, inferred, (
+                    f"列『{_col_name}』がこの表にありません"
+                    f"（ある列: {"、".join(_headers_c)}）")
+            if _inf:
+                inferred.add("col")
+            _col_name = _v
+        if not _row_name and not _row_no:
             return False, resolved, inferred, (
-                f"列『{_col_name}』がこの表にありません"
-                f"（ある列: {"、".join(_headers_c)}）")
-        # ★ 行が実在し・1 つに決まることを**適用前に**確かめる（推測で別の行に書かない）。
-        _hitrow, _note_c = _resolve_named_row(book_meta, _sheet_c, _row_name)
-        if _hitrow is None:
-            return False, resolved, inferred, _note_c
+                "どの行かが読み取れません（行の名前か行番号で指してください）")
+        # ★★ 2026-08-28: 行番号で指された時は**番号を正**にする（人が数えて言っている）。
+        #   ★ 名前も同時に在るなら、その行に本当にその名前が在るかを確かめる ──
+        #     三項（依頼・宣言・実体）。食い違ったら書かずに断る。
+        if _row_no:
+            _hr_c = int((book_meta.get("header_rows") or {}).get(_sheet_c, 1) or 1)
+            _path_c = book_meta.get("path")
+            try:
+                with BookView(Path(_path_c)) as _bvc:
+                    _wsc = _bvc.sheet(_sheet_c)
+                    _lastc, _colsc = data_extent(_wsc, _hr_c)
+                    _rowvals = [str(_wsc.cell(row=int(_row_no), column=c).value or "").strip()
+                                 for c in range(1, _colsc + 1)] if int(_row_no) <= _lastc else None
+            except Exception as e:
+                return False, resolved, inferred, f"表を読めませんでした（{type(e).__name__}）"
+            if _rowvals is None or int(_row_no) <= _hr_c:
+                return False, resolved, inferred, (
+                    f"{_row_no}行目はこの表の範囲外です（見出しは{_hr_c}行目・データは"
+                    f"{_hr_c + 1}〜{_lastc}行目）")
+            # ★ 実測: 第二段は row に**行番号そのもの**を入れてくることがある（"7"）。
+            #   それは名前ではないので、名前としては扱わない（食い違い扱いにしない）。
+            if _row_name.isdigit() or _row_name == str(_row_no):
+                _row_name = ""
+            if _row_name and _row_name not in _rowvals:
+                return False, resolved, inferred, (
+                    f"{_row_no}行目に『{_row_name}』がありません"
+                    f"（その行: {"、".join(v for v in _rowvals if v)}）── "
+                    "行番号と名前が食い違っています")
+            _hitrow = int(_row_no)
+            _note_c = f"{_hitrow}行目（依頼文の行番号）"
+            _row_name = _row_name or (_rowvals[0] if _rowvals and _rowvals[0] else str(_hitrow))
+        else:
+            # ★ 行が実在し・1 つに決まることを**適用前に**確かめる（推測で別の行に書かない）。
+            _hitrow, _note_c = _resolve_named_row(book_meta, _sheet_c, _row_name)
+            if _hitrow is None:
+                return False, resolved, inferred, _note_c
+        resolved["_row_index"] = _hitrow
         resolved["row"] = _row_name
         resolved["col"] = _col_name
         resolved["_headers"] = _headers_c
@@ -5366,6 +5419,12 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         val = (repr(float(resolved_args["_write_numeric_value"]))
                 if kind == "n" else str(v))
         hr0 = int(resolved_args.get("_header_row", 1)) - 1
+        # ★ 2026-08-28: 行番号で指された回は**座標で**書く（探し直す相手が無い・同名の
+        #   行が 2 つある表でも狙いが定まる）。名前で指された回は今までどおり名前を渡す
+        #   ── あちらは Basic が自分で位置を見つけるので、事後条件が独立な検算になる。
+        if resolved_args.get("row_number"):
+            return wrap('    Call SetCellAt(oDoc, %d, %d, "%s", "%s")%s'
+                         % (int(resolved_args["row_number"]) - 1, col0, val, kind, chr(10)))
         return wrap(
             f'    Call SetCellByName(oDoc, "{resolved_args["row"]}", 0, {col0}, '
             f'"{val}", "{kind}", {hr0})\n')
@@ -7060,12 +7119,19 @@ def check_set_cell_value(path: Path, args: dict, header_row: int = 1,
         if col_name not in headers:
             return "fail", f"列『{col_name}』が見つからない"
         cidx = headers.index(col_name) + 1
-        hits = [r for r in range(header_row + 1, last + 1)
-                 if any(str(ws.cell(row=r, column=c).value or "").strip() == name
-                         for c in range(1, last_col + 1))]
-        if len(hits) != 1:
-            return "fail", f"『{name}』の行が {len(hits)} 件（1 件に決まらない）"
-        row = hits[0]
+        # ★ 2026-08-28: 行番号で指された回は、その番号を正とする（名前で探し直さない ──
+        #   同名の行が 2 つある表では名前では決まらないし、依頼は番号そのものだった）。
+        if args.get("row_number"):
+            row = int(args["row_number"])
+            if not (header_row < row <= last):
+                return "fail", f"{row}行目は表の範囲外（データは{header_row + 1}〜{last}行目）"
+        else:
+            hits = [r for r in range(header_row + 1, last + 1)
+                     if any(str(ws.cell(row=r, column=c).value or "").strip() == name
+                             for c in range(1, last_col + 1))]
+            if len(hits) != 1:
+                return "fail", f"『{name}』の行が {len(hits)} 件（1 件に決まらない）"
+            row = hits[0]
         got = ws.cell(row=row, column=cidx).value
         after = [[ws.cell(row=r, column=c).value for c in range(1, last_col + 1)]
                   for r in range(header_row + 1, last + 1)]
@@ -7338,6 +7404,78 @@ def resolve_named_cell(book_meta: dict, sheet: str | None, name: str,
         return None, None, (f"『{name}』が {len(hits)} 箇所あります（{where}）"
                              " ── どれか決められません")
     return hits[0][0], hits[0][1], f"『{name}』＝{hits[0][0]}行{hits[0][1]}列"
+
+
+# ★ 「7 行目」「7行」「第7行」── 人は行を**番号**でも指す。
+_re_row_number_in_task = re.compile(r"(?:第)?\s*([0-9０-９]{1,4})\s*行(?:目)?")
+
+
+def task_names_a_row_number(task: str) -> int | None:
+    """依頼文が指している行番号（1 起点）。無い/複数あって決まらないなら None。"""
+    nums = {int(m.translate(_ZENKAKU_DIGITS))
+             for m in _re_row_number_in_task.findall(task or "")}
+    return nums.pop() if len(nums) == 1 else None
+
+
+_re_quoted_value = re.compile(r"[「『\"“]([^」』\"”]{1,40})[」』\"”]")
+
+
+def task_quotes_a_value(task: str) -> str | None:
+    """依頼文が**書き込む値を引用符で名指し**しているか（A' 原則: 値は依頼文から取る）。
+
+    ★ 2026-08-28: 「1 セルのつもりの依頼」を見分ける三項目のうちの 1 つ。
+      行を指し・列を指し・**値を引用している**なら、それは 1 セルへの書き込み。
+      引用が無い依頼（「利益を計算して」）を横取りしないための項でもある。"""
+    m = _re_quoted_value.search(task or "")
+    return m.group(1) if m else None
+
+
+def plan_writes_beyond_one_cell(plan) -> bool:
+    """この計画は**1 セルより広く**書くと宣言しているか。
+
+    ★★ op 名を数え上げない ── 今日 3 度目に破れた「除外の列挙」を繰り返さないため、
+      各 op が OP_WRITE_TARGET に自分で書いている「書く領域」を読む。
+      新しい op が増えても、宣言さえ書けばこの門は自動で効く。"""
+    wide = {WRITE_EXISTING_COLUMN, WRITE_NEW_COLUMN, WRITE_NEW_ROW_AT_END, WRITE_ROW_SHIFT}
+    for st in plan or []:
+        wt = OP_WRITE_TARGET.get((st or {}).get("op"))
+        # ★ 「1 セルだけ書く」と自分で宣言している op は、既に落ちている（読み直さない）。
+        if wt and (set(wt.writes) & wide) and WRITE_SINGLE_CELL not in wt.writes:
+            return True
+    return False
+
+
+def task_points_at_one_row(task: str, book_meta: dict, sheet: str | None) -> str | None:
+    """依頼文が**1 行を名指ししている**なら、その根拠の文。していなければ None。
+
+    ★★ 2026-08-28（Namakoo が請求書のデモで実測・今日いちばん悪い形）:
+      「7行目の担当を『佐藤』にして」で **担当列が全行『佐藤』になり、✓ が出た**。
+      一括書換（列ぜんぶ）の契約としては ✓ は正しい ── だが**依頼は 1 行**だった。
+      ★ 判定に三項が要る（依頼・宣言・実体）のに、機械は宣言と実体しか見ていなかった。
+    ★ ここは「依頼が行を指しているか」だけを見る（どの行かは別で解く）。
+      指しているのに 1 セルへ落とせなかったら、**列全体を書かずに断る**。
+    """
+    if task_names_a_row_number(task):
+        return f"依頼文が『{task_names_a_row_number(task)}行目』と行を指しています"
+    if _task_names_a_row(task, book_meta, sheet):
+        return f"依頼文が『{_task_names_a_row(task, book_meta, sheet)}』の行を指しています"
+    # ★ 名前が**複数行に在る**時も「行を指している」── 決められないだけで、指してはいる。
+    #   ここを見落とすと、同名が 2 行あるだけで列全体が潰れる（実測した形）。
+    path = book_meta.get("path")
+    if not path or not task:
+        return None
+    hr = int((book_meta.get("header_rows") or {}).get(sheet, 1) or 1)
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, _c = data_extent(ws, hr)
+            for r in range(hr + 1, last + 1):
+                v = str(ws.cell(row=r, column=1).value or "").strip()
+                if v and v in task:
+                    return f"依頼文が『{v}』（表に複数あります）を指しています"
+    except Exception:
+        return None
+    return None
 
 
 def _task_names_a_row(task: str, book_meta: dict, sheet: str | None) -> str | None:
@@ -10743,17 +10881,43 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   ★ 個々の塊の条件をいくら賢くしても、この形の事故は消えない ── 塊が増えるたび
     #     「まだ上書きされない」ことを人が確かめる羽目になる。機械で 1 回に縛る。
     _reread_done = False
-    if not _reread_done and any((st or {}).get("op") == "SET_COLUMN_VALUE" for st in plan):
+    #   ★★ 2026-08-28（Namakoo が実測・今日いちばん悪い形）: 「7行目の担当を『佐藤』に」で
+    #     **担当列が全行『佐藤』になり ✓ が出た**。一括書換の契約としては ✓ は正しいが、
+    #     依頼は 1 行だった ── 三項（依頼・宣言・実体）のうち**依頼を見ていなかった**。
+    #   ★ 人は行を**番号でも**指す（「7行目」）。名前だけを見ていたので拾えず、しかも
+    #     同名が 2 行あると名前でも拾えなかった（実測: ヤマノ食品が 2 行）。
+    #   ★ 依頼が行を指しているのに 1 セルへ落とせないなら、**列全体を書かずに断る**。
+    #   ★★ 2026-08-28（第二波・実測）: 「7 行F列に『佐藤』を追加」は一段目が 3/3 で
+    #     **ADD_ROW**（行の追加）を返していた。op 名で門を作っていたので素通り ──
+    #     op 名の数え上げは今日 3 度目に破れた形なので、ここは**宣言**で門を作る。
+    #     三項（行を指す・列を指す・値を引用する）が揃った時だけ 1 セルへ落とす。
+    if not _reread_done and plan_writes_beyond_one_cell(plan):
+        _row_no = task_names_a_row_number(a.task)
         _named = _task_names_a_row(a.task, book_meta, _sheet_h)
-        if _named:
+        _wide = any((st or {}).get("op") == "SET_COLUMN_VALUE" for st in plan)
+        _one_cell = False
+        _points = task_points_at_one_row(a.task, book_meta, _sheet_h) if _wide else None
+        # ★ 比較語のある依頼は条件つき書換であって 1 セルではない（500 を名前と読まない）。
+        if (_row_no or _named) and task_quotes_a_value(a.task) and extract_cmp_from_task(a.task) is None:
             _fx = translate_task_fixed_op(a.model, "SET_CELL_VALUE", a.task, book_meta)
             if _fx and (_fx.get("args") or {}).get("col"):
                 _args = dict(_fx["args"])
-                _args.setdefault("row", _named)
-                print(f"（『一括書換』でなく『1セル書換』として読み直しました ── "
-                      f"依頼文が『{_named}』の行を名指ししています）")
+                if _row_no:
+                    _args["row_number"] = _row_no
+                    _why = f"依頼文が『{_row_no}行目』と行を指しています"
+                else:
+                    _args.setdefault("row", _named)
+                    _why = f"依頼文が『{_named}』の行を名指ししています"
+                print(f"（『一括書換』でなく『1セル書換』として読み直しました ── {_why}）")
                 plan = [{"op": "SET_CELL_VALUE", "args": _args}]
-                _reread_done = True
+                _one_cell = _reread_done = True
+        # ★ ここは読み直しでなく**断り**（印は立てない・立った印を見るのでもない）。
+        #   1 セルへ落とせた回だけ黙る、という 1 つの局所変数で決める。
+        if _points and not _one_cell:
+            # ★ 落とせなかった。列全体を書けば「宣言どおり」で ✓ が出てしまう ── 断る。
+            print(f"？ {_points}が、どのセルかを決められませんでした。"
+                   "列全体は書き換えません（行番号で指してください・例:「7行目の担当を『佐藤』に」）")
+            return 3
 
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
     #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
