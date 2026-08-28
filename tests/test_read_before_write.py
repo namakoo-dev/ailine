@@ -28,6 +28,24 @@ sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
 
+def _fresh_env(tmp_path):
+    """★★ 2026-08-28（CI で赤くなって気づいた・「居るから見えない」の 5 度目）:
+       subprocess で本体を呼ぶ試験は、**俺の ~/.ailine を借りて**通っていた。
+       初回だけ出る告知（既定変更のお知らせ）が手元では既に消えていて、
+       まっさらな CI では exit 9 で返る ── 手元で緑・CI で赤。
+    ★ 状態の置き場を tmp に振り、告知済みの印を先に置いて条件を揃える。
+       ★ ここを消すと、試験が「たまたま自分の環境に在るもの」に寄りかかる形に戻る。
+    """
+    import os
+    home = tmp_path / "ailine_home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "notice_v2_shown").write_text("test", encoding="utf-8")
+    env = dict(os.environ)
+    env["AILINE_HOME"] = str(home)
+    env["PYTHONPATH"] = str(REPO / "src")
+    return env
+
+
 def _book(tmp_path, name="b.xlsx"):
     p = tmp_path / name
     wb = openpyxl.Workbook()
@@ -57,7 +75,7 @@ def test_an_unknown_op_is_refused(tmp_path):
     r = subprocess.run([sys.executable, "-m", "ailine", "run", str(p), "担当を佐藤に",
                          "--op", "NOSUCH", "--dry"],
                         capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        timeout=120, cwd=str(REPO))
+                        timeout=120, cwd=str(REPO), env=_fresh_env(tmp_path))
     assert r.returncode == 3, r.stdout[-400:]
     assert "そんな操作はありません" in r.stdout, r.stdout[-400:]
 
@@ -72,7 +90,9 @@ def test_a_dry_read_does_not_touch_the_file(tmp_path):
     r = subprocess.run([sys.executable, "-m", "ailine", "run", str(p),
                          "担当を全部「佐藤」にして", "--dry"],
                         capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        timeout=300, cwd=str(REPO))
+                        timeout=300, cwd=str(REPO), env=_fresh_env(tmp_path))
+    assert "この告知は一度だけ" not in r.stdout, (
+        "初回告知で早期終了している ── この回は『書かなかった』の証拠にならない")
     assert r.returncode in (0, 3), r.stdout[-400:]
     assert p.read_bytes() == before, "--dry なのにファイルが変わった"
     assert not list(p.parent.glob("*.out.xlsx")), "--dry なのに出力ができた"

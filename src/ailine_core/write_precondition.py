@@ -297,8 +297,14 @@ PRECONDITIONS = {
 NO_PRECONDITION = frozenset({"existing_column", "remove"})
 
 
-# ★ 位置で比べる前提（列を**番号で**突き合わせるもの）。位置がずれる回は使えない。
-POSITION_BASED = frozenset({"new_column"})
+# ★ 位置で比べる前提（列や行を**番号で**突き合わせるもの）。位置がずれる回は使えない。
+# ★★ 2026-08-28（Namakoo が実測・俺が同じ日の朝に開けた穴）: ADD_ROW に
+#   「末尾に新しい行を足す」を宣言したところ、**途中に挿した回**で
+#   「末尾に新しい行を足すはずが、既存の行の値を 29 件書き換えました」が誤爆した。
+#   途中に挿せば下の行は 1 つずつずれる ── 番号で突き合わせれば全部『書き換え』に見える。
+#   ★ new_row_at_end も位置で比べる前提だった。row_shift を同時に宣言している op では外す
+#     （列で同じことを 2026-08-27 に直したのと同じ形・op 名の if は増やさない）。
+POSITION_BASED = frozenset({"new_column", "new_row_at_end"})
 
 
 def check_write_preconditions_detail(writes, before: dict, after: dict, *,
@@ -326,7 +332,8 @@ def check_write_preconditions_detail(writes, before: dict, after: dict, *,
     #   ★ 2026-08-27（2 度目・実測）: 位置がずれるのは**宣言**からだけでなく、
     #     その回の引数からも起きる（依頼文の位置指定で新しい列を動かした回）。
     #     宣言（row_shift + new_column）と実測（positions_shifted）の**どちらでも**外す。
-    if positions_shifted or ("row_shift" in kinds and "new_column" in kinds):
+    if positions_shifted or ("row_shift" in kinds
+                              and any(k in kinds for k in POSITION_BASED)):
         kinds = [k for k in kinds if k not in POSITION_BASED]
     for kind in kinds:
         check = PRECONDITIONS.get(kind)

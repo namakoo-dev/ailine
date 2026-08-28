@@ -7386,6 +7386,92 @@ _re_row_unit = re.compile(r"[0-9０-９]*\s*行\s*(?:を|も)?\s*(?:足|追加|�
 _re_value_assign = re.compile(r"[^\s、。]+\s*(?:は|を|＝|=)\s*[0-9０-９]")
 
 
+def row_anchor_names(task: str) -> list:
+    """依頼文が**位置の目印**として使っている名前（「丸和物流と近江スチールの間に」の 2 つ）。
+
+    ★ 目印は「置く物」ではない ── ここを分けないと、目印がそのまま新しい行の値になる
+      （実測: 「丸和物流と近江スチールの間に北斗精機を作って」で `取引先=丸和物流`）。
+    """
+    text = (task or "").replace("　", " ")
+    out = []
+    m = _re_between.search(text)
+    if m:
+        out += [m.group(1).strip(), m.group(2).strip()]
+    else:
+        for suf in list(_ANCHOR_AFTER) + list(_ANCHOR_BEFORE):
+            m = _re_anchor(suf).search(text)
+            if m:
+                out.append(m.group(1).strip())
+                break
+        else:
+            m2 = _re_row_of.search(text)
+            if m2:
+                out.append(m2.group(1).strip())
+    return [s for s in out if s]
+
+
+def anchor_column_name(book_meta: dict, sheet: str | None, names: list,
+                        header_row: int = 1) -> str | None:
+    """目印の名前が**実際に入っている列**の見出し（決まらなければ None）。
+
+    ★ 「A と B の間に X」の X は、A・B と**同じ列**の住人（取引先の間には取引先が入る）。
+      置き場所を LLM に決めさせると別の列へ入る（実測: `項目=北斗精機`）。
+    """
+    path = book_meta.get("path")
+    headers = (book_meta.get("headers") or {}).get(sheet) or []
+    if not path or not headers or not names:
+        return None
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, last_col = data_extent(ws, header_row)
+            cols = set()
+            for nm in names:
+                for r in range(header_row + 1, last + 1):
+                    for c in range(1, min(last_col, len(headers)) + 1):
+                        if str(ws.cell(row=r, column=c).value or "").strip() == nm:
+                            cols.add(c)
+    except Exception:
+        return None
+    return headers[cols.pop() - 1] if len(cols) == 1 else None
+
+
+def add_row_values_from_request(task: str, book_meta: dict, sheet: str | None,
+                                 llm_values, header_row: int = 1) -> dict:
+    """新しい行に入れる値を、**依頼文から**決める（LLM の出した値は篩にかけるだけ）。
+
+    ★★ 2026-08-28（Namakoo が実測・3 回とも別々に壊れた）:
+      「丸和物流と近江スチールの間に北斗精機を作って」に対し、第二段は
+        取引先=丸和物流／項目=北斗精機／件数=1／単価=件／金額=未定／締め日=未定
+      を返した。**位置の目印が値になり・置く物が別の列に入り・存在しない値
+      （未定・未設定・件）がでっち上げられた**。
+    ★ A' 原則をここでも通す ── 値は依頼文に literal で在るものだけ。
+      ・目印の名前は落とす（それは位置であって値ではない）
+      ・列を人が名指ししている値だけ、その列へ（「売上は600」）
+      ・列が名指しされていない値は**目印と同じ列**へ（置く物そのもの）
+      ・残りは**空のまま**（埋めない ── 空欄は誤値より安い）
+    """
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    anchors = row_anchor_names(task)
+    if isinstance(llm_values, dict):
+        pairs = [(str(k), v) for k, v in llm_values.items()]
+    else:
+        pairs = [(headers[i], v) for i, v in enumerate(llm_values or []) if i < len(headers)]
+    kept, payload = {}, None
+    for col, val in pairs:
+        s = str(val).strip()
+        if not s or s in anchors or s not in (task or ""):
+            continue
+        if col in headers and col in (task or ""):
+            kept[col] = val
+        elif payload is None:
+            payload = val
+    acol = anchor_column_name(book_meta, sheet, anchors, header_row)
+    if payload is not None and acol:
+        kept.setdefault(acol, payload)
+    return kept
+
+
 def insert_rows_should_have_been_add_row(task: str, resolved: dict,
                                           book_meta: dict | None = None,
                                           sheet: str | None = None) -> str | None:
@@ -7412,10 +7498,17 @@ def insert_rows_should_have_been_add_row(task: str, resolved: dict,
     #   「みかんとぶどうの間に梨を追加して」（数字が無い）で発火しなかった。
     #   ★ **相対位置が実表で解けること自体**が強い証拠 ── 空行を「みかんとぶどうの
     #     間に」挿してくれ、という依頼は考えにくい。人は record を置く話をしている。
-    if "追加" in text or "足し" in text or "入れ" in text:
-        at, note = resolve_row_anchor(text, book_meta or {}, sheet)
-        if at is not None:
-            return f"依頼文が場所を{note}と指しています（行挿入は空行を挿すだけです）"
+    # ★★ 2026-08-28（Namakoo が実測・3 度目）: 初版は「追加/足し/入れ」という
+    #   **動詞の列挙**で発火させていた。「丸和物流と近江スチールの間に北斗精機を
+    #   **作って**」が漏れて、空行が挿さった（一段目が CLARIFY を返す回もある）。
+    #   ★ 列挙は必ず漏れる ── この repo で何度も踏んだ形。動詞を見るのをやめる。
+    #   ★ 証拠は 2 つで足りる: ①相対位置が**実表で解ける** ②置く物の名前が依頼文に在る
+    #     （②は呼び出し側が確かめる: 第二段が values を出し、その値が依頼文に literal で
+    #      在ること ── 値をでっち上げた回に switch しない）。
+    #   ★ 「空行が欲しい」「行を 1 本」は上で既に除いてある（別の意図）。
+    at, note = resolve_row_anchor(text, book_meta or {}, sheet)
+    if at is not None:
+        return f"依頼文が場所を{note}と指しています（行挿入は空行を挿すだけです）"
     return None
 
 
@@ -7650,6 +7743,49 @@ def _resolve_named_row(book_meta: dict, sheet: str | None, name: str) -> tuple:
     return hits[0], f"『{name}』の行＝{hits[0]}行目"
 
 
+def _table_rows_for_anchor(book_meta: dict, sheet, header_row: int) -> tuple:
+    """位置解決のために実表を読む（行番号 → 値の並び、と見出しの並び）。読めなければ空。"""
+    path = book_meta.get("path")
+    if not path:
+        return {}, []
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, last_col = data_extent(ws, header_row)
+            rows = {r: [str(ws.cell(row=r, column=c).value or "").strip()
+                         for c in range(1, last_col + 1)]
+                     for r in range(header_row + 1, last + 1)}
+            heads = [str(ws.cell(row=header_row, column=c).value or "").strip()
+                      for c in range(1, last_col + 1)]
+            return rows, heads
+    except Exception:
+        return {}, []
+
+
+def _row_named_anywhere_in_task(task: str, rows: dict, headers: list):
+    """依頼文に literal で現れる**実在の値**が、ちょうど 1 行にしか無いならその行。
+
+    ★★ 2026-08-28（Namakoo「行の削除もできない」）: 「ナットを削除して」のように、
+      人は「〜の行」と言わないことがある。言い回しを足すのではなく**表に訊く**。
+    ★ 見出しの語は除く（列名を行の名前と読み違えない）。
+    ★ 2 行に当たったら決めない（推測で別の行を消すのが一番こわい）。
+    """
+    text = task or ""
+    heads = {h for h in headers if h}
+    best = None
+    for r, vals in (rows or {}).items():
+        for v in vals:
+            if not v or v in heads or len(v) < 2 or v not in text:
+                continue
+            if best is None:
+                best = (r, v)
+            elif best[0] != r:
+                return None          # 2 行以上に当たる ── 決めない
+            elif len(v) > len(best[1]):
+                best = (r, v)
+    return best
+
+
 def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
                         header_row: int = 1) -> tuple:
     """依頼文の「**みかんの下に**」「**みかんとぶどうの間に**」から行番号を決める。
@@ -7684,7 +7820,12 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
         m2 = _re_row_of.search(text)
         if m2:
             want_after, name = None, m2.group(1).strip()
+    # ★ 2026-08-28: 言い回しが 1 つも当たらない回も、**表に訊いてから**諦める。
     if not name:
+        rows_h, heads_h = _table_rows_for_anchor(book_meta, sheet, header_row)
+        alt = _row_named_anywhere_in_task(task, rows_h, heads_h)
+        if alt:
+            return alt[0], f"『{alt[1]}』の行＝{alt[0]}行目"
         return None, None
     # ★ 2026-08-27（自分で入れた誤爆・既存の検体が捕まえた）:
     #   「**2行目の前に**1行挿入して」の「2行目」を中身の名前として探し、
@@ -7703,13 +7844,25 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
             #   失敗して LLM の行番号がそのまま通っていた。
             #   ★ **探す範囲は物理の使用範囲から取る**（今週この repo が 3 度直した形）。
             last, last_col = data_extent(ws, header_row)
-            hits = [r for r in range(header_row + 1, last + 1)
-                     if any(str(ws.cell(row=r, column=c).value or "").strip() == name
-                             for c in range(1, last_col + 1))]
+            ws_rows = {r: [str(ws.cell(row=r, column=c).value or "").strip()
+                            for c in range(1, last_col + 1)]
+                        for r in range(header_row + 1, last + 1)}
+            headers_here = [str(ws.cell(row=header_row, column=c).value or "").strip()
+                             for c in range(1, last_col + 1)]
+            hits = [r for r, vals in ws_rows.items() if name in vals]
     except Exception:
         return None, None
     if not hits:
-        return None, f"『{name}』という行が見つかりません（依頼文の位置を確かめてください）"
+        # ★★ 2026-08-28（Namakoo「行の削除もできない」）: 「ナット**を**削除して」が
+        #   『1行目は見出し行です』で断られていた。人は「〜の行」と言わないこともある。
+        #   ★ 言い回しを足すのではなく、**表に訊く**: 依頼文に literal で現れる値が
+        #     この表のちょうど 1 行にしか無いなら、それがその行。
+        #     （列名も見出しも除く ── 「数量が100未満の行」のような条件文は当たらない）
+        alt = _row_named_anywhere_in_task(task, ws_rows, headers_here)
+        if alt:
+            return alt[0], f"『{alt[1]}』の行＝{alt[0]}行目"
+        return None, (f"『{name}』という行が見つかりません"
+                       "（この表に在る値で指してください・行番号でも指せます）")
     if len(hits) > 1:
         return None, (f"『{name}』が {len(hits)} 行あります（{'、'.join(str(h) for h in hits)}行目）"
                        " ── どれの隣か決められません")
@@ -11401,15 +11554,38 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             plan = [{"op": "SWAP", "args": dict(_sw_args)}]
             _reread_done = True
 
-    _reread_ops = ("INSERT_ROWS", "CLARIFY", "FREEFORM", "OUT_OF_VOCAB")
-    if not _reread_done and any((st or {}).get("op") in _reread_ops for st in plan):
+    #   ★★ 2026-08-28（Namakoo が実測・3 度目の「列挙は漏れる」）: 一段目は同じ依頼文で
+    #     INSERT_ROWS / CLARIFY / EXTRACT を返し分ける。op 名を数え上げても必ず漏れる。
+    #   ★ 宣言で門を作る: 「行をずらして**値も書く**」と宣言している op（＝ADD_ROW）で
+    #     既に読めているなら触らない。逆に、**明らかに別の仕事**を宣言している op
+    #     （見た目だけ／削除／並べ替え）にも触らない。それ以外は読み直しの候補。
+    def _already_places_a_row(st):
+        op_ = (st or {}).get("op")
+        return _op_writes(op_, WRITE_ROW_SHIFT) and _op_writes(op_, WRITE_NEW_ROW_AT_END)
+
+    def _is_a_different_job(st):
+        op_ = (st or {}).get("op")
+        return any(_op_writes(op_, k) for k in (WRITE_FORMAT_ONLY, WRITE_REMOVE, WRITE_REORDER))
+
+    if (not _reread_done and len(plan) == 1
+            and not _already_places_a_row(plan[0]) and not _is_a_different_job(plan[0])):
         _sheet_hint = (book_meta.get("sheets") or [None])[0]
         _why = insert_rows_should_have_been_add_row(a.task, {}, book_meta, _sheet_hint)
         if _why:
             _fixed = translate_task_fixed_op(a.model, "ADD_ROW", a.task, book_meta)
-            if _fixed and (_fixed.get("args") or {}).get("values"):
+            _vals = (_fixed or {}).get("args", {}).get("values") or {}
+            # ★ A' 原則: 置く物の名前は**依頼文から**取れていること。
+            #   でっち上げた値（『商品=みかんとぶどう』の実測）で op を乗り換えない。
+            # ★ 実測: 第二段は values を dict でも list でも返す（形を決めつけない）。
+            # ★★ 値は機械が依頼文から決める（LLM の出した値は篩にかけるだけ）。
+            #   実測で「位置の目印が値になり・置く物が別の列に入り・未定/未設定が
+            #   でっち上げられる」の 3 つが同時に起きた。
+            _clean = add_row_values_from_request(a.task, book_meta, _sheet_hint, _vals)
+            if _fixed and _clean:
                 print(f"（『行挿入』でなく『行追加』として読み直しました ── {_why}）")
-                plan = [{"op": "ADD_ROW", "args": _fixed["args"]}]
+                _aargs = dict(_fixed["args"])
+                _aargs["values"] = _clean
+                plan = [{"op": "ADD_ROW", "args": _aargs}]
                 _reread_done = True
 
     if len(plan) == 1:
