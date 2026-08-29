@@ -3377,6 +3377,18 @@ def _raw_target_not_embedded_in_task(raw_target: str, task: str) -> bool:
     return False
 
 
+def _task_outside_quotes(task: str) -> str:
+    """引用符で囲まれた所を空白に潰した依頼文（＝**値でない部分**だけ）。
+
+    ★ 「」の中は「そのセルに書く文字列」── 対象（列・行）の名指しとして読むと、
+      値の一部分がたまたま列名と一致しただけで、頼んでいない列が対象になる。
+    """
+    out = str(task or "")
+    for pat in _QUOTE_PATTERNS:
+        out = pat.sub(lambda m: " " * len(m.group(0)), out)
+    return out
+
+
 def _task_names_single_real_column(task: str, headers: list) -> str | None:
     """★ operator10 ③ (A' 原則): 依頼文が対象シートの実在列名を独立した語として名指しし、
        候補がちょうど1つに絞れるならその列名を返す（0件/複数件は None ── 曖昧なときは
@@ -3384,7 +3396,14 @@ def _task_names_single_real_column(task: str, headers: list) -> str | None:
        _raw_target_not_embedded_in_task を再利用する（二重実装しない）。"""
     if not task:
         return None
-    hits = [h for h in (headers or []) if h and _raw_target_not_embedded_in_task(str(h), task)]
+    # ★★ 2026-08-30（Namakoo が実測）:「A行G列を『税込み金額』に上書き」で、LLM が
+    #   実在しない列『税込み金額』を返した。ここは救済のつもりで**別の列『金額』を
+    #   採用し**、金額列を丸ごと文字列で潰しにいった（⚠ は出たが止まらない）。
+    #   『金額』が依頼文に現れるのは**引用符の中（＝書き込む値）だけ**だった。
+    #   ★ 引用符の中は**値**であって、対象の名指しではない ── 証拠に使わない。
+    #     （Namakoo の言い方: 「」で囲んだものはセルに入れる値に統一したい）
+    outside = _task_outside_quotes(task)
+    hits = [h for h in (headers or []) if h and _raw_target_not_embedded_in_task(str(h), outside)]
     return hits[0] if len(hits) == 1 else None
 
 
@@ -3560,7 +3579,12 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             #   その日本語ラベルを見出しに使う（A' 原則: LLM を使わず正規表現の有無のみで
             #   決める。手がかりが無ければ従来どおりの数式風見出しにフォールバック）。
             if not resolved.get("target"):
-                if _TAX_INCLUSIVE_RE.search(task or ""):
+                # ★★ 2026-08-30: **依頼文に名前が在るなら、それが名前**（作らない）。
+                #   下の「税込〜」は、人が名前を書かなかった時だけの間に合わせ。
+                _asked = new_column_name_from_task(task, headers.get(first_sheet, []))
+                if _asked:
+                    resolved["_new_col_label"] = _asked
+                elif _TAX_INCLUSIVE_RE.search(task or ""):
                     resolved["_new_col_label"] = f"税込{v}"
                 elif _TAX_EXCLUSIVE_RE.search(task or ""):
                     resolved["_new_col_label"] = f"税抜{v}"
@@ -4004,6 +4028,17 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         _row_name = str(resolved.get("row", "")).strip()
         _col_name = str(resolved.get("col", "")).strip()
         _row_no = resolved.get("row_number")
+        # ★★ 2026-08-30（Namakoo「行と列による一意の指定も出来た方がいい」→ 実測）:
+        #   「1行F列を「税込金額(10%)」にして」で、第二段は col に**書き込む値**を入れて
+        #   きた（col=『税込金額(10%)』）。列の名前と値が入れ替わっている。
+        #   ★ 依頼文が英字で列を名指ししているなら、それが正 ── 機械が実表から決める
+        #     （行番号を機械が決めるのと同じ分担・LLM の欄の中身に頼らない）。
+        _letters = {m.group(0) for m in _re_a1_col_word.finditer(_task_outside_quotes(task))}
+        if len(_letters) == 1:
+            _cand = next(iter(_letters)).replace("列", "").strip()
+            _v2, _inf2, _err2 = resolve_col_ref(_cand, _headers_c)
+            if not _err2:
+                _col_name = _v2
         # ★ 2026-08-28: 列は**列文字でも**指せる（「F列に」）── resolve_col_ref が解く。
         if _col_name not in _headers_c:
             _v, _inf, _err = resolve_col_ref(_col_name, _headers_c)
@@ -4031,10 +4066,28 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                                  for c in range(1, _colsc + 1)] if int(_row_no) <= _lastc else None
             except Exception as e:
                 return False, resolved, inferred, f"表を読めませんでした（{type(e).__name__}）"
-            if _rowvals is None or int(_row_no) <= _hr_c:
+            # ★★ 2026-08-30（Namakoo「行と列による一意の指定も出来た方がいい。
+            #   ピンポイントに操作できるようになる」）: それまで見出し行は一律で断って
+            #   いたので、**列の名前を直す手段が 1 つも無かった**（実測: 計算列の見出しが
+            #   「金額*1.1」に化けた表を、人が直せない）。
+            #   ★ 人が**行番号と列を書いて名指しした**のは、いちばん強い証拠 ──
+            #     見出しでも書かせる。ただし黙って書かない（解釈行で必ず言う）。
+            #   ★ LLM が推した行・名前から解いた行では、この道は開けない（下の else 側）。
+            if _rowvals is None and int(_row_no) > _hr_c:
                 return False, resolved, inferred, (
                     f"{_row_no}行目はこの表の範囲外です（見出しは{_hr_c}行目・データは"
                     f"{_hr_c + 1}〜{_lastc}行目）")
+            if int(_row_no) < _hr_c:
+                return False, resolved, inferred, (
+                    f"{_row_no}行目は見出し行（{_hr_c}行目）より上です ── "
+                    "表の外には書けません")
+            if int(_row_no) == _hr_c:
+                if task_names_a_row_number(task) != int(_row_no):
+                    return False, resolved, inferred, (
+                        f"{_row_no}行目は見出し行です ── 見出しの名前を変えるなら、"
+                        f"行番号と列で名指ししてください"
+                        f"（例:「{_hr_c}行G列を「新しい名前」にして」）")
+                resolved["_writes_header"] = True
             # ★ 実測: 第二段は row に**行番号そのもの**を入れてくることがある（"7"）。
             #   それは名前ではないので、名前としては扱わない（食い違い扱いにしない）。
             if _row_name.isdigit() or _row_name == str(_row_no):
@@ -4046,13 +4099,24 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                     "行番号と名前が食い違っています")
             _hitrow = int(_row_no)
             _note_c = f"{_hitrow}行目（依頼文の行番号）"
-            _row_name = _row_name or (_rowvals[0] if _rowvals and _rowvals[0] else str(_hitrow))
+            if resolved.get("_writes_header"):
+                # ★ 見出しを書き換える回に「対象の行:取引先」と出ると読み手を誤らせる
+                #   （実測で出た）── 何をしているのかを、その言葉で言う。
+                _row_name = "見出し"
+                _note_c = f"{_hitrow}行目（見出し行）── **見出しの名前を変えます**"
+            else:
+                _row_name = _row_name or (_rowvals[0] if _rowvals and _rowvals[0] else str(_hitrow))
         else:
             # ★ 行が実在し・1 つに決まることを**適用前に**確かめる（推測で別の行に書かない）。
             _hitrow, _note_c = _resolve_named_row(book_meta, _sheet_c, _row_name)
             if _hitrow is None:
                 return False, resolved, inferred, _note_c
         resolved["_row_index"] = _hitrow
+        # ★ 見出しを書き換えると、**その列は元の名前で引けなくなる** ── 位置を残す
+        #   （検算は名前でなく座標で見る）。実測で「列『税込み金額』が見つからない」と
+        #   落ちた（書き込み自体は成功していたのに）。
+        if _col_name in _headers_c:
+            resolved["_col_index"] = _headers_c.index(_col_name) + 1
         resolved["row"] = _row_name
         resolved["col"] = _col_name
         resolved["_headers"] = _headers_c
@@ -4942,8 +5006,10 @@ _CONFIRM_FIELDS = {
     #   契約が守られていない（在っても鳴らない、の形）。解釈行に出す口を足す。
     "SORT": (("対象", "col", None), ("順", "order", lambda v: "降順" if v == "desc" else "昇順"),
               ("対象から外した行", "_skip_label", None)),
+    # ★ 新しい列の名前は**必ず出す** ── 出ていなかったので、「税込み金額」が
+    #   「税込金額」や「金額*1.1」に化けても気づけなかった（2026-08-30 実測）。
     "COMPUTE_COLUMN": (("演算対象", "operands", lambda v: " と ".join(v)), ("演算子", "operator", None),
-                        ("対象列", "target", None)),
+                        ("対象列", "target", None), ("新しい列の名前", "_new_col_label", None)),
     "LOOKUP_FILL": (("対象シート", "target_sheet", None), ("対象列", "target_col", None),
                      ("参照シート", "source_sheet", None), ("キー列", "key_col", None)),
     "AGGREGATE": (("分類列", "group_col", None), ("集計列", "value_col", None)),
@@ -7459,14 +7525,22 @@ def check_set_cell_value(path: Path, args: dict, header_row: int = 1,
         last, last_col = data_extent(ws, header_row)
         headers = [str(ws.cell(row=header_row, column=c).value or "")
                     for c in range(1, last_col + 1)]
-        if col_name not in headers:
+        if args.get("_writes_header"):
+            # ★ 見出しそのものを書き換えた回。名前で引くと**書き換えた後の表には
+            #   もう無い** ── 宣言した座標で見る（2026-08-30 実測で落ちた形）。
+            cidx = int(args.get("_col_index") or 0)
+            if not (1 <= cidx <= last_col):
+                return "fail", f"列の位置（{cidx}）が表の外です"
+        elif col_name not in headers:
             return "fail", f"列『{col_name}』が見つからない"
-        cidx = headers.index(col_name) + 1
+        else:
+            cidx = headers.index(col_name) + 1
         # ★ 2026-08-28: 行番号で指された回は、その番号を正とする（名前で探し直さない ──
         #   同名の行が 2 つある表では名前では決まらないし、依頼は番号そのものだった）。
         if args.get("row_number"):
             row = int(args["row_number"])
-            if not (header_row < row <= last):
+            _lo = header_row - 1 if args.get("_writes_header") else header_row
+            if not (_lo < row <= last):
                 return "fail", f"{row}行目は表の範囲外（データは{header_row + 1}〜{last}行目）"
         else:
             hits = [r for r in range(header_row + 1, last + 1)
@@ -7476,8 +7550,12 @@ def check_set_cell_value(path: Path, args: dict, header_row: int = 1,
                 return "fail", f"『{name}』の行が {len(hits)} 件（1 件に決まらない）"
             row = hits[0]
         got = ws.cell(row=row, column=cidx).value
+        # ★ 見出しを書き換えた回は、見出し行も**見る範囲に入れる** ── 入れないと
+        #   「1 セルのはずが 0 セル変わっています」になる（2026-08-30 実測）。
+        #   ★ 範囲は 1 箇所で決めて、before/after/座標の 3 つに配る（片配線を作らない）。
+        _scan_from = header_row if args.get("_writes_header") else header_row + 1
         after = [[ws.cell(row=r, column=c).value for c in range(1, last_col + 1)]
-                  for r in range(header_row + 1, last + 1)]
+                  for r in range(_scan_from, last + 1)]
     # ① 宣言どおりの値か
     if numeric:
         w = float(args["_write_numeric_value"])
@@ -7491,7 +7569,7 @@ def check_set_cell_value(path: Path, args: dict, header_row: int = 1,
         ws_b = bv_b.sheet(args.get("_target_sheet"))
         lb, cb = data_extent(ws_b, header_row)
         before = [[ws_b.cell(row=r, column=c).value for c in range(1, max(cb, last_col) + 1)]
-                   for r in range(header_row + 1, lb + 1)]
+                   for r in range(_scan_from, lb + 1)]
     # ②③ 変わったセルはちょうど 1 個で、その座標が宣言と一致する
     changed = []
     for ri in range(max(len(before), len(after))):
@@ -7501,7 +7579,7 @@ def check_set_cell_value(path: Path, args: dict, header_row: int = 1,
             bv_ = b_row[ci] if ci < len(b_row) else None
             av_ = a_row[ci] if ci < len(a_row) else None
             if bv_ != av_:
-                changed.append((header_row + 1 + ri, ci + 1))
+                changed.append((_scan_from + ri, ci + 1))
     if len(changed) != 1:
         return "fail", (f"1 セルのはずが {len(changed)} セル変わっています"
                          f"（{'、'.join(f'{r}行{c}列' for r, c in changed[:6])}）"
@@ -7509,6 +7587,9 @@ def check_set_cell_value(path: Path, args: dict, header_row: int = 1,
     if changed[0] != (row, cidx):
         return "fail", (f"変わったのは {changed[0][0]}行{changed[0][1]}列で、"
                          f"宣言した {row}行{cidx}列ではありません")
+    if args.get("_writes_header"):
+        return "pass", (f"{row}行{cidx}列（見出し）の名前だけを書き換え"
+                         f"（変わったセルは 1 個・中身の行は 1 セルも変わらず）")
     return "pass", f"『{name}』の{col_name}だけを書き換え（変わったセルは 1 個）"
 
 
@@ -8794,6 +8875,54 @@ def _rows_matching(book_meta: dict, sheet: str | None, cond_col: str, cmp: str,
                      if r not in skip and match(bv.cell_value(r, ci, sheet))]
     except Exception:
         return None
+
+
+# 「〜の右に」等の位置の言い回し（列版・_COL_AFTER/_COL_BEFORE と同じ語彙）。
+_re_after_position = re.compile("(?:" + "|".join(
+    re.escape(w) for w in (*_COL_AFTER, *_COL_BEFORE)) + ")")
+# 名前のうしろに付く「列を追加して」等。★ 語尾は閉じた文法の集合（業務語彙ではない）。
+_NEW_COL_TAILS = ("という列を追加して", "という列を作って", "という列を追加", "という列を作る",
+                   "という列", "の列を追加して", "の列を作って", "の列を追加", "の列を作る",
+                   "列を追加して", "列を作って", "列を追加", "列を作る", "列",
+                   "を追加して", "を作って", "を追加", "を作る", "を入れて", "を足して")
+
+
+def new_column_name_from_task(task: str, headers=None) -> str | None:
+    """依頼文が名指ししている、**新しい列の名前**（決まらなければ None）。
+
+    ★★ 2026-08-30（Namakoo が実測・下書きに 2 本できた）:
+      「金額の右に税込み金額を追加」を 2 回頼んで、見出しが
+        1 回目「税込金額」（**「み」が落ちた**）／2 回目「金額*1.1」（**式が名前になった**）
+      になった。前者は道具が `f"税込{列名}"` と**作った**名前、後者は式そのもの。
+      ★ どちらも A' 原則（値も名前も依頼文から取る）が抜けていた ── **人が書いた
+        名前がそこに在るのに、機械が別の名前を発明していた**。
+      ★ しかも解釈行に名前が出ていなかったので、間違いに気づく手がかりが無かった。
+    ★ 引き算で切り出す: 位置の言い回し（「〜の右に」）の**うしろ**から、語尾を落とす。
+      全体を置換しない ── 「金額の右に税込み金額」で『金額』を全部消すと『税込み』になる。
+    ★ 実在する見出しと同じ名前なら None（それは新しい列ではない）。
+    """
+    text = _task_outside_quotes(task).replace(chr(12288), " ")
+    m = None
+    for m2 in _re_after_position.finditer(text):
+        m = m2                       # 最後の位置語のうしろを見る（「AとBの右に X」）
+    name = text[m.end():] if m else ""
+    if not name.strip():
+        return None
+    for w in _NEW_COL_TAILS:         # 長い語尾から落とす（並びが長さ順）
+        i = name.find(w)
+        if i > 0:
+            name = name[:i]
+            break
+    name = name.strip().strip("、。 ")
+    while name and name[0] in "をにへはがでとのも 　":
+        name = name[1:]
+    if len(name) < 2 or " " in name:
+        return None
+    if any(ch in name for ch in "をにへはがでとも"):
+        return None                  # 文がまだ切れていない（助詞が残っている）
+    if name in {str(h) for h in (headers or [])}:
+        return None                  # 既にある列 ── 新しい名前ではない
+    return name if name in text else None
 
 
 def resolve_col_anchor(task: str, headers: list) -> tuple:

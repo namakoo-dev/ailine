@@ -5,6 +5,7 @@
     "col": "金額",
     "_target_sheet": "Sheet",
     "_row_index": 2,
+    "_col_index": 2,
     "_headers": [
       "商品",
       "金額"
