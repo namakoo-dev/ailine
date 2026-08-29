@@ -412,7 +412,6 @@ def test_postconditions_do_not_report_zero_targets_on_a_gappy_sheet(tmp_path):
 
 
 @pytest.mark.parametrize("task", [
-    "2行目の前に1行挿入して",
     "3行目に1行挿入して",
     "5行目を削除して",
 ])
@@ -420,11 +419,31 @@ def test_row_numbers_are_not_content_anchors(tmp_path, task):
     """★ 2026-08-27（自分で入れた誤爆・既存の検体が捕まえた）。
 
     「**2行目の前に**1行挿入して」の「2行目」を中身の名前として探し、見つからず
-    断っていた。**行番号は名前ではない** ── 数字の指定はそのまま通す。
+    断っていた。**行番号は名前ではない** ── 表を探しに行かない。
     ★ 相対の言い回しを足すと、絶対の言い回しを壊しうる。両方を同じ試験で見張る。
     """
     _p, meta = _gappy(tmp_path)
     assert ailine.resolve_row_anchor(task, meta, "売上") == (None, None), task
+
+
+@pytest.mark.parametrize("task, at", [
+    ("2行目の前に1行挿入して", 2),
+    ("4行目の下に1行挿入して", 5),
+])
+def test_a_row_number_with_a_direction_is_computed_not_abandoned(tmp_path, task, at):
+    """★★ 2026-08-29 に**挙動を変えた**（Namakoo「行の追加が出来なくなってる」）。
+
+    上の試験は元々「2行目の前に」も (None, None) を要求していた。意図は
+    「行番号を中身として探しに行くな」だったが、書いたのは「**何も決めるな**」で、
+    結果 LLM の行番号がそのまま通っていた ── 「4行目の下に丸山工業の行を作って」で
+    **4 行目に空行**が挿さった（下ではなく上・値も入らない）。
+    ★ 番号と向きが揃っているなら表に訊く必要すら無い ── 引き算で出る。
+      「探しに行かない」は守ったまま、決めるようにした（詳細は
+      tests/test_row_number_anchor.py）。
+    """
+    _p, meta = _gappy(tmp_path)
+    got, note = ailine.resolve_row_anchor(task, meta, "売上")
+    assert got == at, (got, note)
 
 
 # --- ⑧ 式の列がある表で、行を動かしても落ちないこと（2026-08-27・実測で出た欠陥）------

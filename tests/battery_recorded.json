@@ -8,5 +8,15 @@
   "slot_total": 69,
   "misassert": 0,
   "misassert_total": 10,
-  "runs": 2
+  "runs": 2,
+  "matrix": {
+    "_why": "効果で測る検体(bench/basic_ops_matrix.py)の実測値。README と demo/手順.md がここから外れたら赤くする。★ 2026-08-29: それまで地の文に手書きしていた（84 件・97.6%）── 同じ日に検体を 93 件へ増やしてその場で古くなった。手で守れない数字は機械が守る（翻訳精度と同じ二段構え）。",
+    "measured_on": "2026-08-29",
+    "model": "qwen2.5-coder:7b",
+    "cases": 93,
+    "intended": 90,
+    "refused": 3,
+    "failed": 0,
+    "runs": 2
+  }
 }

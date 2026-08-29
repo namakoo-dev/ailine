@@ -124,6 +124,15 @@ class Slot:
     value: str
     kind: str
     context: str = ""
+    # ★★ 2026-08-29（Namakoo が実測・「行の追加が出来なくなってる」）:
+    #   「4行目の下に」の位置は機械が引き算で出す（5行目）。すると依頼文に『5』は
+    #   無いので、この照合が ⚠ を立てて確認の関所で止まっていた。
+    #   ★ **名前で指すと通り、行番号で指すと止まる** ── 精密に言うほど怒られていた。
+    #   ★ ここで要る三項は 依頼／宣言／実体 のまま: 依頼は『4行目』で、確かに在る。
+    #     機械がしたのは引き算だけで、その引き算は解釈行（位置の根拠）に出ている。
+    #     ★ 黙らせるのではなく、**照合する相手を導出元に変える**（根拠が別に在ると認める
+    #       ── 画面のシート選択を「語の一致より強い証拠」と認めたのと同じ線）。
+    derived_from: int | None = None
 
 
 @dataclass(frozen=True)
@@ -281,7 +290,14 @@ def _match_slot(slot: Slot, task: str, columns, d: TaskDesignators, sheets,
     if slot.kind == ROW:
         n = _row_value(raw)
         hit = n is not None and n in d.rows
-        return hit, (("row", n) if hit else None)
+        if hit:
+            return True, ("row", n)
+        # ★ 導出元が依頼文に在るなら照合できている（その語を消費する ── 消費しないと
+        #   「誰も拾わなかった語」として残り、他のスロットの反証に化ける）。
+        src = slot.derived_from
+        if src is not None and src in d.rows:
+            return True, ("row", src)
+        return False, None
     if slot.kind == REGION:
         if raw == "all":
             return d.whole, (("whole", True) if d.whole else None)

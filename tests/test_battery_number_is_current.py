@@ -75,3 +75,50 @@ def test_the_record_still_matches_the_machine():
     assert abs(got - rec["op_correct"]) <= 1, (
         f"実測 {got}/{total}・記録 {rec['op_correct']}/{total} ── "
         "記録と文書を測り直して直すこと（実測が正）")
+
+
+# --- ★★ 効果で測る検体（bench/basic_ops_matrix.py）の数字も同じ二段構えで縛る ---------
+#
+# ★ 2026-08-29: README は「84 件・97.6%」と地の文で書いていた。上の翻訳精度と違って
+#   印も記録も無く、**手で守る数字**だった。同じ日に検体を 93 件へ増やしたので、
+#   その場で古くなる ── 手で守れない数字は機械が守る（この repo の規範）。
+
+
+def _matrix():
+    return _record()["matrix"]
+
+
+def test_the_readme_matches_the_matrix_record():
+    """① 文書 vs 記録。"""
+    m = _matrix()
+    want = f"{m['intended']}/{m['cases']} = {m['intended'] / m['cases'] * 100:.1f}%"
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    got = re.search(r"<!-- MATRIX -->(.*?)<!-- /MATRIX -->", text)
+    assert got, "README に MATRIX の印が無い"
+    assert got.group(1) == want, f"README は {got.group(1)!r}・記録は {want!r}"
+
+
+def test_the_matrix_record_names_how_it_was_measured():
+    m = _matrix()
+    for key in ("measured_on", "model", "cases", "intended", "refused", "failed"):
+        assert m.get(key) is not None, key
+    assert m["intended"] + m["refused"] + m["failed"] == m["cases"], m
+
+
+@pytest.mark.local
+def test_the_matrix_record_still_matches_the_machine():
+    """② 記録 vs 実測（実物の LLM と LibreOffice が要る・13 分ほど掛かる）。"""
+    r = subprocess.run(
+        [sys.executable, str(REPO / "bench" / "basic_ops_matrix.py")],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=3600, cwd=str(REPO),
+        env={**__import__("os").environ, "PYTHONPATH": str(REPO / "src")})
+    assert r.returncode == 0, r.stdout[-800:]
+    m = re.search(r"合計 (\d+) 件: ✓ (\d+)\s+？断り (\d+)\s+× 失敗 (\d+)", r.stdout)
+    assert m, r.stdout[-800:]
+    rec = _matrix()
+    cases, ok = int(m.group(1)), int(m.group(2))
+    assert cases == rec["cases"], f"検体の数が変わった: {cases}（記録は {rec['cases']}）"
+    assert abs(ok - rec["intended"]) <= 1, (
+        f"実測 {ok}/{cases}・記録 {rec['intended']}/{cases} ── "
+        "記録と文書を測り直して直すこと（実測が正）")

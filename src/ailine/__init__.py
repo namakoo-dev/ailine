@@ -2728,7 +2728,7 @@ OP_SUBJECT_SLOTS = {
 }
 
 
-def _subject_slots(op: str, resolved: dict, sheets: list) -> list:
+def _subject_slots(op: str, resolved: dict, sheets: list, task: str = "") -> list:
     """宣言(OP_SUBJECT_SLOTS)と resolved から判定対象のスロットを組む。
        ★ 対象シートは全 op 共通で足す ―― ただし**複数シートのブックだけ**
        （1枚しか無いブックに『どのシートか』の曖昧さは存在しない。format_sheet_field/
@@ -2750,7 +2750,15 @@ def _subject_slots(op: str, resolved: dict, sheets: list) -> list:
             # 限定語が対象列の名前に現れていれば、解釈は限定を運んでいる
             # （例: 対象列『税込金額』の合計にラベル『合計』は正しい）。
             context = str(resolved.get("col") or "")
-        slots.append(Slot(key=key, value=str(value), kind=kind, context=context))
+        # ★ 行の位置が「4行目の下」から**引き算で**出たものなら、依頼文と照合する相手は
+        #   その導出元（4）── 唯一の産地 row_number_anchor に、決める側と同じ問いを出す。
+        _from = None
+        if kind == SUBJ_ROW and key == "at":
+            _at_a, _n_a, _ = row_number_anchor(task)
+            if _at_a is not None and str(_at_a) == str(value):
+                _from = _n_a
+        slots.append(Slot(key=key, value=str(value), kind=kind, context=context,
+                          derived_from=_from))
     target_sheet = resolved.get("_target_sheet")
     # ★ 出どころが「人の明示指定」（--sheet / 画面の選択）なら、依頼文との照合は問わない
     #   ── 人が選んだという事実のほうが、語の一致より強い証拠。
@@ -2890,7 +2898,7 @@ def classify_subject_provenance(op: str, resolved: dict, meta: dict, task: str, 
     if a is not None and consumed is None:
         consumed = SubjectConsumed()
         a._subject_consumed = consumed
-    return classify_slots(_subject_slots(op, resolved, sheets), task=task or "",
+    return classify_slots(_subject_slots(op, resolved, sheets, task or ""), task=task or "",
                            columns=columns, header_row=header_row, sheets=sheets,
                            qualifier_signal=qualifier, consumed=consumed)
 
@@ -7557,6 +7565,46 @@ _ANCHOR_BEFORE = ("の上に", "の上へ", "の前に")
 
 
 _re_row_number_word = re.compile(r"[0-9０-９]+\s*行(?:目)?")
+def _row_word_number(word: str) -> int:
+    """「4行目」「４行」→ 4（全角も受ける）。"""
+    digits = "".join(ch for ch in word if ch.isdigit() or ch in "０１２３４５６７８９")
+    return int(digits.translate(_ZENKAKU_DIGITS))
+
+
+def row_number_anchor(task: str) -> tuple:
+    """「4行目の下に」「2行目の前に」── **行番号と向き**だけから位置を出す。
+
+    戻り値: (入れる行, 依頼文が言った行番号, 説明) ── 当たらなければ (None, None, "")。
+    ★ 表に訊く必要が無い（純関数）。だから**位置を決める側と、その位置を審査する側の
+      両方が同じここを通る**（片配線を作らない ── この repo が何度も踏んだ形）。
+    """
+    text = (task or "").replace("　", " ")
+    # ★★ 2026-08-29（Namakoo）:「4行目と5行目は両方ともヤマノ食品。取引先で指定は
+    #   出来ない」── 中身で指せない表では、人は番号でしか言えない。ならば
+    #   「4行目と5行目の間に」も同じ引き算で出す（ここも表に訊く必要が無い）。
+    m = _re_between.search(text)
+    if m:
+        a_, b_ = m.group(1).strip(), m.group(2).strip()
+        if _re_row_number_word.fullmatch(a_) and _re_row_number_word.fullmatch(b_):
+            na, nb = _row_word_number(a_), _row_word_number(b_)
+            if nb - na != 1:
+                return None, None, ""        # 隣り合っていない ── 決めない
+            return nb, na, f"{na}行目と{nb}行目の間＝{nb}行目"
+        return None, None, ""                # 片方でも名前なら、表に訊く側の仕事
+    for sufs, after in ((_ANCHOR_AFTER, True), (_ANCHOR_BEFORE, False)):
+        for suf in sufs:
+            m = _re_anchor(suf).search(text)
+            if not m:
+                continue
+            name = m.group(1).strip()
+            if not _re_row_number_word.fullmatch(name):
+                return None, None, ""      # 名前で指している（表に訊く側の仕事）
+            n = _row_word_number(name)
+            at = n + 1 if after else n
+            return at, n, f"{n}行目の{chr(0x4E0B) if after else chr(0x4E0A)}に入れる＝{at}行目"
+    return None, None, ""
+
+
 _re_row_of = re.compile(r"([^\s、。]+?)\s*の\s*行")
 _re_row_unit = re.compile(r"[0-9０-９]*\s*行\s*(?:を|も)?\s*(?:足|追加|入れ|挿入)")
 _re_value_assign = re.compile(r"[^\s、。]+\s*(?:は|を|＝|=)\s*[0-9０-９]")
@@ -7592,6 +7640,14 @@ def anchor_column_name(book_meta: dict, sheet: str | None, names: list,
 
     ★ 「A と B の間に X」の X は、A・B と**同じ列**の住人（取引先の間には取引先が入る）。
       置き場所を LLM に決めさせると別の列へ入る（実測: `項目=北斗精機`）。
+    ★★ 2026-08-29（Namakoo「どうしても中身でさせない場面が出てくる」→ 効果検体で実測）:
+      目印が**行番号**（「3行目の上に新品を入れて」）だと、名前が表のどこにも無いので
+      列が決まらず、値の行き先を失って**空行**になっていた ── 位置の解決・op の選択に
+      続いて、これが同じ非対称の 3 層目。
+      ★ ここも表に訊けば決まる: その行が**自分の名前を持っている列**（左から見て最初に
+        値の在る列）。「A の隣には A と同じ列の住人が入る」を、行番号で言われた時に
+        言い直しただけ ── 語の一覧は増やさない。
+      ★ 決めた列は解釈行の「入れる値」にそのまま出る（黙って置かない）。
     """
     path = book_meta.get("path")
     headers = (book_meta.get("headers") or {}).get(sheet) or []
@@ -7602,9 +7658,18 @@ def anchor_column_name(book_meta: dict, sheet: str | None, names: list,
             ws = bv.sheet(sheet)
             last, last_col = data_extent(ws, header_row)
             cols = set()
+            width = min(last_col, len(headers))
             for nm in names:
+                if _re_row_number_word.fullmatch(nm):
+                    rn = _row_word_number(nm)
+                    if header_row < rn <= last:
+                        for c in range(1, width + 1):
+                            if str(ws.cell(row=rn, column=c).value or "").strip():
+                                cols.add(c)
+                                break
+                    continue
                 for r in range(header_row + 1, last + 1):
-                    for c in range(1, min(last_col, len(headers)) + 1):
+                    for c in range(1, width + 1):
                         if str(ws.cell(row=r, column=c).value or "").strip() == nm:
                             cols.add(c)
     except Exception:
@@ -7991,6 +8056,24 @@ def placements_in_plan(plan) -> dict:
     return {"row": rows, "col": cols}
 
 
+def plan_only_inserts_a_bare_row(plan) -> bool:
+    """その計画が「**空行を挿すだけ**」か（値も列も足さない）。
+
+    ★ op 名で数えない ── 宣言（writes）で見る。
+      ・行をずらす（WRITE_ROW_SHIFT）
+      ・でも新しい行の値は書かない（WRITE_NEW_ROW_AT_END が無い）
+      ・列も足さない（WRITE_NEW_COLUMN が無い）
+    ★ この形の計画にだけ「値が決まらないなら止まる」を掛ける ── それ以外の計画
+      （値を書く・列を足す・行を消す）は、値が無いのが普通なので巻き込まない。
+    """
+    if not plan or len(plan) != 1:
+        return False
+    op_ = (plan[0] or {}).get("op")
+    return (_op_writes(op_, WRITE_ROW_SHIFT)
+            and not _op_writes(op_, WRITE_NEW_ROW_AT_END)
+            and not _op_writes(op_, WRITE_NEW_COLUMN))
+
+
 def too_many_placements(plan) -> str | None:
     """同じ軸に位置を作る段が 2 つ以上あるなら、その理由（無ければ None）。
 
@@ -8371,9 +8454,19 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
         return None, None
     # ★ 2026-08-27（自分で入れた誤爆・既存の検体が捕まえた）:
     #   「**2行目の前に**1行挿入して」の「2行目」を中身の名前として探し、
-    #   見つからず断っていた。**行番号は名前ではない** ── 数字の指定はそのまま通す。
+    #   見つからず断っていた。**行番号は名前ではない** ── 表を探しに行かない。
+    # ★★ 2026-08-29（Namakoo が実測・「行の追加が出来なくなってる」）:
+    #   そのとき「探さない」を「**決めない**」と書いてしまった。結果:
+    #     「ヤマノ食品の下に丸山工業の行を作って」→ 5行目・値も入る（✓）
+    #     「4行目の下に丸山工業の行を作って」  → 機械が黙る → LLM の 4 がそのまま通り、
+    #                                            **上に空行**が挿さった（✗）
+    #   ★ 同じ「下に」なのに、**指し方が名前か番号かで結果が変わっていた**。
+    #     ここは表に訊く必要すらない ── 番号と向きが揃っているのだから**引き算で出る**。
+    #   ★ 位置が出れば、`insert_rows_should_have_been_add_row` の証拠①も立つので、
+    #     値つきの行（ADD_ROW）へ回る ── 空行に落ちる道が同時に塞がる。
     if _re_row_number_word.fullmatch(name):
-        return None, None
+        at, _n, note = row_number_anchor(task)
+        return (at, note) if at is not None else (None, None)
     path = book_meta.get("path")
     if not path:
         return None, None
@@ -8406,8 +8499,14 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
         return None, (f"『{name}』という行が見つかりません"
                        "（この表に在る値で指してください・行番号でも指せます）")
     if len(hits) > 1:
-        return None, (f"『{name}』が {len(hits)} 行あります（{'、'.join(str(h) for h in hits)}行目）"
-                       " ── どれの隣か決められません")
+        # ★★ 2026-08-29（Namakoo）:「どうしても中身でさせない場面が出てくる。例えば
+        #   4行目と5行目は両方ともヤマノ食品。取引先で指定は出来ない」── そのとおりで、
+        #   ここは**断って終わる場所ではなく、行番号の道へ渡す場所**。
+        #   ★ 候補の行番号は機械がもう知っている ── そのまま言う（人に数え直させない）。
+        _rows = "、".join(str(h) for h in hits)
+        _ex = f"{hits[0]}行目"
+        return None, (f"『{name}』が {len(hits)} 行あります（{_rows}行目） ── どれか決められません。"
+                       f"行番号で指してください（例:「{_ex}の下に…」「{_ex}を削除して」）")
     row = hits[0]
     if want_after is None:          # 「<X>の行」＝ その行そのもの
         return row, f"『{name}』の行＝{row}行目"
@@ -12276,6 +12375,20 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                 _aargs["values"] = _clean
                 plan = [{"op": "ADD_ROW", "args": _aargs}]
                 _reread_done = True
+            elif plan_only_inserts_a_bare_row(plan):
+                # ★★ 2026-08-29（効果検体で実測・「3行目と4行目の間に新品を作って」）:
+                #   ここまで来た時点で、機械は「**値を入れる行が欲しい依頼だ**」と
+                #   分かっている（それが _why）。なのに値が決まらなかった回は、
+                #   そのまま**空行を挿して ✓ を出して**いた ── 宣言（空行を挿す）と
+                #   実体は一致するので検算は通る。だが依頼とは違う。
+                #   ★ 三項のうち「依頼」を捨てた形の再演。この製品の芯は
+                #     「機械で確かめられないものに ✓ を出さない」── **壊す前に止まる**。
+                #   ★ 断りっぱなしにしない: 何が決まらなかったかと、通る言い方を言う。
+                print(f"？ 入れる値を依頼文から決められません ── {_why}")
+                print("  （値と列を言ってください: 例「3行目の下に新品を追加して」"
+                       "「みかんの下に梨を追加して。売上は600」）")
+                print("  （空の行が欲しいなら: 例「3行目の下に1行挿入して」）")
+                return 3
 
     # ★★ 関所（2026-08-29・Namakoo の設計判断）: 同じ軸に位置を作る段が 2 つ以上ある
     #   計画は実行しない。上の読み直しで 1 本に畳めていればここは通る ── 畳めなかった
