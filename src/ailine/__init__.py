@@ -4913,7 +4913,11 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
 # --- ③ 確認行（命令言語形式） -------------------------------------------------
 
 _CONFIRM_FIELDS = {
-    "SORT": (("対象", "col", None), ("順", "order", lambda v: "降順" if v == "desc" else "昇順")),
+    # ★★ 2026-08-29（Namakoo の通しで実測）: `_skip_label` は**セットされているだけで
+    #   どこにも表示されていなかった** ── 「外したことは必ず画面に出す」と書いてある
+    #   契約が守られていない（在っても鳴らない、の形）。解釈行に出す口を足す。
+    "SORT": (("対象", "col", None), ("順", "order", lambda v: "降順" if v == "desc" else "昇順"),
+              ("対象から外した行", "_skip_label", None)),
     "COMPUTE_COLUMN": (("演算対象", "operands", lambda v: " と ".join(v)), ("演算子", "operator", None),
                         ("対象列", "target", None)),
     "LOOKUP_FILL": (("対象シート", "target_sheet", None), ("対象列", "target_col", None),
@@ -4951,7 +4955,8 @@ _CONFIRM_FIELDS = {
     "SET_WHERE": (("書き込む列", "col", None), ("書き込む値", "value", None),
                    ("条件を見る列", "cond_col", None),
                    ("比べ方", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
-                   ("条件", "_cond_label", None), ("当てはまる行", "_match_label", None)),
+                   ("条件", "_cond_label", None), ("当てはまる行", "_match_label", None),
+                   ("対象から外した行", "_skip_label", None)),
     "SET_CELL_VALUE": (("対象の行", "row", None), ("対象列", "col", None),
                         ("書き込む値", "value", None)),
     "DRAW_BORDERS": (),
@@ -4960,7 +4965,8 @@ _CONFIRM_FIELDS = {
     # ★ operator10 ④: 「型」は resolved_args に "_write_numeric" キーがある時だけ表示される
     #   （M2c のフィールド省略・手組みの resolved_args ではキー自体が無いので出ない）。
     "SET_COLUMN_VALUE": (("対象列", "col", None), ("値", "value", None),
-                          ("型", "_write_numeric", lambda v: "数値" if v else "文字列")),
+                          ("型", "_write_numeric", lambda v: "数値" if v else "文字列"),
+                          ("対象から外した行", "_skip_label", None)),
     "EXTRACT": (("対象列", "col", None), ("条件", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
                  ("値", "value", lambda v: _format_extract_value(v))),
     "SPLIT_CELL": (("対象列", "col", None),

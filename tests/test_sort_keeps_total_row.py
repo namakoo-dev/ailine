@@ -141,3 +141,19 @@ def test_the_end_row_reaches_every_denominator():
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     # 検算の後ろ側と前側の両方で使われていること
     assert src.count('args.get("_sort_end_row")') >= 2, "分母の片側にしか配っていない"
+
+
+def test_the_disclosure_actually_reaches_the_screen():
+    """★★ 2026-08-29（Namakoo の通しで実測・「期待される警告と違う」）:
+       `_skip_label` は**セットされているだけで、どこにも表示されていなかった**。
+       「外したことは必ず画面に出す」と書いてある契約が守られていない
+       ── 在っても鳴らない、の形（この repo で何度も踏んでいる）。
+    ★ 解釈行の欄（_CONFIRM_FIELDS）に載っていることを機械で縛る。
+      3 つの op が `_skip_label` を作るので、3 つとも載っていること。"""
+    setters = {"SORT", "SET_WHERE", "SET_COLUMN_VALUE"}
+    for op in sorted(setters):
+        keys = {k for _label, k, _fn in ailine._CONFIRM_FIELDS[op]}
+        assert "_skip_label" in keys, f"{op} の解釈行に『対象から外した行』が無い"
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    # ★ 作る側と見せる側の数が合っていること（片方だけ増やす事故を止める）
+    assert src.count('resolved["_skip_label"] = ') == len(setters)
