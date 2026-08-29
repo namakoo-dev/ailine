@@ -302,3 +302,97 @@ def _values_differ(have, want) -> bool:
 def _ref(p) -> str:
     r, c = p
     return f"{_num_to_col(c)}{r}"
+
+
+# --- 参照のズレ（並べ替え・入れ替えで「指す先の中身」が変わる式）----------------------
+
+_RANGE_RE = re.compile(
+    r"(\$?[A-Z]{1,3}\$?[0-9]{1,7})\s*:\s*(\$?[A-Z]{1,3}\$?[0-9]{1,7})")
+_QUALIFIED_RE = re.compile(
+    r"(?:'([^']+)'|([A-Za-z_\u3040-\u30ff\u4e00-\u9fff][\w\u3040-\u30ff\u4e00-\u9fff]*))"
+    r"[.!](\$?)([A-Z]{1,3})(\$?)([0-9]{1,7})")
+_BARE_RE = re.compile(r"(?<![.!])(?<![A-Za-z0-9_$])(\$?)([A-Z]{1,3})(\$?)([0-9]{1,7})")
+# ★ コロンに隣接する参照（相手が関数でも範囲の端）。`B2:INDEX(...)` / `INDEX(...):B9`
+_ADJ_COLON_RE = re.compile(
+    r"(\$?[A-Z]{1,3}\$?[0-9]{1,7}\s*:)|(:\s*\$?[A-Z]{1,3}\$?[0-9]{1,7})")
+
+
+def single_cell_refs(formula: str, own_sheet: str) -> list:
+    """式の中の**単独セル参照**を [(シート名, 行, 列), ...] で返す（範囲の両端は除く）。
+
+    ★★ 2026-08-29（Namakoo の指摘 → 実測で裏取り）: 並べ替えると、**範囲の外から
+      特定の 1 行を指している式**は追従せず、**指す先の中身だけが変わる**。
+      実測: `=B3`（ラベルは「ぶどうの金額」）が、並べ替え後に みかん の 200 を指した。
+      式は 1 文字も壊れていないので、値でも文字列でも検出できない ── **参照を読むしかない**。
+    ★ 範囲（`SUM(B2:B4)`）は除く: そちらは領域を指しているので並べ替えに正しく追従する。
+      鳴らすのは「特定の 1 行を指す式」だけ ── ここを分けられるのが、式を読む値打ち。
+    """
+    if not isinstance(formula, str) or not formula.startswith("="):
+        return []
+    masked = _RANGE_RE.sub(lambda m: "#" * len(m.group(0)), formula)
+    # ★★ 2026-08-29（既存の検体が捕まえた誤検出）: `=SUM(B2:INDEX(B:B,ROW()-1))` の
+    #   `B2` を「単独参照」と読んでいた ── 相手が関数なので `A1:B2` の形に見えない。
+    #   ★ **コロンに隣接する参照は範囲の端**。範囲は領域を指すので鳴らさない。
+    masked = _ADJ_COLON_RE.sub(lambda m: "#" * len(m.group(0)), masked)
+    out = []
+    for m in _QUALIFIED_RE.finditer(masked):
+        sheet = m.group(1) or m.group(2)
+        out.append((sheet, int(m.group(6)), _col_to_num(m.group(4))))
+    # 修飾つきを伏せてから、素の参照を拾う（同じ参照を 2 回数えない）
+    rest = _QUALIFIED_RE.sub(lambda m: "#" * len(m.group(0)), masked)
+    for m in _BARE_RE.finditer(rest):
+        out.append((own_sheet, int(m.group(4)), _col_to_num(m.group(2))))
+    return out
+
+
+def refs_pointing_into(path, target_sheet: str, row_lo: int = 1, row_hi: int = 10 ** 7,
+                        col_lo: int = 1, col_hi: int = 10 ** 4) -> list:
+    """動かす区画を**外から**指している単独セル参照を集める。
+
+    区画は 行 [row_lo, row_hi] × 列 [col_lo, col_hi]。
+      並べ替え → 行で区切る（列は全部）
+      列の入れ替え → 列で区切る（行は全部）
+    戻り値: [(式の在るシート, 式のセル参照, 式, 指している行, 指している列), ...]。
+    ★ 「外から」= 別シート、または同じシートでも区画の外。区画の中の式は
+      一緒に動くので正しく追従する（実測で確認済み）。
+    """
+    import openpyxl
+    hits = []
+    wb = openpyxl.load_workbook(path)
+
+    def _in_block(sheet, r, c):
+        return (sheet == target_sheet and row_lo <= r <= row_hi and col_lo <= c <= col_hi)
+
+    try:
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    v = cell.value
+                    if not isinstance(v, str) or not v.startswith("="):
+                        continue
+                    if _in_block(ws.title, cell.row, cell.column):
+                        continue
+                    for sh, r, c in single_cell_refs(v, ws.title):
+                        if _in_block(sh, r, c):
+                            hits.append((ws.title, _ref((cell.row, cell.column)), v, r, c))
+                            break
+    finally:
+        wb.close()
+    return sorted(hits, key=lambda t: (t[0], t[3], t[4]))
+
+
+def reference_drift_note(hits: list) -> str | None:
+    """検出した参照のズレを 1 行にする（無ければ None）。
+
+    ★ 直さない ── **直してよいかは人が決める**（Excel も LibreOffice も、範囲の外から
+      特定の行を指す式は並べ替えで追従させない＝アドレスに留まるのが既定の意味）。
+      「ぶどうの金額 = B3」は行に追従してほしいが、「3行目の値 = B3」は留まってほしい
+      ── 機械には区別できない。だから**名指しして人に返す**。
+    """
+    if not hits:
+        return None
+    head = "・".join(f"{sh}!{ref}（{f}）" for sh, ref, f, *_ in hits[:3])
+    more = f" ほか {len(hits) - 3} 件" if len(hits) > 3 else ""
+    return (f"この操作で、**指す先の中身が変わる式**が {len(hits)} 件あります: {head}{more}"
+             " ── 式そのものは壊れませんが、指している行が入れ替わります"
+             "（直してよいかは人が決めることなので、直していません）")

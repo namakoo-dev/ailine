@@ -140,6 +140,7 @@ from ailine_core.report_per_row import (  # noqa: F401
     sanitize_sheet_name, unique_sheet_name, scan_placeholders, compare_report_cells,   # noqa: F401 ── 再輸出/在否確認のため残す
 )
 from ailine_core import report_group   # ★ 帳票段（まとめ版）: 同じ取引先を 1 枚にまとめる純ロジック
+from ailine_core import cellmap   # ★ 座標の層: 写像・数式の参照・参照のズレ検出
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
 from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
@@ -3467,6 +3468,12 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 resolved["_skip_rows"] = list(_s_tot)
                 resolved["_skip_label"] = ("合計行 " + "、".join(
                     f"{r}行目" for r in _s_tot) + "（データ行でないため並べ替えません）")
+        # ★ 並べ替えで「指す先の中身が変わる式」を名指しする（★ 付き＝決裁③で ✓→△）。
+        #   ここは疑いなので警告でよい ── 合計行の除外（開示）とは性質が違う。
+        _s_last = resolved.get("_sort_end_row") or 10 ** 7
+        if (_dw := reference_drift_warning(book_meta, _s_sheet,
+                                            row_lo=_s_hr + 1, row_hi=_s_last)):
+            resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
 
     elif op == "COMPUTE_COLUMN":
         operands = resolved.get("operands")
@@ -4330,6 +4337,15 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             if min(_ra, _rb) <= _hr_s:
                 return False, resolved, inferred, (
                     f"見出し行（{_hr_s}行目）を巻き込む入れ替えは受け付けません")
+        # ★ 入れ替えでも「指す先の中身が変わる式」を名指しする（並べ替えと同じ目）。
+        #   ★ 軸で区画が変わるだけ ── 行なら 2 行、列なら 2 列（行と列を同じ形で書く）。
+        _sw_sheet = resolved.get("_target_sheet") or first_sheet
+        _lo, _hi = min(resolved["_a_pos"], resolved["_b_pos"]), max(resolved["_a_pos"],
+                                                                     resolved["_b_pos"])
+        _kw = ({"col_lo": _lo, "col_hi": _hi} if as_col
+                else {"row_lo": _lo, "row_hi": _hi})
+        if (_dw := reference_drift_warning(book_meta, _sw_sheet, **_kw)):
+            resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
 
     # --- ★ W9: 検証済みヘルパ4種の語彙昇格 -----------------------------------
     elif op == "INSERT_ROWS":
@@ -7914,6 +7930,34 @@ def number_format_target(task: str, book_meta: dict, sheet: str | None,
     if len(rows) == 1 and any(w in text for w in ("合計", "小計", "総計")):
         return ("row", rows[0])
     return None
+
+
+def reference_drift_warning(book_meta: dict, sheet: str | None, *,
+                             row_lo: int = 1, row_hi: int = 10 ** 7,
+                             col_lo: int = 1, col_hi: int = 10 ** 4) -> str | None:
+    """動かす区画を**外から**指している式を見つけ、1 行にして返す（無ければ None）。
+
+    ★★ 2026-08-29（Namakoo の指摘 → 実測で裏取り）:
+      並べ替えると、範囲の外から特定の 1 行を指している式は**追従しない**。
+      実測: `=B3`（ラベルは「ぶどうの金額」）が、並べ替え後に みかん の 200 を指した。
+      別シートからの `=売上!B2` も同じ（りんご 100 → ぶどう 300）。
+      ★ **式は 1 文字も壊れていない**ので、値でも文字列でも捕まらない ── 参照を読むしかない。
+      ★ そして ailine は ✓ を出していた（並べ替え自体は宣言どおりだから）。
+        「静かに壊れて合格が出る」── この製品が一番嫌う形に、ぴったり当てはまっていた。
+    ★ 直さない: Excel も LibreOffice も、範囲の外から特定の行を指す式は並べ替えで
+      追従させない（アドレスに留まるのが既定の意味）。
+      「ぶどうの金額 = B3」は行に追従してほしいが「3行目の値 = B3」は留まってほしい
+      ── 機械には区別できない。**名指しして人に返す**（補正は人が決めてから）。
+    ★ 範囲（SUM(B2:B4)）は鳴らさない ── そちらは領域を指すので正しく追従する。
+    """
+    path = book_meta.get("path")
+    if not path or not sheet:
+        return None
+    try:
+        hits = cellmap.refs_pointing_into(Path(path), sheet, row_lo, row_hi, col_lo, col_hi)
+    except Exception:
+        return None                      # 読めない回は黙る（断定しない）
+    return cellmap.reference_drift_note(hits)
 
 
 def placements_in_plan(plan) -> dict:
