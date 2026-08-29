@@ -651,7 +651,9 @@ async function readFirst(body){
     const lines = String(d.text || "").split(String.fromCharCode(10))
       .map(s => s.trim())
       .filter(s => s.startsWith("解釈:") || s.startsWith("？") || s.startsWith("★")
-                   || s.indexOf("読み直しました") >= 0);
+                   || s.startsWith("⚠") || s.indexOf("読み直しました") >= 0
+                   || s.indexOf("非対話のため既定で続行") >= 0
+                   || s.indexOf("続行しますか") >= 0 || s.indexOf("[y/N]") >= 0);
     $("#readline").innerHTML = "";
     for (const ln of (lines.length ? lines : ["（読み取れませんでした）"])){
       const el = document.createElement("div");
@@ -676,6 +678,15 @@ async function readFirst(body){
       btn.style.textAlign = "left";
       btn.onclick = () => readFirst(Object.assign({}, pendingRun, {op: op.trim()}));
       box.appendChild(btn);
+    }
+    // ★★ 2026-08-29（Namakoo「確認が出ても入力画面が出ない」）: 読みの段でも
+    //   道具が y/N を求めることがあるのに、答える口が**この段には無かった**
+    //   （承知のうえで続ける／やめる の行は、実行の段だけに出していた）。
+    //   ★ 聞かれる場所すべてに、答える口を置く ── 片方だけだと行き止まりになる。
+    const askedHere = /\[y\/N\]|--overwrite|続行しますか/.test(String(d.text || ""));
+    if (askedHere){
+      lastRunBody = pendingRun;                 // 「承知のうえで続ける」がこれを使う
+      $("#confirmrow").style.display = "flex";
     }
     // ★ 断られた回は「このまま実行」を押させない（押しても同じ所で止まるだけ）。
     const refused = lines.some(s => s.charAt(0) === "？");

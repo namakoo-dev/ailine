@@ -217,3 +217,28 @@ def test_the_screen_turns_choices_into_buttons_that_re_read():
     calls = [ln for ln in html.split(chr(10))
               if "alert(" in ln and not ln.strip().startswith(("//", "#", "*", "<!--"))]
     assert not calls, f"モーダルを使っている: {calls[:2]}"
+
+
+def test_every_place_that_asks_has_a_way_to_answer():
+    """★★ 2026-08-29（Namakoo「確認が出ても入力画面が出ない」）:
+       読みの段でも道具が y/N を求めることがあるのに、答える口が**その段には無かった**
+       （「承知のうえで続ける／やめる」の行は、実行の段だけに出していた）。
+    ★ 聞かれる場所すべてに、答える口を置く ── 片方だけだと行き止まりになる
+      （在っても鳴らない／片配線、この repo が何度も踏んでいる形）。"""
+    html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
+    # 実行の段
+    assert "needsConfirm = /" in html
+    # 読みの段
+    i = html.index("async function readFirst(")
+    seg = html[i:i + 3000]
+    assert "askedHere" in seg, "読みの段に確認の検出が無い"
+    assert '$("#confirmrow").style.display = "flex"' in seg, seg[-400:]
+    assert "lastRunBody = pendingRun" in seg, "『承知のうえで続ける』が何を再実行するか渡していない"
+
+
+def test_the_reading_panel_shows_what_the_machine_decided_alone():
+    """★ 非対話で機械が既定に倒した回、その 1 行を画面に出す（黙って進めない）。"""
+    html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
+    i = html.index("async function readFirst(")
+    seg = html[i:i + 1500]
+    assert "非対話のため既定で続行" in seg, seg[:600]
