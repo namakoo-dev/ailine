@@ -70,11 +70,35 @@ _DRAFT_LAST_TASK: dict = {}
 DRAFT_SUFFIX = "（下書き）"
 
 
+TRASH_SUFFIX = "（捨てた）"
+# ★ 道具が自分で付ける後ろ札。**人が付けた名前と区別できるのはこれだけ**なので、
+#   ここを 1 箇所に持つ（別々の場所で文字列を書くと必ずずれる）。
+_TOOL_SUFFIXES = (DRAFT_SUFFIX, TRASH_SUFFIX, ".out")
+
+
+def _canonical_stem(stem: str) -> str:
+    """道具が付けた後ろ札を**全部**はがして、人が付けた名前に戻す。
+
+    ★★ 2026-08-29（Namakoo が実測）: 画面のファイル名がこうなっていた ──
+      `1_請求_2026年8月（下書き）.out（捨てた）（下書き）.out（捨てた）（下書き）.xlsx`
+      片づけた残骸が同じフォルダに残り、それを選ぶとまた下書きが作られ、名前が積み上がる。
+    ★ 旧 _draft_path は「末尾が（下書き）なら足さない」だけだったので、
+      末尾が（捨てた）の回に素通りしていた ── **1 種類しか見ていない列挙**。
+      札は 3 種類あるので、**在るだけ全部はがす**。
+    """
+    changed = True
+    while changed:
+        changed = False
+        for suf in _TOOL_SUFFIXES:
+            if stem.endswith(suf) and len(stem) > len(suf):
+                stem = stem[: -len(suf)]
+                changed = True
+    return stem
+
+
 def _draft_path(book: Path) -> Path:
-    """下書きの置き場。★ 名前を積み重ねない（.out.out.out… にしない）。"""
-    if book.stem.endswith(DRAFT_SUFFIX):
-        return book
-    return book.with_name(book.stem + DRAFT_SUFFIX + book.suffix)
+    """下書きの置き場。★ 名前を積み重ねない（札は 1 つだけ・原本の名前から作る）。"""
+    return book.with_name(_canonical_stem(book.stem) + DRAFT_SUFFIX + book.suffix)
 
 def _native_dialog(kind: str, start: str = "", name: str = "") -> str:
     """本物のエクスプローラを開く。**サーバと画面が同じ機械**だから成り立つ。
@@ -340,9 +364,14 @@ class Handler(BaseHTTPRequestHandler):
             folder = Path((q.get("dir") or [str(_default_dir())])[0]).expanduser()
             try:
                 folder = folder.resolve()
+                # ★ 2026-08-29: 片づけた残骸（（捨てた））は一覧に出さない。
+                #   出すと人が選べてしまい、そこから下書きが作られて名前が積み上がる
+                #   （実測: `…（下書き）.out（捨てた）（下書き）.out（捨てた）（下書き）.xlsx`）。
+                #   ★ 消してはいない ── フォルダには残っている（取り返しは残す）。
                 items = sorted((p for p in folder.iterdir()
                                  if p.is_file() and p.suffix.lower() == ".xlsx"
-                                 and not p.name.startswith("~$")),
+                                 and not p.name.startswith("~$")
+                                 and TRASH_SUFFIX not in p.stem),
                                 key=lambda q: q.name)
             except OSError as e:
                 self._json(200, {"dir": str(folder), "files": [], "error": str(e)})
@@ -544,7 +573,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200, {"rc": 0, "json": {"verdict": "not_applied"},
                                       "text": "片づけるものはありません。"})
                     return
-                trash = target.with_name(target.stem + "（捨てた）" + target.suffix)
+                trash = target.with_name(_canonical_stem(target.stem) + TRASH_SUFFIX
+                                          + target.suffix)
                 try:
                     if trash.exists():
                         trash.unlink()

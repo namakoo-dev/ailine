@@ -17,6 +17,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 GUI = REPO / "gui"
 HTML = (GUI / "index.html").read_text(encoding="utf-8")
@@ -494,3 +496,53 @@ def test_the_op_picker_does_not_hardcode_the_list():
 def test_the_server_asks_the_product_for_the_op_list():
     src = (REPO / "gui" / "server.py").read_text(encoding="utf-8")
     assert '_ailine(["ops", "--json"])' in src, "一覧を本体から取っていない"
+
+
+# --- 名前を積み上げない（2026-08-29・Namakoo が実測）------------------------------------
+
+def _srv():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gui_server", REPO / "gui" / "server.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+@pytest.mark.parametrize("name,want", [
+    ("請求.xlsx", "請求（下書き）.xlsx"),
+    ("請求（下書き）.xlsx", "請求（下書き）.xlsx"),
+    ("請求.out.xlsx", "請求（下書き）.xlsx"),
+    ("請求（捨てた）.xlsx", "請求（下書き）.xlsx"),
+    # ★★ 実測で画面に出ていた形（札が 6 枚積み上がっていた）
+    ("請求（下書き）.out（捨てた）（下書き）.out（捨てた）（下書き）.xlsx", "請求（下書き）.xlsx"),
+])
+def test_the_draft_name_never_accretes(name, want):
+    """★★ 2026-08-29: 画面のファイル名がこうなっていた ──
+       `1_請求_2026年8月（下書き）.out（捨てた）（下書き）.out（捨てた）（下書き）.xlsx`
+    ★ 旧実装は「末尾が（下書き）なら足さない」だけで、末尾が（捨てた）の回に素通り
+      していた ── **1 種類しか見ていない列挙**。札は 3 種類あるので在るだけ全部はがす。"""
+    from pathlib import Path as _P
+    assert _srv()._draft_path(_P(name)).name == want
+
+
+def test_the_trash_rename_does_not_accrete():
+    from pathlib import Path as _P
+    m = _srv()
+    assert m._canonical_stem("請求（下書き）.out（捨てた）") == "請求"
+
+
+def test_discarded_files_are_not_offered_in_the_list():
+    """★ 片づけた残骸を一覧に出すと、人が選べてしまい そこから名前が積み上がる。
+       ★ 消してはいない ── フォルダには残る（取り返しは残す）。"""
+    src = (REPO / "gui" / "server.py").read_text(encoding="utf-8")
+    i = src.index("items = sorted((p for p in folder.iterdir()")
+    seg = src[i:i + 400]
+    assert "TRASH_SUFFIX not in p.stem" in seg, seg[:300]
+
+
+def test_the_tool_suffixes_live_in_one_place():
+    """★ 道具が付ける後ろ札は 1 箇所に持つ（別々の場所で書くと必ずずれる）。"""
+    src = (REPO / "gui" / "server.py").read_text(encoding="utf-8")
+    assert "_TOOL_SUFFIXES = (DRAFT_SUFFIX, TRASH_SUFFIX, \".out\")" in src
+    # 直書きの「（捨てた）」が残っていないこと（定数を使う）
+    assert src.count('"（捨てた）"') == 1, "『（捨てた）』を直書きしている箇所がある"
