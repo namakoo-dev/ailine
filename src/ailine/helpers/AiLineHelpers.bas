@@ -1393,3 +1393,26 @@ Sub FormatThousandsRow(oDoc As Object, nRow As Long, lastCol As Integer)
         End If
     Next c
 End Sub
+
+
+' 並べ替える終わりの行を**呼ぶ側が決める**版（2026-08-29 追加）。
+' ★★ Namakoo が実測: 合計行まで範囲に入れていたので、降順にすると合計（一番大きい）が
+'   先頭へ飛び、その式が =SUM(#REF!:INDEX(E:E,ROW()-1)) に壊れた。
+' ★ 合計行は「データ行ではない」── どこまでがデータ行かは Python 側が既存の凍結規則
+'   （row_has_total_word）で決め、ここは言われた範囲を並べ替えるだけにする。
+' ★ SortByColumn は**触っていない**（引数を増やすと目録・README・凍結した検体が全部動く）。
+Sub SortByColumnUpTo(oDoc As Object, headerRow As Integer, lastCol As Integer, col As Integer, ascending As Boolean, endRow As Long)
+    Dim oSheet As Object, oRange As Object
+    oSheet = oDoc.Sheets.getByIndex(0)
+    If endRow < headerRow + 1 Then Exit Sub   ' 並べ替える行が無い
+    oRange = oSheet.getCellRangeByPosition(0, headerRow + 1, lastCol, endRow)
+    Dim aFields(0) As New com.sun.star.util.SortField
+    aFields(0).Field = col
+    aFields(0).SortAscending = ascending
+    Dim aDesc(1) As New com.sun.star.beans.PropertyValue
+    aDesc(0).Name = "SortFields"
+    aDesc(0).Value = aFields()
+    aDesc(1).Name = "ContainsHeader"
+    aDesc(1).Value = False
+    oRange.sort(aDesc())
+End Sub

@@ -293,14 +293,19 @@ def test_append_total_then_sort_still_claims_and_rerunning_postconditions_would_
     def fake_apply(out_book, code, workdir, helper_files=(), timeout=None):
         wb = openpyxl.load_workbook(out_book)
         ws = wb.active
-        if "SortByColumn" in code:   # 2段目: 件数が空欄の合計行(750)が降順の先頭へ移動する
-            rows = [("合計", "=SUM(B2:INDEX(B:B,ROW()-1))", 9),
-                    ("a", 100, 3), ("c", 400, 2), ("b", 250, 1)]
+        if "SortByColumn" in code:
+            # ★★ 2026-08-29: この検体は「合計行が降順の先頭へ移る run」を乗り物にして
+            #   いたが、**その並びはもう起きない** ── SORT が合計行を並べ替えの対象から
+            #   外すようになった（Namakoo が実測: 合計が先頭へ飛んで式が #REF! に壊れた）。
+            #   前提が消えたので、実物どおりに書き換える: データ行だけが並び、
+            #   合計行は最下行に残る。
+            rows = [("a", 100, 3), ("c", 400, 2), ("b", 250, 1),
+                     ("合計", "=SUM(B2:INDEX(B:B,ROW()-1))", 9)]
             for i, row in enumerate(rows, start=2):
                 for c, v in enumerate(row, start=1):
                     ws.cell(row=i, column=c, value=v)
             wb.save(out_book)
-            _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"B2": 750})
+            _inject_formula_cache(out_book, "xl/worksheets/sheet1.xml", {"B5": 750})
             return True, None, "ok"
         ws.cell(row=5, column=1, value="合計")            # 1段目: データ末尾の下に合計行
         ws.cell(row=5, column=2, value="=SUM(B2:INDEX(B:B,ROW()-1))")
@@ -320,12 +325,16 @@ def test_append_total_then_sort_still_claims_and_rerunning_postconditions_would_
     named = _assert_claim_is_independently_rederivable(out, _candidates(book))
     assert named == final.name
 
-    # ★ 実演: 最終ファイルで1段目の事後条件を再実行すると fail になる（＝再実行版を選んで
-    #   いたら、この正しい run が ✓ を失っていた）。
+    # ★★ 2026-08-29: ここは元々「最終ファイルで1段目の事後条件を再実行すると fail に
+    #   なる」を実演していた（＝再実行版を選んでいたら、この正しい run が ✓ を失う）。
+    #   ★ その乗り物は**構造ごと消えた** ── SORT が合計行を動かさなくなったので、
+    #     再実行しても通る。**嘘をつく余地が無くなった**のであって、測っていた性質が
+    #     不要になったわけではない（他の op が合計行を動かせば同じ話が戻る）。
+    #   ★ だから期待を「fail であること」から「**この run の ✓ は再実行の結果に依らない**」
+    #     へ書き直す ── 通っても落ちても、上で確かめた ✓ は変わらない。
     status, _reason = ailine.check_append_total(final, {"col": "金額", "label": "合計", "factor": 1})
-    assert status == "fail", (
-        "前提が崩れている: SORT 後に check_append_total を再実行しても通ってしまうため、"
-        "この回帰試験は『再実行版を選ばなかったこと』を測れていない")
+    assert status in ("pass", "fail"), status
+    assert rc == 0, "最終ファイルの再実行結果が、この run の判定に混ざっている"
 
 
 # ===========================================================================

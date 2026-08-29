@@ -3447,6 +3447,26 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return False, resolved, inferred, err
         if resolved.get("order") not in ("asc", "desc"):
             return False, resolved, inferred, f"順序『{resolved.get('order')}』は asc/desc のどちらでもありません"
+        # ★★ 2026-08-29（Namakoo が実測）: 合計行まで並べ替えの範囲に入れていたので、
+        #   降順にすると合計（一番大きい）が**先頭へ飛び**、その式が
+        #   `=SUM(#REF!:INDEX(E:E,ROW()-1))` に壊れた。番人は止めたが、人は並べ替えられない。
+        #   ★ 合計行は「データ行ではない」── 並べ替えの対象から外し、最下行に残す。
+        #     判定は既存の凍結規則を借りる（total_rows_in → row_has_total_word）。
+        #   ★ 見つけたら**必ず画面に出す**（黙って行を外さない）。
+        _s_sheet = resolved.get("_target_sheet") or first_sheet
+        _s_hr = int((book_meta.get("header_rows") or {}).get(_s_sheet, 1) or 1)
+        _s_tot = total_rows_in(book_meta, _s_sheet, _s_hr)
+        if _s_tot:
+            _s_end = min(_s_tot) - 1
+            if _s_end >= _s_hr + 1:
+                resolved["_sort_end_row"] = _s_end
+                # ★ 開示は**解釈行**に出す（警告ではない）。SET_WHERE が合計行を外す時と
+                #   同じ口を使う ── 警告にすると決裁③で ✓ が △ に落ち、合計行のある表を
+                #   並べ替えるたびに「確かめきれていない」と言うことになる。
+                #   ★ 宣言どおりに動いて検算も通っているのだから、それは ✓ でよい。
+                resolved["_skip_rows"] = list(_s_tot)
+                resolved["_skip_label"] = ("合計行 " + "、".join(
+                    f"{r}行目" for r in _s_tot) + "（データ行でないため並べ替えません）")
 
     elif op == "COMPUTE_COLUMN":
         operands = resolved.get("operands")
@@ -5269,6 +5289,14 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         col_idx = headers[first_sheet].index(resolved_args["col"])
         asc = "True" if resolved_args["order"] == "asc" else "False"
         last_col = len(headers[first_sheet]) - 1
+        # ★ 合計行が在る回だけ、終わりの行を足して渡す。
+        #   ★ 挙動が変わらない回は**生成する文字列も変えない**（凍結した検体・
+        #     ゴールデンを理由なく動かさない ── 動かすと差分の意味が薄まる）。
+        #   ★ 引数を増やさず**別の腕**を呼ぶ（既存の目録・README・凍結した検体を動かさない）。
+        _end = resolved_args.get("_sort_end_row")
+        if _end:
+            return wrap(f"    Call SortByColumnUpTo(oDoc, {hr0}, {last_col}, {col_idx}, "
+                         f"{asc}, {int(_end) - 1})\n")
         return wrap(f"    Call SortByColumn(oDoc, {hr0}, {last_col}, {col_idx}, {asc})\n")
 
     if op == "LOOKUP_FILL":
@@ -6177,6 +6205,12 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
         if idx is None:
             return "fail", f"列『{args['col']}』が見つからない"
         last = _scan_last_row(ws, header_row=header_row)
+        # ★★ 2026-08-29（Namakoo が実測）: 合計行を並べ替えの対象から外したら、今度は
+        #   **検算側が合計行を数えて**「指定順に並んでいない」と言った（合計は一番大きい）。
+        #   ★ 並べ替えなかった行を、並び順の検算に入れない ── 宣言（_sort_end_row）を
+        #     そのまま分母にする。宣言と検算が同じ範囲を見る、という当たり前を通す。
+        if args.get("_sort_end_row"):
+            last = min(last, int(args["_sort_end_row"]))
         # ★ 塊②（2026-08-25）: 分母を**物理の使用範囲**と突き合わせる。
         #   A 列走査は最初の空で止まるので、末尾に A 列が空の行があると
         #   処理からも分母からも消える（実測: 真の分母 5 を「3行中」と言っていた）。
@@ -6251,6 +6285,10 @@ def _sort_rows_lost_their_identity(source_book, after_rows: list, args: dict,
         with BookView(Path(source_book)) as bv:
             ws = bv.sheet(args.get("_target_sheet"))
             last = _scan_last_row(ws, header_row=header_row)
+            # ★ 2026-08-29: 並べ替えなかった行（合計行）は**前後どちらの分母からも**外す。
+            #   片側だけ縮めると「行数が変わった」と言う ── 分母は 1 箇所で決める。
+            if args.get("_sort_end_row"):
+                last = min(last, int(args["_sort_end_row"]))
             before_rows = [tuple(ws.cell(row=r, column=c).value for c in range(1, phys_cols + 1))
                             for r in range(header_row + 1, last + 1)]
     except Exception:
