@@ -162,9 +162,12 @@ def test_the_gate_is_built_from_declarations_not_op_names():
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     assert '_reread_ops = (' not in src, "op 名の列挙が残っている"
     i = src.index("def _already_places_a_row(st):")
-    seg = src[i:i + 700]
-    assert "WRITE_ROW_SHIFT" in seg and "WRITE_NEW_ROW_AT_END" in seg, seg[:300]
-    assert "WRITE_FORMAT_ONLY" in seg and "WRITE_REMOVE" in seg, seg[:600]
+    seg = src[i:i + 1600]
+    # ★ 2026-08-29: 条件を「行をずらす**かつ**末尾に置く」から「**新しい行に中身を置く**」
+    #   の 1 点に絞った ── 合計行のようにずらさずに置く op（APPEND_TOTAL）が素通りして
+    #   いたため（Namakoo の通しで実測: 「件数の合計も合計行に入れて」が行追加に化けた）。
+    assert "WRITE_NEW_ROW_AT_END" in seg, seg[:300]
+    assert "WRITE_FORMAT_ONLY" in seg and "WRITE_REMOVE" in seg, seg[:900]
 
 
 def test_the_verb_list_is_gone():
@@ -342,3 +345,15 @@ def test_the_sieve_is_on_the_path_every_add_row_takes():
     seg = src[max(0, i - 700):i + 500]
     assert "for _st in plan:" in seg, seg[:300]
     assert "add_row_values_from_request(" in seg, seg[-300:]
+
+
+def test_a_total_row_request_is_not_stolen_by_the_row_placement_reread():
+    """★★ 2026-08-29（Namakoo の通しで実測）: 「件数の合計も合計行に入れて」が
+       **行追加**に化けた。一段目は 3/3 とも正しく APPEND_TOTAL を返していたのに、
+       読み直しの門が「行を**ずらす**」op だけを『もう置けている』と数えていて、
+       合計行のように**ずらさずに末尾へ置く** op が素通りしていた。
+    ★ 見るべきは「新しい行に中身を置く」と宣言しているか、の 1 点だけ。"""
+    for op in ("ADD_ROW", "APPEND_TOTAL"):
+        assert ailine._op_writes(op, ailine.WRITE_NEW_ROW_AT_END), op
+    for op in ("INSERT_ROWS", "EXTRACT", "FILL_COLOR"):
+        assert not ailine._op_writes(op, ailine.WRITE_NEW_ROW_AT_END), op

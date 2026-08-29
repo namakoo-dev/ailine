@@ -11914,8 +11914,13 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         return 3
 
     def _already_places_a_row(st):
-        op_ = (st or {}).get("op")
-        return _op_writes(op_, WRITE_ROW_SHIFT) and _op_writes(op_, WRITE_NEW_ROW_AT_END)
+        # ★★ 2026-08-29（Namakoo の通しで実測）: 「件数の合計も合計行に入れて」が
+        #   **行追加**に化けた。一段目は 3/3 とも正しく APPEND_TOTAL を返していたのに、
+        #   読み直しの門が「行を**ずらす**」op だけを『もう置けている』と数えていて、
+        #   合計行のように**ずらさずに末尾へ置く** op が素通りしていた。
+        #   ★ 見るべきは「新しい行に中身を置く」と宣言しているか、の 1 点だけ。
+        #     ADD_ROW も APPEND_TOTAL も真。INSERT_ROWS（空行を挿すだけ）は偽のまま。
+        return _op_writes((st or {}).get("op"), WRITE_NEW_ROW_AT_END)
 
     def _already_writes_one_cell(st):
         return _op_writes((st or {}).get("op"), WRITE_SINGLE_CELL)
