@@ -266,3 +266,50 @@ def test_the_longer_of_two_task_derived_values_wins(tmp_path):
     got = ailine.add_row_values_from_request(
         "味噌汁の上に新品を入れて", _meta(p, "献立"), "献立", {"料理": "新"})
     assert got == {"料理": "新品"}, got
+
+
+# --- 「除く」の 2 つの読み（2026-08-29・84 件の効果検体で最後まで残った穴）--------------
+
+@pytest.mark.parametrize("task,want_row", [
+    ("ナットの行を除いて", 3), ("ナットの行を削除して", 3), ("ナットを消して", 3),
+    ("ナットの行はいらない", 3),
+])
+def test_a_removal_reading_resolves_the_row(tmp_path, task, want_row):
+    """★ 一段目は 3 表で EXTRACT / OUT_OF_VOCAB / 条件付き抽出 と返り分けた。
+       ★ ここは**語の列挙で正しい** ── 判定しているのが「表のどこか」ではなく
+         「人がどの動作を言ったか」だから（動作は言葉でしか分からない）。
+       ★ 漏れた時の壊れ方が違うのが肝: 語が無ければ**何も起きない**（今までどおり）。
+         黙って別のことはしないし、読みは書く前に画面に出る。"""
+    p = _book(tmp_path, "在庫")
+    got = ailine.removal_reading(task, _meta(p, "在庫"), "在庫")
+    assert got and got[0] == want_row, got
+
+
+@pytest.mark.parametrize("task", [
+    "ナット以外を抜き出して", "ナットを除いた行を抜き出して",
+])
+def test_the_except_reading_is_refused_not_flipped(tmp_path, task):
+    """★★ 実測（自分で開けた片配線）: 「味噌汁**以外**を抜き出して」が
+       味噌汁**だけ**を抜き出して ✓ になった ── **逆のことをして合格**。
+    ★ 『以外』（残す側を選ぶ）は cmp『〜でない』が要るが、述語は 3 箇所が独立に持つ
+      凍結表なので、いまは無い。**無いものは名指しで断る** ──
+      ここで削除に化けさせると、残したい行を消す取り返しのつかない事故になる。"""
+    p = _book(tmp_path, "在庫")
+    assert ailine.removal_reading(task, _meta(p, "在庫"), "在庫") is None
+    assert ailine.unsupported_except_reading(task), task
+
+
+def test_a_plain_extract_is_not_refused():
+    """★ 黙りすぎない側の対: 普通の抽出は通す。"""
+    assert ailine.unsupported_except_reading("数量が100以上の行を抜き出して") is None
+    assert ailine.unsupported_except_reading("ナットの行だけ抜き出して") is None
+
+
+def test_the_refusal_sits_outside_the_reread_gate():
+    """★★ 片配線の再演を止める: 断りを読み直しの門の**内側**に置いていたので、
+       先に別の読み直しが印を立てた回に素通りした。断りは門の外に置く。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("if (_exc := unsupported_except_reading(a.task)):")
+    j = src.index("_reread_done = bool(getattr(a,")
+    k = src.index("def _already_places_a_row(st):")
+    assert j < i < k, "『以外』の断りが、読み直しの層の中に入っている"

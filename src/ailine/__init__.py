@@ -7679,6 +7679,52 @@ def value_written_in_task(task: str, llm_value, headers=None) -> str | None:
     return s
 
 
+# ★ 「取り除く」意味の語。**ここは語の列挙で正しい** ── 判定しているのが
+#   「表のどこか」ではなく「人がどの動作を言ったか」だからだ（動作は言葉でしか分からない）。
+#   ★ 漏れた時の壊れ方が違うことが大事: 語が無ければ**何も起きない**（今までどおり）。
+#     黙って別のことをするのではない。しかも読みは書く前に画面に出る。
+_REMOVAL_WORDS = ("削除", "消して", "消す", "除いて", "除く", "取り除", "抜いて", "無くして",
+                   "いらない", "要らない", "不要")
+# ★ 「〜以外」は**別の意味**（残す側を選ぶ）。今はその操作が無いので、混ぜずに断る。
+_EXCEPT_WORDS = ("以外", "を除いた", "を抜いた")
+
+
+def removal_reading(task: str, book_meta: dict, sheet: str | None, header_row: int = 1):
+    """「その行を消す」と読める依頼なら (行番号, 説明) を返す。無ければ None。
+
+    ★★ 2026-08-29（84 件の効果検体で最後まで残った穴・3 表とも同じ形）:
+      「味噌汁の行を**除いて**」が、削除にならなかった（抽出に化ける／断られる）。
+      一段目は 3 表で EXTRACT / OUT_OF_VOCAB / 条件付き抽出 と返し分けた。
+    ★ 「除く」は日本語として 2 通りに読める:
+        ① その行を**消す**            → DELETE_ROWS（この道具にある）
+        ② それ**以外**を残す/抜き出す → EXTRACT の cmp『〜でない』（**まだ無い**）
+      ★ ②の語（以外・を除いた）が在る回は、①に化けさせない ── 断って要望に記録する。
+        ここで①を選ぶと、残したかった行を消すという**取り返しのつかない**間違いになる。
+    ★ 行そのものが決まらない回も決めない（推測で別の行を消さない）。
+    """
+    text = task or ""
+    if any(w in text for w in _EXCEPT_WORDS):
+        return None
+    if not any(w in text for w in _REMOVAL_WORDS):
+        return None
+    if not _re_row_of.search(text) and not _row_named_anywhere_in_task(
+            text, *_table_rows_for_anchor(book_meta, sheet, header_row)):
+        return None
+    at, note = resolve_row_anchor(text, book_meta, sheet, header_row=header_row)
+    if at is None or not note:
+        return None
+    return at, note
+
+
+def unsupported_except_reading(task: str) -> str | None:
+    """「〜以外」の読みは、まだこの道具に無い ── 黙って別のことをせずに名指しで断る。"""
+    text = task or ""
+    if any(w in text for w in _EXCEPT_WORDS):
+        return ("『以外』の抽出（その行だけを残さない・他を残す）は、まだ頼める操作に"
+                 "ありません。行を**消す**なら「〜の行を削除して」と言ってください")
+    return None
+
+
 def placements_in_plan(plan) -> dict:
     """計画の中で**位置を作る**段（挿入・追加）を軸ごとに数える。
 
@@ -11616,6 +11662,14 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     「こう読みました」と、実際に走る操作が食い違わないため）。
     _reread_done = bool(getattr(a, "_forced_op", None))
 
+    # ★★ 2026-08-29（自分で開けた片配線・実測で捕まえた）: 「〜以外」の断りを
+    #   読み直しの門の**内側**に置いていたので、先に別の読み直しが印を立てた回に
+    #   素通りし、「味噌汁**以外**を抜き出して」が味噌汁**だけ**を抜き出して ✓ になった。
+    #   ★ 断りは読み直しではない ── 門の外に、独立した関所として置く。
+    if (_exc := unsupported_except_reading(a.task)):
+        print(f"？ {_exc}")
+        return 3
+
     def _already_places_a_row(st):
         op_ = (st or {}).get("op")
         return _op_writes(op_, WRITE_ROW_SHIFT) and _op_writes(op_, WRITE_NEW_ROW_AT_END)
@@ -11871,6 +11925,19 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     という 2 段の計画を返し、両方走っていた。
     #   ★ 1 つの依頼に**配置は 1 回**。行をずらすと宣言した段が 2 つ以上あるなら、
     #     それは同じ仕事を二重に言っている ── 1 本に畳む（宣言で数える・op 名で数えない）。
+    # ★★ 2026-08-29（84 件の効果検体で最後まで残った穴）: 「〜の行を除いて」が
+    #   削除にならなかった（3 表で EXTRACT / OUT_OF_VOCAB / 条件付き抽出 に返り分かれた）。
+    #   ★ 「除く」は 2 通りに読める。**できる読みだけ**を提案し、できない読み（〜以外を
+    #     残す）は名指しで断る ── 黙って逆のことをすると、残したい行を消す事故になる。
+    if (not _reread_done and plan
+            and not any(_op_writes((st or {}).get("op"), WRITE_REMOVE) for st in plan)):
+        _rm = removal_reading(a.task, book_meta, _sheet_h)
+        if _rm:
+            _rat, _rnote = _rm
+            print(f"（『行削除』として読み直しました ── {_rnote}）")
+            plan = [{"op": "DELETE_ROWS", "args": {"at": _rat, "count": 1}}]
+            _reread_done = True
+
     _row_placing = sum(1 for st in plan if _op_writes((st or {}).get("op"), WRITE_ROW_SHIFT))
     if (not _reread_done and plan and not any(_is_a_different_job(st) for st in plan)
             and (_row_placing > 1
