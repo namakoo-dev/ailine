@@ -68,6 +68,17 @@ class Shift:
             return idx
         raise ValueError(f"未知の写像: {self.kind}")
 
+    def moving_lines(self):
+        """並べ替えで**実際に動く**行(列)番号の集合。並べ替えでなければ None。
+
+        ★ 挿入・削除は「番地そのものがずれる」ので、この概念を使わない（None）。
+        """
+        if self.kind == "swap":
+            return frozenset({self.a, self.b})
+        if self.kind == "permute":
+            return frozenset(o for i, o in enumerate(self.order, start=1) if o != i)
+        return None
+
     def map_cell(self, row: int, col: int):
         """(行, 列) → 適用後の (行, 列)。消えるなら None。"""
         if self.axis == "row":
@@ -163,6 +174,21 @@ def _num_to_col(n: int) -> str:
     return s
 
 
+def _whole_lines_on_axis(formula: str, axis: str) -> set:
+    """式の中の「列まるごと(E:E)」「行まるごと(3:3)」が指す線の番号（軸が合うものだけ）。
+
+    ★ 範囲の相手が式で静的に分からない時、**どちらの軸に伸びているか**を教える手掛かり。
+    """
+    out = set()
+    if axis == "col":
+        for m in _WHOLE_COL.finditer(formula):
+            out |= {_col_to_num(m.group(2)), _col_to_num(m.group(4))}
+    elif axis == "row":
+        for m in _WHOLE_ROW.finditer(formula):
+            out |= {int(m.group(2)), int(m.group(4))}
+    return out
+
+
 def map_formula(formula: str, shift: Shift) -> str | None:
     """数式の中の座標を、**同じ写像で**動かした形にする。消える参照があれば None。
 
@@ -175,19 +201,90 @@ def map_formula(formula: str, shift: Shift) -> str | None:
     """
     if not isinstance(formula, str) or not formula.startswith("="):
         return formula
-    out, lost = [], False
+    lost = False
+    moving = shift.moving_lines()
+    refs = list(_REF.finditer(formula))
+    starts = {m.start() for m in refs}
 
-    def sub(m):
-        nonlocal lost
-        cd, cl, rd, rw = m.group(1), m.group(2), m.group(3), m.group(4)
-        mapped = shift.map_cell(int(rw), _col_to_num(cl))
-        if mapped is None:
-            lost = True
-            return m.group(0)
-        r2, c2 = mapped
-        return f"{cd}{_num_to_col(c2)}{rd}{r2}"
+    def _neighbour(i: int, step: int):
+        """i から step 方向に空白を飛ばした 1 文字（無ければ ""）。"""
+        j = i
+        while 0 <= j < len(formula) and formula[j] == " ":
+            j += step
+        return formula[j] if 0 <= j < len(formula) else ""
 
-    out = _REF.sub(sub, formula)
+    def _line(m) -> int:
+        return int(m.group(4)) if shift.axis == "row" else _col_to_num(m.group(2))
+
+    def _span(k: int):
+        """k 番目の参照が、写像の軸の上で**指している線の範囲** (lo, hi)。
+           None は「そちら側は限りが無い」。★ 範囲の相手が式（INDEX(...) 等）で
+           静的に分からない時は、開いた側を無限として扱う ── 「B2 から下ぜんぶ」。"""
+        m = refs[k]
+        x = _line(m)
+        after = _neighbour(m.end(), 1)
+        before = _neighbour(m.start() - 1, -1)
+        if after == ":":
+            nxt = k + 1 < len(refs) and refs[k + 1].start() in starts
+            if nxt:
+                y = _line(refs[k + 1])
+                return (min(x, y), max(x, y))
+            # ★★ 2026-08-30: 相手が式（INDEX(...) 等）の時、開いた側を無限と読むのは
+            #   **範囲が伸びている軸**だけ。`E2:INDEX(E:E,ROW()-1)` は縦の帯で、
+            #   列は E だけ・行が下へ伸びる。同じ式の中の「列まるごと」がその幅を教える。
+            #   ★ これを見ないと、同じ範囲の両端が別々の判断をした（実測:
+            #     `=SUM(E2:INDEX(E:E,…))` が `=SUM(E2:INDEX(F:F,…))` になった）。
+            same_axis = _whole_lines_on_axis(formula, shift.axis)
+            if same_axis:
+                lo2, hi2 = min(same_axis | {x}), max(same_axis | {x})
+                return (lo2, hi2)
+            return (x, None)                 # 「B2:（式）」= B2 から下(右)ぜんぶ
+        if before == ":":
+            prv = k - 1 >= 0
+            if prv and _neighbour(refs[k - 1].end(), 1) == ":":
+                y = _line(refs[k - 1])
+                return (min(x, y), max(x, y))
+            return (None, x)                 # 「（式）:B8」= B8 まで
+        return (x, x)                        # 単独のセル参照
+
+    def _self_mapping(span) -> bool:
+        """その範囲が、並べ替えで**自分自身に写る**か（＝指す中身の集まりが変わらない）。
+
+        ★★ 2026-08-30（Namakoo「入れ替えが効かない　これ一般化できないのか？」）:
+          それまでは「動いた式は隣を指し続ける／動かなかった式は同じ番地」という
+          規則にしていた。列 E↔F と行の入れ替えは説明できたが、**単価(D)↔金額(F)**
+          で破れた ── 動かない E 列の `=F2*1.1` が F を指したまま残り、税込金額が
+          **単価×1.1**（5280）になった。
+        ★ 正しい問いは「その式が動いたか」ではなく
+          **「その参照が指している集合が、入れ替えで自分自身に写るか」**:
+            単独セル `F2`          → 集合は列F → F は D へ写る       → 動かす
+            範囲 `B2:（下ぜんぶ）` → 行 2..∞ に 2 も 4 も入る        → 動かさない
+            範囲 `F2:INDEX(F:F,…)` → 集合は列F → F は E へ写る       → 動かす
+            `E:E` を行の入れ替えで → 行の軸では全行                  → 動かさない
+        ★ 4 つとも同じ 1 行で説明できる。
+        """
+        lo, hi = span
+        inside = [x for x in moving
+                   if (lo is None or x >= lo) and (hi is None or x <= hi)]
+        return len(inside) == 0 or len(inside) == len(moving)
+
+    pieces, last = [], 0
+    for k, m in enumerate(refs):
+        pieces.append(formula[last:m.start()])
+        keep = moving is not None and _self_mapping(_span(k))
+        if keep:
+            pieces.append(m.group(0))
+        else:
+            mapped = shift.map_cell(int(m.group(4)), _col_to_num(m.group(2)))
+            if mapped is None:
+                lost = True
+                pieces.append(m.group(0))
+            else:
+                r2, c2 = mapped
+                pieces.append(f"{m.group(1)}{_num_to_col(c2)}{m.group(3)}{r2}")
+        last = m.end()
+    pieces.append(formula[last:])
+    out = "".join(pieces)
 
     def sub_whole(m, axis):
         """列まるごと（E:E）／行まるごと（3:3）── **軸の番号だけ**を写像に通す。"""
@@ -197,6 +294,12 @@ def map_formula(formula: str, shift: Shift) -> str | None:
             return m.group(0)          # 別の軸の操作では動かない（そのまま）
         to_n = _col_to_num if axis == "col" else int
         to_s = _num_to_col if axis == "col" else str
+        # ★ 単独セルと同じ問い: この範囲は自分自身に写るか（写るなら触らない）。
+        if moving is not None:
+            lo, hi = sorted((to_n(a1), to_n(a2)))
+            inside = [x for x in moving if lo <= x <= hi]
+            if len(inside) == 0 or len(inside) == len(moving):
+                return m.group(0)
         n1, n2 = shift.moved(to_n(a1)), shift.moved(to_n(a2))
         if n1 is None or n2 is None:
             lost = True
@@ -223,26 +326,15 @@ def formulas_after(cells: dict, shift: Shift) -> tuple:
     ★ 消える参照（写像の外へ出る）が 1 つでもあれば呼び出し側が止める ── 黙って
       壊れた式を書かない。
     """
-    reorder = shift.kind in ("swap", "permute")
     out, lost = {}, []
     for (r, c), f in sorted(cells.items()):
         moved = shift.map_cell(r, c)
         if moved is None:
             lost.append((r, c))
             continue
-        # ★★ 2026-08-29 の実測が、この 1 行の理由:
-        #   列を入れ替えた回 ── 合計セルは**列ごと動いた**。動いた先で自分の列を
-        #     指し続けるのが正しい（=SUM(F2:INDEX(F:F,…)) → =SUM(E2:INDEX(E:E,…))）。
-        #   行を入れ替えた回 ── 合計行は**動かなかった**のに、LibreOffice は範囲の
-        #     始まり B2 を B4 に付け替え、合計が 3500 → 1200 になった。
-        #   ★ 一つの規則で両方説明できる:
-        #     **動いた式は隣を指し続ける／動かなかった式は同じ番地を指し続ける。**
-        #   ★ ただしこれは**並べ替え（入れ替え・並び替え）だけ**の規則。行や列を
-        #     挿す/消す時は番地そのものがずれるので、動かない式も追従しなければ
-        #     ならない（片方の規則を両方に当てない）。
-        if reorder and moved == (r, c):
-            out[moved] = f
-            continue
+        # ★ 参照ごとの判断は map_formula が持つ（_self_mapping）── ここでは
+        #   位置を写して式を通すだけ。**規則は 1 箇所**（2026-08-30 に、ここに
+        #   置いた「動かなかった式は据え置き」が単価↔金額で破れたため移した）。
         mapped = map_formula(f, shift)
         if mapped is None:
             lost.append((r, c))

@@ -80,7 +80,52 @@ def test_a_sheet_qualified_reference_is_left_alone():
     assert cm.map_formula("=売上!E:E", cm.swap_cols(5, 6)) == "=売上!E:E"
 
 
-# --- ③ 動いたか動かなかったかで規則が変わる ------------------------------------------
+# --- ③ 参照が「指す集合」が自分自身に写るかで決める -------------------------------------
+#
+# ★★ 2026-08-30（Namakoo「入れ替えが効かない　これ一般化できないのか？」）:
+#   初版は「動いた式は隣を指し続ける／動かなかった式は同じ番地」という規則にしていた。
+#   列 E↔F と行の入れ替えは説明できたが、**単価(D)↔金額(F)** で破れた ── 動かない
+#   E 列の `=F2*1.1` が F を指したまま残り、税込金額が**単価×1.1**（5280）になった。
+# ★ 正しい問いは「その式が動いたか」ではなく
+#   **「その参照が指している集合が、入れ替えで自分自身に写るか」**。下の 4 つが同じ 1 行で説明できる。
+
+
+@pytest.mark.parametrize("shift, src, want", [
+    # 単独セル参照は、指す列が動くなら付いていく（今回落ちた形）
+    (cm.swap_cols(4, 6), "=F2*1.1", "=D2*1.1"),
+    # 入れ替えに関係しない列を指す式は動かない
+    (cm.swap_cols(4, 6), "=SUM(E2:INDEX(E:E,ROW()-1))", "=SUM(E2:INDEX(E:E,ROW()-1))"),
+    # 自分の列ごと動く合計は付いていく
+    (cm.swap_cols(4, 6), "=SUM(F2:INDEX(F:F,ROW()-1))", "=SUM(D2:INDEX(D:D,ROW()-1))"),
+    # 行の入れ替え: 範囲が入れ替える行を両方含む＝集合は変わらない → 動かさない
+    (cm.swap_rows(2, 4), "=SUM(B2:INDEX(B:B,ROW()-1))", "=SUM(B2:INDEX(B:B,ROW()-1))"),
+    # 行の入れ替え: 単独セルは付いていく
+    (cm.swap_rows(2, 4), "=B2-C2", "=B4-C4"),
+])
+def test_a_reference_moves_only_when_what_it_points_at_moves(shift, src, want):
+    assert cm.map_formula(src, shift) == want
+
+
+def test_both_ends_of_one_range_agree():
+    """★★ 直す途中でやった形: `=SUM(E2:INDEX(E:E,…))` の **両端が別々の判断**をして
+       `=SUM(E2:INDEX(F:F,…))` になった（片配線が、式の中で起きた）。
+    ★ 相手が式で分からない時に「開いた側は無限」と読むのは**範囲が伸びている軸**だけ
+      ── 縦の帯の幅は、同じ式の中の「列まるごと」が教える。"""
+    got = cm.map_formula("=SUM(E2:INDEX(E:E,ROW()-1))", cm.swap_cols(5, 6))
+    assert got == "=SUM(F2:INDEX(F:F,ROW()-1))", got
+
+
+def test_the_rule_lives_in_one_place():
+    """★ 判断は map_formula の中だけ ── formulas_after 側に写し取らない
+       （初版はあちらに置いて、単価↔金額で破れた）。"""
+    src = (REPO / "src" / "ailine_core" / "cellmap.py").read_text(encoding="utf-8")
+    assert src.count("def _self_mapping(") == 1
+    i = src.index("def formulas_after(")
+    seg = src[i:src.index(chr(10) + "def ", i + 10)]
+    assert "moved == (r, c)" not in seg, "並べ替えの規則が formulas_after に戻っている"
+
+
+# --- ④ 動いたか動かなかったかで規則が変わる（旧・③に吸収）-----------------------------
 
 def test_a_formula_that_moves_keeps_pointing_at_its_neighbours():
     """列の入れ替え: 合計セルは列ごと動く ── 動いた先で自分の列を指す。"""
