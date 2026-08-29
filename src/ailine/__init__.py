@@ -7496,6 +7496,14 @@ def add_row_values_from_request(task: str, book_meta: dict, sheet: str | None,
             payload = val
     acol = anchor_column_name(book_meta, sheet, anchors, header_row)
     if payload is not None and acol:
+        # ★★ 2026-08-29（効果検体の第 2 回で出た新しい穴）: 「味噌汁の上に**新品**を入れて」で
+        #   値が『新』になった。第二段が『新』を返し、篩は「依頼文に literal で在る」だけを
+        #   見ていたので通した ── **短い部分文字列は必ず通ってしまう**。
+        #   ★ 機械の引き算（bare_value_from_task）も同じ依頼から値を出せる。
+        #     両方とも依頼文由来なら、**長い方**を採る（部分だけ書くのは必ず間違い）。
+        _bare = bare_value_from_task(task, anchors, acol, headers)
+        if _bare and str(payload) in str(_bare) and len(str(_bare)) > len(str(payload)):
+            payload = _bare
         kept.setdefault(acol, payload)
     return kept
 
@@ -7528,12 +7536,18 @@ def bare_value_from_task(task: str, row_name: str | None, col_name: str | None,
     """
     text = (task or "")
     out = text
-    for w in [row_name, col_name] + [str(h) for h in (headers or [])]:
+    # ★ row_name は 1 つとは限らない（「AとBの間に」は目印が 2 つ）── 並びも受ける。
+    names = list(row_name) if isinstance(row_name, (list, tuple)) else [row_name]
+    for w in names + [col_name] + [str(h) for h in (headers or [])]:
         if w:
             out = out.replace(str(w), " ")
     out = _re_row_word.sub(" ", out)
     out = _re_a1_col_word.sub(" ", out)
-    for w in ("の右隣", "の左隣", "のとなり", "の右", "の左", "の隣", "列"):
+    # ★ 位置の語（列の左右だけでなく、**行の上下と間**も落とす）。
+    #   ★ 2026-08-29: 「味噌汁**の上に**新品を入れて」で『上に新品』が値になっていた
+    #     ── 列の語だけ落として行の語を落としていなかった（また行と列の非対称）。
+    for w in ("の右隣", "の左隣", "のとなり", "のあいだ", "の間",
+               "の右", "の左", "の隣", "の上", "の下", "の前", "の後ろ", "列"):
         out = out.replace(w, " ")
     for w in _TAIL_WORDS:
         out = out.replace(w, " ")
@@ -7546,6 +7560,11 @@ def bare_value_from_task(task: str, row_name: str | None, col_name: str | None,
         return None                       # 2 つ以上に割れた ── 決めない
     if out not in text:
         return None                       # 連続していない ── 継ぎ足した値は使わない
+    # ★★ 2026-08-29: 「スプリング**を作って**」がそのまま値になった。動詞の語尾を
+    #   数え上げても必ず漏れる（今日 3 度目）── **文法の線**で弾く:
+    #   セルに書く値の中に助詞は入らない。残っていたら、それは文がまだ切れていない証拠。
+    if any(ch in out for ch in "をにへはがでとのも"):
+        return None
     bad = {str(h) for h in (headers or [])} | {str(row_name or ""), str(col_name or "")}
     if out in bad:
         return None
@@ -7658,6 +7677,46 @@ def value_written_in_task(task: str, llm_value, headers=None) -> str | None:
     if headers and s in {str(h) for h in headers}:
         return None
     return s
+
+
+def placements_in_plan(plan) -> dict:
+    """計画の中で**位置を作る**段（挿入・追加）を軸ごとに数える。
+
+    ★★ 2026-08-29（Namakoo の設計判断）:
+      「行や列を 2 つ以上増やす操作はもともと無いから縛っていい。
+        複数行を増やす場合は for 文で順次増やせばいい」
+    ★ これは**座標の法則の形とそのまま一致する** ── 1 つの操作 = 1 つの写像 π。
+      写像は合成しない、と決めれば「1 回の依頼で 2 本増える」は構造的に起きない。
+    ★ 実測（84 件の効果検体・3 表で同じ形）: 「味噌汁の上に新品を入れて」で一段目が
+        [INSERT_ROWS at:2（空行）, ADD_ROW at:2（値つき）]
+      を返し、両方走って**行が 2 本**増えた。同じ仕事を二重に言っている。
+    ★ 数えるのは op 名ではなく**宣言**（新しい op が増えても、宣言さえ書けば数に入る）。
+    """
+    rows = cols = 0
+    for st in plan or []:
+        op_ = (st or {}).get("op")
+        if not _op_writes(op_, WRITE_ROW_SHIFT):
+            continue
+        if _op_writes(op_, WRITE_NEW_COLUMN):
+            cols += 1
+        else:
+            rows += 1
+    return {"row": rows, "col": cols}
+
+
+def too_many_placements(plan) -> str | None:
+    """同じ軸に位置を作る段が 2 つ以上あるなら、その理由（無ければ None）。
+
+    ★ 「追加してから並べ替えて」のような**別種の合成**は縛らない ── 縛るのは
+      「同じ軸に 2 回place する」形だけ（それは 1 つの仕事の二重宣言）。
+    """
+    n = placements_in_plan(plan)
+    for axis, label in (("row", "行"), ("col", "列")):
+        if n[axis] > 1:
+            return (f"1 回の依頼で{label}を {n[axis]} 回足そうとしています"
+                     f"（{label}を増やすのは 1 回だけです ── "
+                     f"複数必要なら、1 本ずつ頼んでください）")
+    return None
 
 
 def insert_rows_should_have_been_add_row(task: str, resolved: dict,
@@ -8247,6 +8306,20 @@ def resolve_col_anchor(task: str, headers: list) -> tuple:
     """
     text = (task or "").replace("　", " ")
     names = [str(h) for h in headers]
+    # ★★ 2026-08-29（84 件の効果検体で 3 表とも同じ形で落ちた）:
+    #   「料理と主材料の**間に**区分の列を追加して」が解けず、黙って末尾に付いていた。
+    #   行は `_re_between`（「AとBの間」）を持っているのに、列は「右／左」しか
+    #   見ていなかった ── **行と列の非対称**。Namakoo が名指しした所そのもの。
+    #   ★ 同じ正規表現を列にも通す（軸が違うだけで、位置の言い回しは同じ）。
+    mb = _re_between.search(text)
+    if mb:
+        a, c = mb.group(1).strip(), mb.group(2).strip()
+        ia, a = _header_index(names, a)
+        ic, c = _header_index(names, c)
+        if ia is not None and ic is not None:
+            hi = max(ia, ic)
+            return hi, f"『{a}』と『{c}』の間＝{hi}列目"
+        # ★ 見出しに無いなら、それは列の話ではない（行の「間」かもしれない）── 触らない。
     m = _re_col_pair.search(text)
     if m:
         a, c, side = m.group(1).strip(), m.group(2).strip(), m.group(3)
@@ -11792,8 +11865,16 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   ★ 宣言で門を作る: 「行をずらして**値も書く**」と宣言している op（＝ADD_ROW）で
     #     既に読めているなら触らない。逆に、**明らかに別の仕事**を宣言している op
     #     （見た目だけ／削除／並べ替え）にも触らない。それ以外は読み直しの候補。
-    if (not _reread_done and len(plan) == 1
-            and not _already_places_a_row(plan[0]) and not _is_a_different_job(plan[0])):
+    #   ★★ 2026-08-29（84 件の効果検体・3 表で同じ形）: 「味噌汁の**上に**新品を入れて」で
+    #     **行が 2 本**増えた。一段目が
+    #       [INSERT_ROWS at:2（空行）, ADD_ROW at:2（値つき）]
+    #     という 2 段の計画を返し、両方走っていた。
+    #   ★ 1 つの依頼に**配置は 1 回**。行をずらすと宣言した段が 2 つ以上あるなら、
+    #     それは同じ仕事を二重に言っている ── 1 本に畳む（宣言で数える・op 名で数えない）。
+    _row_placing = sum(1 for st in plan if _op_writes((st or {}).get("op"), WRITE_ROW_SHIFT))
+    if (not _reread_done and plan and not any(_is_a_different_job(st) for st in plan)
+            and (_row_placing > 1
+                  or (len(plan) == 1 and not _already_places_a_row(plan[0])))):
         _sheet_hint = (book_meta.get("sheets") or [None])[0]
         _why = insert_rows_should_have_been_add_row(a.task, {}, book_meta, _sheet_hint)
         if _why:
@@ -11812,6 +11893,13 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                 _aargs["values"] = _clean
                 plan = [{"op": "ADD_ROW", "args": _aargs}]
                 _reread_done = True
+
+    # ★★ 関所（2026-08-29・Namakoo の設計判断）: 同じ軸に位置を作る段が 2 つ以上ある
+    #   計画は実行しない。上の読み直しで 1 本に畳めていればここは通る ── 畳めなかった
+    #   回だけ、**壊す前に**止まる（当て物でなく関所にするのが芯）。
+    if (_dup := too_many_placements(plan)):
+        print(f"？ {_dup}")
+        return 3
 
     if len(plan) == 1:
         step = plan[0]

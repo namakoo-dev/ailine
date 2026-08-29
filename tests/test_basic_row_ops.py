@@ -210,3 +210,59 @@ def test_inserting_in_the_middle_does_not_trip_the_append_precondition():
     # row_shift の宣言が無ければ、今も捕まる（黙りすぎていない）
     got = wp.check_write_preconditions_detail(("new_row_at_end",), before, after, **kw)
     assert got and got[0] == "new_row_at_end", got
+
+
+# --- 1 回の依頼に、位置を作るのは 1 回だけ（2026-08-29・Namakoo の設計判断）------------
+
+def test_two_placements_on_the_same_axis_are_refused():
+    """★★ 実測: 「味噌汁の上に新品を入れて」で一段目が
+         [INSERT_ROWS at:2（空行）, ADD_ROW at:2（値つき）]
+       を返し、両方走って**行が 2 本**増えた。同じ仕事の二重宣言。
+    ★ Namakoo の設計判断:「行や列を 2 つ以上増やす操作はもともと無いから縛っていい。
+       複数必要なら順次増やせばいい」── これは**座標の法則の形と一致する**
+       （1 つの操作 = 1 つの写像 π。写像は合成しない）。
+    ★ 数えるのは op 名でなく**宣言**（新しい op が増えても勝手に数に入る）。"""
+    assert ailine.placements_in_plan([{"op": "INSERT_ROWS"}, {"op": "ADD_ROW"}]) == \
+        {"row": 2, "col": 0}
+    assert ailine.too_many_placements([{"op": "INSERT_ROWS"}, {"op": "ADD_ROW"}])
+    assert ailine.too_many_placements([{"op": "ADD_COLUMN"}, {"op": "ADD_COLUMN"}])
+
+
+def test_a_genuine_compound_is_not_refused():
+    """★ 黙りすぎない側の対: 「足してから並べ替えて」のような**別種の合成**は縛らない。
+       縛るのは『同じ軸に 2 回 place する』形だけ。"""
+    assert ailine.too_many_placements([{"op": "ADD_ROW"}, {"op": "SORT"}]) is None
+    assert ailine.too_many_placements([{"op": "ADD_ROW"}]) is None
+    assert ailine.too_many_placements([{"op": "ADD_ROW"}, {"op": "ADD_COLUMN"}]) is None
+
+
+def test_the_gate_runs_before_anything_is_applied():
+    """★ 当て物でなく**関所**であること（畳めなかった回に、壊す前に止まる）。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("if (_dup := too_many_placements(plan)):")
+    j = src.index("if len(plan) == 1:", i)
+    assert j > i and "return 3" in src[i:j], src[i:i + 300]
+
+
+# --- 値に助詞は入らない（文法の線で弾く）-----------------------------------------------
+
+@pytest.mark.parametrize("task,anchors,want", [
+    ("味噌汁の上に新品を入れて", ["味噌汁"], "新品"),
+    ("丸山重工の右にPCパーツ", ["丸山重工"], "PCパーツ"),
+    # ★ 語尾が落ちきらない回は**決めない**（『スプリングを作って』を値にしない）
+    ("ボルトとナットの間にスプリングを作って", ["ボルト", "ナット"], None),
+])
+def test_a_value_never_contains_a_particle(task, anchors, want):
+    """★★ 2026-08-29（今日 3 度目の『列挙は漏れる』）: 動詞の語尾を数え上げても漏れる。
+       ★ 文法の線で弾く ── セルに書く値の中に助詞は入らない。
+         残っていたら文がまだ切れていない証拠なので、**決めない**。"""
+    assert ailine.bare_value_from_task(task, anchors, "品名", ["品名", "棚", "数量"]) == want
+
+
+def test_the_longer_of_two_task_derived_values_wins(tmp_path):
+    """★ 実測: 第二段が『新』を返し、篩が『依頼文に在る』だけを見て通した
+       ── 短い部分文字列は必ず通る。両方とも依頼文由来なら**長い方**を採る。"""
+    p = _book(tmp_path, "献立")
+    got = ailine.add_row_values_from_request(
+        "味噌汁の上に新品を入れて", _meta(p, "献立"), "献立", {"料理": "新"})
+    assert got == {"料理": "新品"}, got
