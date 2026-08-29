@@ -7018,12 +7018,24 @@ def compare_moved_rows(after_rows: list, before_rows: list, label: str) -> tuple
     return "ok", disclosures
 
 
-def _moved_rows_note(disclosures: list) -> str:
-    """開示の 1 行にまとめる（★ 決裁③: この文が付いた回は ✓ を出さない）。"""
+_MOVED_ROWS_WHY = ("動いた行の式の結果が変わっています ── 追加/削除した行を参照する"
+                    "合計式なら正当ですが、機械には区別がつきません")
+
+
+def _moved_rows_note(disclosures: list, why: str = _MOVED_ROWS_WHY) -> str:
+    """開示の 1 行にまとめる（★ 決裁③: この文が付いた回は ✓ を出さない）。
+
+    ★★ 2026-08-29（Namakoo「この操作が拒否されるのは正答か？」）: 断りは正しかった
+      （実測: 列を入れ替えたら合計式が `=SUM(E2:INDEX(F:F,…))` と**二列にまたがり**、
+       両方の合計が 1,000,440 ＝ 金額＋税込み金額 になっていた）。
+      ★ ところが理由の文は**行の話**をしていた ── 列の入れ替えなのに
+        「追加/削除した行を参照する合計式なら正当ですが」。
+      ★ 正しい判定を、間違った言葉で説明していた。呼ぶ側が理由を渡せるようにする
+        （文面を写し取らない ── 並べ方はここ 1 箇所のまま）。
+    """
     head = "／".join(disclosures[:5])
     more = f"（ほか {len(disclosures) - 5} 件）" if len(disclosures) > 5 else ""
-    return ("動いた行の式の結果が変わっています ── 追加/削除した行を参照する合計式なら"
-            f"正当ですが、機械には区別がつきません: {head}{more}")
+    return f"{why}: {head}{more}"
 
 
 def check_add_row(path: Path, args: dict, header_row: int = 1,
@@ -7389,9 +7401,15 @@ def check_swap(path: Path, args: dict, header_row: int = 1,
         return "fail", f"{where} が入れ替わっていません ── {info}"
     if info:
         # ★ 入れ替えで計算結果が変わったら、それは実測した「静かに壊れる」形そのもの。
+        # ★★ 2026-08-29（Namakoo の実測・デモ材料そのもの）: 「税込み金額と金額を
+        #   入れ替えて」で、データ側は正しく追従した（税込み列は `=F2*1.1` になった）のに、
+        #   合計式だけ範囲の**片側しか追従せず** `=SUM(E2:INDEX(F:F,ROW()-1))` になり、
+        #   E2 から F8 までの**二列**を足していた（両方の合計が 1,000,440）。
+        #   ★ 画面には大きな数字が出るだけなので、人はまず気づかない。
         return "fail", (f"{where} を入れ替えたあと、式の計算結果が変わっています ── "
-                         f"式が別の行/列を指すようになった疑いがあります: "
-                         f"{_moved_rows_note(info)}")
+                         + _moved_rows_note(info, why=(
+                             "式が入れ替え先の列に付いていきませんでした"
+                             "（範囲の片側だけが動くと、二列にまたがる合計になります）")))
     return "pass", f"{where} を入れ替え（中身は自分の値のまま移動・他は 1 セルも変わらず）"
 
 
