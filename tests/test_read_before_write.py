@@ -157,7 +157,7 @@ def test_the_screen_does_not_paraphrase_the_reading():
 def test_a_refusal_disables_the_run_button():
     html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
     i = html.index("async function readFirst(")
-    seg = html[i:i + 1800]
+    seg = html[i:i + 4000]
     assert '$("#readgo").disabled = refused' in seg, seg[-400:]
 
 
@@ -176,3 +176,44 @@ def test_the_op_picker_is_shared_with_the_alias_form():
     html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
     assert 'fillOpPicker($("#readop")' in html
     assert '"/api/oplist"' in html
+
+
+# --- 2 通りに読める回は「選べる形」で返す（2026-08-29）---------------------------------
+
+def test_choices_are_machine_readable_and_describe_the_effect():
+    """★ 断りを行き止まりにしない ──「どちらですか」を返す。
+       ★ 説明は op 名でなく**効果**で書く（人は op 名を知らない）。"""
+    out = ailine.render_choices([("SET_CELL_VALUE", "その 1 セルだけを書き換える"),
+                                  ("SET_COLUMN_VALUE", "列のデータ行を全部書き換える")])
+    lines = out.split(chr(10))
+    assert len(lines) == 2
+    for ln in lines:
+        assert ln.startswith(ailine.CHOICE_PREFIX)
+        op, why = ln[len(ailine.CHOICE_PREFIX):].split(chr(9))
+        assert op in ailine.OP_SCHEMA, op          # ★ 実在する操作だけを候補にする
+        assert why and op not in why               # ★ op 名を人に見せない
+
+
+def test_the_one_cell_vs_whole_column_refusal_offers_both():
+    """★★ ここは**本物の 2 択**が残っている唯一の場所（1 セルか、列ぜんぶか）。
+       行き止まりの断りにせず、両方を候補として出していること。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("列全体は勝手に書き換えません")
+    seg = src[i:i + 900]
+    assert "render_choices(" in seg, seg[:300]
+    assert "SET_CELL_VALUE" in seg and "SET_COLUMN_VALUE" in seg, seg[:400]
+
+
+def test_the_screen_turns_choices_into_buttons_that_re_read():
+    """★ 押したら、その操作で**読み直して**もう一度見せる（黙って実行しない）。
+       ★ ポップアップは使わない ── モーダルは画面を止める（実測で踏んだ）。"""
+    html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
+    assert 'id="readchoices"' in html
+    assert '.filter(s => s.indexOf("候補: ") === 0)' in html
+    assert "btn.textContent = why" in html, "op 名をボタンに出している"
+    i = html.index("btn.textContent = why")
+    assert "readFirst(Object.assign" in html[i:i + 400], "押したときに読み直していない"
+    # ★ コメントの中の「alert() は使わない」に当たらないよう、**呼び出しだけ**を見る
+    calls = [ln for ln in html.split(chr(10))
+              if "alert(" in ln and not ln.strip().startswith(("//", "#", "*", "<!--"))]
+    assert not calls, f"モーダルを使っている: {calls[:2]}"

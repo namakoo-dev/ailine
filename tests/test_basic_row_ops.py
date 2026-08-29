@@ -313,3 +313,32 @@ def test_the_refusal_sits_outside_the_reread_gate():
     j = src.index("_reread_done = bool(getattr(a,")
     k = src.index("def _already_places_a_row(st):")
     assert j < i < k, "『以外』の断りが、読み直しの層の中に入っている"
+
+
+def test_the_anchor_is_never_written_even_when_the_llm_offers_nothing_else(tmp_path):
+    """★★ 2026-08-29（84 件の効果検体で最後に残った 1 件・また片配線）:
+       「鈴木**の上に**新品を入れて」で **氏名=鈴木**（＝位置の目印そのもの）が
+       新しい行に書かれた。
+    ★ 2 段構えで壊れていた:
+       ① 値の篩を「読み直した経路」にだけ入れていた（一段目が最初から ADD_ROW を
+          返した回は素通り）── 処方は「両方に入れる」でなく**必ず同じ関数を通す**
+       ② 第二段が目印だけを返した回、篩で全部落ちて空になり、呼び出し側が
+          「置き換え無し」と見て**悪い値のまま**通した ── 篩が空の回にも機械の
+          引き算を使う（LLM が何も出さない回と同じ扱い）
+    """
+    p = _book(tmp_path, "名簿")
+    got = ailine.add_row_values_from_request(
+        "鈴木の上に新品を入れて", _meta(p, "名簿"), "名簿", {"氏名": "鈴木"})
+    assert got == {"氏名": "新品"}, got
+    # 値をまったく返さなかった回も同じ結果になること
+    assert ailine.add_row_values_from_request(
+        "鈴木の上に新品を入れて", _meta(p, "名簿"), "名簿", {}) == {"氏名": "新品"}
+
+
+def test_the_sieve_is_on_the_path_every_add_row_takes():
+    """★ 経路が増えても篩が外れない形になっていること（片配線の再演を止める）。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index('if (_st or {}).get("op") != "ADD_ROW":')
+    seg = src[max(0, i - 700):i + 500]
+    assert "for _st in plan:" in seg, seg[:300]
+    assert "add_row_values_from_request(" in seg, seg[-300:]

@@ -7495,15 +7495,22 @@ def add_row_values_from_request(task: str, book_meta: dict, sheet: str | None,
         elif payload is None:
             payload = val
     acol = anchor_column_name(book_meta, sheet, anchors, header_row)
+    # ★★ 2026-08-29（84 件の効果検体で最後に残った 1 件）: 「鈴木の上に新品を入れて」で
+    #   第二段が値として**目印そのもの**（氏名=鈴木）だけを返した回、篩で全部落ちて
+    #   空になり、呼び出し側が「置き換え無し」と見て**悪い値のまま**通していた。
+    #   ★ 機械の引き算は、篩が空になった回にも使う（LLM が何も出さない回と同じ扱い）。
+    _bare_all = bare_value_from_task(task, anchors, acol, headers)
+    if payload is None:
+        payload = _bare_all
     if payload is not None and acol:
         # ★★ 2026-08-29（効果検体の第 2 回で出た新しい穴）: 「味噌汁の上に**新品**を入れて」で
         #   値が『新』になった。第二段が『新』を返し、篩は「依頼文に literal で在る」だけを
         #   見ていたので通した ── **短い部分文字列は必ず通ってしまう**。
         #   ★ 機械の引き算（bare_value_from_task）も同じ依頼から値を出せる。
         #     両方とも依頼文由来なら、**長い方**を採る（部分だけ書くのは必ず間違い）。
-        _bare = bare_value_from_task(task, anchors, acol, headers)
-        if _bare and str(payload) in str(_bare) and len(str(_bare)) > len(str(payload)):
-            payload = _bare
+        if (_bare_all and str(payload) in str(_bare_all)
+                and len(str(_bare_all)) > len(str(payload))):
+            payload = _bare_all
         kept.setdefault(acol, payload)
     return kept
 
@@ -7723,6 +7730,21 @@ def unsupported_except_reading(task: str) -> str | None:
         return ("『以外』の抽出（その行だけを残さない・他を残す）は、まだ頼める操作に"
                  "ありません。行を**消す**なら「〜の行を削除して」と言ってください")
     return None
+
+
+CHOICE_PREFIX = "候補: "
+
+
+def render_choices(choices) -> str:
+    """2 通り以上に読める時の**選べる形**（機械可読 1 行 × N）。
+
+    ★★ 2026-08-29: 断りを行き止まりにしない ── 「どちらですか」を返す。
+    ★ 形は `候補: <op>	<人が読む説明>`。画面はこれをボタンにし、押した候補を
+      `--op` で**固定して**実行する（当て直しが起きない）。
+    ★ ポップアップは使わない（モーダルは画面を止める・実測で踏んだ）。
+    ★ 説明は op 名でなく**効果**で書く ── 人は op 名を知らない。
+    """
+    return chr(10).join(f"{CHOICE_PREFIX}{op}{chr(9)}{why}" for op, why in choices)
 
 
 def placements_in_plan(plan) -> dict:
@@ -11748,8 +11770,21 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         #   1 セルへ落とせた回だけ黙る、という 1 つの局所変数で決める。
         if _points and not _one_cell:
             # ★ 落とせなかった。列全体を書けば「宣言どおり」で ✓ が出てしまう ── 断る。
+            # ★★ 2026-08-29: ここは**本物の 2 択**が残っている唯一の場所
+            #   （1 セルか、列ぜんぶか）。行き止まりにせず、**選べる形**で返す。
+            #   ★ 候補は機械可読の 1 行で出す（画面がボタンにする・CLI は --op で選べる）。
+            #     ポップアップは使わない ── モーダルは画面を止める（実測で踏んだ）。
             print(f"？ {_points}が、どのセルかを決められませんでした。"
-                   "列全体は書き換えません（行番号で指してください・例:「7行目の担当を『佐藤』に」）")
+                   "列全体は勝手に書き換えません ── どちらか選んでください")
+            _col_hint = str((plan[0] or {}).get("args", {}).get("col") or "")
+            print(render_choices([
+                ("SET_CELL_VALUE",
+                 f"その 1 セルだけを書き換える（行番号で言い直してください"
+                 f"・例:「7行目の{_col_hint or '担当'}を『佐藤』に」）"),
+                ("SET_COLUMN_VALUE",
+                 f"『{_col_hint}』列のデータ行を**全部**書き換える"
+                 if _col_hint else "その列のデータ行を**全部**書き換える"),
+            ]))
             return 3
 
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
@@ -11937,6 +11972,21 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             print(f"（『行削除』として読み直しました ── {_rnote}）")
             plan = [{"op": "DELETE_ROWS", "args": {"at": _rat, "count": 1}}]
             _reread_done = True
+
+    # ★★ 2026-08-29（84 件の効果検体で最後に残った 1 件・また片配線）:
+    #   「鈴木**の上に**新品を入れて」で **氏名=鈴木**（＝位置の目印そのもの）が
+    #   新しい行に書かれた。値の篩は「読み直した経路」にだけ入れていて、
+    #   一段目が最初から ADD_ROW を返した回は素通りしていた。
+    #   ★ 処方は「両方に入れる」ではなく「**必ず同じ関数を通す**」── 経路が増えても
+    #     篩が外れない形にする（この repo が 3 度直してきた形）。
+    for _st in plan:
+        if (_st or {}).get("op") != "ADD_ROW":
+            continue
+        _raw_vals = (_st.get("args") or {}).get("values")
+        _sieved = add_row_values_from_request(
+            a.task, book_meta, (book_meta.get("sheets") or [None])[0], _raw_vals)
+        if _sieved and _sieved != _raw_vals:
+            _st.setdefault("args", {})["values"] = _sieved
 
     _row_placing = sum(1 for st in plan if _op_writes((st or {}).get("op"), WRITE_ROW_SHIFT))
     if (not _reread_done and plan and not any(_is_a_different_job(st) for st in plan)

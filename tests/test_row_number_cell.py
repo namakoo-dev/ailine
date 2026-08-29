@@ -190,5 +190,8 @@ def test_pointing_at_a_row_never_falls_back_to_the_whole_column():
        ここを『列全体を書く』に戻すと、依頼を見ない ✓ が復活する。"""
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     i = src.index("if _points and not _one_cell:")
-    seg = src[i:i + 500]
-    assert "列全体は書き換えません" in seg and "return 3" in seg, seg[:300]
+    seg = src[i:i + 1200]
+    # ★ 2026-08-29: 行き止まりの断りから「選べる形」に変えた（文言も変わった）。
+    #   守っている不変は同じ ── **列全体には落とさない**。
+    assert "列全体は勝手に書き換えません" in seg and "return 3" in seg, seg[:300]
+    assert "render_choices(" in seg, "断りが行き止まりに戻っている（候補を出していない）"

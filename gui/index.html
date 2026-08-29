@@ -112,6 +112,7 @@
           <button id="readgo" class="primary">このまま実行</button>
           <button id="readcancel">やめる</button>
         </div>
+        <div class="row" id="readchoices" style="margin-top:6px;display:none;flex-wrap:wrap"></div>
         <div class="row" style="margin-top:6px">
           <select id="readop" style="flex:1"><option value="">操作が違うなら選び直す…</option></select>
         </div>
@@ -629,7 +630,11 @@ $("#run").onclick     = () => call("/api/run",  {task: "", copy:false}, "原本�
 //     言い回しの揺れを 1 つずつ矯正しても、別の言い方でまた外れる。
 //     **人が照らす機会を、書く前に渡す**のが構造的な答え。
 let pendingRun = null;
-function hideRead(){ $("#readpanel").style.display = "none"; pendingRun = null; }
+function hideRead(){
+  $("#readpanel").style.display = "none";
+  $("#readchoices").style.display = "none";
+  pendingRun = null;
+}
 async function readFirst(body){
   if (!picked){ setBadge("not_applied", "左の一覧からファイルを選んでください。"); return; }
   if (!String(body.task || "").trim()){
@@ -653,6 +658,24 @@ async function readFirst(body){
       el.textContent = ln;
       if (ln.charAt(0) === "？") el.style.color = "#e6b800";
       $("#readline").appendChild(el);
+    }
+    // ★★ 2026-08-29: 2 通りに読める回は、断って終わりにせず**選べる形**で返す。
+    //   本体が `候補: <op>	<効果の説明>` を出すので、そのままボタンにする。
+    //   ★ 押したら、その操作で**読み直して**もう一度見せる（黙って実行しない）。
+    //   ★ ポップアップは使わない ── モーダルは画面を止める（実測で踏んだ）。
+    const choices = String(d.text || "").split(String.fromCharCode(10))
+      .map(s => s.trim()).filter(s => s.indexOf("候補: ") === 0)
+      .map(s => s.slice(4).split(String.fromCharCode(9)));
+    const box = $("#readchoices");
+    box.innerHTML = "";
+    box.style.display = choices.length ? "flex" : "none";
+    for (const [op, why] of choices){
+      if (!op || !why) continue;
+      const btn = document.createElement("button");
+      btn.textContent = why;                       // ★ op 名でなく**効果**を見せる
+      btn.style.textAlign = "left";
+      btn.onclick = () => readFirst(Object.assign({}, pendingRun, {op: op.trim()}));
+      box.appendChild(btn);
     }
     // ★ 断られた回は「このまま実行」を押させない（押しても同じ所で止まるだけ）。
     const refused = lines.some(s => s.charAt(0) === "？");
