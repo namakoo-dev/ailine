@@ -130,6 +130,23 @@ def permute_rows(order) -> Shift:
 #   ── 別のシートに行を挿したわけではないので、これは静かな破壊になる。
 _REF = re.compile(r"(?<![.!])(?<![A-Za-z0-9_$])(\$?)([A-Z]{1,3})(\$?)([0-9]{1,7})")
 
+# ★★ 2026-08-29（Namakoo「合計行ごと参照を変えずに追記したいってことじゃないの？」から
+#   補正を作ろうとして分かったこと）: `_REF` は**行番号を要求する**ので、
+#   `INDEX(E:E,…)` のような**列まるごとの参照が見えていなかった**。
+#   ★ そのせいで `map_formula` は LibreOffice と**同じ壊し方**を再現していた ──
+#     直す側と壊す側が同じ盲点を持っていた（検証は別実装で、の反対をやっていた）。
+#   ★ 実測（列 E と F の入れ替え）:
+#       正: =SUM(E2:INDEX(E:E,ROW()-1)) → =SUM(F2:INDEX(F:F,ROW()-1))
+#       誤: =SUM(E2:INDEX(E:E,ROW()-1)) → =SUM(F2:INDEX(E:E,ROW()-1))  ← 片側だけ動く
+#     後者は E2 から F8 までの**二列**を足す（実測で合計が 1,000,440 になった）。
+#   ★ 行まるごと（`3:3`）も同じ形なので一緒に通す ── 片方だけ賢くしない。
+_WHOLE_COL = re.compile(
+    r"(?<![.!])(?<![A-Za-z0-9_$])(\$?)([A-Z]{1,3})(?![A-Za-z0-9_$])"
+    r"\s*:\s*(\$?)([A-Z]{1,3})(?![A-Za-z0-9_$])")
+_WHOLE_ROW = re.compile(
+    r"(?<![.!])(?<![A-Za-z0-9_$.])(\$?)([0-9]{1,7})(?![A-Za-z0-9_$.])"
+    r"\s*:\s*(\$?)([0-9]{1,7})(?![A-Za-z0-9_$.])")
+
 
 def _col_to_num(s: str) -> int:
     n = 0
@@ -171,7 +188,67 @@ def map_formula(formula: str, shift: Shift) -> str | None:
         return f"{cd}{_num_to_col(c2)}{rd}{r2}"
 
     out = _REF.sub(sub, formula)
+
+    def sub_whole(m, axis):
+        """列まるごと（E:E）／行まるごと（3:3）── **軸の番号だけ**を写像に通す。"""
+        nonlocal lost
+        d1, a1, d2, a2 = m.group(1), m.group(2), m.group(3), m.group(4)
+        if shift.axis != axis:
+            return m.group(0)          # 別の軸の操作では動かない（そのまま）
+        to_n = _col_to_num if axis == "col" else int
+        to_s = _num_to_col if axis == "col" else str
+        n1, n2 = shift.moved(to_n(a1)), shift.moved(to_n(a2))
+        if n1 is None or n2 is None:
+            lost = True
+            return m.group(0)
+        return f"{d1}{to_s(n1)}:{d2}{to_s(n2)}"
+
+    out = _WHOLE_COL.sub(lambda m: sub_whole(m, "col"), out)
+    out = _WHOLE_ROW.sub(lambda m: sub_whole(m, "row"), out)
     return None if lost else out
+
+
+def formulas_after(cells: dict, shift: Shift) -> tuple:
+    """操作前の式から、**操作後に在るべき式**を全部並べる（純関数）。
+
+    cells: {(行, 列): 式の文字列} ── 操作前の、式が入っているセルだけ。
+    戻り値: ({(操作後の行, 操作後の列): 式}, 消えてしまう参照のセル一覧)
+
+    ★★ 2026-08-29（Namakoo「合計行ごと参照を変えずに追記したいってことじゃないの？」）:
+      それまでは「壊れたことを見つけて止める」で終わっていた。だが利用者が欲しいのは
+      **意味を保ったまま位置だけ入れ替わった表**で、それは機械が全部言える ──
+      操作前の式と写像 π が分かっているのだから、操作後の式は π(操作前) でしかない。
+    ★ だから「後から直す」のではなく、**最初から正しく書く**（LibreOffice の
+      付け替えを当てにしない）。合っているセルに同じ内容を書き戻すのは無害。
+    ★ 消える参照（写像の外へ出る）が 1 つでもあれば呼び出し側が止める ── 黙って
+      壊れた式を書かない。
+    """
+    reorder = shift.kind in ("swap", "permute")
+    out, lost = {}, []
+    for (r, c), f in sorted(cells.items()):
+        moved = shift.map_cell(r, c)
+        if moved is None:
+            lost.append((r, c))
+            continue
+        # ★★ 2026-08-29 の実測が、この 1 行の理由:
+        #   列を入れ替えた回 ── 合計セルは**列ごと動いた**。動いた先で自分の列を
+        #     指し続けるのが正しい（=SUM(F2:INDEX(F:F,…)) → =SUM(E2:INDEX(E:E,…))）。
+        #   行を入れ替えた回 ── 合計行は**動かなかった**のに、LibreOffice は範囲の
+        #     始まり B2 を B4 に付け替え、合計が 3500 → 1200 になった。
+        #   ★ 一つの規則で両方説明できる:
+        #     **動いた式は隣を指し続ける／動かなかった式は同じ番地を指し続ける。**
+        #   ★ ただしこれは**並べ替え（入れ替え・並び替え）だけ**の規則。行や列を
+        #     挿す/消す時は番地そのものがずれるので、動かない式も追従しなければ
+        #     ならない（片方の規則を両方に当てない）。
+        if reorder and moved == (r, c):
+            out[moved] = f
+            continue
+        mapped = map_formula(f, shift)
+        if mapped is None:
+            lost.append((r, c))
+            continue
+        out[moved] = mapped
+    return out, lost
 
 
 # --- 座標表 ---------------------------------------------------------------------

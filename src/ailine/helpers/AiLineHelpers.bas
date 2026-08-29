@@ -1416,3 +1416,14 @@ Sub SortByColumnUpTo(oDoc As Object, headerRow As Integer, lastCol As Integer, c
     aDesc(1).Value = False
     oRange.sort(aDesc())
 End Sub
+
+' 1 セルに**式**を書く（2026-08-29 追加）。
+' ★ SetCellAt は setString なので式にならない（文字列として入る）。
+' ★ 入れ替え・並べ替えのあと、「操作前の式を写像に通した形」を書き戻すために要る
+'   ── LibreOffice の自動付け替えは範囲の片側だけ動かすことがある（実測）。
+' 行・列とも 0 起点（他のヘルパと同じ）。
+Sub SetFormulaAt(oDoc As Object, nRow As Long, nCol As Integer, sFormula As String)
+    Dim oSheet As Object
+    oSheet = oDoc.Sheets.getByIndex(0)
+    oSheet.getCellByPosition(nCol, nRow).setFormula(sFormula)
+End Sub

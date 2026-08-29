@@ -4345,6 +4345,22 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             if min(_ra, _rb) <= _hr_s:
                 return False, resolved, inferred, (
                     f"見出し行（{_hr_s}行目）を巻き込む入れ替えは受け付けません")
+        # ★★ 2026-08-29: 入れ替えは「表に写像 π を掛ける」ことで、式もその対象。
+        #   LibreOffice の自動付け替えに任せず、**π を通した式を自分で書き戻す**。
+        _sh = (cellmap.swap_cols(resolved["_a_pos"], resolved["_b_pos"]) if as_col
+                else cellmap.swap_rows(resolved["_a_pos"], resolved["_b_pos"]))
+        _rw, _rw_why = formula_rewrites_for_shift(
+            book_meta, resolved.get("_target_sheet") or first_sheet, _sh)
+        if _rw_why and "実行しません" in _rw_why:
+            return False, resolved, inferred, _rw_why
+        if _rw:
+            resolved["_formula_rewrites"] = sorted(
+                (r, c, f) for (r, c), f in _rw.items())
+            resolved["_formula_rewrites_label"] = (
+                f"{len(_rw)} 個の式を、入れ替え後の位置に合わせて書き直します"
+                "（操作前と同じ計算結果に戻ることを、適用後に読み戻して確かめます）")
+        elif _rw_why:
+            resolved["_warnings"] = resolved.get("_warnings", []) + [_rw_why]
         # ★ 入れ替えでも「指す先の中身が変わる式」を名指しする（並べ替えと同じ目）。
         #   ★ 軸で区画が変わるだけ ── 行なら 2 行、列なら 2 列（行と列を同じ形で書く）。
         _sw_sheet = resolved.get("_target_sheet") or first_sheet
@@ -5656,10 +5672,17 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         _a = str(resolved_args["a"]).replace(chr(34), chr(34) * 2)
         _b = str(resolved_args["b"]).replace(chr(34), chr(34) * 2)
         if resolved_args.get("_axis") == "column":
-            return wrap('    Call SwapColumnsByName(oDoc, "%s", "%s", %d)%s'
-                         % (_a, _b, hr0, chr(10)))
-        return wrap('    Call SwapRowsByName(oDoc, "%s", "%s", 0, %d)%s'
-                     % (_a, _b, hr0, chr(10)))
+            _body = ('    Call SwapColumnsByName(oDoc, "%s", "%s", %d)%s'
+                      % (_a, _b, hr0, chr(10)))
+        else:
+            _body = ('    Call SwapRowsByName(oDoc, "%s", "%s", 0, %d)%s'
+                      % (_a, _b, hr0, chr(10)))
+        # ★ 入れ替えの**あと**に、写像を通した式を書き戻す（順序が意味を持つ）。
+        for _r, _c, _f in resolved_args.get("_formula_rewrites") or ():
+            _esc = formula_for_basic(_f).replace(chr(34), chr(34) * 2)
+            _body += ('    Call SetFormulaAt(oDoc, %d, %d, "%s")%s'
+                       % (_r - 1, _c - 1, _esc, chr(10)))
+        return wrap(_body)
 
     if op == "SET_CELL_VALUE":
         headers = list(resolved_args.get("_headers") or [])
@@ -8019,6 +8042,73 @@ def number_format_target(task: str, book_meta: dict, sheet: str | None,
     if len(rows) == 1 and any(w in text for w in ("合計", "小計", "総計")):
         return ("row", rows[0])
     return None
+
+
+def formula_for_basic(formula: str) -> str:
+    """xlsx の式（引数の区切りが `,`）を、Basic の `setFormula` が読める形（`;`）にする。
+
+    ★★ 2026-08-29（実測で分かった環境の事実・推測では出ない）:
+      同じ式を 3 通り書いて読み戻した:
+        =SUM(E2:INDEX(E:E,ROW()-1))  → **#VALUE!**
+        =SUM(E2:INDEX(E:E;ROW()-1))  → 通る
+        =SUM(E2:E8)                  → 通る（区切りが無いので影響なし）
+      ★ `setFormula` の引数区切りは **`;`**。カンマのまま渡すと式は入るが計算できない
+        （文字は正しく見えるのに値だけ壊れる ── 一番たちが悪い形）。
+    ★ 文字列の中のカンマは触らない（`=IF(A1;"a,b";"c")` の中身を壊さない）。
+    """
+    out, in_q = [], False
+    for ch in str(formula or ""):
+        if ch == chr(34):
+            in_q = not in_q
+        out.append(";" if (ch == "," and not in_q) else ch)
+    return "".join(out)
+
+
+# ★ 式を書き直す本数の上限。これを超えたら書き直さない（黙って諦めない・下で言う）。
+FORMULA_REWRITE_LIMIT = 200
+
+
+def formula_rewrites_for_shift(book_meta: dict, sheet: str | None, shift) -> tuple:
+    """操作前の式を写像に通して、**操作後に在るべき式**を並べる。
+
+    戻り値: (書き直し {(行, 列): 式}, 断りの理由 or None)
+
+    ★★ 2026-08-29（Namakoo「合計行ごと参照を変えずに追記したいってことじゃないの？」）:
+      「税込み金額と金額を入れ替えて」が × になった。断り自体は正しかった（実測で
+      合計式が二列にまたがり、両方 1,000,440 ＝ 金額＋税込み金額 になっていた）。
+      ★ だが利用者が欲しいのは**意味を保ったまま位置だけ入れ替わった表**で、
+        それは機械が全部言える ── 操作前の式と π が分かっているのだから、
+        操作後の式は π(操作前) でしかない。
+      ★ だから「後から直す」のではなく **最初から正しく書く**。LibreOffice の
+        自動付け替えを当てにしない（範囲の片側だけ動かすことがある・実測）。
+      ★ 合っているセルに同じ内容を書き戻すのは無害 ── 見分けるより確実。
+    ★ 消える参照が 1 つでもあれば**書き直さずに断る**（壊れた式を書かない）。
+    ★ 本数が多すぎる回は書き直さない ── ただし黙らない（呼び出し側が理由を出す）。
+    """
+    path = book_meta.get("path")
+    if not path or not sheet:
+        return {}, None
+    try:
+        cells = {}
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            for row in ws.iter_rows():
+                for cell in row:
+                    v = cell.value
+                    if isinstance(v, str) and v.startswith("="):
+                        cells[(cell.row, cell.column)] = v
+    except Exception:
+        return {}, None                    # 読めない回は何もしない（断定しない）
+    if not cells:
+        return {}, None
+    if len(cells) > FORMULA_REWRITE_LIMIT:
+        return {}, (f"式が {len(cells)} 個あるため、参照の書き直しは行いません"
+                     f"（上限 {FORMULA_REWRITE_LIMIT} 個）")
+    out, lost = cellmap.formulas_after(cells, shift)
+    if lost:
+        where = "、".join(f"{r}行{c}列" for r, c in lost[:3])
+        return {}, f"この操作で参照が消える式があります（{where}）── 実行しません"
+    return out, None
 
 
 def reference_drift_warning(book_meta: dict, sheet: str | None, *,

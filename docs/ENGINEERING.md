@@ -558,7 +558,7 @@ CI から区別できなかった（外部 repo の取り込み調査が実測�
   `Font.bold` が `False` になることを確認済み）。
 - **全部を人が回す**: `python -m pytest tests -q`
 - **CI と同じ範囲だけ人が回す**: `python -m pytest tests -q -m "not local"`
-- **ローカル依存だけ回す**: `pytest -m local`（<!-- LOCAL_TESTS -->29<!-- /LOCAL_TESTS --> 本 ── この数は `tests/test_local_test_count.py` が実測と突き合わせる）
+- **ローカル依存だけ回す**: `pytest -m local`（<!-- LOCAL_TESTS -->31<!-- /LOCAL_TESTS --> 本 ── この数は `tests/test_local_test_count.py` が実測と突き合わせる）
 
 ## 参照ライブラリ
 
@@ -593,6 +593,7 @@ CI から区別できなかった（外部 repo の取り込み調査が実測�
 | `VLookupFromTable(oDoc, headerRow, keyCol, resultCol, lookupSheet)` | `Call VLookupFromTable(oDoc, 0, 0, 2, "単価表")` | Basic 側で照合（数式 `=VLOOKUP` はこの経路で `#VALUE!`）。参照表は 列0=キー/列1=値 |
 | `PivotSum(oDoc, groupCol, valueCol)` | `Call PivotSum(oDoc, 0, 1)` | 本物のピボット（DataPilot）を新「ピボット」シートに。分類×合計を自動。★LO は開くたび再描画してセル書式を撥ねる（罫線・カンマが出ない）＝清潔な表が欲しければ下の `SummaryTable` |
 | `SummaryTable(oDoc, headerRow, groupCol, valueCol)` | `Call SummaryTable(oDoc, 0, 0, 1)` | 分類×合計を新「集計」シートに**普通の表**として出す（格子罫線・カンマ・中央揃え・見出し/合計太字を native で。DataPilot でないので全部残る） |
+| `SetFormulaAt(oDoc, row, col, formula)` | `Call SetFormulaAt(oDoc, 8, 4, "=SUM(E2:INDEX(E:E;ROW()-1))")` | 1 セルに**式**を書く。★`SetCellAt` は `setString` なので式にならない。★★ `setFormula` の引数区切りは **`;`** ── カンマのまま渡すと式は入るのに `#VALUE!` になる（文字は正しく見えて値だけ壊れる・実測で 3 通り比較して確定）。変換は `formula_for_basic`（文字列の中のカンマは触らない） |
 | `StyleBold(oDoc, c1, r1, c2, r2)` | `Call StyleBold(oDoc, 0, 0, 4, 0)` | native 太字。★`CharWeight`＋**`CharWeightAsian`**（日本語）＋`CharWeightComplex` をセルに直接。text cursor は数値を壊すので使わない |
 
 ユーザは `SortByColumn` を知らなくてよい。**「金額で降順に並べ替えて」と自然文で頼むだけ**で、
