@@ -1371,3 +1371,25 @@ Sub FillGroupReportSheet(oDoc As Object, templateSheet As String, newSheetName A
         Next gCol
     Next gRow
 End Sub
+
+
+' 桁区切りを**行**に掛ける（2026-08-29 追加）。列版 FormatThousands の軸違い。
+' ★ Namakoo が実測:「合計を金額表示にして」が、書式でなく合計追加に読まれていた。
+'   道具の側にも穴があり、数値書式は**列にしか**掛けられなかった（行と列の非対称）。
+' ★ 数値の入っているセルだけに掛ける（ラベルの『合計』に桁区切りを掛けない）。
+Sub FormatThousandsRow(oDoc As Object, nRow As Long, lastCol As Integer)
+    Dim oSheet As Object, oFormats As Object, oCell As Object
+    Dim c As Integer, nFmt As Long
+    Dim aLocale As New com.sun.star.lang.Locale
+    oSheet = oDoc.Sheets.getByIndex(0)
+    oFormats = oDoc.getNumberFormats()
+    nFmt = oFormats.queryKey("#,##0", aLocale, False)
+    If nFmt = -1 Then nFmt = oFormats.addNew("#,##0", aLocale)
+    For c = 0 To lastCol
+        oCell = oSheet.getCellByPosition(c, nRow)
+        If oCell.getType() = com.sun.star.table.CellContentType.VALUE Or _
+           oCell.getType() = com.sun.star.table.CellContentType.FORMULA Then
+            If oCell.getString() <> "" Then oCell.NumberFormat = nFmt
+        End If
+    Next c
+End Sub

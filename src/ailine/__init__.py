@@ -3733,7 +3733,19 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             resolved["color"] = color
 
     elif op == "NUMBER_FORMAT":
-        if (err := resolve_in("col", first_sheet)):
+        # ★ 2026-08-29: 行にも掛けられるようにした（行と列は軸違い）。
+        #   行が指定されている回は列を要求しない。
+        if resolved.get("row_number"):
+            _nf_sheet = resolved.get("_target_sheet") or first_sheet
+            _nf_hr = int((book_meta.get("header_rows") or {}).get(_nf_sheet, 1) or 1)
+            _nf_row = int(resolved["row_number"])
+            if _nf_row <= _nf_hr:
+                return False, resolved, inferred, (
+                    f"{_nf_row}行目は見出し行（{_nf_hr}行目）またはその上です")
+            resolved["_row_index"] = _nf_row
+            resolved.pop("col", None)
+            resolved["_at_basis"] = f"{_nf_row}行目"
+        elif (err := resolve_in("col", first_sheet)):
             return False, resolved, inferred, err
         if resolved.get("style") != "thousands":
             return False, resolved, inferred, f"書式『{resolved.get('style')}』は未対応です（対応: thousands）"
@@ -5284,6 +5296,10 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         return wrap(f"    Call SummaryTable(oDoc, {hr0}, {g_idx}, {v_idx})\n")
 
     if op == "NUMBER_FORMAT":
+        if resolved_args.get("_row_index"):
+            _nrow0 = int(resolved_args["_row_index"]) - 1
+            _lastc = max(0, len(headers.get(first_sheet) or []) - 1)
+            return wrap(f"    Call FormatThousandsRow(oDoc, {_nrow0}, {_lastc})\n")
         col_idx = headers[first_sheet].index(resolved_args["col"])
         return wrap(f"    Call FormatThousands(oDoc, {hr0}, {col_idx})\n")
 
@@ -6685,6 +6701,23 @@ def check_fill_color(path: Path, args: dict, header_row: int = 1,
 
 
 def check_number_format(path: Path, args: dict, header_row: int = 1) -> tuple:
+    # ★ 2026-08-29: 行に掛けた回は、その行の**数値セル**に付いていることを見る
+    #   （ラベルの『合計』には掛からないのが正しい）。
+    if args.get("_row_index"):
+        row = int(args["_row_index"])
+        with BookView(path) as bv:
+            ws = bv.sheet(args.get("_target_sheet"))
+            _last, last_col = data_extent(ws, header_row)
+            nums = [c for c in range(1, last_col + 1)
+                     if isinstance(ws.cell(row=row, column=c).value, (int, float))
+                     or str(ws.cell(row=row, column=c).value or "").startswith("=")]
+            if not nums:
+                return "fail", f"{row}行目に数値のセルがありません"
+            bad = [c for c in nums
+                    if "#,##0" not in (ws.cell(row=row, column=c).number_format or "")]
+        if bad:
+            return "fail", (f"{row}行目の {len(bad)} 箇所に桁区切り書式が付いていません")
+        return "pass", f"{row}行目の数値 {len(nums)} 箇所に桁区切り書式を確認"
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
         idx = _col_index_by_header(ws, args["col"], header_row=header_row)
@@ -7800,6 +7833,49 @@ def render_choices(choices) -> str:
     ★ 説明は op 名でなく**効果**で書く ── 人は op 名を知らない。
     """
     return chr(10).join(f"{CHOICE_PREFIX}{op}{chr(9)}{why}" for op, why in choices)
+
+
+# ★ 「数値の見せ方」を言う語。**op を当てる**ための語なので列挙で正しい
+#   （動作は言葉でしか分からない）。漏れても何も起きない（今までどおり）。
+_NUMFMT_WORDS = ("金額表示", "通貨表示", "通貨", "カンマ区切り", "カンマ", "桁区切り",
+                  "3桁", "３桁", "円表示", "見やすい数字")
+
+
+def task_asks_for_number_format(task: str) -> bool:
+    """依頼文が桁区切り（金額表示）を求めているか。
+
+    ★★ 2026-08-29（Namakoo が実測）:「合計を金額表示にして」が**合計追加**に読まれ、
+      既にある合計をもう一度書いて ✓ が出た（画面は何も変わらない）。
+      『合計』は**対象**であって操作ではないのに、そちらに引かれていた。
+    ★ 『金額』単体では発火させない ── 「金額列の合計を出して」を横取りしないため。
+    """
+    return any(w in (task or "") for w in _NUMFMT_WORDS)
+
+
+def number_format_target(task: str, book_meta: dict, sheet: str | None,
+                          header_row: int = 1):
+    """桁区切りを掛ける先を機械が決める → ("col", 列名) / ("row", 行番号) / None。
+
+    ★ 列でも行でも掛けられる（行と列は軸違い・今日そこの非対称を 3 回踏んだ）。
+    ★ 決まらなければ決めない（推測で別の場所に書式を掛けない）。
+    """
+    text = task or ""
+    # ★★ 2026-08-29: 「合計を**金額表示**にして」の『金額』を列名と読んでいた
+    #   （部分文字列の穴 ── この repo で 3 度目）。操作の語を**先に取り除いてから**
+    #   列名を探す。「金額列を桁区切りにして」は取り除いても『金額』が残るので当たる。
+    stripped = text
+    for w in _NUMFMT_WORDS:
+        stripped = stripped.replace(w, " ")
+    heads = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    named = [h for h in heads if h and h in stripped]
+    if len(named) == 1:
+        return ("col", named[0])
+    if len(named) > 1:
+        return None
+    rows = total_rows_in(book_meta, sheet, header_row)
+    if len(rows) == 1 and any(w in text for w in ("合計", "小計", "総計")):
+        return ("row", rows[0])
+    return None
 
 
 def placements_in_plan(plan) -> dict:
@@ -12053,6 +12129,27 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             a.task, book_meta, (book_meta.get("sheets") or [None])[0], _raw_vals)
         if _sieved and _sieved != _raw_vals:
             _st.setdefault("args", {})["values"] = _sieved
+
+    # ★★ 2026-08-29（Namakoo が実測）:「合計を金額表示にして」が**合計追加**に読まれ、
+    #   既にある合計をもう一度書いて ✓ が出た（画面は何も変わらない）。
+    #   『合計』は**対象**であって操作ではない ── 依頼文が「数値の見せ方」を言っていて、
+    #   掛ける先が機械で 1 つに決まるなら、書式として読み直す。
+    if (not _reread_done and plan and task_asks_for_number_format(a.task)
+            and not any((st or {}).get("op") == "NUMBER_FORMAT" for st in plan)):
+        _nf = number_format_target(a.task, book_meta, _sheet_h)
+        if _nf:
+            _kind, _what = _nf
+            _nargs = {"style": "thousands"}
+            if _kind == "col":
+                _nargs["col"] = _what
+                _nnote = f"列『{_what}』"
+            else:
+                _nargs["row_number"] = _what
+                _nnote = f"{_what}行目"
+            print(f"（『数値書式』として読み直しました ── 依頼文が桁区切りを指しています: "
+                   f"{_nnote}）")
+            plan = [{"op": "NUMBER_FORMAT", "args": _nargs}]
+            _reread_done = True
 
     _row_placing = sum(1 for st in plan if _op_writes((st or {}).get("op"), WRITE_ROW_SHIFT))
     if (not _reread_done and plan and not any(_is_a_different_job(st) for st in plan)
