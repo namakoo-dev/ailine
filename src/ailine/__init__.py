@@ -5272,7 +5272,14 @@ def _extract_output_sheet_name(col: str, cmp: str, value) -> str:
     label = _EXTRACT_CMP_LABELS.get(cmp, cmp)
     shown = ("・".join(str(v) for v in value) if isinstance(value, (list, tuple))
               else _format_extract_value(value))
-    name = f"{col}{shown}{label}"
+    # ★★ 2026-08-30（Namakoo の実測で画面に出た）: 連結だけだと
+    #   『取引先丸和物流・みどり建設のどれか』── 文になっておらず、会社名に見える。
+    #   ★ 大小比較（以上・未満）は連結で日本語になる（『金額40000以上』）が、
+    #     一致（eq/in）は**助詞が要る** ── そこだけ「が」を挟み、語尾は落とす。
+    if cmp in ("eq", "in"):
+        name = f"{col}が{shown}"
+    else:
+        name = f"{col}{shown}{label}"
     return _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub("_", name)[:31]
 
 
@@ -8263,6 +8270,52 @@ def plan_only_inserts_a_bare_row(plan) -> bool:
             and not _op_writes(op_, WRITE_NEW_COLUMN))
 
 
+# ★★ 機械が**依頼文から取り直す**引数（A' 原則で LLM の値を採らないもの）。
+#   ★ 2026-08-30（Namakoo「特定条件の行や列の抜き出しができない」）:
+#     「丸和物流とみどり建設を抽出して」で、一段目は**値ごとに 1 段ずつ**返した
+#       [EXTRACT value:丸和物流, EXTRACT value:みどり建設]
+#     機械は各段で値を依頼文から取り直すので、解決後は**同じ抽出が 2 段**になり、
+#     2 段目が連鎖の規則で 1 段目の出力を食って落ちた（人は 1 回しか頼んでいない）。
+#   ★ だから「同じ仕事か」を見る時は、**機械が取り直す引数を外してから**比べる。
+MACHINE_DERIVED_ARGS = {
+    "EXTRACT": ("value", "values"),
+}
+
+
+def fold_identical_steps(plan) -> tuple:
+    """**中身がまったく同じ段**を 1 回にまとめる。戻り値: (畳んだ計画, 落とした数)。
+
+    ★★ 2026-08-30（Namakoo「特定条件の行や列の抜き出しができない」）:
+      「丸和物流とみどり建設を抽出して」で、一段目が**同じ抽出を 2 段**返した。
+      2 段目は連鎖の規則で 1 段目の出力を対象にし、そこから同じ条件で抽出して
+      「元シートが 8 セル変更されています」で落ちた ── 人は 1 回しか頼んでいない。
+    ★ 同じ op・同じ引数の段は「合成」ではなく**同じ仕事の二重宣言**（行を 2 回
+      足そうとする形と同じ・too_many_placements と同じ系譜）。
+    ★ 断らずに畳む ── 依頼そのものは曖昧でない。ただし**黙って畳まない**
+      （何段落としたかを呼び出し側が言う）。
+    """
+    out, seen, dropped = [], set(), 0
+    for st in plan or []:
+        op_ = str((st or {}).get("op"))
+        # ★★ 畳むのは**新しいシートを作る段**だけ（宣言で絞る）。
+        #   落ちたのはその形だけ ── 2 段目が連鎖の規則で 1 段目の出力を食う。
+        #   同じ並べ替えを 2 回のような段は無害なので触らない（実測で、既存の
+        #   検体「もう一度金額で降順に並べ替えて」を壊しかけた）。
+        if not _op_writes(op_, WRITE_NEW_SHEET):
+            out.append(st)
+            continue
+        args = dict((st or {}).get("args") or {})
+        for k in MACHINE_DERIVED_ARGS.get(op_, ()):
+            args.pop(k, None)
+        key = (op_, repr(sorted(args.items(), key=lambda kv: str(kv[0]))))
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        out.append(st)
+    return out, dropped
+
+
 def too_many_placements(plan) -> str | None:
     """同じ軸に位置を作る段が 2 つ以上あるなら、その理由（無ければ None）。
 
@@ -9196,6 +9249,26 @@ def _extract_predicate(cmp: str, threshold, date_mode: bool = False):
     return _match
 
 
+def _row_as_shown(bv, sheet_name: str, row: int, last_col: int) -> list:
+    """その行の「**見えている値**」（式のセルは計算結果）。
+
+    ★★ 2026-08-30（Namakoo「特定条件の行や列の抜き出しができない」）:
+      「丸和物流とみどり建設を抽出して」── **抽出そのものは成功していた**（7 行中 2 行）。
+      落ちたのは検算で、元の `=E2*1.1`（式）と、抽出先の `63360`（値）を
+      **文字どおり比べて**「元と不一致」と言っていた。
+    ★ 抽出が値を写すのは正しい ── 式をそのまま持っていけば、新しいシートでは
+      違うセルを指す。だから比べる相手は**計算結果**でなければならない
+      （並べ替えの検算 compare_moved_rows が既に取っている線と同じ）。
+    ★ 抽出と重複削除の**両方**が同じ形で比べていた ── 片方だけ直さない。
+    """
+    out = []
+    for c in range(1, last_col + 1):
+        f = bv.cell_formula(row, c, sheet_name)
+        out.append(bv.cell_value(row, c, sheet_name) if f is not None
+                    else bv.sheet(sheet_name).cell(row=row, column=c).value)
+    return out
+
+
 def check_extract(path: Path, args: dict, header_row: int = 1,
                    source_book: Path | None = None) -> tuple:
     """EXTRACT の事後条件（コミット 2edcb08「EXTRACT op」―「番人が入場料を徴収した初の op」）。
@@ -9239,7 +9312,7 @@ def check_extract(path: Path, args: dict, header_row: int = 1,
             total += 1
             cell_v = src.cell(row=r, column=col_idx).value
             if match(cell_v):
-                expected_rows.append([src.cell(row=r, column=c).value for c in range(1, last_col + 1)])
+                expected_rows.append(_row_as_shown(bv, src_name, r, last_col))
             else:
                 unmatched_cells.append(cell_v)
             r += 1
@@ -9383,7 +9456,7 @@ def check_dedup(path: Path, args: dict, header_row: int = 1,
             else:
                 seen[key_tuple] = r
                 keep_row_nums.append(r)
-                expected_rows.append([src.cell(row=r, column=c).value for c in range(1, last_col + 1)])
+                expected_rows.append(_row_as_shown(bv, src.title, r, last_col))
             r += 1
         if total == 0:
             return "fail", _ZERO_TARGET_REASON
@@ -12626,6 +12699,13 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                        "「みかんの下に梨を追加して。売上は600」）")
                 print("  （空の行が欲しいなら: 例「3行目の下に1行挿入して」）")
                 return 3
+
+    # ★★ 2026-08-30: 中身がまったく同じ段は 1 回にまとめる（連鎖で 2 段目が 1 段目の
+    #   出力を食う前に畳む ── 順番が意味を持つ）。黙って畳まず、落とした数を言う。
+    if plan and len(plan) > 1:
+        plan, _folded = fold_identical_steps(plan)
+        if _folded:
+            print(f"（同じ操作が {_folded + 1} 回書かれていたので 1 回にまとめました）")
 
     # ★★ 関所（2026-08-29・Namakoo の設計判断）: 同じ軸に位置を作る段が 2 つ以上ある
     #   計画は実行しない。上の読み直しで 1 本に畳めていればここは通る ── 畳めなかった
