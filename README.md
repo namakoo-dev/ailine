@@ -193,7 +193,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->2786<!-- /TOTAL_TESTS --> 本のうち、実機が要る 28 本を除いた範囲）。
+期待: 全件緑（<!-- TOTAL_TESTS -->2785<!-- /TOTAL_TESTS --> 本のうち、実機が要る 28 本を除いた範囲）。
 ★ この 2 つの数は `tests/test_local_test_count.py` が実測と突き合わせています ──
 文書の数字を、人の記憶で守らないためです。
 
