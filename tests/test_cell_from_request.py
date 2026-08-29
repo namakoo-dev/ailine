@@ -152,14 +152,21 @@ def test_an_unquoted_value_is_accepted_when_it_is_in_the_request(tmp_path):
     assert r["value"] == "PCパーツ" and r["_row_index"] == 4
 
 
-def test_a_value_the_request_never_mentions_is_still_refused(tmp_path):
-    """★ 緩めた分の歯止め: 依頼文に無い値は、引用符が無くても通さない。"""
+def test_a_value_the_request_never_mentions_is_never_written(tmp_path):
+    """★ 守る不変は「断ること」ではなく **依頼文に無い値を書かないこと**。
+    ★ 2026-08-29: 機械の引き算を先に通すようにしたので、でっち上げの値が来ても
+      **依頼文から正しい値を取り直す**ようになった（断るより良い）。
+      どちらに転んでも、書かれる値は必ず依頼文の中に在る。"""
     p = _book(tmp_path)
-    ok, _r, _i, err = ailine.verify_dsl_args(
+    ok, r, _i, err = ailine.verify_dsl_args(
         "SET_CELL_VALUE",
         {"row": "丸山重工", "col": "項目", "value": "でっちあげ", "row_number": 4},
         _meta(p), task="丸山重工の右にPCパーツ")
-    assert not ok and "読み取れません" in err, err
+    if ok:
+        assert str(r["value"]) in "丸山重工の右にPCパーツ", r["value"]
+        assert str(r["value"]) != "でっちあげ"
+    else:
+        assert "読み取れません" in err, err
 
 
 # --- 門は計画の長さで閉じない ----------------------------------------------------------
@@ -201,3 +208,60 @@ def test_two_equally_wide_candidates_are_still_ambiguous():
              4: {"nonempty": 2, "str": 1, "bold": 0}}
     got, confident = ailine.detect_header_row({"rows": rows})
     assert (got, confident) == (None, False), (got, confident)
+
+
+# --- 書き込む値を、行の名前と読み違えない（2026-08-29・Namakoo が実測）---------------
+
+def test_the_value_being_written_is_not_read_as_a_row_name(tmp_path):
+    """★★ 実測: 「丸山工業の担当に『佐藤』を入れて」で、**書き込む値『佐藤』**が
+       別の行の担当欄にも在るため行の候補が 2 つになり、「決められない」に落ちた。
+    ★ 人が行を指すときは「**〜の**」と言う。セルを指す経路ではそれを要求する。"""
+    p = _book(tmp_path, headers=["取引先", "担当"],
+               rows=[["丸和物流", "佐藤"], ["丸山工業", None]])
+    got = ailine.resolve_cell_target_from_task(
+        "丸山工業の担当に「佐藤」を入れて", _meta(p, ["取引先", "担当"]), "請求")
+    assert got and (got[0], got[1]) == (3, 2), got
+
+
+def test_the_possessive_rule_only_binds_the_cell_path(tmp_path):
+    """★ 「ナットを削除して」のように の が無い経路は今までどおり解ける
+       （締めたのはセルを指す経路だけ）。"""
+    rows = {2: ["ボルト", "A-1"], 3: ["ナット", "A-2"]}
+    heads = ["品名", "棚"]
+    assert ailine._row_named_anywhere_in_task("ナットを削除して", rows, heads) == (3, "ナット")
+    assert ailine._row_named_anywhere_in_task(
+        "ナットを削除して", rows, heads, require_possessive=True) is None
+
+
+def test_the_machine_row_overrides_whatever_the_llm_said():
+    """★ 実測: 第二段は row に**シート名**を返すことがある（'8月請求'）。
+       機械が実表で解いた名前で**上書きする** ── setdefault だと LLM の嘘が勝つ。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index('_why = f"依頼文が『{_named}』の行を名指ししています"')
+    seg = src[max(0, i - 500):i]
+    assert '_args["row"] = _named' in seg, seg[-300:]
+    assert '_args.setdefault("row"' not in seg, "LLM の row が勝つ形に戻っている"
+
+
+# --- 値は丸ごと取る（途中で切らない）---------------------------------------------------
+
+@pytest.mark.parametrize("task,want", [
+    ("丸山工業の締め日を2026/08/31にして", "2026/08/31"),   # ★ 『31』だけを拾わない
+    ("丸山工業の単価を2000にして", "2000"),
+    ("丸山工業の担当を佐藤にして", "佐藤"),
+])
+def test_a_value_is_taken_whole(task, want):
+    """★★ 実測: 「締め日を**2026/08/31**にして」で **31** が書かれて ✓ が出た。
+       裸の数字を拾う正規表現が日付の**末尾だけ**を掴んでいた。
+    ★ 機械の引き算を先に通す ── こちらは値を丸ごと取るので途中で切れない。"""
+    got = ailine.bare_value_from_task(task, "丸山工業", "締め日",
+                                       ["取引先", "締め日", "単価", "担当"])
+    assert got == want, got
+
+
+def test_the_subtraction_runs_before_the_bare_number_regex():
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("_lit = extract_quoted_literal(task)")
+    seg = src[i:i + 1200]
+    assert seg.index("bare_value_from_task(") < seg.index("_re_bare_number.search"), \
+        "裸の数字の正規表現が、機械の引き算より先に走っている"

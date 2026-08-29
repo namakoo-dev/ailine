@@ -3974,6 +3974,13 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         #     引用符の有無で断るのは、道具の都合を人に押し付けている（実測の困りごと）。
         _lit = extract_quoted_literal(task)
         if _lit is None:
+            # ★★ 2026-08-29（Namakoo が実測・直した先で出た穴）:
+            #   「丸山工業の締め日を**2026/08/31**にして」で **31** が書かれて ✓ が出た。
+            #   裸の数字を拾う正規表現が、日付の**末尾だけ**を掴んでいた。
+            #   ★ 先に機械の引き算（依頼文から、既に分かっている物を引く）を通す ──
+            #     こちらは値を**丸ごと**取るので、途中で切れない。
+            _lit = bare_value_from_task(task, _row_name, _col_name, _headers_c)
+        if _lit is None:
             _m = _re_bare_number.search(task or "")
             _lit = _m.group(1) if _m else None
         if _lit is None:
@@ -7621,7 +7628,7 @@ def resolve_cell_target_from_task(task: str, book_meta: dict, sheet: str | None,
     if row is not None and row not in rows:
         return None
     if row is None:
-        hit = _row_named_anywhere_in_task(task, rows, heads)
+        hit = _row_named_anywhere_in_task(task, rows, heads, require_possessive=True)
         if not hit:
             return None
         row, name = hit
@@ -8077,7 +8084,8 @@ def _table_rows_for_anchor(book_meta: dict, sheet, header_row: int) -> tuple:
         return {}, []
 
 
-def _row_named_anywhere_in_task(task: str, rows: dict, headers: list):
+def _row_named_anywhere_in_task(task: str, rows: dict, headers: list,
+                                 require_possessive: bool = False):
     """依頼文に literal で現れる**実在の値**が、ちょうど 1 行にしか無いならその行。
 
     ★★ 2026-08-28（Namakoo「行の削除もできない」）: 「ナットを削除して」のように、
@@ -8091,6 +8099,13 @@ def _row_named_anywhere_in_task(task: str, rows: dict, headers: list):
     for r, vals in (rows or {}).items():
         for v in vals:
             if not v or v in heads or len(v) < 2 or v not in text:
+                continue
+            # ★★ 2026-08-29（Namakoo が実測）: 「丸山工業の担当に『佐藤』を入れて」で
+            #   **書き込む値『佐藤』**が別の行の担当欄にも在るため、行の候補が 2 つに
+            #   なって「決められない」に落ちていた ── 値を行の名前と読んでいた。
+            #   ★ 人が行を指すときは「**〜の**」と言う。セルを指す経路ではそれを要求する
+            #     （「ナットを削除して」のように の が無い経路は今までどおり）。
+            if require_possessive and f"{v}の" not in text:
                 continue
             if best is None:
                 best = (r, v)
@@ -11761,7 +11776,10 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                     _args["row_number"] = _row_no
                     _why = f"依頼文が『{_row_no}行目』と行を指しています"
                 else:
-                    _args.setdefault("row", _named)
+                    # ★ 2026-08-29（実測）: 第二段は row に**シート名**を返すことがある
+                    #   （'8月請求'）。機械が実表で解いた名前で**上書きする**
+                    #   ── setdefault だと LLM の嘘が勝つ。
+                    _args["row"] = _named
                     _why = f"依頼文が『{_named}』の行を名指ししています"
                 print(f"（『一括書換』でなく『1セル書換』として読み直しました ── {_why}）")
                 plan = [{"op": "SET_CELL_VALUE", "args": _args}]
