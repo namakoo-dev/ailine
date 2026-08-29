@@ -256,6 +256,11 @@ async function loadFiles(){
     el.onclick = () => { picked = f;
       [...files.children].forEach(c => c.classList.remove("on"));
       el.classList.add("on");
+      // ★★ 2026-08-29（Namakoo が実測）: 別のファイルを選んでも**前のシート名が
+      //   残っていた**ので、`？ シート『8月請求』がありません。あるシート: 売上表`
+      //   で止まった。シートの選択は**そのファイルのもの** ── 持ち越さない。
+      window._sheet = null;
+      hideRead();
       showBefore(); };
     files.appendChild(el);
   }

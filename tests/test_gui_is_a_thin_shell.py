@@ -546,3 +546,21 @@ def test_the_tool_suffixes_live_in_one_place():
     assert "_TOOL_SUFFIXES = (DRAFT_SUFFIX, TRASH_SUFFIX, \".out\")" in src
     # 直書きの「（捨てた）」が残っていないこと（定数を使う）
     assert src.count('"（捨てた）"') == 1, "『（捨てた）』を直書きしている箇所がある"
+
+
+def test_the_sheet_choice_does_not_survive_a_file_change():
+    """★★ 2026-08-29（Namakoo が実測）: 別のファイルを選んでも**前のシート名が残って**
+       いたので、`？ シート『8月請求』がありません。あるシート: 売上表` で止まった。
+    ★ シートの選択は**そのファイルのもの** ── 持ち越さない。"""
+    html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
+    i = html.index("el.onclick = () => { picked = f;")
+    seg = html[i:i + 700]
+    assert "window._sheet = null" in seg, seg[:400]
+    assert "showBefore()" in seg
+
+
+def test_the_reading_panel_is_closed_when_the_file_changes():
+    """★ 別のファイルを選んだのに、前のファイルの読みが残っていたら嘘になる。"""
+    html = (REPO / "gui" / "index.html").read_text(encoding="utf-8")
+    i = html.index("el.onclick = () => { picked = f;")
+    assert "hideRead()" in html[i:i + 700]
