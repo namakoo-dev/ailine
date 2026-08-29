@@ -3963,9 +3963,23 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             _m = _re_bare_number.search(task or "")
             _lit = _m.group(1) if _m else None
         if _lit is None:
+            # ★★ 2026-08-29（Namakoo が実測）: 「丸山重工の右にPCパーツ」が
+            #   『文字なら「」で囲んで』で断られていた。**引用符は道具の都合**であって、
+            #   人の書き方の問題ではない（この repo が何度も自分に言ってきた線）。
+            #   ★ A' 原則の芯は「引用符が在ること」ではなく「**依頼文に在る値**であること」。
+            #     だから条件をそちらへ置き直す: 依頼文に literal で在り・見出しの語でなく・
+            #     行の名前でもない値なら、引用符が無くても受ける。
+            #   ★ それでも**画面に出してから書く**（「こう読みました」に値が出る）。
+            _cand = str((resolved.get("value") if resolved.get("value") is not None else ""))
+            _cand = _cand.strip()
+            _bad = {str(h) for h in _headers_c} | {str(_row_name), str(_col_name)}
+            if _cand and _cand in (task or "") and _cand not in _bad:
+                _lit = _cand
+        if _lit is None:
             return False, resolved, inferred, (
                 "書き込む値が依頼文から読み取れません"
-                "（数字ならそのまま、文字なら「」で囲んで書いてください）")
+                "（依頼文に書かれている値をそのまま使います ── "
+                "紛らわしいときは「」で囲んでください）")
         resolved["value"] = _lit
         # ★ 2026-08-27（実測）: `_is_number` は**型**で見るので、文字列 "2000" は False。
         #   ここへ来る値は必ず文字列なので、**数字として読めるか**で判定する。
@@ -7470,6 +7484,166 @@ def add_row_values_from_request(task: str, book_meta: dict, sheet: str | None,
     if payload is not None and acol:
         kept.setdefault(acol, payload)
     return kept
+
+
+_RIGHT_WORDS = ("の右", "の隣", "のとなり", "の右隣")
+_LEFT_WORDS = ("の左", "の左隣")
+
+
+_re_row_word = re.compile(r"(?:第)?\s*[0-9０-９]{1,4}\s*行(?:目)?")
+_re_a1_col_word = re.compile(r"[A-Za-z]{1,2}\s*列")
+# ★ 助詞と語尾は**閉じた文法の集合**（業務語彙の列挙ではない）。落としても意味は減らない。
+_TAIL_WORDS = ("にして", "にする", "に変えて", "に変える", "と入れて", "と書いて",
+                "を入れて", "を書いて", "を追加して", "を追加", "を記入して", "を記入",
+                "にセット", "入れて", "書いて", "変えて", "して", "ください", "です")
+_PARTICLES = "をにへはとがのでも、。 　"
+
+
+def bare_value_from_task(task: str, row_name: str | None, col_name: str | None,
+                          headers=None) -> str | None:
+    """依頼文から、機械が**引き算で**書き込む値を切り出す。
+
+    ★★ 2026-08-29（Namakoo が実測）: 「丸山重工の右にPCパーツ」で、第二段は
+      row/col しか返さず **value を返さなかった**（qwen も gemma4 も）。
+      LLM が値を出さないなら、機械が出す ── 機械は既に「誰の行か」「どの列か」を
+      知っているので、依頼文からそれらを**引く**だけでいい。
+    ★ 引くのは: 行の名前・列の名前・見出しの語・「N行目」「F列」・位置の語・助詞と語尾。
+      どれも閉じた集合（業務語彙の列挙ではない）。
+    ★ 残りが**依頼文の中に連続した文字列として在る**ことを最後に確かめる
+      ── 切れ端を継ぎ足した幽霊の値を作らないため。
+    """
+    text = (task or "")
+    out = text
+    for w in [row_name, col_name] + [str(h) for h in (headers or [])]:
+        if w:
+            out = out.replace(str(w), " ")
+    out = _re_row_word.sub(" ", out)
+    out = _re_a1_col_word.sub(" ", out)
+    for w in ("の右隣", "の左隣", "のとなり", "の右", "の左", "の隣", "列"):
+        out = out.replace(w, " ")
+    for w in _TAIL_WORDS:
+        out = out.replace(w, " ")
+    out = out.strip(_PARTICLES).strip()
+    while out and out[0] in _PARTICLES:
+        out = out[1:]
+    while out and out[-1] in _PARTICLES:
+        out = out[:-1]
+    if not out or " " in out or "　" in out:
+        return None                       # 2 つ以上に割れた ── 決めない
+    if out not in text:
+        return None                       # 連続していない ── 継ぎ足した値は使わない
+    bad = {str(h) for h in (headers or [])} | {str(row_name or ""), str(col_name or "")}
+    if out in bad:
+        return None
+    return out
+
+
+def _is_number_like(s) -> bool:
+    """数字だけの文字列か（依頼文に出る数と、行の名前を混同しないため）。"""
+    try:
+        float(str(s).replace(",", ""))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _cell_row_name_for(book_meta: dict, sheet, row: int, header_row: int = 1):
+    """その行を人が呼ぶときの名前（1 列目の値）。分からなければ None。"""
+    rows, _h = _table_rows_for_anchor(book_meta, sheet, header_row)
+    vals = rows.get(row) or []
+    return vals[0] if vals else None
+
+
+def resolve_cell_target_from_task(task: str, book_meta: dict, sheet: str | None,
+                                   header_row: int = 1):
+    """依頼文 → **1 つのセル**（行・列・その根拠）。決まらなければ None。
+
+    ★★ 2026-08-29（Namakoo が実測・両モデルとも外した）:
+      「丸山重工の右にPCパーツ」を qwen は SPLIT_CELL（区切り文字を聞く）、
+      gemma4 は ADD_ROW at:1（見出し行に挿す）と読んだ。
+      「丸山重工の項目をPCパーツにして」は OUT_OF_VOCAB / SET_COLUMN_VALUE（列を全部潰す）。
+    ★ どれも「1 セルに書く」だけの依頼で、**機械は既に答えを知っている** ──
+      丸山重工は 8 行目、項目は 2 列目。誰も表に訊いていなかった。
+    ★ だからモデルを替えても直らない。**行も列も機械が実表から決める**。
+
+    列の決め方は 3 つ（強い順）:
+      ① 見出しの名前が依頼文に**ちょうど 1 つ**現れる（「項目を」）
+      ② A1 の列名（「F列に」）
+      ③ 行の名前が入っているセルからの**相対**（「〜の右」「〜の隣」「〜の左」）
+    ★ 2 つ以上の見出しが現れたら決めない（推測で別の列に書かない）。
+    """
+    rows, heads = _table_rows_for_anchor(book_meta, sheet, header_row)
+    if not rows or not heads:
+        return None
+    # --- 行 ---
+    name = None
+    row = task_names_a_row_number(task)
+    if row is not None and row not in rows:
+        return None
+    if row is None:
+        hit = _row_named_anywhere_in_task(task, rows, heads)
+        if not hit:
+            return None
+        row, name = hit
+        # ★★ 2026-08-29（既存の検体が捕まえた・俺の横取り）: この読み直しは
+        #   「金額の**合計**を一番下に出して」の『合計』や、「数量を**10**に」の『10』を
+        #   行の名前と読んで、正当な依頼を 1 セル書換に化けさせた。
+        #   ★ 歯止めを 2 つ ── どちらも文法であって業務語彙ではない:
+        #     ① 数字は行の名前にしない（依頼文には数字が普通に出る）
+        #     ② 人がセルを指すときは「**〜の**」と言う（「丸山重工の項目」「高橋の右」）。
+        #        「合計**を**」のように別の助詞が付くなら、それは操作の説明であって
+        #        行の名指しではない。
+        if _is_number_like(name) or f"{name}の" not in (task or ""):
+            return None
+    basis_row = f"{row}行目" if name is None else f"『{name}』の行＝{row}行目"
+
+    # --- 列 ---
+    text = task or ""
+    named = [h for h in heads if h and h in text]
+    if len(named) == 1:
+        return row, heads.index(named[0]) + 1, f"{basis_row}／列は『{named[0]}』"
+    if len(named) > 1:
+        return None                      # 見出しが 2 つ以上 ── 決めない
+
+    for raw in re.findall(r"([A-Za-z]{1,2})\s*列", text):
+        try:
+            idx = column_index_from_string(raw.upper())
+        except ValueError:
+            continue
+        if 1 <= idx <= len(heads):
+            return row, idx, f"{basis_row}／列は『{heads[idx - 1]}』（{raw.upper()}列）"
+
+    if name:
+        try:
+            base = rows[row].index(name) + 1
+        except ValueError:
+            return None
+        step = 0
+        if any(w in text for w in _RIGHT_WORDS):
+            step = 1
+        elif any(w in text for w in _LEFT_WORDS):
+            step = -1
+        if step:
+            idx = base + step
+            if 1 <= idx <= len(heads):
+                where = "右" if step > 0 else "左"
+                return row, idx, (f"{basis_row}／列は『{heads[idx - 1]}』"
+                                   f"（『{name}』の 1 つ{where}）")
+    return None
+
+
+def value_written_in_task(task: str, llm_value, headers=None) -> str | None:
+    """書き込む値は**依頼文に literal で在るもの**だけ（A' 原則）。
+
+    ★ 実測: 第二段は『未定』『未設定』のような、どこにも書かれていない値を返す。
+      見出しの語をそのまま値にすることもある ── どちらも入れさせない。
+    """
+    s = "" if llm_value is None else str(llm_value).strip()
+    if not s or s not in (task or ""):
+        return None
+    if headers and s in {str(h) for h in headers}:
+        return None
+    return s
 
 
 def insert_rows_should_have_been_add_row(task: str, resolved: dict,
@@ -11354,6 +11528,51 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   ★★ 人が op を固定した回は、読み直しを**一切しない**（画面に出した
     #     「こう読みました」と、実際に走る操作が食い違わないため）。
     _reread_done = bool(getattr(a, "_forced_op", None))
+
+    def _already_places_a_row(st):
+        op_ = (st or {}).get("op")
+        return _op_writes(op_, WRITE_ROW_SHIFT) and _op_writes(op_, WRITE_NEW_ROW_AT_END)
+
+    def _already_writes_one_cell(st):
+        return _op_writes((st or {}).get("op"), WRITE_SINGLE_CELL)
+
+    def _is_a_different_job(st):
+        op_ = (st or {}).get("op")
+        return any(_op_writes(op_, k) for k in (WRITE_FORMAT_ONLY, WRITE_REMOVE, WRITE_REORDER))
+
+    # ★★ 2026-08-29（Namakoo が実測・qwen も gemma4 も外した）:
+    #   「丸山重工の右にPCパーツ」→ qwen は SPLIT_CELL（区切り文字を聞き返す）、
+    #   gemma4 は ADD_ROW at:1（見出し行に挿す）。
+    #   「丸山重工の項目をPCパーツにして」→ OUT_OF_VOCAB / SET_COLUMN_VALUE（列を全部潰す）。
+    #   ★ どれも「1 セルに書く」だけの依頼で、機械は既に答えを持っている
+    #     （丸山重工は 8 行目・項目は 2 列目）。**モデルを替えても直らない** ──
+    #     誰も表に訊いていなかっただけ。行も列も機械が実表から決める。
+    #   ★ 値だけは第二段に出させて、依頼文に literal で在るものだけ通す（A' 原則）。
+    #   ★ 計画の**長さ**で門を閉じない（実測: 同じ依頼で 1 段と 2 段が返り分かれ、
+    #     2 段の回だけ素通りしていた ── 長さは依頼の性質ではなくモデルの気分）。
+    #     見るのは「どの段も 1 セル書換でなく、どの段も別の仕事でない」こと。
+    if (not _reread_done and plan
+            and not any(_already_writes_one_cell(st) for st in plan)
+            and not any(_is_a_different_job(st) for st in plan)):
+        _cell = resolve_cell_target_from_task(a.task, book_meta, _sheet_h)
+        if _cell:
+            _crow, _ccol, _cnote = _cell
+            _cheads = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_h) or [])]
+            _cfix = translate_task_fixed_op(a.model, "SET_CELL_VALUE", a.task, book_meta)
+            _cval = value_written_in_task(a.task, (_cfix or {}).get("args", {}).get("value"),
+                                           _cheads)
+            if _cval is None and 1 <= _ccol <= len(_cheads):
+                # ★ 第二段が value を返さない回がある（実測: qwen も gemma4 も row/col だけ）。
+                #   LLM が出さないなら機械が出す ── 依頼文から、既に分かっている物を引く。
+                _cval = bare_value_from_task(
+                    a.task, _cell_row_name_for(book_meta, _sheet_h, _crow),
+                    _cheads[_ccol - 1], _cheads)
+            if _cval is not None and 1 <= _ccol <= len(_cheads):
+                print(f"（『1セル書換』として読み直しました ── {_cnote}）")
+                plan = [{"op": "SET_CELL_VALUE",
+                          "args": {"row_number": _crow, "col": _cheads[_ccol - 1],
+                                    "value": _cval}}]
+                _reread_done = True
     #   ★★ 2026-08-28（Namakoo が実測・今日いちばん悪い形）: 「7行目の担当を『佐藤』に」で
     #     **担当列が全行『佐藤』になり ✓ が出た**。一括書換の契約としては ✓ は正しいが、
     #     依頼は 1 行だった ── 三項（依頼・宣言・実体）のうち**依頼を見ていなかった**。
@@ -11559,14 +11778,6 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   ★ 宣言で門を作る: 「行をずらして**値も書く**」と宣言している op（＝ADD_ROW）で
     #     既に読めているなら触らない。逆に、**明らかに別の仕事**を宣言している op
     #     （見た目だけ／削除／並べ替え）にも触らない。それ以外は読み直しの候補。
-    def _already_places_a_row(st):
-        op_ = (st or {}).get("op")
-        return _op_writes(op_, WRITE_ROW_SHIFT) and _op_writes(op_, WRITE_NEW_ROW_AT_END)
-
-    def _is_a_different_job(st):
-        op_ = (st or {}).get("op")
-        return any(_op_writes(op_, k) for k in (WRITE_FORMAT_ONLY, WRITE_REMOVE, WRITE_REORDER))
-
     if (not _reread_done and len(plan) == 1
             and not _already_places_a_row(plan[0]) and not _is_a_different_job(plan[0])):
         _sheet_hint = (book_meta.get("sheets") or [None])[0]
