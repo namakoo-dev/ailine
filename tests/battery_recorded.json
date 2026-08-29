@@ -1,0 +1,12 @@
+{
+  "_why": "凍結検体(bench/translation_battery.json items)の実測値。README がここから外れたら赤くする。★ 2026-08-29: README は 51/52=98.1% と書いていたが、実測は 49/52=94.2% だった。OPS_DOC に 16 行足した回の低下(98.1%→94.2%)が文書に反映されないまま残っていた ── 手で守れない数字は機械が守る。",
+  "measured_on": "2026-08-29",
+  "model": "qwen2.5-coder:7b",
+  "op_correct": 49,
+  "op_total": 52,
+  "slot_correct": 68,
+  "slot_total": 69,
+  "misassert": 0,
+  "misassert_total": 10,
+  "runs": 2
+}
