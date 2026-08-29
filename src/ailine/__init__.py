@@ -12079,13 +12079,23 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     間違った操作を自信をもって実行する形で、断るより悪い）。
     #   ★ ただし SORT を横取りする以上、条件を厳しくする: **2 つの名前が実表で
     #     ちょうど 1 つに解ける時だけ**読み直す（解けないなら元の計画のまま進める）。
-    if (not _reread_done and task_asks_for_a_swap(a.task) and len(plan) == 1
-            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB", "SORT")):
+    #   ★★ 2026-08-29（Namakoo が実測・今日 4 度目の「列挙は漏れる」）:
+    #     「税込み金額列と金額列を入れ替えて」が **COMPUTE_COLUMN**（計算列）に読まれ、
+    #     金額列を掛け算で潰しかけた（関所が止めた）。門が op 名の列挙だったので素通り。
+    #   ★ 門は証拠で作る: 依頼文が入れ替えを言い、**機械が対象を 2 つとも解けている**なら
+    #     読み直す。既に SWAP で読めている回だけ触らない（op 名の列挙をやめる）。
+    if (not _reread_done and plan and task_asks_for_a_swap(a.task)
+            and not any((st or {}).get("op") == "SWAP" for st in plan)):
         _sw = translate_task_fixed_op(a.model, "SWAP", a.task, book_meta)
         _sw_args = (_sw or {}).get("args") or {}
-        if (str(_sw_args.get("a", "")).strip() and str(_sw_args.get("b", "")).strip()
-                and _swap_pair_resolves(book_meta, _sheet_h,
-                                         str(_sw_args["a"]).strip(), str(_sw_args["b"]).strip())):
+        _sa, _sb = str(_sw_args.get("a", "")).strip(), str(_sw_args.get("b", "")).strip()
+        # ★★ 2026-08-29: 門を広げた途端、元の狭い門が守っていた物が壊れた ──
+        #   「税込み金額の**順番を逆にして**」で、第二段が**相手をでっち上げて**
+        #   入れ替えに化けた（正当な並べ替えを壊す）。
+        #   ★ A' 原則をここにも通す: **入れ替える 2 つは、どちらも依頼文に在ること**。
+        #     片方しか書かれていない依頼は、入れ替えの依頼ではない。
+        if (_sa and _sb and _sa in (a.task or "") and _sb in (a.task or "")
+                and _swap_pair_resolves(book_meta, _sheet_h, _sa, _sb)):
             print(f"（『入れ替え』として読み直しました ── 依頼文が"
                    f"『{_sw_args["a"]}』と『{_sw_args["b"]}』の入れ替えを指しています）")
             plan = [{"op": "SWAP", "args": dict(_sw_args)}]

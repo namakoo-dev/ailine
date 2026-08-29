@@ -237,3 +237,48 @@ def test_without_the_before_file_it_does_not_claim(tmp_path):
     after = _book(tmp_path, ROWS)
     status, _reason = ailine.check_swap(after, _args(), source_book=None)
     assert status == "warn"
+
+
+# --- 入れ替えの門を、op 名でなく証拠で作る（2026-08-29・Namakoo が実測）---------------
+
+def test_the_swap_gate_is_not_a_list_of_op_names():
+    """★★ 実測: 「税込み金額列と金額列を入れ替えて」が **COMPUTE_COLUMN**（計算列）に
+       読まれ、金額列を掛け算で潰しかけた（関所が止めた）。門が
+       ("CLARIFY","FREEFORM","OUT_OF_VOCAB","SORT") という **op 名の列挙**だったので、
+       それ以外を返した回は素通りしていた ── 今日 4 度目の同じ形。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("task_asks_for_a_swap(a.task)")
+    seg = src[max(0, i - 600):i + 900]
+    assert '("CLARIFY", "FREEFORM", "OUT_OF_VOCAB", "SORT")' not in seg, "op 名の列挙が残っている"
+    assert 'get("op") == "SWAP"' in seg, "既に入れ替えで読めている回を除いていない"
+
+
+def test_both_targets_must_be_written_in_the_request():
+    """★★ 門を広げた途端、元の狭い門が守っていた物が壊れた:
+       「税込み金額の**順番を逆にして**」で、第二段が**相手をでっち上げて**
+       入れ替えに化けた（正当な並べ替えを壊す）。
+    ★ A' 原則をここにも通す ── 入れ替える 2 つは、どちらも依頼文に在ること。
+      片方しか書かれていない依頼は、入れ替えの依頼ではない。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("_sa, _sb = str(_sw_args.get(")
+    seg = src[i:i + 900]
+    assert '_sa in (a.task or "")' in seg and '_sb in (a.task or "")' in seg, seg[:400]
+
+
+def test_a_nested_column_name_still_resolves(tmp_path):
+    """★ 片方の名前がもう片方を含む（税込み金額 ⊃ 金額）── 部分文字列の穴の再演を止める。"""
+    p = tmp_path / "n.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "請求"
+    ws.append(["取引先", "金額", "税込み金額"])
+    ws.append(["丸和物流", 100, 110])
+    wb.save(p)
+    meta = {"sheets": ["請求"], "headers": {"請求": ["取引先", "金額", "税込み金額"]},
+             "header_rows": {"請求": 1}, "path": str(p)}
+    assert ailine._swap_pair_resolves(meta, "請求", "税込み金額", "金額")
+    ok, r, _i, err = ailine.verify_dsl_args(
+        "SWAP", {"a": "税込み金額", "b": "金額"}, meta, task="税込み金額列と金額列を入れ替えて")
+    assert ok, err
+    assert r.get("_axis") == "column", r          # 軸は機械が決める（見出しで一致）
+    assert (r["_a_pos"], r["_b_pos"]) == (3, 2), r
