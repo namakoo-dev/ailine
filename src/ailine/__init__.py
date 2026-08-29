@@ -7745,7 +7745,7 @@ def row_anchor_names(task: str) -> list:
     ★ 目印は「置く物」ではない ── ここを分けないと、目印がそのまま新しい行の値になる
       （実測: 「丸和物流と近江スチールの間に北斗精機を作って」で `取引先=丸和物流`）。
     """
-    text = (task or "").replace("　", " ")
+    text = _task_outside_quotes(task).replace("　", " ")   # ★ 引用符の中は値（上と同じ線）
     out = []
     m = _re_between.search(text)
     if m:
@@ -7993,7 +7993,11 @@ def resolve_cell_target_from_task(task: str, book_meta: dict, sheet: str | None,
         except ValueError:
             continue
         if 1 <= idx <= len(heads):
-            return row, idx, f"{basis_row}／列は『{heads[idx - 1]}』（{raw.upper()}列）"
+            # ★ 2026-08-30（実測で画面に出た）: 見出しの無い列だと「列は『』（B列）」と
+            #   **空の名前**が出ていた。名前が無いなら英字だけで言う（嘘の空欄を見せない）。
+            _hd = str(heads[idx - 1] or "").strip()
+            return row, idx, (f"{basis_row}／列は『{_hd}』（{raw.upper()}列）" if _hd
+                               else f"{basis_row}／列は {raw.upper()}列（見出しなし）")
 
     if name:
         try:
@@ -8629,8 +8633,13 @@ def _row_named_anywhere_in_task(task: str, rows: dict, headers: list,
       人は「〜の行」と言わないことがある。言い回しを足すのではなく**表に訊く**。
     ★ 見出しの語は除く（列名を行の名前と読み違えない）。
     ★ 2 行に当たったら決めない（推測で別の行を消すのが一番こわい）。
+    ★★ 2026-08-30（Namakoo「セル指定しているのに値を上書きできない」）:
+      「7行B列を『{{合計:税込金額}}』に上書き」で、**引用符の中の『合計』**が表の
+      合計行に当たり、そこを狙った操作に読み替えられていた。
+      ★ 引用符の中は**値**であって、対象の名指しではない ── ここが 4 つの呼び出しの
+        合流点なので、**この 1 行**で全部に効く（呼び出し側に配らない）。
     """
-    text = task or ""
+    text = _task_outside_quotes(task)
     heads = {h for h in headers if h}
     best = None
     for r, vals in (rows or {}).items():
@@ -8664,7 +8673,16 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
     ★ 見つからない・複数ある時は**決めない**（推測で行を挿すと、静かに別の場所へ入る）。
     戻り値: (行番号 or None, 説明 or 断りの理由 or None)
     """
-    text = (task or "").replace("　", " ")
+    # ★★ 2026-08-30（Namakoo「セル指定しているのに値を上書きできない」）:
+    #   「7行B列を『{{合計:税込金額}}』に上書き」で、**引用符の中の『合計』**を位置の
+    #   目印として拾い、『合計』の行＝9行目 と解いていた。そのせいで一段目が行の挿入を
+    #   返した回に「行追加として読み直しました」が発火し、頼んでいない行が挿さりかけた。
+    #   ★ 列では既に塞いだ穴（_task_names_single_real_column）が、行では開いていた
+    #     ── **行と列の非対称**、この repo が何度も踏んだ形。
+    #   ★ 引用符の中は**値**であって、対象の名指しではない（Namakoo の決めた約束）。
+    #     だから位置を探す時は引用符の中を見ない ── 「『みかん』の行を削除して」の
+    #     ように名前を引用する書き方は、引用符なしで書いてもらう（列と同じ扱い）。
+    text = _task_outside_quotes(task).replace("　", " ")
     want_after, name, second = None, None, None
     m = _re_between.search(text)
     if m:
@@ -12308,7 +12326,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   「値を『』で囲め」と断られていた。だが依頼文は**行を名指し**している。
     #   ★ 行の名前が実表で 1 つに決まるなら、狙いは 1 セル ── 第二段で読み直す。
     #     （OPS_DOC は 1 文字も増やさない ── 第二段は op を固定してスキーマだけ見せる）
-    _sheet_h = (book_meta.get("sheets") or [None])[0]
+    # ★ 読み直しの塊はすべて**対象シート**で解く（1 枚目を仮定しない・上の _sheet_hint と同じ）。
+    _sheet_h = (getattr(a, "_target_sheet", None)
+                 or (book_meta.get("sheets") or [None])[0])
     # ★★ 2026-08-27（Namakoo「◎を入れて では動作しない」の**構造側**の真因）:
     #   読み直しの塊が 5 つ並んでいて、**後の塊が前の塊の結果を上書きしていた**。
     #   実測: 「チェック列に『◎』を入れて」は正しく条件つき書換に読み直された直後、
@@ -12667,7 +12687,11 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     if (not _reread_done and plan and not any(_is_a_different_job(st) for st in plan)
             and (_row_placing > 1
                   or (len(plan) == 1 and not _already_places_a_row(plan[0])))):
-        _sheet_hint = (book_meta.get("sheets") or [None])[0]
+        # ★★ 2026-08-30（同じ実測）: ここが **1 枚目**を見ていた。画面で『雛形』を
+        #   選んでいるのに『8月請求』の 9 行目で位置を解き、別のシートの行を根拠に
+        #   op を乗り換えていた。★ 対象シートは既に 1 箇所で決まっている ── それを使う。
+        _sheet_hint = (getattr(a, "_target_sheet", None)
+                        or (book_meta.get("sheets") or [None])[0])
         _why = insert_rows_should_have_been_add_row(a.task, {}, book_meta, _sheet_hint)
         if _why:
             _fixed = translate_task_fixed_op(a.model, "ADD_ROW", a.task, book_meta)
