@@ -1668,7 +1668,10 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
     new_row_at_end = _op_writes(op, WRITE_NEW_ROW_AT_END)   # ★ 単位C(D10): 合計行は宣言済みの効果
     for fn, kwargs in ((detect_ghost_data, {"new_col_letter": new_col_letter, "new_row_at_end": new_row_at_end}),
                         (detect_uniform_fill,
-                          {"single_cell": _op_writes(op, WRITE_SINGLE_CELL),
+                          # ★ 2026-08-29: 「既にある合計行に書く」回は**1 セルだけ**の
+                          #   書き込み（行を増やさない）── 宣言は op でなく args に在る。
+                          {"single_cell": (_op_writes(op, WRITE_SINGLE_CELL)
+                                            or bool((resolved or {}).get("_at_row"))),
                            "new_col_letter": new_col_letter,
                            "proved": bool(getattr(OP_WRITE_TARGET.get(op), "proves_which_cells",
                                                     False))})):
@@ -3778,6 +3781,44 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["label"] = str(resolved.get("label") or "合計")
         label = resolved["label"]
 
+        # ★★ 2026-08-29（Namakoo が実測）: 合計行が**既に在る**表で「単価列の合計行に
+        #   単価の合計を書いて」と頼むと、10 行目に『単価合計』という**別の行**が増えた。
+        #   ★ 真因: 合計行を「データ行」と数えて、その下に足していた。
+        #   ★ 合計行が 1 つに決まり、その列がまだ空なら、**その行に書く**（行は増やさない）。
+        #     判定は既存の凍結規則を借りる（total_rows_in → row_has_total_word）──
+        #     ここで新しい規則を書かない。同じことを 2 箇所が決めると必ずずれる。
+        _tot_sheet = resolved.get("_target_sheet") or first_sheet
+        _tot_hr = int((book_meta.get("header_rows") or {}).get(_tot_sheet, 1) or 1)
+        _tot_rows = total_rows_in(book_meta, _tot_sheet, _tot_hr)
+        if len(_tot_rows) == 1:
+            _tr = _tot_rows[0]
+            _theads = [str(h) for h in ((book_meta.get("headers") or {}).get(_tot_sheet) or [])]
+            _tidx = _theads.index(resolved["col"]) + 1 if resolved["col"] in _theads else 0
+            _cur = None
+            if _tidx:
+                try:
+                    with BookView(Path(book_meta["path"])) as _bv:
+                        _cur = _bv.sheet(_tot_sheet).cell(row=_tr, column=_tidx).value
+                except Exception:
+                    _tidx = 0
+            if _tidx and (_cur in (None, "") or str(_cur).startswith("=SUM(")):
+                resolved["_at_row"] = _tr
+                resolved["_at_basis"] = f"既にある合計行＝{_tr}行目（行は増やしません）"
+                # ★ ラベルは**その行に既に在る物**が正（LLM の案『単価合計』で検算しない）。
+                try:
+                    with BookView(Path(book_meta["path"])) as _bv2:
+                        _lbl = _bv2.sheet(_tot_sheet).cell(row=_tr, column=1).value
+                    if _lbl not in (None, ""):
+                        resolved["label"] = str(_lbl)
+                        label = resolved["label"]
+                except Exception:
+                    pass
+            # ★★ 2026-08-29: ここで「既に値が入っています」と**断るのはやめた**。
+            #   既存の番人（事後条件の算術の検算＝二重計上に ✓ を出さない／単位F の関所）が
+            #   同じ事故を既に止めていて、断りを重ねると**その番人の出番が消える**
+            #   ── 過去の事故を守っている検体が通らなくなる（実測で 3 本落ちた）。
+            #   ★ 埋められる時だけ埋め、それ以外は今までどおり深い番人に任せる。
+
         # ★ A': factor は LLM から受け取らない。LLM が返した値(あれば)はいったん取り出して
         #   おき、機械抽出/用語集の結果と食い違う場合だけ WARN として記録する（常に機械が勝つ）。
         llm_factor_raw = resolved.pop("factor", None)
@@ -5294,11 +5335,18 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         col_letter = get_column_letter(col_idx + 1)
         start_excel_row = hr0 + 2   # データ先頭行（Basic 0起点 hr0+1）の Excel(1起点) 行
         factor_tail = "" if factor == 1 else f"*{factor:g}"
-        body = ("    Dim oSheet As Object, lastRow As Long, totalRow As Long\n"
-                "    oSheet = oDoc.Sheets.getByIndex(0)\n"
-                + _scan_last_row_basic(start_row=str(hr0 + 1))
-                + "    totalRow = lastRow + 1\n")
-        if col_idx > 0:
+        _fixed_row = resolved_args.get("_at_row")
+        if _fixed_row:
+            # ★ 既にある合計行に書く（行は増やさない・ラベルはその行に既に在る）。
+            body = ("    Dim oSheet As Object, totalRow As Long\n"
+                     "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                     "    totalRow = " + str(int(_fixed_row) - 1) + "\n")
+        else:
+            body = ("    Dim oSheet As Object, lastRow As Long, totalRow As Long\n"
+                    "    oSheet = oDoc.Sheets.getByIndex(0)\n"
+                    + _scan_last_row_basic(start_row=str(hr0 + 1))
+                    + "    totalRow = lastRow + 1\n")
+        if col_idx > 0 and not _fixed_row:
             body += f'    oSheet.getCellByPosition(0, totalRow).setString("{label}")\n'
         body += (f'    oSheet.getCellByPosition({col_idx}, totalRow).setFormula('
                  f'"=SUM(" & "{col_letter}" & {start_excel_row} & ":INDEX(" & "{col_letter}" & '
@@ -12219,8 +12267,15 @@ def _maybe_warn_write_precondition(op: str, before: dict, after: dict, resolved:
     write_target = OP_WRITE_TARGET.get(op)
     if not write_target:
         return None
+    _writes = write_target.writes
+    # ★★ 2026-08-29（Namakoo が実測）: 「既にある合計行に書く」回は**末尾に足していない**
+    #   ── 宣言（new_row_at_end）のままだと「末尾に足すはずが既存の行を書き換えた」と
+    #   誤警報する。その回だけ**1 セルの書き込み**として扱う（宣言でなく引数から分かる事実・
+    #   位置がずれる回に位置ベースの前提を外すのと同じ形）。
+    if (resolved or {}).get("_at_row"):
+        _writes = tuple(k for k in _writes if k != WRITE_NEW_ROW_AT_END) + (WRITE_SINGLE_CELL,)
     return check_write_preconditions_detail(
-        write_target.writes, before, after,
+        _writes, before, after,
         cell_ref=_cell_ref, fmt_value=_fmt_cell_value,
         own_output_headers=_own_output_headers(op, resolved),
         # ★ この回、新しい列を依頼文の位置へ動かしたなら、右側の列は 1 つずつずれる
