@@ -172,3 +172,32 @@ def test_the_gate_does_not_close_on_plan_length():
     seg = src[max(0, i - 900):i]
     assert "any(_already_writes_one_cell(st) for st in plan)" in seg, seg[-400:]
     assert "len(plan) == 1" not in seg, "計画の長さで門を閉じている"
+
+
+# --- 途中まで入力した行があっても、見出しの検出が止まらない ----------------------------
+
+def test_a_half_filled_row_does_not_break_header_detection():
+    """★★ 2026-08-29（Namakoo が実測・基本操作が丸ごと止まった）:
+       「丸山工業／PCパーツ」だけ埋めた行を作ったら、そのシートで**何も**できなくなった
+       （？ 見出しが何行目か分かりません）。
+    ★ その行は「非空セルが全部文字列」で下の行に数字がある ── 見出しの条件を満たす。
+    ★ 一般則で切る: **本物の見出しは表の幅いっぱいに並ぶ**。
+       途中まで入力した行は 1〜2 セルしか埋まっていないので幅が違う。"""
+    rows = {1: {"nonempty": 7, "str": 7, "bold": 1}}          # 見出し（7 列）
+    for r in range(2, 7):
+        rows[r] = {"nonempty": 7, "str": 3, "bold": 0}        # データ
+    rows[7] = {"nonempty": 2, "str": 2, "bold": 0}            # 途中まで入力した行
+    rows[8] = {"nonempty": 7, "str": 3, "bold": 0}
+    got, confident = ailine.detect_header_row({"rows": rows})
+    assert (got, confident) == (1, True), (got, confident)
+
+
+def test_two_equally_wide_candidates_are_still_ambiguous():
+    """★ 黙りすぎない側の対: 同じ幅の候補が並ぶ（見出し 2 段・表が縦に 2 つ）なら
+       今までどおり**決めない**。幅で切れるのは、幅が違うときだけ。"""
+    rows = {1: {"nonempty": 2, "str": 2, "bold": 0},
+             2: {"nonempty": 2, "str": 1, "bold": 0},
+             3: {"nonempty": 2, "str": 2, "bold": 0},
+             4: {"nonempty": 2, "str": 1, "bold": 0}}
+    got, confident = ailine.detect_header_row({"rows": rows})
+    assert (got, confident) == (None, False), (got, confident)

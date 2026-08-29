@@ -643,6 +643,20 @@ def detect_header_row(sheet_struct: dict) -> tuple:
         return nxt is not None and nxt["nonempty"] > nxt["str"]
 
     with_mixture = [r for r in pure_str_rows if _mixture_below(r)]
+    # ★★ 2026-08-29（Namakoo が実測・基本操作が丸ごと止まった）: 「丸山工業／PCパーツ」
+    #   だけ埋めた行を作ったら、そのシートで**何も**できなくなった
+    #   （？ 見出しが何行目か分かりません）。
+    #   ★ その行は「非空セルが全部文字列」で、下の行に数字がある ── 見出しの条件を
+    #     そのまま満たしてしまう。候補が 2 つになって決められない。
+    #   ★ 一般則で切れる: **本物の見出しは表の幅いっぱいに並ぶ**。
+    #     途中まで入力した行は 1〜2 セルしか埋まっていない ── 幅が違う。
+    #     幅が最大の候補が**ちょうど 1 つ**なら、それが見出し。
+    #     同じ幅で並ぶ（見出しが 2 段・表が 2 つ縦に並ぶ等）なら、今までどおり決めない。
+    if len(with_mixture) > 1:
+        _widest = max(rows[r]["str"] for r in with_mixture)
+        _top = [r for r in with_mixture if rows[r]["str"] == _widest]
+        if len(_top) == 1:
+            with_mixture = _top
     if len(with_mixture) == 1:
         return with_mixture[0], True
     if not with_mixture and len(pure_str_rows) == 1:
