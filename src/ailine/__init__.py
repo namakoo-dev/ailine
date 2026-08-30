@@ -10853,6 +10853,13 @@ def refuse_if_locked(book: Path) -> int | None:
         print("  → Excel で開いています。閉じてから実行してください")
         print("  → Excel を開いていないのに出る場合は、同じフォルダの"
               f"「~${book.name}」が前回の異常終了の残骸です（消せば進めます）")
+    elif kind == "libreoffice":
+        # ★ 「書けないから止める」ではなく「**あとで消えるから止める**」。理由を言う。
+        print("  → LibreOffice で開いています。閉じてから実行してください")
+        print("  → 開いたまま書き換えると、そのあと LibreOffice 側で保存したときに"
+              "**開いた時点の内容で上書き**され、変更が消えます")
+        print("  → 開いていないのに出る場合は、同じフォルダの"
+              f"「.~lock.{book.name}#」が前回の異常終了の残骸です（消せば進めます）")
     else:
         # ★ 原因を断定しない ── 見たのは「書けない」ことだけ。心当たりを並べる。
         print("  → 心当たり: Excel などで開いている / 読み取り専用 / "
@@ -10879,6 +10886,17 @@ def check_excel_lock(book: Path) -> tuple | None:
     lock_file = book.parent / f"~${book.name}"
     if lock_file.exists():
         return ("excel", f"Excel のロックファイル {lock_file.name} が在ります")
+    # ★★ 2026-08-30（Namakoo「LO を開いた状態で表の更新はできないの？」→ 実測）:
+    #   Excel のロック（~$名前）は見ていたのに、**LibreOffice のロック（.~lock.名前#）は
+    #   見ていなかった** ── ailine 自身が LibreOffice を使う道具なのに、片方だけ。
+    #   ★ 実測: ロックファイルを置いても素通りして書き込めた。
+    #   ★ 危ないのは書けることではなく、この順序:
+    #       ① 人が LO で開く → ② ailine が書く（成功） → ③ 人が LO 側で保存する
+    #       → **開いた時点の古い中身で上書き**され、ailine の変更が黙って消える。
+    #     この道具が一番嫌う「静かに失われる」形なので、書く前に止める。
+    lo_lock = book.parent / f".~lock.{book.name}#"
+    if lo_lock.exists():
+        return ("libreoffice", f"LibreOffice のロックファイル {lo_lock.name} が在ります")
     try:
         with open(book, "r+b"):
             pass
