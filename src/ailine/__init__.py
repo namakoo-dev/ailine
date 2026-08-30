@@ -2953,8 +2953,8 @@ SET_COLUMN_VALUE: 既存列の値を全部、同じ1つの値に書き換える�
 EXTRACT: 単一条件（列×比較×値）に一致する行だけを新しいシートへ抜き出す。
   args: col(列名), cmp(比較。gte=以上, lte=以下, gt=超, lt=未満, eq=等しい, contains=を含む),
   value(比較する値。数値または文字列。ここでは数値化しなくてよい・機械が確定する)
-  ★ 出力シート名は機械が決める（LLM は考えなくてよい）。一部の列だけを残す絞り込みや
-  複数条件(AND/OR)、グループごとに分けての抽出は語彙に無い（OUT_OF_VOCAB にする）
+  ★ 出力シート名は機械が決める（LLM は考えなくてよい）。複数条件(AND/OR)や
+  グループごとに分けての抽出は語彙に無い（OUT_OF_VOCAB にする）
 DEDUP: 判定キー列（1つ以上）の値の組が同じ行のうち、最初の1行だけを新しいシートへ残す
   （重複除去。元シートの行は消さない・非破壊）。args: keys(判定キー列名のリスト。
   依頼文で名指しされた列だけを入れる)
@@ -8395,6 +8395,27 @@ MACHINE_DERIVED_ARGS = {
 }
 
 
+# ★ 一段目が「分かりません」と降りたことを表す op。読み直しが横取りしてよい相手。
+GIVING_UP_OPS = ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB")
+
+
+def plan_is_all_giving_up(plan) -> bool:
+    """その計画が**全段とも降りている**か（1 段でも仕事をしているなら False）。
+
+    ★★ 2026-08-30（Namakoo「読み直しって具体的には何をしてるの？」から辿って判明）:
+      読み直しは `len(plan) == 1` のときしか発火しなかった。ところが実測では、
+      一段目が**2 段の「内容不明」計画**を返すことがある:
+          「商品・売上の2列だけ取り出して」
+            → 1. 内容不明の依頼 / 2. 内容不明の依頼   ← 読み直しが鳴らない
+      ★ 番人は在るのに、**失敗が取る形では発火しない** ──「在っても鳴らない」の再演。
+    ★ 横取りしてよいのは**降りている計画だけ**、という元の線はそのまま守る
+      （1 段でも実行できる段が在れば触らない）。段数だけを緩める。
+    """
+    steps = list(plan or [])
+    return bool(steps) and all(
+        str((st or {}).get("op")) in GIVING_UP_OPS for st in steps)
+
+
 def fold_identical_steps(plan) -> tuple:
     """**中身がまったく同じ段**を 1 回にまとめる。戻り値: (畳んだ計画, 落とした数)。
 
@@ -12628,9 +12649,11 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
 
     # ★★ 2026-08-27（Namakoo「特定行や特定列の抜き出しができない」）: 列の抽出。
     #   実測で一段目は OUT_OF_VOCAB（「複数条件の抽出」と誤読）を返していた。
-    if (not _reread_done and task_asks_to_extract_columns(a.task) and len(plan) == 1
-            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB",
-                                                "EXTRACT")):
+    #   ★ 2026-08-30: 段数の縛りを外した（全段が降りている計画も拾う）── 実測で
+    #     「商品・売上の2列だけ取り出して」が 2 段の内容不明になり、素通りしていた。
+    if (not _reread_done and task_asks_to_extract_columns(a.task)
+            and (plan_is_all_giving_up(plan)
+                  or (len(plan) == 1 and (plan[0] or {}).get("op") == "EXTRACT"))):
         print("（『列抽出』として読み直しました ── 依頼文が「列だけ」を指しています）")
         plan = [{"op": "EXTRACT_COLUMNS", "args": {}}]
         _reread_done = True
@@ -12654,9 +12677,17 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             plan = [{"op": "SET_WHERE", "args": {"col": _rp_args["col"]}}]
             _reread_done = True
 
-    if (not _reread_done and task_asks_for_a_conditional_write(a.task) and len(plan) == 1
-            and (plan[0] or {}).get("op") in ("CLARIFY", "FREEFORM", "OUT_OF_VOCAB",
-                                                "SET_COLUMN_VALUE")):
+    #   ★ 2026-08-30: 同上。実測で「売上が1000以上の行の担当を『佐藤』にして」が
+    #     『抽出＋一括書換』の 2 段になり、**別シートを作って担当列を丸ごと潰す**
+    #     ところだった。★ ここは「降りている計画」ではないので、**抽出＋書換の 2 段**
+    #     という形そのものを名指しで拾う（条件つき書換を分解した形）。
+    _cw_split = (len(plan) == 2
+                  and str((plan[0] or {}).get("op")) == "EXTRACT"
+                  and str((plan[1] or {}).get("op")) in ("SET_COLUMN_VALUE", "SET_WHERE"))
+    if (not _reread_done and task_asks_for_a_conditional_write(a.task)
+            and (plan_is_all_giving_up(plan) or _cw_split
+                  or (len(plan) == 1
+                       and (plan[0] or {}).get("op") == "SET_COLUMN_VALUE"))):
         _sw2 = translate_task_fixed_op(a.model, "SET_WHERE", a.task, book_meta)
         _sw2_args = dict((_sw2 or {}).get("args") or {})
         if _sw2_args.get("col") and _sw2_args.get("cond_col"):

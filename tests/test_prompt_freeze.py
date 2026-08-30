@@ -71,7 +71,7 @@ _FROZEN = {
     #     「削除 op は語彙にない」）だった ── **その前提を今日変えた**ので、検体を
     #     DELETE_COLUMN 期待へ付け替えた（緩めたのではなく契約の訂正）。
     #   ★ これ以上は同じ検体で調整しない（自己汚染）── 実運用の誤分類が出たら測り直す。
-    "OPS_DOC": "19ce775d7d59cf4f",
+    "OPS_DOC": "c6a8f342abf61058",
     "TRANSLATION_SYSTEM": "8dd5cd3a43d833fe",
     "TRANSLATION_FEWSHOT": "c10a9b45e6cada35",
     # ★ 2026-08-22: W10 便B（二段目翻訳・op 固定で args だけ埋めさせる）で追加した第4の定数。
