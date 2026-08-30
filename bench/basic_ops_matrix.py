@@ -240,9 +240,14 @@ def run_one(table_key: str, task: str, check, workdir: Path, timeout: float):
     if out.exists():
         out.unlink()
     env = {**__import__("os").environ, "PYTHONPATH": str(ROOT / "src")}
+    # ★ 2026-08-30: 入口を差し替えられるようにした（AILINE_ENTRY）。
+    #   既定は製品そのもの。段階的に聞く実験（bench/staged_translate.py）を
+    #   **同じ検体で**測るためだけの口で、製品の挙動は 1 ビットも変わらない。
+    _entry = __import__("os").environ.get("AILINE_ENTRY")
+    _cmd = ([sys.executable, _entry] if _entry else [sys.executable, "-m", "ailine"])
     p = subprocess.run(
-        [sys.executable, "-m", "ailine", "run", str(src), task, "--copy",
-         "--sheet", sheet, "--timeout", "90"],
+        _cmd + ["run", str(src), task, "--copy",
+                 "--sheet", sheet, "--timeout", "90"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=timeout, cwd=str(ROOT), env=env)
     stdout = p.stdout or ""

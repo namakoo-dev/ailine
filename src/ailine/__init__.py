@@ -7920,6 +7920,13 @@ _TAIL_WORDS = ("にして", "にする", "に変えて", "に変える", "と入
 _PARTICLES = "をにへはとがのでも、。 　"
 
 
+# ★ 末尾の「を＋動詞」（を作って／をつくる／を新設して…）。**語でなく形**で書く。
+#   ★ 語尾（て・た・る…）は**必須**にする。省略可にすると「担当を佐藤」の
+#     『を佐藤』まで食って、値そのものを消してしまった（実測）。
+_re_verb_tail = re.compile(
+    r"を[^\sをにへはがでとのも、。]{1,6}(?:て|た|る|ます|ください|下さい)\s*$")
+
+
 def bare_value_from_task(task: str, row_name: str | None, col_name: str | None,
                           headers=None) -> str | None:
     """依頼文から、機械が**引き算で**書き込む値を切り出す。
@@ -7950,6 +7957,18 @@ def bare_value_from_task(task: str, row_name: str | None, col_name: str | None,
         out = out.replace(w, " ")
     for w in _TAIL_WORDS:
         out = out.replace(w, " ")
+    # ★★ 2026-08-30（1B の検体で 6 件・7B でも同じ形で落ちていた）:
+    #   「ボルトとナットの間に**新品を作って**」で値が取れず、空行の挿入に落ちていた。
+    #   「を追加して」は _TAIL_WORDS に在り、「を作って」は無い ── **列挙の穴そのもの**。
+    #   ★ 動詞を数え上げると必ず漏れる（この repo が何度も踏んだ形）。
+    #     語尾は**閉じた文法**なので、語ではなく**形**で書く:
+    #       「を」＋（助詞を含まない短い語）＋（て／た／る／…）が末尾に付いていたら落とす。
+    #   ★ セルに書く値は名詞なので、この形が値の一部になることはまずない。
+    out = _re_verb_tail.sub(" ", out)
+    #   ★ 「1行足して」のように**行そのものを足す**依頼は値ではない（凍結済みの
+    #     述語を借りる ── 新しい語を数え上げない）。実測で『足』が値になりかけた。
+    if _re_row_unit.search(task or ""):
+        return None
     out = out.strip(_PARTICLES).strip()
     while out and out[0] in _PARTICLES:
         out = out[1:]
