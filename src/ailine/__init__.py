@@ -6444,8 +6444,51 @@ def _sort_rows_lost_their_identity(source_book, after_rows: list, args: dict,
             " ── 見出しの無い列が一緒に動かなかった可能性があります")
 
 
+def only_this_column_changed(path: Path, source_book, sheet, col_index: int,
+                              header_row: int = 1) -> str | None:
+    """作った列**以外**が 1 セルも変わっていないか。変わっていればその理由（無ければ None）。
+
+    ★★ 2026-08-30（番人の感度を測る治具が、初回の本気の測定で見つけた穴）:
+      生成コードに「頼んでいないセルへの書き足し」を仕込んだところ、計算列の事後条件が
+      **pass を返した**。作った列の中身しか見ていなかったため。
+      ★ 1セル書換・行追加・行削除・並べ替え・入れ替えには「他は 1 セルも変わらず」が
+        在るのに、計算列だけ無かった ── **また片配線**。
+      ★ 単列×率の版（single_factor）も同じ穴なので、**1 関数を両方に配る**。
+    ★ source_book が無い経路では何も言わない（断定しない・従来どおり）。
+    """
+    if not source_book or not Path(source_book).exists():
+        return None
+    try:
+        with BookView(Path(source_book)) as bv_b, BookView(path) as bv_a:
+            ws_b, ws_a = bv_b.sheet(sheet), bv_a.sheet(sheet)
+            lb, cb = data_extent(ws_b, header_row)
+            la, ca = data_extent(ws_a, header_row)
+            width = max(cb, ca)
+            # ★★ 2026-08-30（既存の検体が捕まえた・俺の入れた誤爆）: 同じ名前の列が
+            #   2 本ある表（同じ依頼を 2 回した回）だと、_col_index_by_header は
+            #   **古いほう**を返す。すると新しく作った列が「頼んでいない場所」に見えて、
+            #   前提破れの関所（exit 7・言い方を案内する）より先に落としていた。
+            #   ★ 同じ見出しの列は**全部**対象外にする（どれが新しいかは名前では決まらない）。
+            _name = str(ws_a.cell(row=header_row, column=col_index).value or "")                 if 1 <= col_index <= ca else ""
+            skip = {c for c in range(1, width + 1)
+                     if _name and str(ws_a.cell(row=header_row, column=c).value or "") == _name}
+            skip.add(col_index)
+            for r in range(header_row, max(lb, la) + 1):
+                for c in range(1, width + 1):
+                    if c in skip:
+                        continue          # 作った列そのものは上で検証済み
+                    v_b = ws_b.cell(row=r, column=c).value
+                    v_a = ws_a.cell(row=r, column=c).value
+                    if v_b != v_a:
+                        return (f"作った列のほかに {r}行{c}列 が変わっています"
+                                 f"（{v_b!r}→{v_a!r}）── 頼んでいない場所を書いた疑いがあります")
+    except Exception:
+        return None                       # 読めない回は黙る
+    return None
+
+
 def check_compute_column(path: Path, args: dict, header_row: int = 1,
-                          use_formula: bool = False) -> tuple:
+                          use_formula: bool = False, source_book=None) -> tuple:
     """★ 止血1/2: 演算対象が非数値/None の行（合計行等）は「対象外」として除外し件数を
        表示する。除外後に検証できた行が0件なら fail（機械検証済みと名乗らない）。
        対象列(target)自体が非数値なのは演算が本当に効いていない証拠なので除外せず fail。
@@ -6466,7 +6509,8 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
        歪めない（AGGREGATE/SORT の全行をまたぐ検証とは違い部分採点できる）。"""
     if len(args["operands"]) == 1:
         return check_compute_column_single_factor(path, args, header_row=header_row,
-                                                    use_formula=use_formula)
+                                                    use_formula=use_formula,
+                                                    source_book=source_book)
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
         op1, op2 = args["operands"]
@@ -6524,13 +6568,16 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
     note = f"（{'・'.join(note_parts)}）" if note_parts else ""
     if checked == 0:
         return "fail", _ZERO_TARGET_REASON + note
+    if (_side := only_this_column_changed(path, source_book, args.get("_target_sheet"),
+                                          inew, header_row)):
+        return "fail", _side
     if use_formula:
-        return "pass", f"{checked} 行を検証（式・キャッシュ値とも一致）{note}"
-    return "pass", f"{checked} 行を検証{note}"
+        return "pass", f"{checked} 行を検証（式・キャッシュ値とも一致・他は 1 セルも変わらず）{note}"
+    return "pass", f"{checked} 行を検証（他は 1 セルも変わらず）{note}"
 
 
 def check_compute_column_single_factor(path: Path, args: dict, header_row: int = 1,
-                                        use_formula: bool = False) -> tuple:
+                                        use_formula: bool = False, source_book=None) -> tuple:
     """★ W10b 項目3: COMPUTE_COLUMN の「1列 × 率」パターン（税込み/税抜き等）専用の事後条件。
        check_compute_column（2列版）と同じ二層検証（式の期待形・data_only キャッシュ値）を
        1列 + factor に合わせて行う。factor は verify_dsl_args が機械確定済みの値
@@ -6587,9 +6634,12 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
     note = f"（{'・'.join(note_parts)}）" if note_parts else ""
     if checked == 0:
         return "fail", _ZERO_TARGET_REASON + note
+    if (_side := only_this_column_changed(path, source_book, args.get("_target_sheet"),
+                                          inew, header_row)):
+        return "fail", _side
     if use_formula:
-        return "pass", f"{checked} 行を検証（式・キャッシュ値とも一致）{note}"
-    return "pass", f"{checked} 行を検証{note}"
+        return "pass", f"{checked} 行を検証（式・キャッシュ値とも一致・他は 1 セルも変わらず）{note}"
+    return "pass", f"{checked} 行を検証（他は 1 セルも変わらず）{note}"
 
 
 def check_lookup_fill(path: Path, args: dict, header_row: int = 1,
@@ -8079,6 +8129,46 @@ def unsupported_except_reading(task: str) -> str | None:
 
 
 CHOICE_PREFIX = "候補: "
+
+
+def render_refusal(op: str, resolved_or_args, reason: str) -> list:
+    """断りを、**利用者の言葉**で 3 行にする。
+
+    ★★ 2026-08-30（Namakoo）:「断りの理由が対象とする非エンジニアにとって理解しがたい。
+      『なんでできないの？』という感覚が先に来る」
+      実測で出ていた断り:
+        ？ 演算子『+』は列1つの計算（税込み/税抜き等）では * か / のみ対応です
+        ？ 列『ナット』がこの表にありません（ある列: 品名、棚、数量、備考）
+      ★ どちらも**機械の内側の状態**を説明していて、頼んだ人の言葉になっていない。
+        「ナットを削除して」と頼んだ人に列の話をしても、何を直せばいいか分からない。
+    ★★ 一番効くのは**「こう読みました」の 1 行**だと判断した ── 断りの多くは
+      「できない」ではなく「**違うふうに読まれた**」なので、そこを見せれば
+      『なんでできないの？』が『ああ、読み違えられたのか』に変わる。
+      直し方も自分で分かる（言い直せばよい、と分かる）。
+    ★ 理由そのものは消さない ── 事実は落とさない。順番と枠だけ変える。
+    """
+    lines = ["？ できませんでした"]
+    label = OP_LABELS.get(op)
+    if label:
+        args = resolved_or_args if isinstance(resolved_or_args, dict) else {}
+        # ★ 内部の引数名（col=…）ではなく、解釈行と**同じ日本語の欄名**で見せる
+        #   ── 画面の他の場所と言葉が揃っていないと、そこでまた迷わせる。
+        _labels = {k: lab for lab, k, _fn in _CONFIRM_FIELDS.get(op, ())}
+        shown = "、".join(
+            f"{_labels.get(k, k)}={v}" for k, v in args.items()
+            if not str(k).startswith("_") and v not in (None, "", [], {})
+            and not isinstance(v, (dict, list, tuple)))
+        head = f"  依頼を『{label}』と読みました"
+        lines.append(f"{head}（{shown}）" if shown else head)
+    lines.append(f"  止めた理由: {reason}")
+    phrases = (OP_META.get(op) or {}).get("match_phrases") or []
+    if label and phrases:
+        # ★ match_phrases は語の断片のこともある（「演算」「掛け算」）。
+        #   「こう言えば通る」と書くと嘘になるので、**その操作を指す言い方**として出す。
+        lines.append(f"  『{label}』を指す言い方: "
+                      + "／".join(f"「{p}」" for p in phrases[:3]))
+    lines.append("  読み方そのものが違うなら、言い直してください（頼める操作の一覧: ailine ops）")
+    return lines
 
 
 def render_choices(choices) -> str:
@@ -10016,7 +10106,10 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
         if fn is None:
             return "fail", f"未対応の op: {op}"
         if op == "COMPUTE_COLUMN":
-            return fn(out_book, resolved_args, header_row, use_formula)
+            # ★ 2026-08-30: 「作った列以外は 1 セルも変わらず」を見るため before が要る
+            #   （番人の感度を測る治具が、ここが素通りするのを見つけた）。
+            return fn(out_book, resolved_args, header_row, use_formula,
+                       source_book=source_book)
         if op == "SORT":
             # ★ 算術恒等の検算: 合計行が最下行から動いたかは before が無いと測れない。
             return fn(out_book, resolved_args, header_row, use_formula=use_formula,
@@ -13098,7 +13191,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
     ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, first_sheet=first_sheet, deps=deps)
     if not ground.ok:
-        print(f"？ {ground.err}")
+        for _ln in render_refusal(op, raw_args, ground.err):
+            print(_ln)
         return 3
     resolved, inferred = ground.resolved, ground.inferred
 
@@ -13300,7 +13394,8 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
     first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
     ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, first_sheet=first_sheet, deps=deps)
     if not ground.ok:
-        print(f"？ {ground.err}")
+        for _ln in render_refusal(op, raw_args, ground.err):
+            print(_ln)
         return 3
     resolved, inferred = ground.resolved, ground.inferred
 
@@ -13464,7 +13559,8 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
     first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
     ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, first_sheet=first_sheet, deps=deps)
     if not ground.ok:
-        print(f"？ {ground.err}")
+        for _ln in render_refusal(op, raw_args, ground.err):
+            print(_ln)
         return 3
     resolved, inferred = ground.resolved, ground.inferred
 
