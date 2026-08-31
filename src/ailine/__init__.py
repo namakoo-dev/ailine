@@ -4359,18 +4359,59 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
 
     # --- ★ 2026-08-27: 入れ替え（行か列かは**機械が実表を見て**決める）------------
     elif op == "SWAP":
+        # ★★ 2026-08-31: セルの入れ替えは **a/b を要求する前**に見る。
+        #   実測: 一段目が OUT_OF_VOCAB を返す言い方（「みどり建設の単価と丸和物流の
+        #   単価を入れ替えて」）では a/b が空で、ここで先に落ちていた。
+        #   ★ 座標は依頼文と実表だけで解ける ── LLM の返事に依存させない。
+        _sheet_s0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+        _hr_s0 = int((book_meta.get("header_rows") or {}).get(_sheet_s0, 1) or 1)
+        _cells0 = swap_targets_are_cells(task, book_meta, _sheet_s0, _hr_s0)
         _a = str(resolved.get("a", "")).strip()
         _b = str(resolved.get("b", "")).strip()
-        if not _a or not _b:
+        if not _cells0 and (not _a or not _b):
             return False, resolved, inferred, (
                 "入れ替える 2 つを取り出せませんでした"
                 "（『みかんとぶどうを入れ替えて』のように 2 つの名前を書いてください）")
-        if _a == _b:
+        if not _cells0 and _a == _b:
             return False, resolved, inferred, (
                 f"『{_a}』と『{_b}』が同じものです（入れ替えになりません）")
         _sheet_s = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
         _hr_s = int((book_meta.get("header_rows") or {}).get(_sheet_s, 1) or 1)
         _headers_s = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_s) or [])]
+        resolved["_headers"] = _headers_s
+        resolved["_header_row"] = _hr_s
+        resolved["a"], resolved["b"] = _a, _b
+        # ★★ 2026-08-31: 行/列を決める**前に**、セルの入れ替えでないかを見る。
+        #   実測: 「丸和物流の単価とみどり建設の単価を入れ替えて」で行を丸ごと
+        #   入れ替えて ✓ を出していた（頼んだのは 2 セル）。
+        if (_cells := _cells0):
+            # ★ 中身は**実表から読む**（LLM に値を作らせない・A' 原則）。
+            _p_s = book_meta.get("path")
+            try:
+                with BookView(Path(_p_s)) as _bv_s:
+                    _ws_s = _bv_s.sheet(_sheet_s)
+                    _vals = [_ws_s.cell(row=r, column=c).value for r, c in _cells]
+            except Exception as _e:
+                return False, resolved, inferred, f"表を読めませんでした（{type(_e).__name__}）"
+            if _vals[0] == _vals[1]:
+                return False, resolved, inferred, (
+                    "入れ替える 2 つのセルの中身が同じです（入れ替えになりません）")
+            resolved["_axis"] = "cell"
+            # ★ 2026-08-31: a/b が空の経路（一段目が OUT_OF_VOCAB だった回）だと
+            #   解釈行に「入れ替える一方: もう一方:」と**空欄**が出ていた。
+            #   嘘の空欄を見せない ── その行を人が呼ぶ名前（1 列目）で埋める。
+            if not _a or not _b:
+                _n0 = _cell_row_name_for(book_meta, _sheet_s, _cells[0][0], _hr_s)
+                _n1 = _cell_row_name_for(book_meta, _sheet_s, _cells[1][0], _hr_s)
+                resolved["a"] = _a or (str(_n0) if _n0 else f"{_cells[0][0]}行目")
+                resolved["b"] = _b or (str(_n1) if _n1 else f"{_cells[1][0]}行目")
+            resolved["_cells"] = [list(c) for c in _cells]
+            resolved["_cell_values"] = list(_vals)
+            resolved["_a_pos"], resolved["_b_pos"] = _cells[0][0], _cells[1][0]
+            resolved["_axis_label"] = (
+                f"セル（{_headers_s[_cells[0][1] - 1]} の {_cells[0][0]}行目 と "
+                f"{_headers_s[_cells[1][1] - 1]} の {_cells[1][0]}行目）")
+            return True, resolved, inferred, None
         as_col = _a in _headers_s and _b in _headers_s
         _ra, _note_a = _resolve_named_row(book_meta, _sheet_s, _a)
         _rb, _note_b = _resolve_named_row(book_meta, _sheet_s, _b)
@@ -4397,29 +4438,6 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["_headers"] = _headers_s
         resolved["_header_row"] = _hr_s
         resolved["a"], resolved["b"] = _a, _b
-        # ★★ 2026-08-31: 行/列を決める**前に**、セルの入れ替えでないかを見る。
-        #   実測: 「丸和物流の単価とみどり建設の単価を入れ替えて」で行を丸ごと
-        #   入れ替えて ✓ を出していた（頼んだのは 2 セル）。
-        if (_cells := swap_targets_are_cells(task, book_meta, _sheet_s, _hr_s)):
-            # ★ 中身は**実表から読む**（LLM に値を作らせない・A' 原則）。
-            _p_s = book_meta.get("path")
-            try:
-                with BookView(Path(_p_s)) as _bv_s:
-                    _ws_s = _bv_s.sheet(_sheet_s)
-                    _vals = [_ws_s.cell(row=r, column=c).value for r, c in _cells]
-            except Exception as _e:
-                return False, resolved, inferred, f"表を読めませんでした（{type(_e).__name__}）"
-            if _vals[0] == _vals[1]:
-                return False, resolved, inferred, (
-                    "入れ替える 2 つのセルの中身が同じです（入れ替えになりません）")
-            resolved["_axis"] = "cell"
-            resolved["_cells"] = [list(c) for c in _cells]
-            resolved["_cell_values"] = list(_vals)
-            resolved["_a_pos"], resolved["_b_pos"] = _cells[0][0], _cells[1][0]
-            resolved["_axis_label"] = (
-                f"セル（{_headers_s[_cells[0][1] - 1]} の {_cells[0][0]}行目 と "
-                f"{_headers_s[_cells[1][1] - 1]} の {_cells[1][0]}行目）")
-            return True, resolved, inferred, None
         if as_col:
             resolved["_axis"] = "column"
             resolved["_axis_label"] = "列（見出しで一致）"
@@ -12965,6 +12983,20 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     金額列を掛け算で潰しかけた（関所が止めた）。門が op 名の列挙だったので素通り。
     #   ★ 門は証拠で作る: 依頼文が入れ替えを言い、**機械が対象を 2 つとも解けている**なら
     #     読み直す。既に SWAP で読めている回だけ触らない（op 名の列挙をやめる）。
+    if (not _reread_done and plan and task_asks_for_a_swap(a.task)
+            and not any((st or {}).get("op") == "SWAP" for st in plan)):
+        # ★★ 2026-08-31（Namakoo が実測・「単価の入れ替えに対応していないようにみえる」）:
+        #   「みどり建設の単価と丸和物流の単価を入れ替えて」が **OUT_OF_VOCAB** で
+        #   終わっていた。セルの入れ替えは前日に実装したが、それは SWAP の**検証段**に
+        #   置いたので、**op が SWAP にならなければ一度も呼ばれない**。
+        #   ★ また「番人は在るが、失敗が取る形では鳴らない」── この repo で何度も踏む形。
+        #   ★ ここで LLM に聞く前に、**機械だけで 2 つのセルが解けているなら**それを使う。
+        #     依頼文と実表しか見ていないので、LLM の返事より確かで、速い。
+        if swap_targets_are_cells(a.task, book_meta, _sheet_h):
+            print("（『入れ替え』として読み直しました ── "
+                   "依頼文が 2 つのセルの入れ替えを指しています）")
+            plan = [{"op": "SWAP", "args": {}}]
+            _reread_done = True
     if (not _reread_done and plan and task_asks_for_a_swap(a.task)
             and not any((st or {}).get("op") == "SWAP" for st in plan)):
         _sw = translate_task_fixed_op(a.model, "SWAP", a.task, book_meta)

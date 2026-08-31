@@ -168,8 +168,53 @@ def test_only_two_cells_move_for_real(tmp_path):
          "丸和物流の単価とみどり建設の単価を入れ替えて", "--copy", "--sheet", "請求"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=900, cwd=str(REPO), env=env)
-    assert "✓" in r.stdout, r.stdout[-1500:]
+    # ★★ 2026-08-31: この検体を書いた時点では ✓ を期待していたが、そのあと
+    #   **派生列の取り残しの ⚠** を入れたので、この表（金額＝件数×単価）では △ が正しい。
+    #   ★ 実装が正しく、検体が追いついていなかった ── 期待値を実態に合わせる。
+    #     操作そのものが通っていること（2 セルだけ動いた）は下の assert で見る。
+    assert "2 セルだけを入れ替え" in r.stdout, r.stdout[-1500:]
+    assert "『金額』＝『件数』×『単価』" in r.stdout, "派生列の取り残しを言っていない"
     v = openpyxl.load_workbook(tmp_path / "r.out.xlsx", data_only=True)["請求"]
     assert v.cell(2, 4).value == 7200 and v.cell(4, 4).value == 4800
     assert v.cell(2, 1).value == "丸和物流" and v.cell(4, 1).value == "みどり建設"
     assert v.cell(2, 5).value == 57600, "金額まで動いている"
+
+
+# --- ⑤ 一段目が降りた回でも届くこと（読み直し）--------------------------------------------
+
+def test_the_reread_uses_the_machine_not_the_model():
+    """★★ 2026-08-31（Namakoo「単価の入れ替えに対応していないようにみえる」）:
+       「みどり建設の単価と丸和物流の単価を入れ替えて」が **OUT_OF_VOCAB** で終わっていた。
+       セルの入れ替えは前日に実装したが、それは SWAP の**検証段**に置いたので、
+       **op が SWAP にならなければ一度も呼ばれない**。
+       ★ また「番人は在るが、失敗が取る形では鳴らない」── 何度も踏む形。
+       ★ 直し: 読み直しで LLM に聞く**前に**、機械だけで 2 セルが解けているならそれを使う。
+    """
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("task_asks_for_a_swap(a.task)")
+    seg = src[i:i + 1200]
+    assert "swap_targets_are_cells(a.task, book_meta, _sheet_h)" in seg, (
+        "読み直しが、機械で解けるセルを見ていない")
+    j = seg.index("swap_targets_are_cells")
+    k = seg.index("translate_task_fixed_op")
+    assert j < k, "LLM に聞いてから機械を見ている（順序が逆）"
+
+
+def test_cells_are_resolved_before_the_row_or_column_decision():
+    """★ a/b が空でも通ること ── 一段目が降りた回は a/b が無い。
+       セルの解決を**行/列の判定より前**に置く（そこで確定して先へ行かない）。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index('elif op == "SWAP":')
+    # ★ 窓を固定長で切ると、間に足したぶんで外れる（実際に外れた）── 次の分岐まで見る。
+    seg = src[i:src.index('elif op == "INSERT_ROWS":', i)]
+    assert seg.index("_cells0 = swap_targets_are_cells") < seg.index("as_col = _a in _headers_s")
+    assert "if not _cells0 and (not _a or not _b):" in seg, "a/b が無い回に先に落ちる"
+
+
+def test_the_interpretation_line_has_no_empty_slots(meta):
+    """★ 実測で「入れ替える一方: もう一方:」と**空欄**が出ていた（a/b が無い経路）。
+       嘘の空欄を見せない ── 行の名前で埋める。"""
+    ok, r, _i, err = ailine.verify_dsl_args(
+        "SWAP", {}, meta, task="丸和物流の単価とみどり建設の単価を入れ替えて")
+    assert ok, err
+    assert r["a"] == "丸和物流" and r["b"] == "みどり建設", (r.get("a"), r.get("b"))
