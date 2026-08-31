@@ -1427,3 +1427,30 @@ Sub SetFormulaAt(oDoc As Object, nRow As Long, nCol As Integer, sFormula As Stri
     oSheet = oDoc.Sheets.getByIndex(0)
     oSheet.getCellByPosition(nCol, nRow).setFormula(sFormula)
 End Sub
+
+' 2 つの行を**行番号で**入れ替える（2026-08-31 追加）。
+' ★ 既存の SwapRowsByName は「名前で探す」ので、「6行目と5行目を入れ替えて」のように
+'   人が行番号で指した回に使えない（表に『6行目』という名前は無い）。
+' ★ 名前で指す回は今までどおり SwapRowsByName ── どちらを使うかは Python 側が決める。
+' 行は 0 起点（他のヘルパと同じ）。
+Sub SwapRowsAt(oDoc As Object, nRow1 As Long, nRow2 As Long)
+    Dim oSheet As Object, oCur As Object, oRng As Object, oDst As Object
+    Dim park As Long, lastCol As Integer
+    If nRow1 = nRow2 Then Exit Sub
+    oSheet = oDoc.Sheets.getByIndex(0)
+    oCur = oSheet.createCursor()
+    oCur.gotoEndOfUsedArea(False)
+    lastCol = oCur.RangeAddress.EndColumn
+    park = oCur.RangeAddress.EndRow + 1
+    oSheet.Rows.insertByIndex(park, 1)
+    oRng = oSheet.getCellRangeByPosition(0, nRow1, lastCol, nRow1).RangeAddress
+    oDst = oSheet.getCellByPosition(0, park).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oRng = oSheet.getCellRangeByPosition(0, nRow2, lastCol, nRow2).RangeAddress
+    oDst = oSheet.getCellByPosition(0, nRow1).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oRng = oSheet.getCellRangeByPosition(0, park, lastCol, park).RangeAddress
+    oDst = oSheet.getCellByPosition(0, nRow2).CellAddress
+    oSheet.moveRange(oDst, oRng)
+    oSheet.Rows.removeByIndex(park, 1)
+End Sub

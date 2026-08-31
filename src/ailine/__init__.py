@@ -5820,8 +5820,18 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
             _body = ('    Call SwapColumnsByName(oDoc, "%s", "%s", %d)%s'
                       % (_a, _b, hr0, chr(10)))
         else:
-            _body = ('    Call SwapRowsByName(oDoc, "%s", "%s", 0, %d)%s'
-                      % (_a, _b, hr0, chr(10)))
+            # ★★ 2026-08-31: 行番号で指された回は**座標で**渡す。名前で渡すと Basic は
+            #   表から『6行目』という名前を探して見つけられない（実測で別の行が動いた）。
+            #   ★ 名前で指された回は今までどおり名前を渡す ── あちらは Basic が自分で
+            #     位置を見つけるので、事後条件が独立な検算になる。
+            if (_re_row_number_word.fullmatch(_a.strip())
+                    and _re_row_number_word.fullmatch(_b.strip())):
+                _body = ('    Call SwapRowsAt(oDoc, %d, %d)%s'
+                          % (resolved_args["_a_pos"] - 1, resolved_args["_b_pos"] - 1,
+                             chr(10)))
+            else:
+                _body = ('    Call SwapRowsByName(oDoc, "%s", "%s", 0, %d)%s'
+                          % (_a, _b, hr0, chr(10)))
         # ★ 入れ替えの**あと**に、写像を通した式を書き戻す（順序が意味を持つ）。
         for _r, _c, _f in resolved_args.get("_formula_rewrites") or ():
             _esc = formula_for_basic(_f).replace(chr(34), chr(34) * 2)
@@ -8941,6 +8951,16 @@ def _resolve_named_row(book_meta: dict, sheet: str | None, name: str) -> tuple:
     if not path:
         return None, "表を読めないため、どの行かを決められません"
     hr = int((book_meta.get("header_rows") or {}).get(sheet, 1) or 1)
+    # ★★ 2026-08-31（Namakoo が実測・「この基本操作ができない」）:
+    #   「6行目と5行目を入れ替えて」が CLARIFY に落ちていた ── **行番号で指すと黙る**、
+    #   08-29 に追加・削除で直したのと同じ非対称が、**入れ替えには残っていた**。
+    #   ★ ここは住所の解決を集めている 1 箇所なので、ここに足すと全部の op に効く
+    #     （入れ替え専用の判定を作らない）。
+    if _re_row_number_word.fullmatch(str(name or "").strip()):
+        _n = _row_word_number(name)
+        if _n > hr:
+            return _n, f"{_n}行目（依頼文の行番号）"
+        return None, f"{_n}行目は見出し行（{hr}行目）またはその上です"
     try:
         with BookView(Path(path)) as bv:
             ws = bv.sheet(sheet)

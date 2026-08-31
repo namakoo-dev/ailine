@@ -218,3 +218,59 @@ def test_the_interpretation_line_has_no_empty_slots(meta):
         "SWAP", {}, meta, task="丸和物流の単価とみどり建設の単価を入れ替えて")
     assert ok, err
     assert r["a"] == "丸和物流" and r["b"] == "みどり建設", (r.get("a"), r.get("b"))
+
+
+# --- ⑥ 行番号で指した入れ替え ------------------------------------------------------------
+#
+# ★★ 2026-08-31（Namakoo が実測・「この基本操作ができない」）:
+#   「6行目と5行目を入れ替えて」が CLARIFY に落ちていた ── **行番号で指すと黙る**、
+#   08-29 に追加・削除で直したのと同じ非対称が、**入れ替えには残っていた**。
+# ★ 直しは「住所の解決を集めている 1 箇所」（_resolve_named_row）に足した ──
+#   入れ替え専用の判定を作らない。そこに足すと全部の op に効く。
+# ★★ さらに、解釈が通ったあとに**実行が別の行を動かした** ── 生成側が Basic に
+#   **名前**を渡しており、表に『6行目』という名前は無いので探せなかった（番人が捕捉）。
+#   行番号で解けた回は**座標で**渡す（SwapRowsAt を追加・既存の SwapRowsByName は不変）。
+
+
+def test_a_row_number_resolves_as_a_row(meta):
+    row, note = ailine._resolve_named_row(meta, "請求", "6行目")
+    assert row == 6, (row, note)
+    assert "依頼文の行番号" in note
+
+
+def test_the_header_row_is_refused(meta):
+    row, note = ailine._resolve_named_row(meta, "請求", "1行目")
+    assert row is None and "見出し行" in note, (row, note)
+
+
+def test_a_name_is_still_resolved_by_content(meta):
+    """★ 行番号を足したせいで、名前で指す道が壊れていないこと。"""
+    row, _note = ailine._resolve_named_row(meta, "請求", "丸和物流")
+    assert row == 2
+
+
+def test_the_codegen_passes_coordinates_for_numbered_rows():
+    """★★ 名前で渡すと Basic が探せない（実測で別の行が動いた）。"""
+    m = {"sheets": ["S"], "headers": {"S": HEADERS}, "header_rows": {"S": 1}}
+    args = {"a": "6行目", "b": "5行目", "_axis": "row", "_a_pos": 6, "_b_pos": 5,
+            "_headers": HEADERS, "_header_row": 1}
+    code = ailine.codegen_dsl("SWAP", args, m)
+    assert "Call SwapRowsAt(oDoc, 5, 4)" in code, code
+    assert "SwapRowsByName" not in code, code
+
+
+def test_the_codegen_still_passes_names_when_named():
+    """★ 名前で指された回は今までどおり名前を渡す（Basic 側が独立に位置を探す）。"""
+    m = {"sheets": ["S"], "headers": {"S": HEADERS}, "header_rows": {"S": 1}}
+    args = {"a": "丸和物流", "b": "みどり建設", "_axis": "row", "_a_pos": 2, "_b_pos": 4,
+            "_headers": HEADERS, "_header_row": 1}
+    code = ailine.codegen_dsl("SWAP", args, m)
+    assert "SwapRowsByName" in code and "SwapRowsAt" not in code, code
+
+
+def test_the_basic_helper_exists_and_is_new():
+    bas = (REPO / "src" / "ailine" / "helpers" / "AiLineHelpers.bas").read_text(encoding="utf-8")
+    assert "Sub SwapRowsAt(" in bas
+    # ★ 既存の SwapRowsByName は触っていない（目録・凍結検体が全部動く）
+    i = bas.index("Sub SwapRowsByName(")
+    assert "nKeyCol As Integer" in bas[i:i + 200]
