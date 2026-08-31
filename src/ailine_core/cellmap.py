@@ -550,7 +550,37 @@ def refs_pointing_into(path, target_sheet: str, row_lo: int = 1, row_hi: int = 1
     return sorted(hits, key=lambda t: (t[0], t[3], t[4]))
 
 
-def reference_drift_note(hits: list) -> str | None:
+def drop_rewritten(hits: list, rewritten, sheet: str) -> list:
+    """**書き直した式**を、ズレの名指しから外す。
+
+    ★★ 2026-08-31（Namakoo「この指す中身が変わるとはどういうこと？」→ 実測）:
+      「金額と単価を入れ替えて」で ⚠ が出るが、中身が事実に反していた ──
+      式は正しく付いていっていて（=E2*1.1 → =D2*1.1）、値も操作前と同じだった。
+      ★ 原因は片配線の**逆**: この警告は並べ替え（式を直さない）用に作り、入れ替えにも
+        配線した。そのあと**入れ替えだけ式を直すようになった**のに、警告は昔の前提のまま。
+      ★ 書き直した式は、もう「ずれる式」ではない。ただし**別シートから指している式**は
+        書き直していないので、そちらは名指しを残す（黙らせすぎない）。
+    rewritten: 書き直す (行, 列) の集合（そのシート内）。
+    """
+    if not rewritten:
+        return list(hits)
+    keep = []
+    for h in hits:
+        sh, ref, f, r, c = h
+        row_col = _cell_of_ref(ref)
+        if sh == sheet and row_col in rewritten:
+            continue
+        keep.append(h)
+    return keep
+
+
+def _cell_of_ref(ref: str):
+    """"D7" → (7, 4)。読めなければ None（除外しない側に倒す）。"""
+    m = re.fullmatch(r"([A-Z]{1,3})([0-9]{1,7})", str(ref or ""))
+    return (int(m.group(2)), _col_to_num(m.group(1))) if m else None
+
+
+def reference_drift_note(hits: list, unit: str = "行") -> str | None:
     """検出した参照のズレを 1 行にする（無ければ None）。
 
     ★ 直さない ── **直してよいかは人が決める**（Excel も LibreOffice も、範囲の外から
@@ -562,6 +592,8 @@ def reference_drift_note(hits: list) -> str | None:
         return None
     head = "・".join(f"{sh}!{ref}（{f}）" for sh, ref, f, *_ in hits[:3])
     more = f" ほか {len(hits) - 3} 件" if len(hits) > 3 else ""
+    # ★ 2026-08-31: 列の入れ替えなのに「**行**が入れ替わります」と言っていた
+    #   （同じ形の言い間違いを 08-30 に別の場所で直したばかり）── 軸を受け取る。
     return (f"この操作で、**指す先の中身が変わる式**が {len(hits)} 件あります: {head}{more}"
-             " ── 式そのものは壊れませんが、指している行が入れ替わります"
+             f" ── 式そのものは壊れませんが、指している{unit}が入れ替わります"
              "（直してよいかは人が決めることなので、直していません）")

@@ -4432,7 +4432,18 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                                                                      resolved["_b_pos"])
         _kw = ({"col_lo": _lo, "col_hi": _hi} if as_col
                 else {"row_lo": _lo, "row_hi": _hi})
-        if (_dw := reference_drift_warning(book_meta, _sw_sheet, **_kw)):
+        # ★★ 2026-08-31（Namakoo「この指す中身が変わるとはどういうこと？」→ 実測）:
+        #   「金額と単価を入れ替えて」で ⚠ が出るが、**中身が 3 つとも事実に反していた**:
+        #     ・「指す先の中身が変わる」→ 変わらない（税込金額は金額を指し続けた）
+        #     ・「**行**が入れ替わる」   → 入れ替えたのは列
+        #     ・「直していません」       → **直している**（=E2*1.1 → =D2*1.1）
+        #   そして嘘の ⚠ のせいで、正しく動いた操作の ✓ が △ に落ちていた。
+        #   ★ 片配線の**逆**: 警告は並べ替え（式を直さない）用に作って入れ替えにも配線し、
+        #     そのあと入れ替えだけ式を直すようになったのに、警告は昔の前提のまま残った。
+        #   ★ 書き直す式は名指しから外す（別シートから指す式は書き直さないので残す）。
+        if (_dw := reference_drift_warning(book_meta, _sw_sheet,
+                                            rewritten=set(_rw),
+                                            unit=("列" if as_col else "行"), **_kw)):
             resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
 
     # --- ★ W9: 検証済みヘルパ4種の語彙昇格 -----------------------------------
@@ -8314,7 +8325,8 @@ def formula_rewrites_for_shift(book_meta: dict, sheet: str | None, shift) -> tup
 
 def reference_drift_warning(book_meta: dict, sheet: str | None, *,
                              row_lo: int = 1, row_hi: int = 10 ** 7,
-                             col_lo: int = 1, col_hi: int = 10 ** 4) -> str | None:
+                             col_lo: int = 1, col_hi: int = 10 ** 4,
+                             rewritten=None, unit: str = "行") -> str | None:
     """動かす区画を**外から**指している式を見つけ、1 行にして返す（無ければ None）。
 
     ★★ 2026-08-29（Namakoo の指摘 → 実測で裏取り）:
@@ -8337,7 +8349,10 @@ def reference_drift_warning(book_meta: dict, sheet: str | None, *,
         hits = cellmap.refs_pointing_into(Path(path), sheet, row_lo, row_hi, col_lo, col_hi)
     except Exception:
         return None                      # 読めない回は黙る（断定しない）
-    return cellmap.reference_drift_note(hits)
+    # ★ 2026-08-31: **こちらで書き直す式**は、もう「ずれる式」ではないので名指ししない
+    #   （別シートから指している式は書き直していないので、そちらは残す）。
+    return cellmap.reference_drift_note(
+        cellmap.drop_rewritten(hits, rewritten, sheet), unit=unit)
 
 
 def placements_in_plan(plan) -> dict:
