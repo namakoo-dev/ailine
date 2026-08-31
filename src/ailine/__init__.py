@@ -7956,7 +7956,13 @@ def row_number_anchor(task: str) -> tuple:
     return None, None, ""
 
 
-_re_row_of = re.compile(r"([^\s、。]+?)\s*の\s*行")
+# ★★ 2026-08-31（Namakoo の提案した通しを俺が先に走らせて出た・1 幕目が全滅）:
+#   「**8行目に**丸山工業の行を作って」で、名前として『8行目に丸山工業』を丸ごと
+#   切り出していた（区切りが空白と読点しか無く、**行番号をまたいで飲み込む**）。
+#   ★ そのとき task_names_a_row_number は正しく 8 を返していた ── **行番号が
+#     分かっているのに、名前の切り出しがそれを無視していた**。
+#   ★ 助詞と行番号の語は名前に含まれない ── そこで切る（語彙ではなく文法の線）。
+_re_row_of = re.compile(r"([^\s、。をにへはがでとのも]+?)\s*の\s*行")
 _re_row_unit = re.compile(r"[0-9０-９]*\s*行\s*(?:を|も)?\s*(?:足|追加|入れ|挿入)")
 _re_value_assign = re.compile(r"[^\s、。]+\s*(?:は|を|＝|=)\s*[0-9０-９]")
 
@@ -9102,6 +9108,14 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
         alt = _row_named_anywhere_in_task(task, ws_rows, headers_here)
         if alt:
             return alt[0], f"『{alt[1]}』の行＝{alt[0]}行目"
+        # ★★ 2026-08-31（通しの 1 幕目で全滅した形）:「8行目に丸山工業の行を作って」
+        #   ── **これから置く**行なので、名前が表に無いのは当たり前。
+        #   ★ 依頼文が行番号を名指ししているなら、それが場所（表に無いことは断りの
+        #     理由にならない）。実測では task_names_a_row_number が 8 を返せていたのに、
+        #     名前が見つからないほうで先に断っていた。
+        _n_here = task_names_a_row_number(task)
+        if _n_here and _n_here > header_row:
+            return _n_here, f"{_n_here}行目（依頼文の行番号）"
         return None, (f"『{name}』という行が見つかりません"
                        "（この表に在る値で指してください・行番号でも指せます）")
     if len(hits) > 1:
