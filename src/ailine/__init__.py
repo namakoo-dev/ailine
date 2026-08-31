@@ -162,6 +162,7 @@ from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領�
     own_prior_output_notice_lines,   # ★ 単位H 開示: 関所が黙った理由を1行で見せる
 )
 from ailine_core.sum_identity import rows_matching_sum_above   # ★ 算術恒等の検算（二重計上）
+from ailine_core import row_identity   # ★ 行内の等式（金額＝件数×単価）が操作で崩れたら言う
 from ailine_core.target_sheet import (
     drop_names_covered_by_longer, sheets_named_explicitly,   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
@@ -4396,6 +4397,29 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         resolved["_headers"] = _headers_s
         resolved["_header_row"] = _hr_s
         resolved["a"], resolved["b"] = _a, _b
+        # ★★ 2026-08-31: 行/列を決める**前に**、セルの入れ替えでないかを見る。
+        #   実測: 「丸和物流の単価とみどり建設の単価を入れ替えて」で行を丸ごと
+        #   入れ替えて ✓ を出していた（頼んだのは 2 セル）。
+        if (_cells := swap_targets_are_cells(task, book_meta, _sheet_s, _hr_s)):
+            # ★ 中身は**実表から読む**（LLM に値を作らせない・A' 原則）。
+            _p_s = book_meta.get("path")
+            try:
+                with BookView(Path(_p_s)) as _bv_s:
+                    _ws_s = _bv_s.sheet(_sheet_s)
+                    _vals = [_ws_s.cell(row=r, column=c).value for r, c in _cells]
+            except Exception as _e:
+                return False, resolved, inferred, f"表を読めませんでした（{type(_e).__name__}）"
+            if _vals[0] == _vals[1]:
+                return False, resolved, inferred, (
+                    "入れ替える 2 つのセルの中身が同じです（入れ替えになりません）")
+            resolved["_axis"] = "cell"
+            resolved["_cells"] = [list(c) for c in _cells]
+            resolved["_cell_values"] = list(_vals)
+            resolved["_a_pos"], resolved["_b_pos"] = _cells[0][0], _cells[1][0]
+            resolved["_axis_label"] = (
+                f"セル（{_headers_s[_cells[0][1] - 1]} の {_cells[0][0]}行目 と "
+                f"{_headers_s[_cells[1][1] - 1]} の {_cells[1][0]}行目）")
+            return True, resolved, inferred, None
         if as_col:
             resolved["_axis"] = "column"
             resolved["_axis_label"] = "列（見出しで一致）"
@@ -5755,6 +5779,25 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         hr0 = int(resolved_args.get("_header_row", 1)) - 1
         _a = str(resolved_args["a"]).replace(chr(34), chr(34) * 2)
         _b = str(resolved_args["b"]).replace(chr(34), chr(34) * 2)
+        if resolved_args.get("_axis") == "cell":
+            # ★ 2 セルの入れ替え。中身は verify が実表から読んだもの（LLM 由来ではない）。
+            #   ★ 式のセルは setFormula で書く（setString だと文字列になる）。
+            _cs = resolved_args["_cells"]
+            _vs = resolved_args["_cell_values"]
+            _body = ""
+            for (r, c), v in zip(_cs, reversed(_vs)):     # ★ 入れ替え＝相手の値を書く
+                if isinstance(v, str) and v.startswith("="):
+                    _esc = formula_for_basic(v).replace(chr(34), chr(34) * 2)
+                    _body += ('    Call SetFormulaAt(oDoc, %d, %d, "%s")%s'
+                               % (r - 1, c - 1, _esc, chr(10)))
+                elif _is_number(v):
+                    _body += ('    Call SetCellAt(oDoc, %d, %d, "%s", "n")%s'
+                               % (r - 1, c - 1, repr(float(v)), chr(10)))
+                else:
+                    _esc = str("" if v is None else v).replace(chr(34), chr(34) * 2)
+                    _body += ('    Call SetCellAt(oDoc, %d, %d, "%s", "s")%s'
+                               % (r - 1, c - 1, _esc, chr(10)))
+            return wrap(_body)
         if resolved_args.get("_axis") == "column":
             _body = ('    Call SwapColumnsByName(oDoc, "%s", "%s", %d)%s'
                       % (_a, _b, hr0, chr(10)))
@@ -7491,6 +7534,61 @@ def check_add_column(path: Path, args: dict, header_row: int = 1,
     return "pass", f"{at}列目に{label}を挿入（他の列は 1 セルも変わらず）"
 
 
+def _check_swap_cells(path: Path, args: dict, header_row: int,
+                       source_book) -> tuple:
+    """セル 2 つの入れ替えの事後条件。**2 つだけが、互いの値になった**ことを証明する。
+
+    ★★ 2026-08-31（Namakoo が実測）:「丸和物流の単価とみどり建設の単価を入れ替えて」で
+      **行を丸ごと入れ替えて ✓ を出していた**（16 セルが動いた・頼んだのは 2 セル）。
+      番人は宣言（行の入れ替え）どおりかを見るので、宣言が違えば通ってしまう。
+    ★ だからここで見るのは 3 つ:
+      ① 宣言した 2 セルが、**互いの値**になっている
+      ② 変わったセルは**ちょうど 2 個**（列や行を巻き込んでいない）
+      ③ その 2 個の座標が宣言と一致する
+    ★ ②③ は適用前が要る。無ければ①だけの warn（断定しない・他の op と同じ劣化）。
+    """
+    cells = [tuple(c) for c in (args.get("_cells") or [])]
+    want = list(args.get("_cell_values") or [])
+    if len(cells) != 2 or len(want) != 2:
+        return "fail", "入れ替える 2 セルが宣言されていません"
+    sheet = args.get("_target_sheet")
+    with BookView(path) as bv:
+        got = [bv.cell_value(r, c, sheet) if bv.cell_formula(r, c, sheet) is not None
+                else bv.sheet(sheet).cell(row=r, column=c).value
+                for r, c in cells]
+        _last, _wide = data_extent(bv.sheet(sheet), header_row)
+        after = {(r, c): bv.sheet(sheet).cell(row=r, column=c).value
+                  for r in range(header_row, _last + 1) for c in range(1, _wide + 1)}
+    # ① 互いの値になっているか（式セルは計算後の値で見る ── 他の op と同じ線）
+    for i, (r, c) in enumerate(cells):
+        w = want[1 - i]
+        if isinstance(w, str) and w.startswith("="):
+            continue                      # 式は②③と読み戻しで見る（文字比較しない）
+        if str(got[i]) != str(w):
+            return "fail", (f"{r}行{c}列 が {w!r} になっていません（実際 {got[i]!r}）")
+    if source_book is None or not Path(source_book).exists():
+        return "warn", (f"{cells[0][0]}行{cells[0][1]}列 と {cells[1][0]}行{cells[1][1]}列 "
+                         "の入れ替えだけ確認（変えていないセルは見ていません）")
+    with BookView(source_book) as bv_b:
+        ws_b = bv_b.sheet(sheet)
+        lb, cb = data_extent(ws_b, header_row)
+        before = {(r, c): ws_b.cell(row=r, column=c).value
+                   for r in range(header_row, lb + 1) for c in range(1, cb + 1)}
+    # ②③ 変わったのはちょうど 2 個で、その座標が宣言と一致する
+    changed = sorted(k for k in set(before) | set(after)
+                      if before.get(k) != after.get(k))
+    if len(changed) != 2:
+        return "fail", (f"2 セルのはずが {len(changed)} セル変わっています"
+                         f"（{'、'.join(f'{r}行{c}列' for r, c in changed[:6])}）"
+                         " ── 行や列ごと動かした疑いがあります")
+    if changed != sorted(cells):
+        return "fail", (f"変わったのは {'、'.join(f'{r}行{c}列' for r, c in changed)} で、"
+                         f"宣言した {'、'.join(f'{r}行{c}列' for r, c in sorted(cells))} "
+                         "ではありません")
+    return "pass", (f"{cells[0][0]}行{cells[0][1]}列 と {cells[1][0]}行{cells[1][1]}列 "
+                     "の 2 セルだけを入れ替え（他は 1 セルも変わらず）")
+
+
 def check_swap(path: Path, args: dict, header_row: int = 1,
                 source_book: Path | None = None) -> tuple:
     """SWAP の事後条件。**入れ替わったこと**を、適用前との突き合わせで証明する。
@@ -7504,6 +7602,8 @@ def check_swap(path: Path, args: dict, header_row: int = 1,
       ので、開示（warn）ではなく **fail** に倒す。ここが挿入と違う唯一の点。
     """
     axis = args.get("_axis") or "row"
+    if axis == "cell":
+        return _check_swap_cells(path, args, header_row, source_book)
     a, bname = str(args.get("a", "")), str(args.get("b", ""))
     if source_book is None or not Path(source_book).exists():
         return "warn", "適用前ファイルが無いため、入れ替わったことを確かめられていません"
@@ -7730,6 +7830,49 @@ def _swap_pair_resolves(book_meta: dict, sheet: str | None, a: str, b: str) -> b
     ra, _ = _resolve_named_row(book_meta, sheet, a)
     rb, _ = _resolve_named_row(book_meta, sheet, b)
     return ra is not None and rb is not None
+
+
+def swap_targets_are_cells(task: str, book_meta: dict, sheet: str | None,
+                            header_row: int = 1) -> list | None:
+    """依頼文が **2 つのセル**の入れ替えを指しているなら [(行,列), (行,列)]（でなければ None）。
+
+    ★★ 2026-08-31（Namakoo が実測・✓ が出たのに操作が違った）:
+      「丸和物流の**単価**とみどり建設の**単価**を入れ替えて」で、
+      **行を丸ごと入れ替えて ✓ を出していた**（16 セルが動いた・頼んだのは 2 セル）。
+      番人は「宣言どおり行が入れ替わったか」を見るので、**宣言そのものが違えば通る**
+      ── 三項（依頼・宣言・実体）の「依頼」が抜けた形。
+    ★ 依頼文には証拠が在る: **両側とも「〜の〈列名〉」と列を名指ししている**。
+      行の入れ替えなら列は出てこない。
+    ★ 言い回しを数え上げない ── 見るのは**実表に在る見出し**と**実表に在る行**だけ。
+      「〈何か〉の〈実在する列〉」がちょうど 2 つ在り、その〈何か〉が行として一意に
+      決まるときだけ、セルの入れ替えと読む。決まらなければ None（推測しない）。
+    """
+    text = _task_outside_quotes(task)
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    if not headers:
+        return None
+    found = []
+    for h in sorted(headers, key=len, reverse=True):   # 長い見出しから（部分一致よけ）
+        start = 0
+        while True:
+            i = text.find("の" + h, start)
+            if i < 0:
+                break
+            start = i + 1
+            name = text[:i].rsplit("と", 1)[-1].strip(" 　、。")
+            for w in ("を", "は", "が", "の"):
+                name = name.split(w)[-1] if name.endswith(w) else name
+            if name:
+                found.append((i, name, h))
+    if len(found) != 2:
+        return None
+    cells = []
+    for _i, name, h in sorted(found):
+        row, note = _resolve_named_row(book_meta, sheet, name)
+        if row is None or h not in headers:
+            return None
+        cells.append((row, headers.index(h) + 1))
+    return cells if cells[0] != cells[1] else None
 
 
 def _swap_axis_hint(task: str) -> str | None:
@@ -8321,6 +8464,46 @@ def formula_rewrites_for_shift(book_meta: dict, sheet: str | None, shift) -> tup
         where = "、".join(f"{r}行{c}列" for r, c in lost[:3])
         return {}, f"この操作で参照が消える式があります（{where}）── 実行しません"
     return out, None
+
+
+def broken_identity_advisory(source_book, out_book, resolved: dict) -> list:
+    """操作の前に成り立っていた**列どうしの等式**が崩れていたら、その 1 行（無ければ []）。
+
+    ★★ 2026-08-31（Namakoo）:「金額が入れ替われば付随して関連するセルの内容も
+      変えなければいけない。しかもそれが複数の内容に影響する場合はそれらも踏まえて」
+      実測: 単価のセルを 2 つ入れ替えると、**直値の 金額（＝件数×単価）が取り残される**。
+        件数 12 × 単価 7200 = 86,400 なのに 金額 57,600 のまま。
+      それでも「頼まれた 2 セルだけ動いた」は真実なので **✓ が出ていた**。
+    ★ 式なら再計算されるので起きない ── **直値で持っている派生列**だけの事故。
+    ★ 直さない・**言う**（どう直すかは人が決める ── 参照のズレと同じ線）。
+    ★ op を問わず**1 箇所**で見る（入れ替えに限らず、入力を変える操作すべてに効く）。
+    """
+    sheet = (resolved or {}).get("_target_sheet")
+    if not source_book or not Path(source_book).exists() or not sheet:
+        return []
+    # ★ 見出し行は resolved から取る ── **呼び出し側の変数に頼らない**
+    #   （最初は header_row / book_meta を引数で受けたが、5 つの呼び出し場所で
+    #     名前が揃っておらず NameError を 2 回出した。渡すものは 1 つに減らす）。
+    header_row = int((resolved or {}).get("_header_row") or 1)
+    try:
+        def _rows(path):
+            with BookView(Path(path)) as bv:
+                ws = bv.sheet(sheet)
+                last, wide = data_extent(ws, header_row)
+                heads = [ws.cell(row=header_row, column=c).value
+                          for c in range(1, wide + 1)]
+                body = [[bv.cell_value(r, c, sheet)
+                          if bv.cell_formula(r, c, sheet) is not None
+                          else ws.cell(row=r, column=c).value
+                          for c in range(1, wide + 1)]
+                         for r in range(header_row + 1, last + 1)]
+                return heads, body
+        heads_b, rows_b = _rows(source_book)
+        _heads_a, rows_a = _rows(out_book)
+    except Exception:
+        return []                      # 読めない回は黙る（断定しない）
+    note = row_identity.describe(row_identity.broken(rows_b, rows_a), heads_b)
+    return [f"⚠ {note}"] if note else []
 
 
 def reference_drift_warning(book_meta: dict, sheet: str | None, *,
@@ -13383,7 +13566,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
         sheet_conflict=getattr(a, "_sheet_conflict", None),
-        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
+        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref) + broken_identity_advisory(source_book, out_book, resolved if isinstance(resolved, dict) else {})   # ★ 挙動変更#1(a)
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -13565,7 +13748,9 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
         sheet_conflict=getattr(a, "_sheet_conflict", None),
         precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(
-            source_book, out_book, cell_ref=_cell_ref)
+            source_book, out_book, cell_ref=_cell_ref) + broken_identity_advisory(
+            source_book, out_book,
+            resolved if isinstance(resolved, dict) else {})
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -13729,7 +13914,9 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
         sheet_conflict=getattr(a, "_sheet_conflict", None),
         precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(
-            source_book, out_book, cell_ref=_cell_ref)
+            source_book, out_book, cell_ref=_cell_ref) + broken_identity_advisory(
+            source_book, out_book,
+            resolved if isinstance(resolved, dict) else {})
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -14496,7 +14683,7 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
         print(f"{step_prefix}{own_notice}")
     step_advisories.extend(compose_dsl_step_advisories(
         "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps,
-        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref))   # ★ 挙動変更#1(a)
+        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref) + broken_identity_advisory(stepsource, out_book, resolved if isinstance(resolved, dict) else {}))   # ★ 挙動変更#1(a)
 
     status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
     # ★ 止血1/2: "error"→fail 扱い。"warn"(検証対象不足)は成功は名乗るが機械検証済みとは言わない。

@@ -558,7 +558,7 @@ CI から区別できなかった（外部 repo の取り込み調査が実測�
   `Font.bold` が `False` になることを確認済み）。
 - **全部を人が回す**: `python -m pytest tests -q`
 - **CI と同じ範囲だけ人が回す**: `python -m pytest tests -q -m "not local"`
-- **ローカル依存だけ回す**: `pytest -m local`（<!-- LOCAL_TESTS -->33<!-- /LOCAL_TESTS --> 本 ── この数は `tests/test_local_test_count.py` が実測と突き合わせる）
+- **ローカル依存だけ回す**: `pytest -m local`（<!-- LOCAL_TESTS -->35<!-- /LOCAL_TESTS --> 本 ── この数は `tests/test_local_test_count.py` が実測と突き合わせる）
 
 ## 参照ライブラリ
 
