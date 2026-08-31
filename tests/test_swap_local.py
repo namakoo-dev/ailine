@@ -177,8 +177,16 @@ def test_named_rows_and_columns_extract_on_real_lo(tmp_path):
     r = _run(p, "みかんの行とりんごの行だけを抽出して")
     assert r.returncode == 0, f"名指しの抽出が失敗:\n{r.stdout[-900:]}"
     wb2 = openpyxl.load_workbook(_out(p))
-    dst = [s for s in wb2.sheetnames if "どれか" in s]
-    assert dst, wb2.sheetnames
+    # ★★ 2026-09-01: ここは「どれか」という**語**でシートを探していた。
+    #   8/30 に名前の作り方を変えた（『取引先丸和物流・みどり建設のどれか』が
+    #   会社名に見えたので `{列}が{値}` に）ので、**実装は正しいのに番人だけが
+    #   落ちた**。しかも -m local は push の時しか走らないので、1 日半誰も
+    #   気づかなかった（在っても、その事故の形では鳴らない）。
+    #   ★ 窓は語で切らない ── 「元に無かったシート」という**構造**で取る。
+    dst = [s for s in wb2.sheetnames if s != "売上"]
+    assert len(dst) == 1, wb2.sheetnames
+    # ★ A' の担保はこちら: 名前は LLM でなく機械が組む（対象の列と値が入る）。
+    assert "商品" in dst[0] and "みかん" in dst[0] and "りんご" in dst[0], dst[0]
     got = [[wb2[dst[0]].cell(i, j).value for j in (1, 2)]
             for i in range(2, wb2[dst[0]].max_row + 1)]
     assert got == [["りんご", 1200], ["みかん", 800]], f"抽出の中身が違う: {got}"
@@ -188,8 +196,9 @@ def test_named_rows_and_columns_extract_on_real_lo(tmp_path):
     r2 = _run(p2, "商品と原価の列だけ抜き出して")
     assert r2.returncode == 0, f"列の抽出が失敗:\n{r2.stdout[-900:]}"
     wb3 = openpyxl.load_workbook(_out(p2))
-    dst2 = [s for s in wb3.sheetnames if "だけ" in s]
-    assert dst2, wb3.sheetnames
+    dst2 = [s for s in wb3.sheetnames if s != "売上"]      # ★ 同上（語でなく構造で）
+    assert len(dst2) == 1, wb3.sheetnames
+    assert "商品" in dst2[0] and "原価" in dst2[0], dst2[0]
     out = wb3[dst2[0]]
     assert [out.cell(1, j).value for j in (1, 2)] == ["商品", "原価"]
     assert out.max_row == 4, f"行が減っている: {out.max_row}"

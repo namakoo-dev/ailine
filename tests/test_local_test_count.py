@@ -70,11 +70,13 @@ def test_the_main_file_line_count_in_the_docs_is_not_stale():
        分母は文書自身でも人の記憶でもなく、`test_line_budget` が縛っている
        tests/ailine_py_line_budget.txt から取る（そちらは実ファイルと一致を強制される）。
 
-    ★★ 2026-08-31: 評価者に見せる文書が README だけではなくなった（提出.md）。
+    ★★ 2026-08-31: 一時、評価者に見せる文書が README のほかにもう 1 本あった。
       README を名指しで読む書き方だと、**足した文書が黙って素通りする**
-      ── この repo で繰り返し踏んだ片配線。全 .md を走査する側に寄せた。"""
+      ── この repo で繰り返し踏んだ片配線。全 .md を走査する側に寄せた。
+      ★ 09-01 に文書は README 1 本へ畳んだが、走査はこのまま残す ──
+        次に文書が増えた時、番人の側を直さなくても効く。"""
     pinned = int(BUDGET.read_text(encoding="utf-8").splitlines()[0])
-    assert_all_agree("MAIN_FILE_LINES", str(pinned), at_least=2)
+    assert_all_agree("MAIN_FILE_LINES", str(pinned))
 
 
 # ── 試験の総数（README が評価者に「これだけ緑になります」と見せる数）────────────────
@@ -87,4 +89,4 @@ def test_the_total_in_the_readme_matches_what_pytest_collects():
        ★ 実際、初版は local の本数しか見ていないのに「2 つとも見ている」と書いていた
        （在るのに、その事故の形では鳴らない番人）。"""
     _local, total = _collected()
-    assert_all_agree("TOTAL_TESTS", str(total), at_least=2)
+    assert_all_agree("TOTAL_TESTS", str(total))

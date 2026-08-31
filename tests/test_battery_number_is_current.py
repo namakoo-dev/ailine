@@ -34,7 +34,7 @@ def test_the_readme_matches_the_record():
     rec = _record()
     want = f"{rec['op_correct']}/{rec['op_total']} = {rec['op_correct'] / rec['op_total'] * 100:.1f}%"
     # ★ 2026-08-31: README だけでなく、印のある文書を**全部**見る（tests/_doc_numbers.py）。
-    assert_all_agree("BATTERY_OP", want, at_least=2)
+    assert_all_agree("BATTERY_OP", want)
 
 
 def test_the_runbook_does_not_quote_a_stale_number():
@@ -92,7 +92,7 @@ def test_the_readme_matches_the_matrix_record():
     """① 文書 vs 記録。"""
     m = _matrix()
     want = f"{m['intended']}/{m['cases']} = {m['intended'] / m['cases'] * 100:.1f}%"
-    assert_all_agree("MATRIX", want, at_least=2)
+    assert_all_agree("MATRIX", want)
 
 
 def test_the_matrix_record_names_how_it_was_measured():
