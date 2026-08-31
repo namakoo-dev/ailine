@@ -638,6 +638,27 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"rc": rc, "text": out, "json": payload})
 
 
+def port_already_answers(port: int, host: str = "127.0.0.1") -> bool:
+    """そのポートで**既に誰かが応答している**か（接続できたら True）。
+
+    ★★ 2026-08-31 に実測した事故（ナギが撮影中に踏んだ）:
+      8/28 に起動したままの GUI と、今日起動した GUI が **同じ 8760 に 2 つ**載っていた。
+      `http.server` は `allow_reuse_address = 1` を持つので、Windows では
+      **後から来た方も bind に成功する**（SO_REUSEADDR は「乗っ取り」を許す）。
+      どちらが応答するかは運で、実際 `/api/read` が **404** を返した
+      ── 古い方が answer していたため。画面には「（読み取れませんでした）」とだけ出る。
+
+    ★ これは「在っても鳴らない」ではなく「**別人が返事をしている**」形。
+      新しい方が正しく動いていても、利用者には壊れて見える。
+    ★ 直しは**黙って重ねないこと**。既に応答が在るなら、上に載らずに断る。
+      （bind の仕方そのものは変えない ── Ctrl+C 直後の再起動を壊さないため。）
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.4)
+        return s.connect_ex((host, port)) == 0
+
+
 def main() -> int:
     # ★ 2026-08-28: ポートと自動起動を外から決められるようにした（2 つ動かして
     #   比べる／別の窓を開かずに試す、が実際に要った）。既定は今までどおり。
@@ -646,6 +667,19 @@ def main() -> int:
     ap.add_argument("--no-browser", action="store_true", help="ブラウザを開かない")
     ns = ap.parse_args()
     port = ns.port
+    # ★ 上に重ねない（上の port_already_answers の説明を参照）。
+    if port_already_answers(port):
+        print(f"× ポート {port} は既に使われています。"
+               f"別の ailine GUI が動いたままかもしれません。" + chr(10)
+               + f"  ここに重ねて起動すると、**どちらが応答するかが決まりません**"
+                 f"（古い方が答えると、直したはずの不具合がそのまま出ます）。" + chr(10)
+               + f"  いま応答しているものを確かめる:" + chr(10)
+               + f"    Get-NetTCPConnection -State Listen -LocalPort {port} "
+                 f"| Select-Object OwningProcess" + chr(10)
+               + f"  それが要らないものなら、その PID だけを止めてください"
+                 f"（名前でまとめて止めない）。" + chr(10)
+               + f"  2 つ並べて比べたいときは --port で別の番号を指定してください。")
+        return 1
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"ailine GUI: {url}  （終了は Ctrl+C）")

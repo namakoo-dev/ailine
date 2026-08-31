@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from _doc_numbers import assert_all_agree
+
 REPO = Path(__file__).resolve().parent.parent
 RECORD = Path(__file__).resolve().parent / "battery_recorded.json"
 
@@ -31,10 +33,8 @@ def test_the_readme_matches_the_record():
     """① 文書 vs 記録。★ 数字を直すときは記録も直す（片方だけ動かせない形にする）。"""
     rec = _record()
     want = f"{rec['op_correct']}/{rec['op_total']} = {rec['op_correct'] / rec['op_total'] * 100:.1f}%"
-    text = (REPO / "README.md").read_text(encoding="utf-8")
-    m = re.search(r"<!-- BATTERY_OP -->(.*?)<!-- /BATTERY_OP -->", text)
-    assert m, "README に BATTERY_OP の印が無い"
-    assert m.group(1) == want, f"README は {m.group(1)!r}・記録は {want!r}"
+    # ★ 2026-08-31: README だけでなく、印のある文書を**全部**見る（tests/_doc_numbers.py）。
+    assert_all_agree("BATTERY_OP", want, at_least=2)
 
 
 def test_the_runbook_does_not_quote_a_stale_number():
@@ -92,10 +92,7 @@ def test_the_readme_matches_the_matrix_record():
     """① 文書 vs 記録。"""
     m = _matrix()
     want = f"{m['intended']}/{m['cases']} = {m['intended'] / m['cases'] * 100:.1f}%"
-    text = (REPO / "README.md").read_text(encoding="utf-8")
-    got = re.search(r"<!-- MATRIX -->(.*?)<!-- /MATRIX -->", text)
-    assert got, "README に MATRIX の印が無い"
-    assert got.group(1) == want, f"README は {got.group(1)!r}・記録は {want!r}"
+    assert_all_agree("MATRIX", want, at_least=2)
 
 
 def test_the_matrix_record_names_how_it_was_measured():

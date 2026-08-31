@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _doc_numbers import assert_all_agree
+
 REPO = Path(__file__).resolve().parent.parent
 ENGINEERING = REPO / "docs" / "ENGINEERING.md"
 MARK = re.compile(r"<!--\s*LOCAL_TESTS\s*-->\s*(\d+)\s*<!--\s*/LOCAL_TESTS\s*-->")
@@ -63,16 +65,16 @@ LINES_MARK = re.compile(r"<!--\s*MAIN_FILE_LINES\s*-->\s*(\d+)\s*<!--\s*/MAIN_FI
 BUDGET = REPO / "tests" / "ailine_py_line_budget.txt"
 
 
-def test_the_main_file_line_count_in_the_readme_is_not_stale():
-    """★ 同じ形の嘘を先回りして塞ぐ: 行数は毎回変わるのに、README には固定で書いてある。
-       分母は README 自身でも人の記憶でもなく、`test_line_budget` が縛っている
-       tests/ailine_py_line_budget.txt から取る（そちらは実ファイルと一致を強制される）。"""
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    found = LINES_MARK.findall(readme)
-    assert len(found) == 1, f"主ファイルの行数の宣言が 1 箇所ではない: {found}"
+def test_the_main_file_line_count_in_the_docs_is_not_stale():
+    """★ 同じ形の嘘を先回りして塞ぐ: 行数は毎回変わるのに、文書には固定で書いてある。
+       分母は文書自身でも人の記憶でもなく、`test_line_budget` が縛っている
+       tests/ailine_py_line_budget.txt から取る（そちらは実ファイルと一致を強制される）。
+
+    ★★ 2026-08-31: 評価者に見せる文書が README だけではなくなった（提出.md）。
+      README を名指しで読む書き方だと、**足した文書が黙って素通りする**
+      ── この repo で繰り返し踏んだ片配線。全 .md を走査する側に寄せた。"""
     pinned = int(BUDGET.read_text(encoding="utf-8").splitlines()[0])
-    assert int(found[0]) == pinned, (
-        f"README は主ファイルを {found[0]} 行と書いているが、縛られている値は {pinned} 行")
+    assert_all_agree("MAIN_FILE_LINES", str(pinned), at_least=2)
 
 
 # ── 試験の総数（README が評価者に「これだけ緑になります」と見せる数）────────────────
@@ -84,9 +86,5 @@ def test_the_total_in_the_readme_matches_what_pytest_collects():
        **両方**見ていないと、その一文自体が嘘になる。
        ★ 実際、初版は local の本数しか見ていないのに「2 つとも見ている」と書いていた
        （在るのに、その事故の形では鳴らない番人）。"""
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    found = TOTAL_MARK.findall(readme)
-    assert len(found) == 1, f"試験の総数の宣言が 1 箇所ではない: {found}"
     _local, total = _collected()
-    assert int(found[0]) == total, (
-        f"README は試験を {found[0]} 本と書いているが、実測は {total} 本")
+    assert_all_agree("TOTAL_TESTS", str(total), at_least=2)
