@@ -150,7 +150,10 @@ def test_the_disclosure_actually_reaches_the_screen():
        ── 在っても鳴らない、の形（この repo で何度も踏んでいる）。
     ★ 解釈行の欄（_CONFIRM_FIELDS）に載っていることを機械で縛る。
       3 つの op が `_skip_label` を作るので、3 つとも載っていること。"""
-    setters = {"SORT", "SET_WHERE", "SET_COLUMN_VALUE"}
+    # ★★ 2026-08-31: EXTRACT も合計行を外すようになった（実測で合計 356400 まで
+    #   抜き出されていた ── 並べ替え・条件つき書換では外していたのに抽出だけ無かった）。
+    #   ★ 「作る側と見せる側の数が合っている」を縛る試験なので、仲間に入れる。
+    setters = {"SORT", "SET_WHERE", "SET_COLUMN_VALUE", "EXTRACT"}
     for op in sorted(setters):
         keys = {k for _label, k, _fn in ailine._CONFIRM_FIELDS[op]}
         assert "_skip_label" in keys, f"{op} の解釈行に『対象から外した行』が無い"

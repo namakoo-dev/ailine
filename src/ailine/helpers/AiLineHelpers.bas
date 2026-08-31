@@ -836,7 +836,11 @@ Sub SetColumnValueWhere(oDoc As Object, headerRow As Integer, writeCol As Intege
 End Sub
 
 
-Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode As Integer, cmpValue As Variant, dstName As String)
+' ★★ 2026-08-31: 外す行（sSkip）を受ける。合計行はデータ行ではないので抜き出さない。
+'   並べ替え・条件つき書換では既に外していたのに、**抽出だけ外していなかった**
+'   （実測: 『金額が60000以上の行を抜き出して』で合計 356400 まで抜き出された）。
+' ★ Optional にして既存の呼び出しを壊さない。
+Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode As Integer, cmpValue As Variant, dstName As String, Optional sSkip As Variant)
     Dim oSheet As Object, oOut As Object
     Dim lastRow As Long, lastCol As Integer, i As Long, j As Integer
     Dim oCell As Object, oSrc As Object, oDst As Object
@@ -867,9 +871,16 @@ Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode
     Next j
 
     outRow = 1
+    Dim sSkipCsv As String
+    sSkipCsv = ""
+    If Not IsMissing(sSkip) Then sSkipCsv = "," & CStr(sSkip) & ","
     For i = headerRow + 1 To lastRow
         oCell = oSheet.getCellByPosition(colIdx, i)
         matched = RowMatches(oCell, cmpCode, cmpValue)
+        ' ★ 外す行（合計行など）は、条件に合っていても抜き出さない
+        If sSkipCsv <> "" Then
+            If InStr(sSkipCsv, "," & CStr(i) & ",") > 0 Then matched = False
+        End If
 
         If matched Then
             For j = 0 To lastCol

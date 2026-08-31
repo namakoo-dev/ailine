@@ -4573,6 +4573,32 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     #   gte/lte/gt/lt なら数値必須・eq は数値化できればそのまま数値・できなければ文字列・
     #   contains は常に文字列（A' 原則: 数値化は機械が行う。LLM の言い分をそのまま信じない）。
     elif op == "EXTRACT":
+        # ★★ 2026-08-31（Namakoo が実測）:「**5行目の**ヤマノ食品を抜き出して」で
+        #   ヤマノ食品が **2 行とも**抜き出されていた（5行目という限定が無視された）。
+        #   ★ 三項の番人は鳴っていた（「依頼文が指しているのは: 5行目」）が、
+        #     **⚠ を出して進んで**いた ── 何が無視されたかを言っておらず、
+        #     利用者からは「効かなかった」に見える。
+        #   ★★ そして、そもそも**行番号での抜き出しは語彙に無い**（EXTRACT は
+        #     列×比較×値しか持たない）。できないことは ⚠ でなく**断る**。
+        #   ★ この分岐には**早い出口が 2 つ**ある（依頼文が実在の値を名指しした道と、
+        #     LLM の値をそのまま使う道）。最初は片方にだけ足して**素通り**した
+        #     ── 判定は必ず**両方の手前**に置く（今日 3 度目の片配線）。
+        if (_x_n := task_names_a_row_number(task)):
+            return False, resolved, inferred, (
+                f"行番号での抜き出し（{_x_n}行目）には対応していません ── "
+                "抜き出しは「どの列がどうなっている行か」で指してください"
+                "（例:「取引先がヤマノ食品の行を抜き出して」）")
+        # ★★ 2026-08-31（Namakoo の実測から辿って出た別件）:
+        #   「金額が60000以上の行を抜き出して」で **合計行（356400）まで抜き出されていた**。
+        #   条件には合っているが、**合計はデータ行ではない**。
+        #   ★ 並べ替え・条件つき書換では既に外していたのに、**抽出だけ外していなかった**
+        #     ── また片配線。判定は凍結済みの規則（total_rows_in）を借りる。
+        #   ★ ここも**早い出口より前**に置く（後ろに置いて 1 度素通りさせた）。
+        _x_hr = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+        if (_x_tot := total_rows_in(book_meta, first_sheet, _x_hr)):
+            resolved["_skip_rows"] = list(_x_tot)
+            resolved["_skip_label"] = ("合計行 " + "、".join(
+                f"{r}行目" for r in _x_tot) + "（データ行でないため抜き出しません）")
         if (err := resolve_in("col", first_sheet)):
             return False, resolved, inferred, err
         # ★★ 2026-08-27（Namakoo「みかんの行とりんごの行だけを抽出して」）:
@@ -5110,8 +5136,11 @@ _CONFIRM_FIELDS = {
     "SET_COLUMN_VALUE": (("対象列", "col", None), ("値", "value", None),
                           ("型", "_write_numeric", lambda v: "数値" if v else "文字列"),
                           ("対象から外した行", "_skip_label", None)),
+    # ★ 2026-08-31: 合計行を外すようになったので、**外したことを画面に出す**
+    #   （08-29 に SORT で同じ形を踏んだ ── 作る側と見せる側の数を検体が縛っている）。
     "EXTRACT": (("対象列", "col", None), ("条件", "cmp", lambda v: _EXTRACT_CMP_LABELS.get(v, v)),
-                 ("値", "value", lambda v: _format_extract_value(v))),
+                 ("値", "value", lambda v: _format_extract_value(v)),
+                 ("対象から外した行", "_skip_label", None)),
     "SPLIT_CELL": (("対象列", "col", None),
                     ("区切り", "sep", lambda v: split_cell.describe_separator(v))),
     "DEDUP": (("判定キー", "keys", lambda v: "・".join(v)),),
@@ -5911,7 +5940,14 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         else:
             value_lit = f"{float(value):g}"
         dst_name = str(resolved_args["_new_sheet"]).replace('"', '""')
-        return wrap(f'    Call ExtractRows(oDoc, {hr0}, {col_idx}, {cmp_code}, {value_lit}, "{dst_name}")\n')
+        # ★ 外す行は**構造の事実**なので Python が渡す（条件の判定は Basic が自分で行う
+        #   ── そこを渡すと事後条件が独立した検算でなくなる）。SET_WHERE と同じ作法。
+        # ★ Basic のループは **0 起点**（他のヘルパと同じ）── 1 起点の行番号を渡すと
+        #   1 行ずれて効かない（実測: 「8」を渡したのに 8 行目が抜き出された）。
+        #   SetColumnValueWhere も同じく -1 して渡している。
+        _x_skip = ",".join(str(int(r) - 1) for r in (resolved_args.get("_skip_rows") or []))
+        return wrap(f'    Call ExtractRows(oDoc, {hr0}, {col_idx}, {cmp_code}, '
+                     f'{value_lit}, "{dst_name}", "{_x_skip}")\n')
 
     if op == "SPLIT_CELL":
         # ★ ヘルパへの Call 1行だけ（helpers/AiLineHelpers.bas:SplitColumn）。
@@ -9016,7 +9052,16 @@ def _row_named_anywhere_in_task(task: str, rows: dict, headers: list,
     best = None
     for r, vals in (rows or {}).items():
         for v in vals:
-            if not v or v in heads or len(v) < 2 or v not in text:
+            # ★★ 2026-08-31（Namakoo「LLM の揺れが一番厄介だ」→ 追ったら半分は機械の責任）:
+            #   「金額が**60000**以上の行を抜き出して」で、機械が『60000』を**行の名前**
+            #   として解き（金額列に 60000 が在る）、「『60000』の行＝3行目」と確信して
+            #   行追加に読み替えていた。★ LLM が揺れた回に、**機械がその揺れを
+            #   『確信をもって間違った操作』に育てていた**。
+            #   ★ 揺れは消せないが、**増幅しないことはできる** ── 依頼文に出る数は
+            #     ほぼ常に閾値や個数で、行の名前ではない。
+            #   ★ 判定は既にある `_is_number_like`（「依頼文に出る数と、行の名前を
+            #     混同しないため」）を借りる ── 1 箇所でしか使われていなかった。
+            if not v or v in heads or len(v) < 2 or v not in text or _is_number_like(v):
                 continue
             # ★★ 2026-08-29（Namakoo が実測）: 「丸山工業の担当に『佐藤』を入れて」で
             #   **書き込む値『佐藤』**が別の行の担当欄にも在るため、行の候補が 2 つに
@@ -9706,7 +9751,14 @@ def check_extract(path: Path, args: dict, header_row: int = 1,
         expected_rows = []
         unmatched_cells = []
         r = header_row + 1
+        # ★★ 2026-08-31: 合計行は抜き出さない ── **分母もそこを外す**。
+        #   ★ 片側だけ縮めると「行数が期待と不一致」になる（並べ替えで 2 度踏んだ形）。
+        #     宣言（_skip_rows）を**同じ 1 箇所**から生成にも検算にも配る。
+        _skip = {int(x) for x in (args.get("_skip_rows") or [])}
         while src.cell(row=r, column=1).value not in (None, ""):
+            if r in _skip:
+                r += 1
+                continue
             total += 1
             cell_v = src.cell(row=r, column=col_idx).value
             if match(cell_v):
