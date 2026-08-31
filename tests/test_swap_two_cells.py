@@ -191,8 +191,10 @@ def test_the_reread_uses_the_machine_not_the_model():
        ★ 直し: 読み直しで LLM に聞く**前に**、機械だけで 2 セルが解けているならそれを使う。
     """
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("task_asks_for_a_swap(a.task)")
-    seg = src[i:i + 1200]
+    # ★ 「最初の出現」で切ると、別の門に同じ述語を足したときに外れる（実際に外れた）
+    #   ── 入れ替えの読み直しそのもの（plan を SWAP に差し替える所）を狙う。
+    i = src.index('plan = [{"op": "SWAP", "args": {}}]')
+    seg = src[max(0, i - 1200):i + 600]
     assert "swap_targets_are_cells(a.task, book_meta, _sheet_h)" in seg, (
         "読み直しが、機械で解けるセルを見ていない")
     j = seg.index("swap_targets_are_cells")
@@ -274,3 +276,53 @@ def test_the_basic_helper_exists_and_is_new():
     # ★ 既存の SwapRowsByName は触っていない（目録・凍結検体が全部動く）
     i = bas.index("Sub SwapRowsByName(")
     assert "nKeyCol As Integer" in bas[i:i + 200]
+
+
+# --- ⑦ 「AとBの〈列〉」と、入れ替えを 1 セル書換に読み替えない ------------------------------
+#
+# ★★ 2026-08-31（Namakoo が実測・「項目名が上書きされている。しかも機械検証が通している。
+#   これは式としては正しいかもしれない」）:
+#     「丸和物流と近江スチールの**項目を入れ替えて**」
+#       → **1 セル書換**に読み直され、近江スチールの項目に**「丸和物流」と書いて** ✓
+#          （鋼材加工が消えた）
+#   ★ Namakoo の見立てどおり、番人は「1 セルだけ書き換えた」を**正しく**検算している。
+#     違っていたのは**宣言**のほう ── 三項の「依頼」が抜けた形（今日 2 度目）。
+#
+# ★ 直しは 2 つ:
+#   ① 依頼文が**入れ替え**と言っているなら、1 セル書換に読み替えない
+#     （入れ替えは 2 か所が動く操作・1 セル書換は 1 か所しか動かない＝別の仕事）
+#   ② 「〈A〉と〈B〉の〈列〉」＝ 2 つの行の同じ 1 列、として解く
+#     （列名が **1 回しか出ない**言い方なので、前の形では拾えず行を丸ごと入れ替えていた）
+
+
+def test_the_shared_column_phrasing_is_two_cells(meta):
+    """★★ 列名が 1 回しか出ない言い方も、2 セルとして解く。"""
+    got = ailine.swap_targets_are_cells("丸和物流と近江スチールの項目を入れ替えて",
+                                          meta, "請求")
+    assert got == [(2, 2), (3, 2)], got
+
+
+def test_both_phrasings_agree(meta):
+    """★ 同じ意味なら同じ答え（指し方で結果が変わってはいけない）。"""
+    a = ailine.swap_targets_are_cells("丸和物流と近江スチールの項目を入れ替えて", meta, "請求")
+    b = ailine.swap_targets_are_cells("丸和物流の項目と近江スチールの項目を入れ替えて",
+                                        meta, "請求")
+    assert a == b, (a, b)
+
+
+@pytest.mark.parametrize("task", [
+    "丸和物流と近江スチールを入れ替えて",   # 行の入れ替え（列が出てこない）
+    "件数と単価を入れ替えて",              # 列の入れ替え
+])
+def test_the_new_shape_does_not_hijack(meta, task):
+    assert ailine.swap_targets_are_cells(task, meta, "請求") is None
+
+
+def test_a_swap_request_is_never_reread_as_a_single_cell_write():
+    """★★ 変異試験: 入れ替えの依頼を 1 セル書換の門が拾わないこと。
+       ここが緩むと、片方の名前がもう片方のセルに**書き込まれて ✓ が出る**。"""
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("_cell = resolve_cell_target_from_task(a.task, book_meta, _sheet_h)")
+    seg = src[max(0, i - 900):i]
+    assert "not task_asks_for_a_swap(a.task)" in seg, (
+        "入れ替えの依頼が 1 セル書換に読み替えられる")

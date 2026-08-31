@@ -247,8 +247,10 @@ def test_the_swap_gate_is_not_a_list_of_op_names():
        ("CLARIFY","FREEFORM","OUT_OF_VOCAB","SORT") という **op 名の列挙**だったので、
        それ以外を返した回は素通りしていた ── 今日 4 度目の同じ形。"""
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("task_asks_for_a_swap(a.task)")
-    seg = src[max(0, i - 600):i + 900]
+    # ★ 2026-08-31: 「最初の出現」で切ると、1 セル書換の門にも同じ述語を足した時に
+    #   外れる（実際に外れた）── 入れ替えの読み直しそのものを狙う。
+    i = src.index('plan = [{"op": "SWAP", "args": {}}]')
+    seg = src[max(0, i - 1200):i + 900]
     assert '("CLARIFY", "FREEFORM", "OUT_OF_VOCAB", "SORT")' not in seg, "op 名の列挙が残っている"
     assert 'get("op") == "SWAP"' in seg, "既に入れ替えで読めている回を除いていない"
 

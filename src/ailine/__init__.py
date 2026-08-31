@@ -7896,6 +7896,10 @@ def _swap_pair_resolves(book_meta: dict, sheet: str | None, a: str, b: str) -> b
     return ra is not None and rb is not None
 
 
+# 「AとBの〈列〉」── 2 つの行の、同じ 1 列を指す言い方（末尾の「の」まで含めて当てる）。
+_re_between_and = re.compile(r"^.*?([^\s、。との]+?)\s*と\s*([^\s、。との]+?)\s*の$")
+
+
 def swap_targets_are_cells(task: str, book_meta: dict, sheet: str | None,
                             header_row: int = 1) -> list | None:
     """依頼文が **2 つのセル**の入れ替えを指しているなら [(行,列), (行,列)]（でなければ None）。
@@ -7928,6 +7932,26 @@ def swap_targets_are_cells(task: str, book_meta: dict, sheet: str | None,
                 name = name.split(w)[-1] if name.endswith(w) else name
             if name:
                 found.append((i, name, h))
+    # ★★ 2026-08-31（Namakoo が実測・2 つ目の形）:
+    #   「丸和物流**と**近江スチール**の項目**を入れ替えて」は、列名が **1 回しか出ない**。
+    #   前の形（〈A〉の〈列〉と〈B〉の〈列〉）だけを見ていたので拾えず、
+    #   行を丸ごと入れ替えていた（人は 2 セルのつもり）。
+    #   ★ 「〈A〉と〈B〉の〈列〉」＝ **2 つの行の、同じ 1 列**。実表に照らして解ける
+    #     ときだけ（列は実在の見出し・A と B は行として一意）── 推測しない。
+    if len(found) == 1:
+        _i, _name, _h = found[0]
+        _pair = _re_between_and.match(text[:_i] + "の")
+        if _pair:
+            _rows = []
+            for _nm in (_pair.group(1).strip(), _pair.group(2).strip()):
+                _r, _ = _resolve_named_row(book_meta, sheet, _nm)
+                if _r is None:
+                    return None
+                _rows.append(_r)
+            if _rows[0] != _rows[1] and _h in headers:
+                _c = headers.index(_h) + 1
+                return [(_rows[0], _c), (_rows[1], _c)]
+        return None
     if len(found) != 2:
         return None
     cells = []
@@ -12828,7 +12852,15 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   ★ 計画の**長さ**で門を閉じない（実測: 同じ依頼で 1 段と 2 段が返り分かれ、
     #     2 段の回だけ素通りしていた ── 長さは依頼の性質ではなくモデルの気分）。
     #     見るのは「どの段も 1 セル書換でなく、どの段も別の仕事でない」こと。
+    # ★★ 2026-08-31（Namakoo が実測・✓ が出たのに依頼と違う操作）:
+    #   「丸和物流と近江スチールの**項目を入れ替えて**」が **1 セル書換**に読み直され、
+    #   近江スチールの項目に**「丸和物流」と書いて** ✓ を出していた（鋼材加工が消えた）。
+    #   ★ 番人は「1 セルだけ書き換えた」を正しく検算している ── **宣言が依頼と違う**
+    #     （三項の「依頼」が抜けた形・今日 2 度目）。
+    #   ★ 依頼文が**入れ替え**と言っているなら、1 セル書換に読み替えてはいけない。
+    #     入れ替えは 2 か所が動く操作で、1 セル書換は 1 か所しか動かない ── 別の仕事。
     if (not _reread_done and plan
+            and not task_asks_for_a_swap(a.task)
             and not any(_already_writes_one_cell(st) for st in plan)
             and not any(_is_a_different_job(st) for st in plan)):
         _cell = resolve_cell_target_from_task(a.task, book_meta, _sheet_h)
