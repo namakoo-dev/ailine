@@ -160,3 +160,22 @@ def test_the_disclosure_actually_reaches_the_screen():
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     # ★ 作る側と見せる側の数が合っていること（片方だけ増やす事故を止める）
     assert src.count('resolved["_skip_label"] = ') == len(setters)
+
+
+# --- ★ 列の入れ替えで合計行の見出しが動く（言うだけ・挙動は変えない）--------------------
+
+def test_a_column_swap_names_the_total_label_as_a_likely_cause():
+    """★★ 2026-08-31（Namakoo が実測・「めちゃくちゃ惜しい」）:
+       「取引先と項目を入れ替えて」で**合計行の見出し『合計』も一緒に動き**、
+       1 列目が空になって走査が止まっていた。
+    ★ 道具は気づいていた（⚠ が出ていた）のに、文面は「1 列目が空」としか言わず、
+      **何が起きたか伝わらなかった** ── 正しい警告を、伝わらない言葉で出していた
+      （08-30 に入れ替えの ⚠ で踏んだのと同じ形）。
+    ★ 挙動は 1 ビットも変えない ── 心当たりを名指しするだけ。
+      Excel でも同じことが起きるので、直すより**言う**のが正しい。
+    """
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    i = src.index("1 列目が空のため走査がそこで止まり")
+    seg = src[max(0, i - 900):i + 600]
+    assert '_axis") or "") == "column"' in seg, "軸を見ていない（行の操作でも出てしまう）"
+    assert "合計行の見出しが 1 列目に在ると" in seg, "心当たりを言っていない"
