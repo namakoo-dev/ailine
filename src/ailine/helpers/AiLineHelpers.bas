@@ -244,6 +244,33 @@ Sub AddRowWithValues(oDoc As Object, atRow As Integer, colIdxCsv As String, _
 End Sub
 
 
+' 新しい行に、隣の行から**式だけ**を写す（2026-09-02 追加）。
+' ★★ なぜ要るか（README の「既知の問題」に自分で書いていた）:
+'   「みかんの下に梨を追加して」の後、梨の行の利益列は**空のまま**だった。
+'   宣言した値は正しいので ✓ は正しいが、人が期待するものとは違う。
+' ★ **式の文字列を自分で書き換えない。** copyRange を使うと LibreOffice 自身が
+'   相対参照を付け替える（SwapRowsByName が moveRange を使うのと同じ線）。
+'   自前で書き換えると、それは 2 つ目の参照解決の実装になり、必ずずれる。
+' ★ 変数名に注意: Basic は大文字小文字を区別せず、予約語と同名の変数は
+'   **モジュールごと黙ってコンパイルに失敗する**（oR / Or の事故を実測済み）。
+Sub FillFormulasFromNeighbour(oDoc As Object, nNewRow As Integer, nSrcRow As Integer, _
+                               sColIdxCsv As String)
+    Dim oSheet As Object, oSrcRange As Object, oDstCell As Object
+    Dim cols() As String
+    Dim i As Integer, nCol As Integer
+    If Len(sColIdxCsv) = 0 Then Exit Sub
+    oSheet = oDoc.Sheets.getByIndex(0)
+    cols = Split(sColIdxCsv, ",")
+    For i = 0 To UBound(cols)
+        nCol = CInt(cols(i))
+        oSrcRange = oSheet.getCellRangeByPosition(nCol, nSrcRow, nCol, nSrcRow)
+        oDstCell = oSheet.getCellByPosition(nCol, nNewRow)
+        ' ★ アドレスは生きたオブジェクトから貰う（シート番号を自分で埋めない）。
+        oSheet.copyRange(oDstCell.CellAddress, oSrcRange.RangeAddress)
+    Next i
+End Sub
+
+
 ' 名前で指した 2 行を入れ替える（2026-08-27 追加）。
 ' ★★ 実測で設計が決まった（bench/swap_formula_spike_RESULTS.md）:
 '   セルの値を「文字として交換」すると **式が壊れる** ── みかんの行の =B3*C3 が

@@ -70,19 +70,43 @@ def identities(rows: list) -> list:
     return out
 
 
-def broken(before_rows: list, after_rows: list) -> list:
-    """操作の前に成り立っていて、後で崩れた等式（無ければ空）。
+def _lost(before_rows: list, after_rows: list) -> list:
+    """前に成り立っていた等式のうち、後で成り立たなくなったもの（共通の芯）。
 
-    ★ 行数が変わる操作（追加・削除）では**比べない** ── そこは別の番人の担当で、
-      ここで鳴らすと「行を足したら必ず ⚠」になる（在っても鳴らないの逆・鳴りすぎ）。
+    ★ broken / broken_after_insert が**同じ実装を通る**ようにここへ畳んだ
+      （2 通りに書くと、片方だけ直す事故が起きる ── この repo で何度も踏んだ形）。
     """
-    if len(before_rows) != len(after_rows):
-        return []
     keep = identities(before_rows)
     if not keep:
         return []
     still = set(identities(after_rows))
     return [x for x in keep if x not in still]
+
+
+def broken(before_rows: list, after_rows: list) -> list:
+    """操作の前に成り立っていて、後で崩れた等式（無ければ空）。
+
+    ★ 行数が変わる操作では**ここでは**比べない ── 増える側は broken_after_insert が
+      受け持つ。素朴に比べると「行を足したら必ず ⚠」になる（鳴りすぎ）。
+    """
+    if len(before_rows) != len(after_rows):
+        return []
+    return _lost(before_rows, after_rows)
+
+
+def broken_after_insert(before_rows: list, after_rows: list) -> list:
+    """行が増える操作で、**増えた行を含めて**等式がまだ成り立つか。
+
+    ★★ 2026-09-02: 行を足すと、既存の行では式で出ている列（税込金額など）が
+      新しい行だけ空になる ── 宣言した値は正しいので `✓` は正しいが、
+      **表としては辻褄が合っていない**。ここはそれを見る。
+    ★ 鳴りすぎない理由: identities() は **3 つとも数が入っている行だけ**で判定するので、
+      値を入れなかった新しい行は最初から無視される。鳴るのは
+      「新しい行に数が揃っていて、しかも等式を満たさない」時だけ ── 見たい事故そのもの。
+    """
+    if len(after_rows) <= len(before_rows):
+        return []
+    return _lost(before_rows, after_rows)
 
 
 def describe(broken_list: list, headers: list) -> str | None:

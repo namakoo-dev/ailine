@@ -4020,6 +4020,25 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             resolved["_headers"] = [str(h) for h in headers]
             resolved["_values_label"] = "／".join(
                 f"{k}={v}" for k, v in resolved["values"].items())
+            # ★★ 2026-09-02（README の「既知の問題」に自分で書いていた）:
+            #   追加した行に既存の式が引き継がれず、利益列が**空のまま**だった。
+            #   宣言した値は正しいので ✓ は正しいが、人の期待とは違う。
+            #   ★ 引き継ぐのは「全データ行が式を持つ列」だけ ── 形で決める（列挙しない）。
+            #     合計列は E2..E7 が直値なので自然に外れる。
+            #   ★ **黙ってやらない。**解釈行に出す（_inherit_label）。
+            if op == "ADD_ROW" and resolved.get("at"):
+                _ih_sheet = resolved.get("_target_sheet")
+                _ih_hr = int(resolved.get("_header_row") or 1)
+                _ih_cols, _ih_from = formula_columns_to_inherit(
+                    book_meta, _ih_sheet, _ih_hr, int(resolved["at"]),
+                    set(resolved["values"].keys()))
+                if _ih_cols and _ih_from:
+                    resolved["_inherit_cols"] = _ih_cols
+                    resolved["_inherit_from"] = _ih_from
+                    _hd = resolved["_headers"]
+                    resolved["_inherit_label"] = "／".join(
+                        (_hd[c] if 0 <= c < len(_hd) else f"{c + 1}列目")
+                        for c in _ih_cols) + f"（{_ih_from}行目から）"
 
     elif op == "SET_CELL_VALUE":
         # ★ 2026-08-27（Namakoo「梨の売上にピンポイントで入れたい」）:
@@ -5108,7 +5127,10 @@ _CONFIRM_FIELDS = {
     "INSERT_ROWS": (("挿入位置", "at", None), ("位置の根拠", "_at_basis", None),
                      ("行数", "count", None)),
     "ADD_ROW": (("挿入位置", "at", None), ("位置の根拠", "_at_basis", None),
-                 ("入れる値", "_values_label", None)),
+                 ("入れる値", "_values_label", None),
+                 # ★ 2026-09-02: 宣言していないセル（式の列）に書く以上、**先に言う**。
+                 #   書いてから知らせるのでは、✓ の意味が広がったことが人に伝わらない。
+                 ("式を引き継ぐ列", "_inherit_label", None)),
     "DELETE_ROWS": (("削除位置", "at", None), ("位置の根拠", "_at_basis", None),
                      ("行数", "count", None)),
     "DELETE_COLUMN": (("削除する列", "col", None),),
@@ -5769,9 +5791,18 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
             else:
                 vals.append(str(v)); kinds.append("s")
         sep = chr(1)
-        return wrap(
+        body = (
             f'    Call AddRowWithValues(oDoc, {at0}, "{",".join(idx)}", '
             f'"{sep.join(vals)}", "{",".join(kinds)}")\n')
+        # ★★ 2026-09-02: 既存の行が式で出している列は、新しい行にも式を写す。
+        #   ★ 値は作らない（A' 原則）── **隣の行から写すだけ**。
+        #     参照の付け替えは LibreOffice にやらせる（自前で式を書き換えない）。
+        _inh = list(resolved_args.get("_inherit_cols") or [])
+        _src = int(resolved_args.get("_inherit_from") or 0)
+        if _inh and _src:
+            body += ('    Call FillFormulasFromNeighbour(oDoc, %d, %d, "%s")%s'
+                      % (at0, _src - 1, ",".join(str(c) for c in _inh), chr(10)))
+        return wrap(body)
 
     if op == "DELETE_ROWS":
         at0 = int(resolved_args["at"]) - 1
@@ -8571,6 +8602,59 @@ def formula_rewrites_for_shift(book_meta: dict, sheet: str | None, shift) -> tup
     return out, None
 
 
+def formula_columns_to_inherit(book_meta: dict, sheet: str | None, header_row: int,
+                                at: int, declared: set) -> tuple:
+    """新しい行に式を引き継ぐ列（0 起点の列番号の一覧）と、**写す元の行**（1 起点）。
+
+    ★★ 2026-09-02（README の「既知の問題」に自分で書いていた）:
+      「みかんの下に梨を追加して」の後、梨の行の利益列は**空のまま**だった。
+      宣言した値だけを書くので `✓` は正しいが、**人が期待するものとは違う**。
+    ★ 式は発明ではない ── **隣の行から写す**（依頼文にも実表にも無い値は作らない＝A' 原則）。
+      参照の付け替えは LibreOffice にやらせる（自分で式の文字列を書き換えると、
+      それは 2 つ目の参照解決の実装になる ── SwapRowsByName が moveRange を使うのと同じ線）。
+
+    ★ 引き継ぐ条件は **全データ行が式を持っていること**。これで合計列が自然に外れる:
+      金額列は E2..E7 が直値・E8 だけ =SUM なので「全部が式」ではない。
+      逆に 税込金額 は全行 =E*1.1 なので引き継ぐ。**列挙ではなく形で決める。**
+    ★ 合計行は写す元にしない（=SUM を新しい行に配ると壊れる）。判定は既存の
+      凍結規則（total_rows_in）を借りる ── 同じことを 2 箇所で決めない。
+    ★ 人が値を指定した列は触らない（**人の指定が勝つ**）。
+
+    返り値: (0 起点の列番号のリスト, 写す元の行番号) / 引き継ぐものが無ければ ([], 0)
+    """
+    path = (book_meta or {}).get("path")
+    if not path:
+        return [], 0
+    totals = set(total_rows_in(book_meta, sheet, header_row))
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            last, wide = data_extent(ws, header_row)
+            rows = [r for r in range(header_row + 1, last + 1) if r not in totals]
+            if not rows or wide < 1:
+                return [], 0
+            heads = [str(ws.cell(row=header_row, column=c).value or "")
+                      for c in range(1, wide + 1)]
+            cols = []
+            for c in range(1, wide + 1):
+                if heads[c - 1] in declared:
+                    continue                       # ★ 人が指定した列は触らない
+                if all(bv.cell_formula(r, c, sheet) is not None for r in rows):
+                    cols.append(c - 1)
+    except Exception:
+        return [], 0                               # 読めない回は黙る（断定しない）
+    if not cols:
+        return [], 0
+    # ★ 写す元は「新しい行のすぐ上のデータ行」。無ければ下から取る。
+    above = [r for r in rows if r < at]
+    if above:
+        return cols, max(above)
+    below = [r for r in rows if r >= at]
+    if not below:
+        return [], 0
+    return cols, min(below) + 1                    # ★ 挿入で 1 行ずれた後の位置
+
+
 def broken_identity_advisory(source_book, out_book, resolved: dict) -> list:
     """操作の前に成り立っていた**列どうしの等式**が崩れていたら、その 1 行（無ければ []）。
 
@@ -8616,7 +8700,14 @@ def broken_identity_advisory(source_book, out_book, resolved: dict) -> list:
     #   ★ セル 2 つの入れ替え（幕 3）は見出しが動かないので、そちらは今までどおり鳴る。
     if heads_b != _heads_a:
         return []
-    note = row_identity.describe(row_identity.broken(rows_b, rows_a), heads_b)
+    # ★★ 2026-09-02: 行が増える操作でも見る（増えた行を**含めて**等式が成り立つか）。
+    #   ★ 鳴りすぎない: identities() は 3 つとも数が入っている行だけで判定するので、
+    #     値を入れなかった新しい行は最初から無視される。鳴るのは
+    #     「新しい行に数が揃っていて、しかも等式を満たさない」時だけ。
+    #   ★ 呼び分けはここ 1 箇所 ── 4 つある呼び出し側は 1 行も変えない。
+    _lost = (row_identity.broken_after_insert(rows_b, rows_a)
+              if len(rows_a) > len(rows_b) else row_identity.broken(rows_b, rows_a))
+    note = row_identity.describe(_lost, heads_b)
     return [f"⚠ {note}"] if note else []
 
 
