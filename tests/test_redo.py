@@ -103,6 +103,63 @@ def test_undo_after_redo_goes_back_again(tmp_path, monkeypatch):
     assert _first(p) == "りんご", "redo のあと undo で戻れない"
 
 
+def test_an_edit_made_after_the_undo_is_not_lost(tmp_path, monkeypatch):
+    """★★ 自作 review が見つけた**致命**（2026-09-02・敵対検証 2 レンズとも再現）。
+
+      undo のあとに**別の編集を挟んでから** redo すると、その編集内容が
+      **警告なしに完全消失**していた ── backups にも undo 棚にも残らず、
+      画面には「✓ やり直しました」しか出ない。
+    ★ 姉妹関数 `restore_backup` は上書き前に現在の中身を退避している ── **片配線**。
+    ★ 直しは「棚に積む」ではなく**世代に積む**（make_backup）。棚に積むと redo が
+      自分の直前状態を拾い直して往復が壊れる。世代なら `ailine undo` で取り戻せる。
+    ★ 元の検体（6 本）は「undo の直後にすぐ redo」しか見ていなかった ──
+      **間に何かを挟む**という形が 1 件も無かった。
+    """
+    _isolate(monkeypatch, tmp_path)
+    p = _book(tmp_path, "りんご")
+    _edit(p, "みかん")
+    ailine.restore_backup(p)                    # undo → りんご（棚に みかん）
+    _edit(p, "だいじな編集")                     # ★ ここが消えていた
+    assert _first(p) == "だいじな編集"
+    ailine.redo_last_undo(p)
+    assert _first(p) == "みかん", "redo が効いていない"
+    # ★ 消えていないこと ── undo で取り戻せる
+    ailine.restore_backup(p)
+    assert _first(p) == "だいじな編集", "redo が、あとから足した編集を消した"
+
+
+def test_redo_is_stopped_by_the_lock_gate(tmp_path, monkeypatch, capsys):
+    """★★ 自作 review が見つけた**致命**（2026-09-02）: redo が
+      ロックの関所（refuse_if_locked）を**一度も通っていなかった**。
+
+    ★ この repo は「run は Excel ロックで止まるのに undo は素通り」（復元の致命5）を
+      既に踏み、番人を「1 本で 4 経路を縛る」形にしていた。
+      **5 本目の経路を作って配線しなかった** ── 在っても鳴らない、そのもの。
+    """
+    _isolate(monkeypatch, tmp_path)
+    p = _book(tmp_path, "りんご")
+    _edit(p, "みかん")
+    ailine.restore_backup(p)
+    (p.parent / f"~${p.name}").write_bytes(b"excel lock")   # Excel が開いている印
+    before = p.read_bytes()
+    rc, out = _run_main(["redo", str(p)], capsys)
+    assert rc != 0, out
+    assert p.read_bytes() == before, "ロックを無視して上書きしている"
+
+
+def test_every_write_path_goes_through_the_lock_gate():
+    """★ 経路を数え上げる ── 原本を書き換える口が、全部この関所を通ること。
+
+    ★ 「1 本で N 経路を縛る」と docstring が宣言している以上、**N を数える側**が要る。
+      新しい口（今回の redo）を足した時に、配線忘れがここで赤くなる。
+    """
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    for fn in ("_cmd_undo_body", "cmd_redo"):
+        i = src.index(f"def {fn}(")
+        j = src.index(chr(10) + "def ", i + 10)
+        assert "refuse_if_locked" in src[i:j], f"{fn} がロックの関所を通っていない"
+
+
 def test_a_broken_shelf_item_is_refused(tmp_path, monkeypatch):
     """⑤ 壊れた退避を原本に被せない（undo と同じ物差し）。"""
     _isolate(monkeypatch, tmp_path)

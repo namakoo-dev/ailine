@@ -6690,6 +6690,13 @@ def only_this_column_changed(path: Path, source_book, sheet, col_index: int,
             #   置き場所の機構は動いていたのに、検算が追いついていなかった。
             #   ★ ずれを知っているのは呼び出し側なので、**渡してもらう**（推測しない）。
             if inserted_at:
+                # ★★ 2026-09-02（自作 review・重大 4）: この経路は before の列数ぶんしか
+                #   見ておらず、after に**想定外の列が増えても素通り**していた
+                #   （呼び出し側はこの結果だけを根拠に「他は 1 セルも変わらず」と ✓ を出す）。
+                #   ★ 列を 1 本挿したのだから、増えるのは**ちょうど 1 本**。分母を先に縛る。
+                if ca != cb + 1:
+                    return (f"列が {cb} → {ca} 本になっています"
+                             f"（1 本だけ増えるはず）── 頼んでいない列を作った疑いがあります")
                 for r in range(header_row, max(lb, la) + 1):
                     for c_b in range(1, cb + 1):
                         c_a = c_b if c_b < inserted_at else c_b + 1
@@ -8821,11 +8828,33 @@ def broken_identity_advisory(source_book, out_book, resolved: dict) -> list:
     #   「項目と件数を入れ替えて」で ⚠ が出た。だが 金額＝件数×単価 は**成り立ったまま**
     #   ── 崩れたのではなく、**列が動いた**だけ。等式は列の位置で持っているので、
     #   並びが変われば同じ等式が別の組に見え、「消えた」と誤検出する。
-    #   ★ broken() が行数の変わる回を比べないのと同じ理屈: **列が動いた回も比べない**。
-    #     ここは既に前後の見出しを両方読んでいるのに、突き合わせていなかった。
     #   ★ セル 2 つの入れ替え（幕 3）は見出しが動かないので、そちらは今までどおり鳴る。
-    if heads_b != _heads_a:
-        return []
+    # ★★ 2026-09-02（自作 review・致命 2）: 初版は `if heads_b != _heads_a: return []` と
+    #   **降りて**いた。だがそれは「列が動いた回」だけでなく、**見出しが変わる操作すべて**
+    #   （列追加・列削除・見出しの変更）で検算を丸ごと止める。
+    #   実測: 列を 1 本足すついでに直値の派生列を壊しても ⚠ が出なくなっていた ──
+    #   **この関数が検出対象にしていた事故クラスを、最も普通の操作で握りつぶしていた。**
+    #   ★ しかも同じ関数の docstring に「op を問わず 1 箇所で見る（入れ替えに限らず、
+    #     入力を変える操作すべてに効く）」と書いてある ── 自己申告と実装が矛盾していた。
+    #   ★ 直しは「降りる」ではなく **名前で対応づける**。位置でなく見出しで並べ直せば、
+    #     並べ替えも列追加も列削除も同じ手で扱える（前後の両方に在る列だけを比べる）。
+    #     ★ 同じ見出しが 2 本ある表では最初の 1 本を使う（どちらが対応するかは名前で
+    #       決まらない ── 決められないものを決めない）。
+    def _index_of(heads):
+        out = {}
+        for i, h in enumerate(heads):
+            key = str(h or "")
+            if key and key not in out:
+                out[key] = i
+        return out
+
+    _ib, _ia = _index_of(heads_b), _index_of(_heads_a)
+    _common = [h for h in _ib if h in _ia]
+    if len(_common) < 3:
+        return []                      # 3 列そろわなければ等式は立たない
+    heads_b = list(_common)
+    rows_b = [[r[_ib[h]] if _ib[h] < len(r) else None for h in _common] for r in rows_b]
+    rows_a = [[r[_ia[h]] if _ia[h] < len(r) else None for h in _common] for r in rows_a]
     # ★★ 2026-09-02: 行が増える操作でも見る（増えた行を**含めて**等式が成り立つか）。
     #   ★ 鳴りすぎない: identities() は 3 つとも数が入っている行だけで判定するので、
     #     値を入れなかった新しい行は最初から無視される。鳴るのは
@@ -11409,7 +11438,28 @@ def redo_last_undo(book: Path) -> Path:
             raise BrokenBackupError(
                 f"退避 {target.name} が開けません（{broken}）。"
                 f"原本は変更していません ── 退避は {target.parent} に在ります")
-    shutil.copy2(target, book)
+    # ★★ 2026-09-02（自作 review・致命 1）: ここは**上書き前に今の中身を退避していなかった**。
+    #   実測: undo のあとに別の編集を挟んでから redo すると、その編集内容が
+    #   **警告なしに完全消失**した（backups にも棚にも残らず、rglob で全探索して不在を確認）。
+    #   しかも画面には「✓ やり直しました」しか出ない。
+    #   ★ 姉妹関数 restore_backup は上書き前に `_prev` を取って退避している ── **片配線**。
+    #   ★ 直しは「棚に積む」ではなく **世代に積む**（make_backup）。
+    #     棚に積むと redo が自分の直前状態を拾い直して往復が壊れる。
+    #     世代に積めば `ailine undo` で普通に取り戻せる ── 新しい概念を作らない。
+    #   ★ make_backup は最新世代と 1 バイトも違わなければ積まない（世代列は変化の履歴）。
+    try:
+        make_backup(book)
+    except OSError as e:
+        raise BrokenBackupError(
+            f"やり直す前に今の内容を退避できませんでした（{e}）。原本は変更していません")
+    try:
+        shutil.copy2(target, book)
+    except OSError as e:
+        # ★ 2026-09-02（自作 review・致命 3 の後半）: ここが素だと、他プロセスが
+        #   排他オープン中に**生の traceback** が出る（この repo が「重大7」で踏んだ形）。
+        raise BrokenBackupError(
+            f"やり直せませんでした（{e}）── 原本を開いているアプリを閉じてから、"
+            "もう一度お試しください")
     # ★ 使った退避は外す（山を 1 つ下ろす）。消せなくても進めたことは事実なので黙って続ける。
     try:
         target.unlink()
@@ -11432,6 +11482,13 @@ def cmd_redo(a: argparse.Namespace) -> int:
         return 1
 
     def _body() -> int:
+        # ★★ 2026-09-02（自作 review・致命 3）: redo は**ロックの関所を一度も通っていなかった**。
+        #   この repo は「run は Excel ロックで止まるのに undo は素通り」（復元の致命5）を
+        #   既に踏み、番人を「1 本で 4 経路を縛る」形にしていた。
+        #   ★ 俺が**5 本目の経路を作って配線しなかった** ── 在っても鳴らない、そのもの。
+        blocked = refuse_if_locked(book)
+        if blocked is not None:
+            return blocked
         try:
             used = redo_last_undo(book)
         except NothingToRedoError as e:

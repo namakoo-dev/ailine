@@ -320,6 +320,24 @@ def test_the_shift_itself_is_not_reported(tmp_path):
         after, before, "売上表", 3, 1, inserted_at=3) is None
 
 
+def test_an_extra_column_is_caught_after_a_move(tmp_path):
+    """★★ 自作 review が見つけた**重大**（2026-09-02）:
+
+      ずれを許す経路は before の列数ぶんしか見ておらず、after に**想定外の列が
+      増えても素通り**していた。呼び出し側はこの結果だけを根拠に
+      「他は 1 セルも変わらず」と ✓ を出す。
+    ★ 列を 1 本挿したのだから、増えるのはちょうど 1 本 ── **分母を先に縛る**。
+    """
+    before = _sheet(tmp_path / "b.xlsx",
+                     [["商品", "売上", "原価"], ["りんご", 1200, 700]])
+    after = _sheet(tmp_path / "a.xlsx",          # 利益 のほかに 余計 も増えている
+                    [["商品", "売上", "利益", "原価", "余計"],
+                     ["りんご", 1200, 500, 700, "X"]])
+    got = ailine.only_this_column_changed(
+        after, before, "売上表", 3, 1, inserted_at=3)
+    assert got and "列が" in got, f"余計な列を見逃した: {got!r}"
+
+
 def test_a_real_overwrite_is_still_caught_after_a_move(tmp_path):
     """★★ ここが芯（2026-09-02 の変異試験が開いていた穴）:
       ずれを許す実装にした以上、**ずれに紛れた本当の書き換え**を見逃さないこと。
