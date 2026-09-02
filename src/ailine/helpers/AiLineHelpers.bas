@@ -758,6 +758,13 @@ Function RowMatches(oCell As Object, cmpCode As Integer, cmpValue As Variant) As
             '     両端に区切りを足して、**区切りごと**探すことで丸ごと一致にする。
             m = (InStr(Chr(2) & CStr(cmpValue) & Chr(2), _
                         Chr(2) & oCell.getString() & Chr(2)) > 0)
+        Case 7   ' どれでもない（Case 6 の否定 ── 「〜以外」）
+            ' ★★ 2026-09-02: 「味噌汁**以外**を抜き出して」用。
+            '   ★ Case 6 と**同じ突き合わせ方**（区切りごとの丸ごと一致）の否定にする。
+            '     部分一致の否定にすると「青りんご」が「りんご以外」に入らなくなる
+            '     ── 残したい行を落とす、取り返しのつかない側の間違い。
+            m = (InStr(Chr(2) & CStr(cmpValue) & Chr(2), _
+                        Chr(2) & oCell.getString() & Chr(2)) = 0)
         Case Else
             m = False
     End Select

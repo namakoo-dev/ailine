@@ -193,13 +193,51 @@ def test_the_reread_uses_the_machine_not_the_model():
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     # ★ 「最初の出現」で切ると、別の門に同じ述語を足したときに外れる（実際に外れた）
     #   ── 入れ替えの読み直しそのもの（plan を SWAP に差し替える所）を狙う。
+    # ★★ 2026-09-02: **窓を固定長（1200/600 文字）で切っていて外れた** ──
+    #   行の入れ替えの読み直しを間に足したら、LLM への聞き直しが窓の外へ出た。
+    #   この repo が何度も書いている「窓は構造で切る」を、ここだけ守っていなかった。
+    #   ★ 両端を構造で取る: セルの読み直し（plan を SWAP に差し替える所）から、
+    #     LLM への聞き直しまで。間に何を足しても、順序の主張は生き続ける。
     i = src.index('plan = [{"op": "SWAP", "args": {}}]')
-    seg = src[max(0, i - 1200):i + 600]
+    start = src.rindex("if (not _reread_done", 0, i)
+    end = src.index('translate_task_fixed_op(a.model, "SWAP"', i)
+    seg = src[start:end]
     assert "swap_targets_are_cells(a.task, book_meta, _sheet_h)" in seg, (
         "読み直しが、機械で解けるセルを見ていない")
-    j = seg.index("swap_targets_are_cells")
-    k = seg.index("translate_task_fixed_op")
-    assert j < k, "LLM に聞いてから機械を見ている（順序が逆）"
+    # ★ 窓の終わりが LLM への聞き直しそのものなので、機械の判定がその手前に在れば
+    #   順序は満たされている（seg の中に translate_task_fixed_op は現れない）。
+    assert "translate_task_fixed_op" not in seg, "LLM に聞いてから機械を見ている（順序が逆）"
+
+
+def test_the_cell_reread_actually_fires_without_the_llm(tmp_path, monkeypatch, capsys):
+    """★★ 2026-09-02: 上の番人は**文字の順序**しか見ておらず、`if False and …` で
+      無効化しても緑のままだった（行の側の変異試験で気づいた）。
+      ★ 在ることと効くことは別 ── **配線を通して**確かめる 1 本を置く。
+    ★ 一段目が語彙外を返す回（実測で起きた形）を作り、二段目（LLM への聞き直し）が
+      **呼ばれない**ことまで見る。適用しない（--dry）ので LibreOffice も要らない。
+    """
+    import openpyxl
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_golden_transcripts import _isolate, _run_main
+
+    _isolate(monkeypatch, tmp_path)
+    p = tmp_path / "c.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "請求"
+    ws.append(["取引先", "単価"])
+    for n, v in [("あかね商事", 12000), ("いろは工業", 4500), ("うえだ物産", 30000)]:
+        ws.append([n, v])
+    wb.save(p)
+    monkeypatch.setattr(ailine, "translate_task",
+                         lambda model, task, book_meta, temperature=0.1:
+                         {"plan": [{"op": "OUT_OF_VOCAB", "about": "特定の値の入れ替え"}]})
+    monkeypatch.setattr(ailine, "translate_task_fixed_op",
+                         lambda *a, **k: pytest.fail("機械で解けるのに LLM に聞いている"))
+    _rc, out = _run_main(["run", str(p),
+                           "あかね商事の単価とうえだ物産の単価を入れ替えて", "--dry"], capsys)
+    assert "読み直しました" in out, out
+    assert "2 つのセル" in out, out
 
 
 def test_cells_are_resolved_before_the_row_or_column_decision():

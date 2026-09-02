@@ -4674,8 +4674,20 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                         f"LLM が返した値『{resolved.get('value')}』は列『{resolved['col']}』に"
                         f"無いため、依頼文が名指しする実在の値"
                         f"（{'、'.join(_named_vals)}）を採用しました"]
-                resolved["cmp"] = "in" if len(_named_vals) > 1 else "eq"
-                resolved["value"] = _named_vals if len(_named_vals) > 1 else _named_vals[0]
+                # ★★ 2026-09-02（実測で捕まえた・検体が警告していた事故の再演）:
+                #   ここは「依頼文が実在の値を名指ししたら機械が勝つ」という正しい規則
+                #   だが、**否定を知らなかった**。そのため「味噌汁以外を抜き出して」で
+                #   読み直しが cmp=nin を立てた直後にここが `eq` へ上書きし、
+                #   **味噌汁だけを抜き出して △ を出していた** ── 逆のことをして合格。
+                #   ★ 片配線そのもの: 読み直しに足して、決定の場所に足し忘れた。
+                _neg = task_says_except(task)
+                if _neg:
+                    resolved["cmp"] = "nin"
+                    resolved["value"] = list(_named_vals)
+                else:
+                    resolved["cmp"] = "in" if len(_named_vals) > 1 else "eq"
+                    resolved["value"] = (_named_vals if len(_named_vals) > 1
+                                          else _named_vals[0])
                 resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
                 resolved["_new_sheet"] = _extract_output_sheet_name(
                     resolved["col"], resolved["cmp"], resolved["value"])
@@ -5227,8 +5239,9 @@ PLAN_CHAIN_WARNING_OPS = ("EXTRACT", "DEDUP")
 #   が 3 者の一致を縛る ── 変える時は必ず一緒に直すこと。
 _EXTRACT_CMPS = ("gte", "lte", "gt", "lt", "eq", "contains", "in")
 _EXTRACT_CMP_LABELS = {"gte": "以上", "lte": "以下", "gt": "超", "lt": "未満",
-                        "eq": "等しい", "contains": "を含む", "in": "のどれか"}
-_EXTRACT_CMP_CODE = {"gte": 0, "lte": 1, "gt": 2, "lt": 3, "eq": 4, "contains": 5, "in": 6}
+                        "eq": "等しい", "contains": "を含む", "in": "のどれか",
+                        "nin": "のどれでもない"}
+_EXTRACT_CMP_CODE = {"gte": 0, "lte": 1, "gt": 2, "lt": 3, "eq": 4, "contains": 5, "in": 6, "nin": 7}
 _EXTRACT_SHEET_NAME_FORBIDDEN_RE = re.compile(r'[:\\/?*\[\]]')
 
 # ★ operator9 ①: 比較語(cmp)も A' 原則の中に入れる ── value は機械が数値化するのに、cmp の
@@ -5420,6 +5433,10 @@ def _extract_output_sheet_name(col: str, cmp: str, value) -> str:
     #     一致（eq/in）は**助詞が要る** ── そこだけ「が」を挟み、語尾は落とす。
     if cmp in ("eq", "in"):
         name = f"{col}が{shown}"
+    elif cmp == "nin":
+        # ★ 2026-09-02: 否定は「〜以外」と書く。連結だと『料理味噌汁のどれでもない』
+        #   になり日本語にならない（eq/in で助詞を挟んだのと同じ理由）。
+        name = f"{col}が{shown}以外"
     else:
         name = f"{col}{shown}{label}"
     return _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub("_", name)[:31]
@@ -8000,6 +8017,43 @@ def _swap_pair_resolves(book_meta: dict, sheet: str | None, a: str, b: str) -> b
 _re_between_and = re.compile(r"^.*?([^\s、。との]+?)\s*と\s*([^\s、。との]+?)\s*の$")
 
 
+def swap_targets_are_rows(task: str, book_meta: dict, sheet: str | None,
+                           header_row: int = 1) -> list | None:
+    """依頼文が **2 つの行**の入れ替えを指しているなら [行番号, 行番号]（でなければ None）。
+
+    ★★ 2026-09-02（入れ替えを効果の検体に載せて初めて見えた）:
+      「あかね商事とうえだ物産の行を入れ替えて」で、読み直しの二段目（op を SWAP に
+      固定して LLM に聞き直す）が **a='取引先' b='件数'** を返した ── 人が言っていない
+      **列名**。しかも実在の列なので `_swap_pair_resolves` は True を返す。
+      止まったのは三項の番人が「依頼文の語と照合できない」と気づいたからで、判断は
+      正しいが、**利用者の正当な依頼が通らない**。
+      ★ 3 表（在庫・名簿・献立）では同じ言い方が 6/6 通っていた ── **LLM の揺れ**。
+
+    ★ 処方は 8/31 にセルでやったものと同じ:
+      **LLM に聞く前に、機械だけで 2 つ解けているならそれを使う。**
+      依頼文と実表しか見ていないので、LLM の返事より確かで、速い。
+    ★ 語彙を数え上げない ── 実表の値が依頼文に literal で現れ、それが**ちょうど 2 行**に
+      決まる時だけ。決まらなければ None（推測しない）。
+    ★ 見出しの語と、数のように見える値は行の名前にしない
+      （`_row_named_anywhere_in_task` と同じ理由 ── 揺れを増幅しない）。
+    """
+    rows, heads = _table_rows_for_anchor(book_meta, sheet, header_row)
+    if not rows:
+        return None
+    text = _task_outside_quotes(task)
+    head_set = {h for h in heads if h}
+    hits = {}
+    for r, vals in rows.items():
+        for v in vals:
+            if (not v or v in head_set or len(v) < 2 or v not in text
+                    or _is_number_like(v)):
+                continue
+            hits.setdefault(v, set()).add(r)
+    # ★ 1 行に決まる名前だけを採る（同じ値が 2 行に在るなら名前で指せていない）
+    named = sorted({next(iter(rs)) for v, rs in hits.items() if len(rs) == 1})
+    return named if len(named) == 2 else None
+
+
 def swap_targets_are_cells(task: str, book_meta: dict, sheet: str | None,
                             header_row: int = 1) -> list | None:
     """依頼文が **2 つのセル**の入れ替えを指しているなら [(行,列), (行,列)]（でなければ None）。
@@ -8486,13 +8540,27 @@ def removal_reading(task: str, book_meta: dict, sheet: str | None, header_row: i
     return at, note
 
 
-def unsupported_except_reading(task: str) -> str | None:
-    """「〜以外」の読みは、まだこの道具に無い ── 黙って別のことをせずに名指しで断る。"""
-    text = task or ""
-    if any(w in text for w in _EXCEPT_WORDS):
-        return ("『以外』の抽出（その行だけを残さない・他を残す）は、まだ頼める操作に"
-                 "ありません。行を**消す**なら「〜の行を削除して」と言ってください")
-    return None
+def task_says_except(task: str) -> bool:
+    """依頼文が「〜以外」を言っているか（語の集合は removal_reading と共有）。"""
+    return any(w in (task or "") for w in _EXCEPT_WORDS)
+
+
+def except_extraction_reading(book_meta: dict, sheet: str | None, task: str,
+                               header_row: int = 1) -> tuple:
+    """「〜以外を抜き出して」を、抽出（cmp=nin）として読む。決まらなければ (None, None)。
+
+    ★★ 2026-09-02: これまでは**名指しで断って**いた（README「作らなかったこと」）:
+      「この述語は Python・Basic・凍結した真理値表の 3 箇所が独立に持つので、
+       締切前に触ると 3 つの同期がずれる」── 正しい判断だった。
+      ★ 締切は過ぎ、**ずれたら赤くなる番人**を先に置いた
+        （tests/test_compare_codes_stay_in_sync.py）ので、触れる状態になった。
+    ★ 読みは機械がやる（LLM に「以外」を教えない）── 列も値も
+      resolve_named_extraction が実表から解く。同じ道具を使い、否定だけを足す。
+    ★ 決まらなければ決めない ── ここで外すと、**残したい行を落とす**。
+    """
+    if not task_says_except(task):
+        return None, None
+    return resolve_named_extraction(book_meta, sheet, task, header_row)
 
 
 CHOICE_PREFIX = "候補: "
@@ -9897,6 +9965,14 @@ def _extract_predicate(cmp: str, threshold, date_mode: bool = False):
             if cell_value is None or cell_value == "":
                 return False
             return str(cell_value) in {str(x) for x in (threshold or ())}
+        if cmp == "nin":
+            # ★★ 2026-09-02: 「〜以外」。**`in` の否定**として書く（別の勘定にしない）。
+            #   ★ 空欄は「どれでもない」に**入れる** ── 「味噌汁以外を抜き出して」で
+            #     名前が空の行を落とすと、残したい行を失う（取り返しのつかない側）。
+            #   ★ 部分一致の否定にはしない（「青りんご」が「りんご以外」から外れる）。
+            if cell_value is None or cell_value == "":
+                return True
+            return str(cell_value) not in {str(x) for x in (threshold or ())}
         if cmp == "contains":
             return (isinstance(cell_value, str) and threshold is not None
                     and str(threshold) in cell_value)
@@ -13069,9 +13145,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   読み直しの門の**内側**に置いていたので、先に別の読み直しが印を立てた回に
     #   素通りし、「味噌汁**以外**を抜き出して」が味噌汁**だけ**を抜き出して ✓ になった。
     #   ★ 断りは読み直しではない ── 門の外に、独立した関所として置く。
-    if (_exc := unsupported_except_reading(a.task)):
-        print(f"？ {_exc}")
-        return 3
+    # ★ 2026-09-02: 「〜以外」は読めるようになった（cmp=nin）。ここの関所は外した。
+    #   ★ ただし**読めなかった回**は今までどおり断る ── 下の読み直しで
+    #     列も値も決まらなければ、黙って別のことをしない。
 
     def _already_places_a_row(st):
         # ★★ 2026-08-29（Namakoo の通しで実測）: 「件数の合計も合計行に入れて」が
@@ -13239,13 +13315,25 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             and extract_cmp_from_task(a.task) is None
             and not task_asks_to_extract_columns(a.task) and len(plan) == 1
             and (plan[0] or {}).get("op") != "EXTRACT_COLUMNS"):
-        _xcol, _xvals = resolve_named_extraction(book_meta, _sheet_h, a.task)
-        if _xcol and _xvals:
-            print(f"（『抽出』として読み直しました ── 『{_xcol}』が"
-                   f"{'・'.join(_xvals)} の行を抜き出します）")
-            plan = [{"op": "EXTRACT", "args": {"col": _xcol, "cmp": "eq",
-                                                "value": _xvals[0]}}]
-            _reread_done = True
+        # ★★ 2026-09-02: 「〜以外」は**否定**として読む（同じ読み直しの中で分ける）。
+        #   ★ 別の門を作らない ── 門が増えるほど「どちらが先に立つか」で事故が起きる
+        #     （2026-08-27 に読み直しが 5 つ並んで上書きし合った形）。
+        if task_says_except(a.task):
+            _ncol, _nvals = except_extraction_reading(book_meta, _sheet_h, a.task)
+            if _ncol and _nvals:
+                print(f"（『抽出』として読み直しました ── 『{_ncol}』が"
+                       f"{'・'.join(_nvals)} **以外**の行を抜き出します）")
+                plan = [{"op": "EXTRACT", "args": {"col": _ncol, "cmp": "nin",
+                                                    "value": list(_nvals)}}]
+                _reread_done = True
+        if not _reread_done:
+            _xcol, _xvals = resolve_named_extraction(book_meta, _sheet_h, a.task)
+            if _xcol and _xvals:
+                print(f"（『抽出』として読み直しました ── 『{_xcol}』が"
+                       f"{'・'.join(_xvals)} の行を抜き出します）")
+                plan = [{"op": "EXTRACT", "args": {"col": _xcol, "cmp": "eq",
+                                                    "value": _xvals[0]}}]
+                _reread_done = True
 
     # ★★ 2026-08-27（Namakoo「特定行や特定列の抜き出しができない」）: 列の抽出。
     #   実測で一段目は OUT_OF_VOCAB（「複数条件の抽出」と誤読）を返していた。
@@ -13362,6 +13450,25 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             print("（『入れ替え』として読み直しました ── "
                    "依頼文が 2 つのセルの入れ替えを指しています）")
             plan = [{"op": "SWAP", "args": {}}]
+            _reread_done = True
+    if (not _reread_done and plan and task_asks_for_a_swap(a.task)
+            and _swap_axis_hint(a.task) != "column"
+            and not any((st or {}).get("op") == "SWAP" for st in plan)):
+        # ★★ 2026-09-02（入れ替えを効果の検体に載せて初めて見えた）:
+        #   「あかね商事とうえだ物産の行を入れ替えて」で、下の二段目（op を SWAP に
+        #   固定して LLM に聞き直す）が **a='取引先' b='件数'** を返した ──
+        #   人が言っていない**列名**。実在の列なので _swap_pair_resolves は True。
+        #   止めたのは三項の番人（依頼文の語と照合できない）で判断は正しいが、
+        #   **利用者の正当な依頼が通らない**。3 表では同じ言い方が 6/6 通っていた
+        #   ── つまり **LLM の揺れ**。
+        #   ★ セルの時と同じ処方: **LLM に聞く前に、機械だけで解けているならそれを使う。**
+        #     依頼文と実表しか見ていないので、LLM の返事より確かで、速い。
+        #   ★ 行番号で渡す ── 既に 4 表 4/4 で通っている道に載せる（新しい道を作らない）。
+        if (_rows2 := swap_targets_are_rows(a.task, book_meta, _sheet_h)):
+            print("（『入れ替え』として読み直しました ── "
+                   f"依頼文が {_rows2[0]}行目 と {_rows2[1]}行目 を指しています）")
+            plan = [{"op": "SWAP", "args": {"a": f"{_rows2[0]}行目",
+                                             "b": f"{_rows2[1]}行目"}}]
             _reread_done = True
     if (not _reread_done and plan and task_asks_for_a_swap(a.task)
             and not any((st or {}).get("op") == "SWAP" for st in plan)):

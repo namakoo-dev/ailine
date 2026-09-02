@@ -222,10 +222,20 @@ def rows_swapped(name_a, name_b):
             return False, f"行が見つからない（{[r[0] for r in after]}）"
         if (ia, ja) != (jb, ib):
             return False, f"入れ替わっていない（{name_a}: {ib}→{ia} / {name_b}: {jb}→{ja}）"
-        if after[ia] != before[ib] or after[ja] != before[jb]:
+        # ★★ 2026-09-02 に検体を直した（**製品は正しく、俺の期待が間違っていた**）:
+        #   式のある表では、行が動くと式の**文字が変わる**のが正しい
+        #   （=B2*C2 が 2 行目に残る ＝ 自分の行を指し続ける）。
+        #   丸ごと一致で見ると、その正しい振る舞いを「壊れた」と読む。
+        #   ★ しかも間違いの向きが悪い ── **値だけ交換する実装なら式は動かない**ので、
+        #     丸ごと一致は**その事故のほうを通してしまう**。
+        #   ★ ここは「式でないセルが行ごと付いてくる」で見る。
+        #     式が正しい行を指しているかは formulas_point_at_their_own_row が別に見る。
+        def _plain(row):
+            return [None if (isinstance(v, str) and v.startswith("=")) else v for v in row]
+        if _plain(after[ia]) != _plain(before[ib]) or _plain(after[ja]) != _plain(before[jb]):
             return False, "行の中身が付いてきていない（値だけ交換した疑い）"
-        rest_b = [r for i, r in enumerate(before) if i not in (ib, jb)]
-        rest_a = [r for i, r in enumerate(after) if i not in (ia, ja)]
+        rest_b = [_plain(r) for i, r in enumerate(before) if i not in (ib, jb)]
+        rest_a = [_plain(r) for i, r in enumerate(after) if i not in (ia, ja)]
         if rest_b != rest_a:
             return False, "他の行が変わっている"
         return True, ""

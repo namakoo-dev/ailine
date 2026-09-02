@@ -304,31 +304,39 @@ def test_a_removal_reading_resolves_the_row(tmp_path, task, want_row):
 @pytest.mark.parametrize("task", [
     "ナット以外を抜き出して", "ナットを除いた行を抜き出して",
 ])
-def test_the_except_reading_is_refused_not_flipped(tmp_path, task):
+def test_the_except_reading_is_never_flipped_into_a_deletion(tmp_path, task):
     """★★ 実測（自分で開けた片配線）: 「味噌汁**以外**を抜き出して」が
        味噌汁**だけ**を抜き出して ✓ になった ── **逆のことをして合格**。
-    ★ 『以外』（残す側を選ぶ）は cmp『〜でない』が要るが、述語は 3 箇所が独立に持つ
-      凍結表なので、いまは無い。**無いものは名指しで断る** ──
-      ここで削除に化けさせると、残したい行を消す取り返しのつかない事故になる。"""
+    ★ ここが**この検体の核心**で、2026-09-02 の実装後も 1 ミリも変えない:
+      『以外』を削除に化けさせない（残したい行を消すのは取り返しがつかない）。
+    ★★ 変わったのは**その先**だけ: 以前は「無いものは名指しで断る」だったが、
+      今日 cmp『どれでもない』(nin) を足したので、**否定として読む**ようになった。
+      （3 箇所の同期は tests/test_compare_codes_stay_in_sync.py が機械で縛っている）
+    """
     p = _book(tmp_path, "在庫")
-    assert ailine.removal_reading(task, _meta(p, "在庫"), "在庫") is None
-    assert ailine.unsupported_except_reading(task), task
+    meta = _meta(p, "在庫")
+    assert ailine.removal_reading(task, meta, "在庫") is None      # ★ 核心（不変）
+    col, vals = ailine.except_extraction_reading(meta, "在庫", task)
+    assert col == "品名" and vals == ["ナット"], (col, vals)
 
 
-def test_a_plain_extract_is_not_refused():
-    """★ 黙りすぎない側の対: 普通の抽出は通す。"""
-    assert ailine.unsupported_except_reading("数量が100以上の行を抜き出して") is None
-    assert ailine.unsupported_except_reading("ナットの行だけ抜き出して") is None
+def test_a_plain_extract_is_not_read_as_a_negation():
+    """★ 逆側 ── 「以外」と言っていない依頼を否定に読み替えない。"""
+    assert not ailine.task_says_except("数量が100以上の行を抜き出して")
+    assert not ailine.task_says_except("ナットの行だけ抜き出して")
 
 
-def test_the_refusal_sits_outside_the_reread_gate():
-    """★★ 片配線の再演を止める: 断りを読み直しの門の**内側**に置いていたので、
-       先に別の読み直しが印を立てた回に素通りした。断りは門の外に置く。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("if (_exc := unsupported_except_reading(a.task)):")
-    j = src.index("_reread_done = bool(getattr(a,")
-    k = src.index("def _already_places_a_row(st):")
-    assert j < i < k, "『以外』の断りが、読み直しの層の中に入っている"
+def test_the_negation_predicate_is_the_negation_of_in():
+    """★ 述語の意味 ── `in` の否定であること（別の勘定にしない）。
+
+    ★ 空欄は「どれでもない」に**入れる**（落とすと残したい行を失う）。
+    ★ 部分一致の否定にしない（「ナット」以外に『六角ナット』が残る）。
+    """
+    f = ailine._extract_predicate("nin", ["ナット"])
+    assert f("ボルト") is True
+    assert f("ナット") is False
+    assert f("") is True and f(None) is True
+    assert f("六角ナット") is True
 
 
 def test_the_anchor_is_never_written_even_when_the_llm_offers_nothing_else(tmp_path):
