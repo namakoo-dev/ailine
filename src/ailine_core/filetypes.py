@@ -37,6 +37,15 @@ OPENPYXL_READABLE_SUFFIX = ".xlsx"
 #   ── 出ないことは信号でない（逆向きにも同じ）。
 OPENPYXL_PROBEABLE_SUFFIXES = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 
+# ailine.py の `refuse_if_run_cannot_handle`（`ailine run` が 1 冊を受け取ったとき、
+# **触る前に**扱える形式かを見る関所）が使う集合。
+# ★ OPENPYXL_PROBEABLE_SUFFIXES と今は同じ値だが、**意味が違う**ので畳まない
+#   （あちらは「復元前に壊れていないか調べようがあるか」、こちらは「この道具が
+#   操作を適用できるか」）。片方を広げたときに、もう片方が黙って一緒に動くのを避ける。
+# ★ .ods / .ots はここに**入れない** ── LibreOffice は開けるが build_book_meta が
+#   openpyxl なので読めない。約束（--help）だけが先行していた。
+RUN_SUPPORTED_SUFFIXES = {".xlsx", ".xlsm", ".xltx", ".xltm"}
+
 # ailine.py の `_cmd_run_body`（run の暗黙前段への早期分岐）・`_unreadable_book_for_match_message`
 # （M3 の誤誘導修正）が使う、CSV 検疫（ailine_core/csv_quarantine.py）の対象拡張子。
 CSV_SUFFIX = ".csv"

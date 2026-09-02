@@ -1,7 +1,7 @@
 usage: ailine undo [-h] [--list] book
 
 positional arguments:
-  book        対象の文書 (.xlsx / .ods)
+  book        対象の文書 (.xlsx)
 
 options:
   -h, --help  show this help message and exit

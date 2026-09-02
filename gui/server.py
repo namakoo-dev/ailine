@@ -48,9 +48,18 @@ def _ailine(args: list, answer: str | None = None) -> tuple:
     # ★★ 2026-08-27（Namakoo「y/N の入力ができない」）: 子プロセスに端末が無いので、
     #   道具が [y/N] を聞く場面に画面から答えられなかった（関所の前で行き止まり）。
     #   ★ 関所は 1 ミリも緩めない ── **人の答えを運ぶ道**を作る。
+    # ★★ 2026-09-01（Namakoo が実演の練習で実測・画面が「実行中…」のまま固まった）:
+    #   `input=None` は「stdin を渡さない」ではなく **「この画面サーバの端末を
+    #   子にそのまま継がせる」** という意味だった。子の `input("[y/N]: ")` は
+    #   **人に見えない端末**で待ち続ける（実測: 4 分動いて CPU 0.5 秒＝計算していない）。
+    #   ★ 関所の側は正しく書いてある ── EOFError を拾って逃げ道を出し 7 で抜ける。
+    #     **呼ぶ側が stdin を閉じていなかっただけ。**
+    #   ★ `_stdin_isatty()` で直そうとすると外す: この時 stdin は**本物の端末**なので
+    #     isatty は True を返す。塞ぐべきは「端末を継ぐこと」そのもの。
+    #   ★ 空文字でも `input=` を渡せば stdin は**閉じたパイプ**になり、EOFError が出る。
     proc = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=RUN_TIMEOUT, env=env,
-                           input=(answer + chr(10)) if answer else None)
+                           input=(answer + chr(10)) if answer else "")
     out = (proc.stdout or "") + (proc.stderr or "")
     payload = None
     for line in (proc.stdout or "").splitlines():

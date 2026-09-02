@@ -7,7 +7,7 @@ usage: ailine run [-h] [--model MODEL] [--refs REFS] [--helpers HELPERS]
                   book task [task ...]
 
 positional arguments:
-  book                  対象の文書 (.xlsx / .ods) またはフォルダ
+  book                  対象の文書 (.xlsx) またはフォルダ
   task                  やりたいことを自然言語で（2冊照合は 2冊目のパスに続けて）
 
 options:

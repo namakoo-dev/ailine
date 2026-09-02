@@ -126,7 +126,8 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
 )
 from ailine_core.filetypes import (BOOKLIKE_SUFFIXES, CSV_SUFFIX,
-                                   OPENPYXL_PROBEABLE_SUFFIXES)   # ★ 拡張子判定の登録簿
+                                   OPENPYXL_PROBEABLE_SUFFIXES,
+                                   RUN_SUPPORTED_SUFFIXES)   # ★ 拡張子判定の登録簿
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
@@ -11173,6 +11174,38 @@ def _cmd_undo_body(a: argparse.Namespace, book: Path) -> int:
 # ★ W8b: 安全器官（既定の反転は次コミット。今回は原本を直接書く危険を減らす下ごしらえ）
 # ---------------------------------------------------------------------------
 
+def refuse_if_run_cannot_handle(book: Path) -> int | None:
+    """`ailine run` が扱えない形式なら、**触る前に**人の言葉で断る。
+
+    ★★ 実測（README「未実装」に自分で書いていた）: `.ods` を渡すと**生の traceback**が
+      出ていた。`--help` は 3 箇所で「.xlsx / .ods」と約束しているのに、
+      `build_book_meta` は openpyxl なので読めない ── **約束だけが先行していた。**
+      ★ 直しは 2 つで 1 組: 約束のほうを実体に合わせ（help から .ods を外す）、
+        それでも来た時に**説明して**止まる。
+
+    ★★ ここを `refuse_if_locked` に相乗りさせない（＝ undo も通る場所に置かない）。
+      この repo は 2026-08 の盲検で出た「`.ods` の拒否を全形式に広げよう」を
+      **却下している**: 断る範囲を広げると、**命綱（undo・バックアップ）に届く前に
+      止まる経路**ができるため。だから関所は **run の入口 1 箇所だけ**に置く。
+      undo は「壊れた形式でも戻せる」ままにする。
+
+    ★ 断りは行き止まりにしない ── **直し方**を言う（この repo の作法）。
+    """
+    suffix = book.suffix.lower()
+    if suffix in RUN_SUPPORTED_SUFFIXES:
+        return None
+    print(f"× {book.name} は、この道具が操作できる形式ではありません"
+           f"（{suffix or '拡張子なし'}）。")
+    print("  → 操作できるのは: " + "／".join(sorted(RUN_SUPPORTED_SUFFIXES)))
+    if suffix in (".ods", ".ots"):
+        print("  → LibreOffice で開いて「Excel 2007-365 (.xlsx)」として"
+               "保存し直すと、そのまま扱えます")
+    elif suffix in (".xls", ".xlsb", ".xlt"):
+        print("  → 旧形式です。Excel か LibreOffice で .xlsx として保存し直してください")
+    print("  → 中身を見るだけなら、この道具は使わずにそのまま開けます（原本は触っていません）")
+    return EXIT_ENVIRONMENT
+
+
 def refuse_if_locked(book: Path) -> int | None:
     """書き込みが塞がれていれば、理由を人の言葉で言って EXIT_WRITE_BLOCKED を返す。
 
@@ -12505,6 +12538,12 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
     book = Path(a.book).resolve()
     if not book.exists():
         exit_environment(f"文書が無い: {book}")
+
+    # ★ 形式の関所は**ロックより先**（扱えない形式に「Excel で開いています」と
+    #   言うと、心当たりが的外れになる）。★ run の入口だけ ── undo には掛けない。
+    unusable = refuse_if_run_cannot_handle(book)
+    if unusable is not None:
+        return unusable
 
     blocked = refuse_if_locked(book)
     if blocked is not None:
@@ -17025,7 +17064,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="タスクを生成・適用・検証する")
-    r.add_argument("book", help="対象の文書 (.xlsx / .ods) またはフォルダ")
+    r.add_argument("book", help="対象の文書 (.xlsx) またはフォルダ")
     # ★ M3 P: task は nargs="+" で受ける（2冊照合 `ailine run A.xlsx B.xlsx "依頼"` の
     #   2冊目パス+依頼文を同じ位置引数列で拾うため）。1冊経路では従来どおり要素数1の
     #   リストになり、_cmd_run_body の冒頭で通常の文字列へ畳み戻す（下流は全部 str のまま）。
@@ -17139,12 +17178,12 @@ def build_parser() -> argparse.ArgumentParser:
     h.set_defaults(func=cmd_history)
 
     rs = sub.add_parser("restore", help="原本への反映前のバックアップから復元する（ailine undo と同じ）")
-    rs.add_argument("book", help="対象の文書 (.xlsx / .ods)")
+    rs.add_argument("book", help="対象の文書 (.xlsx)")
     rs.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
     rs.set_defaults(func=cmd_restore)
 
     u = sub.add_parser("undo", help="原本への反映前のバックアップから復元する（あと何回戻せるかを表示）")
-    u.add_argument("book", help="対象の文書 (.xlsx / .ods)")
+    u.add_argument("book", help="対象の文書 (.xlsx)")
     u.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
     u.set_defaults(func=cmd_undo)
 
