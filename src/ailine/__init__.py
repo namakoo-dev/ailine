@@ -8606,6 +8606,15 @@ def broken_identity_advisory(source_book, out_book, resolved: dict) -> list:
         _heads_a, rows_a = _rows(out_book)
     except Exception:
         return []                      # 読めない回は黙る（断定しない）
+    # ★★ 2026-09-01（Namakoo が実演の練習で実測・「成り立っているのに警告が出る」）:
+    #   「項目と件数を入れ替えて」で ⚠ が出た。だが 金額＝件数×単価 は**成り立ったまま**
+    #   ── 崩れたのではなく、**列が動いた**だけ。等式は列の位置で持っているので、
+    #   並びが変われば同じ等式が別の組に見え、「消えた」と誤検出する。
+    #   ★ broken() が行数の変わる回を比べないのと同じ理屈: **列が動いた回も比べない**。
+    #     ここは既に前後の見出しを両方読んでいるのに、突き合わせていなかった。
+    #   ★ セル 2 つの入れ替え（幕 3）は見出しが動かないので、そちらは今までどおり鳴る。
+    if heads_b != _heads_a:
+        return []
     note = row_identity.describe(row_identity.broken(rows_b, rows_a), heads_b)
     return [f"⚠ {note}"] if note else []
 
