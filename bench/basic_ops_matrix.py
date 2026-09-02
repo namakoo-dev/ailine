@@ -66,6 +66,19 @@ TABLES = {
         # ★ 偶然の等式を作らない（合計行の番人が最下行を誤検出しないため）。
         "rows": [["机", 3, 12000, ""], ["椅子", 8, 4500, ""], ["棚", 2, 30000, ""]],
     },
+    # ★★ 2026-09-02: **入れ替え（SWAP）を 1 件も測れていなかった** ── 8/31 に見つけた
+    #   13 件の欠陥のうち **5 件が入れ替え**だったのに、効果の分母に乗っていなかった。
+    #   ★ 入れ替えの本題は「並びが変わったか」ではなく「**式が自分の行を指し続けるか**」。
+    #     実測（bench/swap_formula_spike_RESULTS.md）で、値を交換する実装だと各行の
+    #     金額が他の行の値になり、**並びは正しく見えるので人が気づけない**。
+    #     それを測るには式のある表が要る ── 既存の表の期待値を動かさないよう別に立てる。
+    "請求": {
+        "sheet": "請求",
+        "headers": ["取引先", "件数", "単価", "金額"],
+        "rows": [["あかね商事", 3, 12000, "=B2*C2"],
+                  ["いろは工業", 8, 4500, "=B3*C3"],
+                  ["うえだ物産", 2, 30000, "=B4*C4"]],
+    },
     "献立": {
         "sheet": "献立",
         "headers": ["料理", "主材料", "分量", "備考"],
@@ -185,6 +198,99 @@ def computed_column(name, at_index=None):
     return check
 
 
+def _both(*checks):
+    """複数の期待を**すべて**満たすこと（片方だけ見て通すと、見た目だけ正しい回を拾う）。"""
+    def check(before, after):
+        for c in checks:
+            ok, why = c(before, after)
+            if not ok:
+                return False, why
+        return True, ""
+    return check
+
+
+def rows_swapped(name_a, name_b):
+    """2 行が入れ替わり、**中身は行ごと付いていく**。他の行は動かない。"""
+    def check(before, after):
+        if len(after) != len(before):
+            return False, f"行数が変わった {len(before)}→{len(after)}"
+        def _find(grid, name):
+            return next((i for i, r in enumerate(grid) if str(r[0]) == name), None)
+        ib, jb = _find(before, name_a), _find(before, name_b)
+        ia, ja = _find(after, name_a), _find(after, name_b)
+        if None in (ib, jb, ia, ja):
+            return False, f"行が見つからない（{[r[0] for r in after]}）"
+        if (ia, ja) != (jb, ib):
+            return False, f"入れ替わっていない（{name_a}: {ib}→{ia} / {name_b}: {jb}→{ja}）"
+        if after[ia] != before[ib] or after[ja] != before[jb]:
+            return False, "行の中身が付いてきていない（値だけ交換した疑い）"
+        rest_b = [r for i, r in enumerate(before) if i not in (ib, jb)]
+        rest_a = [r for i, r in enumerate(after) if i not in (ia, ja)]
+        if rest_b != rest_a:
+            return False, "他の行が変わっている"
+        return True, ""
+    return check
+
+
+def columns_swapped(name_a, name_b):
+    """2 列が入れ替わり、**列の中身は見出しに付いていく**。行数は変わらない。"""
+    def check(before, after):
+        if len(after) != len(before):
+            return False, f"行数が変わった {len(before)}→{len(after)}"
+        hb = [str(x or "") for x in before[0]]
+        ha = [str(x or "") for x in after[0]]
+        if sorted(hb) != sorted(ha):
+            return False, f"見出しの顔ぶれが変わった {hb}→{ha}"
+        if name_a not in hb or name_b not in hb:
+            return False, f"対象の見出しが無い（{hb}）"
+        ib, jb = hb.index(name_a), hb.index(name_b)
+        ia, ja = ha.index(name_a), ha.index(name_b)
+        if (ia, ja) != (jb, ib):
+            return False, f"入れ替わっていない（{name_a}: {ib}→{ia} / {name_b}: {jb}→{ja}）"
+        for r in range(1, len(after)):
+            if after[r][ia] != before[r][ib] or after[r][ja] != before[r][jb]:
+                return False, f"{r + 1}行目の中身が見出しに付いてきていない"
+        return True, ""
+    return check
+
+
+def cells_swapped(r1, c1, r2, c2):
+    """**その 2 セルだけ**が互いの値になる（他は 1 セルも変わらない）。"""
+    def check(before, after):
+        if len(before) != len(after):
+            return False, f"行数が変わった {len(before)}→{len(after)}"
+        diff = sorted((r, c) for r in range(len(after))
+                       for c in range(len(after[r])) if before[r][c] != after[r][c])
+        want = sorted([(r1 - 1, c1 - 1), (r2 - 1, c2 - 1)])
+        if diff != want:
+            return False, f"変わったセルが {diff}（{want} だけのはず）"
+        if (after[r1 - 1][c1 - 1] != before[r2 - 1][c2 - 1]
+                or after[r2 - 1][c2 - 1] != before[r1 - 1][c1 - 1]):
+            return False, "互いの値になっていない"
+        return True, ""
+    return check
+
+
+def formulas_point_at_their_own_row(col_index):
+    """★ 入れ替えの本題: 動いた行の式が、**自分の行**を指し続けていること。
+
+    ★ 見た目（並び）が正しくても、値を交換する実装だと各行の計算結果が他の行の値になる
+      ── 人の目では気づけない「静かに壊れる」形（実測で設計が決まった）。
+    ★ ここでは式の**文字**を見る: N 行目の式が N 行目のセルを参照していること。
+    """
+    def check(before, after):
+        import re
+        for r in range(1, len(after)):
+            v = after[r][col_index - 1]
+            if not (isinstance(v, str) and v.startswith("=")):
+                return False, f"{r + 1}行目が式でない（{v!r}）"
+            rows = {int(m) for m in re.findall(r"[A-Z]+(\d+)", v)}
+            if rows and rows != {r + 1}:
+                return False, f"{r + 1}行目の式が他の行を指している（{v!r}）"
+        return True, ""
+    return check
+
+
 def column_deleted(name):
     def check(before, after):
         heads_b = [str(h or "") for h in before[0]]
@@ -222,6 +328,26 @@ def _cases_for(key: str):
     c2 = h[1]           # 2 列目
     c3 = h[2]           # 3 列目（数値）
     out = []
+
+    # ★ 「請求」は**式のある表**。入れ替えで式が壊れないかだけを測る専用の表なので、
+    #   汎用の 6 op は回さない（既存の期待値を式のぶん書き換えずに済ませる）。
+    if key == "請求":
+        # ⑦ 入れ替え ── 本題は「**式が自分の行を指し続けるか**」。
+        for task in (f"{r1}と{r3}の行を入れ替えて", f"{r1}の行と{r3}の行を交換して"):
+            out.append(("swap", task, _both(rows_swapped(r1, r3),
+                                             formulas_point_at_their_own_row(4))))
+        out.append(("swap", "2行目と4行目を入れ替えて",
+                     _both(rows_swapped(r1, r3), formulas_point_at_their_own_row(4))))
+        # 列の入れ替え（式は列の移動に追随する）
+        out.append(("swap", "件数と単価の列を入れ替えて",
+                     _both(columns_swapped("件数", "単価"),
+                            formulas_point_at_their_own_row(4))))
+        # セル 2 つ ── 頼んだ 2 つ**だけ**が動くこと
+        out.append(("swap", f"{r1}の単価と{r3}の単価を入れ替えて",
+                     cells_swapped(2, 3, 4, 3)))
+        out.append(("swap", f"{r1}と{r3}の単価を入れ替えて",
+                     cells_swapped(2, 3, 4, 3)))
+        return out
 
     # ① セルに値を入れる（1 セルだけ）
     for task in (f"{r2}の{c2}を「東棟」にして",
@@ -272,7 +398,15 @@ def _cases_for(key: str):
     out.append(("sort", f"{c3}の大きい順にして", rows_sorted_by(3, True)))
     out.append(("sort", f"{c3}の少ない順に並べて", rows_sorted_by(3, False)))
 
-    # ⑦ 計算列 ── 数値が 2 本ある表でだけ測れる（★ 2026-09-02 に足した分母）。
+    # ⑦ 入れ替え（★ 2026-09-02 に足した分母 ── 8/31 の欠陥 13 件中 5 件がここだった）
+    for task in (f"{r1}と{r3}の行を入れ替えて", f"{r1}の行と{r3}の行を交換して",
+                  f"{r1}と{r3}の順番を入れ替えて"):
+        out.append(("swap", task, rows_swapped(r1, r3)))
+    out.append(("swap", "2行目と4行目を入れ替えて", rows_swapped(r1, r3)))
+    out.append(("swap", f"{c2}と{c3}の列を入れ替えて", columns_swapped(c2, c3)))
+    out.append(("swap", f"{r1}の{c3}と{r3}の{c3}を入れ替えて", cells_swapped(2, 3, 4, 3)))
+
+    # ⑧ 計算列 ── 数値が 2 本ある表でだけ測れる（★ 2026-09-02 に足した分母）。
     #   ここまで測って初めて「名前・位置・式」の 3 つが揃ったと言える。
     if key == "見積":
         # 名前を言った回 ── **依頼文の名前**が見出しになること（A' 原則）

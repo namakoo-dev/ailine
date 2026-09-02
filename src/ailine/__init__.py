@@ -3648,6 +3648,20 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                         and name_matches_task(raw_target, task, others=headers.get(first_sheet, []))):
                     resolved["_new_col_label"] = raw_target
                 del resolved["target"]
+            elif (task_asks_to_add_a_column(task)
+                    and not name_matches_task(v, task,
+                                               others=headers.get(first_sheet, []))):
+                # ★★ 2026-09-02（130 件の器を広げて初めて見えた・実測）:
+                #   「単価の右に、数量と単価をかけた**列を作って**」で、一段目が
+                #   target='メモ'（実在するが**空**の列）を返し、道具は新しい列を作らずに
+                #   **その列へ書いて ✓ を出していた**。頼んでいない場所に書いている。
+                #   ★ W3 は「**実在しない** target ＝ ほぼ捏造」を捨てる。抜けていたのは
+                #     「**実在するが、依頼文に無い**」列 ── そこだけ素通りだった。
+                #   ★ 判定に語彙の一覧は要らない: 依頼文が「作る」と言っているか
+                #     （閉じた文法）と、その名前が依頼文と機械照合できるか（既存の
+                #     provenance 層）の 2 つだけ。新しい言い回しが来ても足すものは無い。
+                #   ★ 道具は既に気づいていた（★で開示していた）── **止めていなかった**だけ。
+                del resolved["target"]          # → 新しい列を作る（自動命名 or 依頼文の名前）
             else:
                 resolved["target"] = v
                 if was_inferred:

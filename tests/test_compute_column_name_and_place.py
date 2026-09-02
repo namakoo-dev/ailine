@@ -158,6 +158,86 @@ def test_a_request_without_a_name_or_a_place_stays_bare(tmp_path):
     assert resolved.get("_move_new_col_to") is None, resolved.get("_move_new_col_to")
 
 
+# --- 実在するが依頼文に無い列 ── 「作る」と言っているなら指名ではない -----------------
+
+def _quote_book(tmp_path: Path) -> Path:
+    p = tmp_path / "q.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "見積"
+    ws.append(["品名", "数量", "単価", "メモ"])
+    for r in [["机", 3, 12000, ""], ["椅子", 8, 4500, ""], ["棚", 2, 30000, ""]]:
+        ws.append(r)
+    wb.save(p)
+    return p
+
+
+def test_an_existing_but_unspoken_target_is_dropped(tmp_path):
+    """★★ 2026-09-02（130 件の器を広げて初めて見えた実測）:
+
+      「単価の右に、数量と単価をかけた**列を作って**」で、一段目が target='メモ'
+      （実在するが**空**の列）を返し、道具は新しい列を作らずに**その列へ書いて ✓**
+      を出していた ── 頼んでいない場所に書いている。
+    ★ W3 は「**実在しない** target ＝ ほぼ捏造」を捨てる。抜けていたのは
+      「**実在するが、依頼文に無い**」列。道具は ★ で開示していたが、止めていなかった。
+    """
+    meta = ailine.build_book_meta(_quote_book(tmp_path))
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["数量", "単価"], "operator": "*", "target": "メモ"},
+        meta, task="単価の右に、数量と単価をかけた列を作って")
+    assert ok, err
+    assert resolved.get("target") is None, (
+        f"依頼文に無い実在列を対象にしている: {resolved.get('target')!r}")
+    assert resolved.get("_move_new_col_to") == 3, resolved.get("_move_new_col_to")
+
+
+def test_a_target_the_request_names_is_kept(tmp_path):
+    """★ 陰性対照 ── 依頼文が名指ししている実在列まで捨てたら、書き込み先を失う。"""
+    meta = ailine.build_book_meta(_quote_book(tmp_path))
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["数量", "単価"], "operator": "*", "target": "メモ"},
+        meta, task="メモに、数量と単価をかけた値を入れて")
+    assert ok, err
+    assert resolved.get("target") == "メモ", resolved.get("target")
+
+
+def test_a_named_target_survives_even_when_the_request_says_create(tmp_path):
+    """★★ 2 つ目の条件（依頼文と照合できるか）を**単独で**縛る検体。
+
+      2026-09-02 の変異試験で開いていた穴: 照合の条件を外して「作ると言っていれば
+      常に捨てる」に緩めても、既存の検体は**緑のまま**だった ── 陰性対照が
+      「作ると言っていない回」しか持っておらず、**両方が真になる回**が無かった。
+    ★ ここは「作る」と言い、**かつ**依頼文がその列を名指ししている回。捨てたら
+      書き込み先を失う（人が『メモ』と言っているのに別の列ができる）。
+    ★★ 検体を 1 度作り直した: 最初は「数量と単価をかけた**メモの列**を作って」にしたが、
+      これだと落とした target を**もう一方の規則**（依頼した名前が既に在るなら target に
+      する）が拾い直してしまい、**差が出なかった**（変異試験が緑のまま）。
+      ★ 2 つの規則が重なる入力では、片方を壊しても結果が同じになる ── 打ち消し合い。
+        名前が語尾の形で切り出せない言い方にして、**この規則だけ**が効く場面にする。
+    """
+    meta = ailine.build_book_meta(_quote_book(tmp_path))
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["数量", "単価"], "operator": "*", "target": "メモ"},
+        meta, task="メモに、数量と単価をかけた列を作って")
+    assert ok, err
+    assert resolved.get("target") == "メモ", (
+        f"依頼文が名指ししている列まで捨てている: {resolved.get('target')!r}")
+
+
+def test_a_request_that_does_not_say_create_keeps_the_target(tmp_path):
+    """★ もう一方の陰性対照 ── 「作る」と言っていない回まで捨てない。
+
+    ★ 判定は 2 つだけ（「作る」と言っているか／依頼文と照合できるか）。
+      どちらも語彙の一覧ではないので、新しい言い回しが来ても足すものは無い。
+    """
+    meta = ailine.build_book_meta(_quote_book(tmp_path))
+    ok, resolved, _inf, err = ailine.verify_dsl_args(
+        "COMPUTE_COLUMN", {"operands": ["数量", "単価"], "operator": "*", "target": "メモ"},
+        meta, task="数量と単価をかけて埋めて")
+    assert ok, err
+    assert resolved.get("target") == "メモ", resolved.get("target")
+
+
 # --- 依頼した名前が既に在る回 ── 「作る」ではなく「もう在る」-------------------------
 
 def test_an_existing_name_becomes_the_target_not_a_new_column(tmp_path):
