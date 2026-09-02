@@ -56,6 +56,16 @@ TABLES = {
         "rows": [["山田", "営業", 101, ""], ["鈴木", "経理", 202, ""],
                   ["高橋", "総務", 305, ""]],
     },
+    # ★★ 2026-09-02: **計算列（COMPUTE_COLUMN）を 1 件も測れていなかった**。
+    #   理由は表の側にあった ── 既存の 3 表はどれも数値の列が 1 本しかない
+    #   （在庫=数量／名簿=内線／献立=分量）ので、2 列の演算を頼めなかった。
+    #   ★ 実演の幕 1 で使う op なのに、効果の分母に入っていなかった。表を 1 つ足す。
+    "見積": {
+        "sheet": "見積",
+        "headers": ["品名", "数量", "単価", "メモ"],
+        # ★ 偶然の等式を作らない（合計行の番人が最下行を誤検出しないため）。
+        "rows": [["机", 3, 12000, ""], ["椅子", 8, 4500, ""], ["棚", 2, 30000, ""]],
+    },
     "献立": {
         "sheet": "献立",
         "headers": ["料理", "主材料", "分量", "備考"],
@@ -139,6 +149,38 @@ def column_added_named(name, at_index=None):
             return False, f"見出しに『{name}』が無い（{heads}）"
         if at_index is not None and heads.index(name) + 1 != at_index:
             return False, f"『{name}』が {heads.index(name) + 1} 列目（{at_index} 列目のはず）"
+        return True, ""
+    return check
+
+
+def computed_column(name, at_index=None):
+    """計算列が、**依頼文の名前**で、指定の位置に、**式**として入ること。
+
+    ★★ 2026-09-02: ここまで効果で見る ── 見出しだけ合っていても、値が直値なら
+      翌月ずれる（この repo が何度も踏んだ「静かに壊れる」形）。
+    ★ 名前は依頼文から取る（A' 原則）。名前を言っていない回は数式風の見出しでよいので、
+      その回は name=None を渡す（位置と式だけ見る）。
+    """
+    def check(before, after):
+        if len(after) != len(before):
+            return False, f"行数が変わった {len(before)}→{len(after)}"
+        heads = [str(h or "") for h in after[0]]
+        if len(heads) != len(before[0]) + 1:
+            return False, f"列が 1 本増えていない（{heads}）"
+        if name is not None:
+            if name not in heads:
+                return False, f"見出しに『{name}』が無い（{heads}）"
+            idx = heads.index(name)
+        else:
+            idx = next((i for i, h in enumerate(heads)
+                         if i >= len(before[0]) or h != str(before[0][i] or "")), -1)
+            if idx < 0:
+                return False, f"新しい列が見つからない（{heads}）"
+        if at_index is not None and idx + 1 != at_index:
+            return False, f"新しい列が {idx + 1} 列目（{at_index} 列目のはず）"
+        vals = [after[r][idx] for r in range(1, len(after))]
+        if not vals or not all(isinstance(v, str) and v.startswith("=") for v in vals):
+            return False, f"式になっていない（{vals}）"
         return True, ""
     return check
 
@@ -229,6 +271,24 @@ def _cases_for(key: str):
     out.append(("sort", f"{c3}で降順に並べ替えて", rows_sorted_by(3, True)))
     out.append(("sort", f"{c3}の大きい順にして", rows_sorted_by(3, True)))
     out.append(("sort", f"{c3}の少ない順に並べて", rows_sorted_by(3, False)))
+
+    # ⑦ 計算列 ── 数値が 2 本ある表でだけ測れる（★ 2026-09-02 に足した分母）。
+    #   ここまで測って初めて「名前・位置・式」の 3 つが揃ったと言える。
+    if key == "見積":
+        # 名前を言った回 ── **依頼文の名前**が見出しになること（A' 原則）
+        out.append(("compute", "数量と単価をかけた金額の列を作って",
+                     computed_column("金額")))
+        out.append(("compute", "数量に単価をかけた小計の列を追加して",
+                     computed_column("小計")))
+        # 名前 ＋ 位置
+        out.append(("compute", "単価の右に、数量と単価をかけた金額の列を作って",
+                     computed_column("金額", 4)))
+        out.append(("compute", "数量と単価の間に、数量と単価をかけた金額の列を作って",
+                     computed_column("金額", 3)))
+        # ★ 名前を言っていない回 ── 発明しない（数式風の見出しでよい）。位置と式だけ見る。
+        out.append(("compute", "数量と単価をかけた列を作って", computed_column(None)))
+        out.append(("compute", "単価の右に、数量と単価をかけた列を作って",
+                     computed_column(None, 4)))
     return out
 
 

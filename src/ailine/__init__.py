@@ -3655,6 +3655,29 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                     # ★ W10a 項目3: 数字指定→列名解決の元の表記を残す（解釈要約の表示用・
                     #   例:「列5」→「在庫」列と解決した時、確認行の直後にその経緯を見せる）。
                     resolved["_target_raw"] = raw_target
+        # ★★ 2026-09-02: 2 項の演算（売上 − 原価）でも、依頼文の名前を拾う。
+        #   名前の抽出は**倍率の枝（税込/税抜）にしかなかった**ので、
+        #   「売上から原価を引いた**利益**の列を作って」の見出しが
+        #   『売上-原価』（式そのもの）になっていた ── A' 原則が抜けた形。
+        #   ★ 人が名前を書いていない時だけ従来どおり式風の見出しに落ちる。
+        if not resolved.get("target") and not resolved.get("_new_col_label"):
+            # ★ 見出しの一覧を**渡さずに**呼ぶ ── 「既に在る名前」も受け取りたいから。
+            _asked_c = new_column_name_from_task(task, [], require_position=False)
+            _heads_c = [str(h) for h in (headers.get(first_sheet) or [])]
+            if _asked_c and _asked_c in _heads_c:
+                # ★★ 2026-09-02（実測で捕まえた実害）: 依頼した名前が**既に在る**時、
+                #   「新しい列の名前ではない」として捨てて自動命名に落ちていた。すると
+                #   「売上から原価を引いた利益の列を作って」を 2 回実行すると、
+                #   1 回目『利益』・2 回目『売上-原価』になり、**見出しが違うので
+                #   「見出しも値も同一の列を作りました」の関所が鳴らない** ──
+                #   値がそっくり同じ列が静かに 2 本目として増え、✓ まで出た。
+                #   （盲検 operator 査定が見つけた事故「不安でもう一回実行」の再来）
+                #   ★ 意味で考えても、これは「作る」ではなく「**もう在る**」。
+                #     その列を計算し直す依頼と読み、既存の**上書きの関所**に載せる
+                #     ── 新しい関所も新しい終了コードも作らない。
+                resolved["target"] = _asked_c
+            elif _asked_c:
+                resolved["_new_col_label"] = _asked_c
 
     elif op == "LOOKUP_FILL":
         if (err := check_sheet("target_sheet")):
@@ -6605,7 +6628,7 @@ def _sort_rows_lost_their_identity(source_book, after_rows: list, args: dict,
 
 
 def only_this_column_changed(path: Path, source_book, sheet, col_index: int,
-                              header_row: int = 1) -> str | None:
+                              header_row: int = 1, inserted_at: int | None = None) -> str | None:
     """作った列**以外**が 1 セルも変わっていないか。変わっていればその理由（無ければ None）。
 
     ★★ 2026-08-30（番人の感度を測る治具が、初回の本気の測定で見つけた穴）:
@@ -6629,6 +6652,23 @@ def only_this_column_changed(path: Path, source_book, sheet, col_index: int,
             #   **古いほう**を返す。すると新しく作った列が「頼んでいない場所」に見えて、
             #   前提破れの関所（exit 7・言い方を案内する）より先に落としていた。
             #   ★ 同じ見出しの列は**全部**対象外にする（どれが新しいかは名前では決まらない）。
+            # ★★ 2026-09-02（在庫 A を確かめて見つけた）: 依頼が位置を言った回
+            #   （「売上と原価の間に…の列を作って」）では、作った列を**あとで動かす**ので
+            #   その右にある列は 1 つずつずれる。同じ座標どうしで比べていたため、
+            #   **正しい結果なのに「頼んでいない場所を書いた」と落としていた** ──
+            #   置き場所の機構は動いていたのに、検算が追いついていなかった。
+            #   ★ ずれを知っているのは呼び出し側なので、**渡してもらう**（推測しない）。
+            if inserted_at:
+                for r in range(header_row, max(lb, la) + 1):
+                    for c_b in range(1, cb + 1):
+                        c_a = c_b if c_b < inserted_at else c_b + 1
+                        v_b = ws_b.cell(row=r, column=c_b).value
+                        v_a = ws_a.cell(row=r, column=c_a).value
+                        if v_b != v_a:
+                            return (f"作った列のほかに {r}行{c_a}列 が変わっています"
+                                     f"（{v_b!r}→{v_a!r}）── "
+                                     "頼んでいない場所を書いた疑いがあります")
+                return None
             _name = str(ws_a.cell(row=header_row, column=col_index).value or "")                 if 1 <= col_index <= ca else ""
             skip = {c for c in range(1, width + 1)
                      if _name and str(ws_a.cell(row=header_row, column=c).value or "") == _name}
@@ -6728,8 +6768,10 @@ def check_compute_column(path: Path, args: dict, header_row: int = 1,
     note = f"（{'・'.join(note_parts)}）" if note_parts else ""
     if checked == 0:
         return "fail", _ZERO_TARGET_REASON + note
-    if (_side := only_this_column_changed(path, source_book, args.get("_target_sheet"),
-                                          inew, header_row)):
+    _moved_to = args.get("_move_new_col_to")
+    if (_side := only_this_column_changed(
+            path, source_book, args.get("_target_sheet"), inew, header_row,
+            inserted_at=(int(_moved_to) + 1) if _moved_to is not None else None)):
         return "fail", _side
     if use_formula:
         return "pass", f"{checked} 行を検証（式・キャッシュ値とも一致・他は 1 セルも変わらず）{note}"
@@ -6794,8 +6836,10 @@ def check_compute_column_single_factor(path: Path, args: dict, header_row: int =
     note = f"（{'・'.join(note_parts)}）" if note_parts else ""
     if checked == 0:
         return "fail", _ZERO_TARGET_REASON + note
-    if (_side := only_this_column_changed(path, source_book, args.get("_target_sheet"),
-                                          inew, header_row)):
+    _moved_to = args.get("_move_new_col_to")
+    if (_side := only_this_column_changed(
+            path, source_book, args.get("_target_sheet"), inew, header_row,
+            inserted_at=(int(_moved_to) + 1) if _moved_to is not None else None)):
         return "fail", _side
     if use_formula:
         return "pass", f"{checked} 行を検証（式・キャッシュ値とも一致・他は 1 セルも変わらず）{note}"
@@ -9512,13 +9556,22 @@ def _rows_matching(book_meta: dict, sheet: str | None, cond_col: str, cmp: str,
 _re_after_position = re.compile("(?:" + "|".join(
     re.escape(w) for w in (*_COL_AFTER, *_COL_BEFORE)) + ")")
 # 名前のうしろに付く「列を追加して」等。★ 語尾は閉じた文法の集合（業務語彙ではない）。
+# 修飾節の終わり ── 助詞、または活用語尾（引い**た** / 掛け**て** / 足し**た**）。
+# ★ 「の」は入れない（「粗利の列」の の は名前の側）。★ 業務語彙ではなく閉じた文法。
+_re_clause_end = re.compile(r"[をにへはがでとも]|[ぁ-ん](?:た|て|だ)")
+# ★ 位置語が無い回の入口 ── 「**作る**」と言っている語尾だけ（裸の「列」は入れない）。
+_NEW_COL_MAKE_TAILS = ("という列を追加して", "という列を作って", "という列を追加",
+                        "という列を作る", "の列を追加して", "の列を作って",
+                        "の列を追加", "の列を作る", "列を追加して", "列を作って",
+                        "列を追加", "列を作る")
 _NEW_COL_TAILS = ("という列を追加して", "という列を作って", "という列を追加", "という列を作る",
                    "という列", "の列を追加して", "の列を作って", "の列を追加", "の列を作る",
                    "列を追加して", "列を作って", "列を追加", "列を作る", "列",
                    "を追加して", "を作って", "を追加", "を作る", "を入れて", "を足して")
 
 
-def new_column_name_from_task(task: str, headers=None) -> str | None:
+def new_column_name_from_task(task: str, headers=None, *,
+                               require_position: bool = True) -> str | None:
     """依頼文が名指ししている、**新しい列の名前**（決まらなければ None）。
 
     ★★ 2026-08-30（Namakoo が実測・下書きに 2 本できた）:
@@ -9536,7 +9589,39 @@ def new_column_name_from_task(task: str, headers=None) -> str | None:
     m = None
     for m2 in _re_after_position.finditer(text):
         m = m2                       # 最後の位置語のうしろを見る（「AとBの右に X」）
-    name = text[m.end():] if m else ""
+    if m:
+        name = text[m.end():]
+    elif require_position:
+        # ★★ 2026-09-02: 既定は**位置語が在る時だけ**（従来どおり）。
+        #   実測で分かったこと: 位置語なしを無条件に許すと、税の枝（W10c で設計）まで
+        #   書き換わる ──「税込みの列を追加して」で見出しが『税込み』になった。
+        #   『税込み』は名前ではなく**修飾語**で、機械が組む『税込金額』のほうが良い。
+        #   ★ 測っていない所まで直しを広げない（断る範囲を広げるのと同じ失敗）。
+        #     欠けていたのは**2 項の演算**の枝だけなので、そこだけ明示的に呼ぶ。
+        return None
+    else:
+        # ★★ 2026-09-02（A の確認中に見つけた）: 位置を言わない依頼では、ここに
+        #   入る前に空文字になっていた ── 「売上から原価を引いた**利益**の列を作って」で
+        #   見出しが『売上-原価』（式そのもの）になっていた。A' 原則が抜けた形。
+        #   ★ 位置語が無い時は、**語尾の手前まで**を候補にして、その中の
+        #     **修飾節の終わり**から始める（引き算は位置語の時と同じ考え方）。
+        #     節の終わり = 助詞（を に へ は が で と も）か、活用語尾（〜た/て/だ）。
+        #     ★ 「の」は**入れない** ── 「粗利の列」の の は名前側に属する。
+        #   ★★ 初版は語尾を先に切らずに走査したので、「作**って**」自身が節の終わりに
+        #     当たり、名前ごと飲み込んで空になっていた（実測で捕まえた）。
+        # ★★ 実測で捕まえた誤爆（既存の検体が赤くした）: 語尾に **裸の「列」** を
+        #   許すと、「A行G列を『税込み金額』に上書き」で『A行G』を新しい列の名前として
+        #   拾った。★ 位置語が無い回は、**作る**と言っている語尾だけを入口にする
+        #   （裸の「列」は「〜の右に 利益列」のような位置語つきの回のためのもの）。
+        _end = min((text.find(w) for w in _NEW_COL_MAKE_TAILS if text.find(w) > 0),
+                    default=-1)
+        if _end < 0:
+            return None                  # 「〜の列を作って」の形 が無い＝名指しでない
+        _head = text[:_end]
+        _cut = 0
+        for _mb in _re_clause_end.finditer(_head):
+            _cut = _mb.end()
+        name = _head[_cut:]
     if not name.strip():
         return None
     for w in _NEW_COL_TAILS:         # 長い語尾から落とす（並びが長さ順）

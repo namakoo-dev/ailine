@@ -2,7 +2,7 @@
 非対話で exit 7 になり、原本に重複列ができないことを、ailine.main を実際に叩いて確かめる。
 
 ★ 発端（盲検 operator 査定・実際に起きた再現手順）: title_rows.xlsx に「売上から原価を
-引いた利益の列を作って」を実行 → F 列に「売上-原価」列ができる。同じ依頼をもう一度実行
+引いた利益の列を作って」を実行 → 「利益」列ができる。同じ依頼をもう一度実行
 → G 列に同じ見出し・同じ値の列がもう一つでき、警告ゼロで ✓ 機械検証済み まで出た。
 「反映されたか不安でもう一回実行」は事務職の最もありがちな操作。
 
@@ -43,14 +43,18 @@ def _noninteractive(monkeypatch):
 
 
 def _write_profit_column():
-    """basrun_apply の差し替え: シート右端の新規列に「売上-原価」を書く（1回目は列D・
+    """basrun_apply の差し替え: シート右端の新規列に「利益」を書く（1回目は列D・
        2回目は列D が既に埋まっているので列E ── 実際の LibreOffice/codegen が右端の
        空列を選ぶ挙動を、右端に足すだけの単純なコードで模する）。"""
     def fake(out_book, code, workdir, helper_files=(), timeout=None):
         wb = openpyxl.load_workbook(out_book)
         ws = wb.active
         col = ws.max_column + 1
-        ws.cell(row=1, column=col, value="売上-原価")
+        # ★ 2026-09-02: 見出しは**生成コードが言った名前**をそのまま書く（実機の模倣）。
+        #   決め打ちにすると、本体が名前を変えた時に治具だけが古くなる。
+        import re as _re
+        _m = _re.search(r'setString\("([^"]+)"\)', code or "")
+        ws.cell(row=1, column=col, value=_m.group(1) if _m else "売上-原価")
         ws.cell(row=2, column=col, value=200)
         ws.cell(row=3, column=col, value=300)
         wb.save(out_book)
@@ -69,18 +73,27 @@ def test_unit_j_repeated_request_is_gated_and_original_stays_clean(tmp_path, mon
 
     # ★ --values: 式でなく値ベタ書きの事後条件にする（fake basrun_apply が単純な値を
     #   書くだけで済むよう、検体の焦点(単位J の前提検査)から式検証の複雑さを外す）。
-    # 1回目: 正常に列D「売上-原価」ができる
+    # 1回目: 正常に列Dができる
+    # ★ 2026-09-02: 見出しは『利益』── この日、計算列に「依頼文の名前を使う」を配線した
+    #   （それまでは『売上-原価』という**式そのもの**が見出しになっていた）。
+    #   この検体が見ているのは**同じ依頼を 2 回した時の関所**なので、性質は変わらない。
     rc1, out1 = _run_main(["run", str(book), "売上から原価を引いた利益の列を作って", "--values"], capsys)
     assert rc1 == 0, f"rc={rc1}\n{out1}"
     wb1 = openpyxl.load_workbook(book)
-    assert wb1.active.cell(row=1, column=4).value == "売上-原価"
+    assert wb1.active.cell(row=1, column=4).value == "利益"
     assert wb1.active.cell(row=2, column=4).value == 200
 
-    # 2回目: 同じ依頼をもう一度。★ 事故の再現 ── 見出しも値も同一の列(E)を作ろうとする。
+    # 2回目: 同じ依頼をもう一度。★ 事故の再現 ── もう 1 本、同じ列ができようとする。
+    # ★★ 2026-09-02: 止まり方が**一段早くなった**。
+    #   以前: 作ってから「見出しも値も同一の列を作りました」（＝**作った後で**気づく）
+    #   いま: 依頼した『利益』は既に在るので「作る」ではなく「その列を計算し直す」と読み、
+    #         **書く前に**上書きの関所で止まる。
+    #   ★ 守っているものは同じ（exit 7・原本は無変更・重複列ができない）。
+    #     関所も終了コードも新しく作っていない ── 既存の上書きの関所に載せただけ。
     _noninteractive(monkeypatch)
     rc2, out2 = _run_main(["run", str(book), "売上から原価を引いた利益の列を作って", "--values"], capsys)
     assert rc2 == 7, f"rc={rc2}\n{out2}"
-    assert "見出しも値も同一の列を作りました" in out2, out2
+    assert "対象列『利益』には既存の値が" in out2, out2
 
     # 原本は無変更（重複列(E)ができていない）── 破壊の関所が止めたので atomic_replace は
     # 起きていないはず。

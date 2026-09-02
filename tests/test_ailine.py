@@ -4567,7 +4567,11 @@ def test_cmd_run_plan_dependent_chaining_resolves_new_column_reference(tmp_path,
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
     argv = run_argv(
-        book=str(p), task="売上から原価を引いた利益列を作って、利益で降順に並べ替えて",
+        # ★ 2026-09-02: 「作る」節から名前を外した ── この日、計算列に「依頼文の名前を
+        #   使う」を配線したので、名前を言うと自動命名が起きなくなり、この検体の
+        #   症状（自動命名された列と依頼文の語の食い違い）が作れなくなったため。
+        #   **番人が見る性質は変えていない。**
+        book=str(p), task="売上から原価を引いた列を作って、利益で降順に並べ替えて",
         model="qwen2.5-coder:7b", refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,
         # ★ W3 Part3: fake_apply は静的な値を直接書き込む(式は書かない)ので、この
@@ -4649,7 +4653,11 @@ def test_cmd_run_plan_dsl_steps_show_advisories_and_dedup_repeats(tmp_path, monk
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
 
     argv = run_argv(
-        book=str(p), task="金額から原価を引いた利益列を作って、見出しを太字にして全体を中央揃えにして",
+        # ★ 2026-09-02: 「作る」節から名前を外した ── この日、計算列に「依頼文の名前を
+        #   使う」を配線したので、名前を言うと自動命名が起きなくなり、この検体の
+        #   症状（自動命名された列と依頼文の語の食い違い）が作れなくなったため。
+        #   **番人が見る性質は変えていない。**
+        book=str(p), task="金額から原価を引いた列を作って、利益の見出しを太字にして全体を中央揃えにして",
         model="qwen2.5-coder:7b", refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=True, timeout=180.0, ask=False, values=True)
     rc = ailine.main(argv)
@@ -7570,7 +7578,11 @@ def test_cmd_run_plan_reproduces_bold_target_leak_and_shows_mismatch_warning(tmp
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
     argv = run_argv(
-        book=str(p), task="数量と単価をかけた金額列を作って、見出しを太字にして",
+        # ★ 2026-09-02: 「作る」節から名前を外した ── この日、計算列に「依頼文の名前を
+        #   使う」を配線したので、名前を言うと自動命名が起きなくなり、この検体の
+        #   症状（自動命名された列と依頼文の語の食い違い）が作れなくなったため。
+        #   **番人が見る性質は変えていない。**
+        book=str(p), task="数量と単価をかけた列を作って、金額の見出しを太字にして",
         model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=False, copy=True, json=False, timeout=180.0, ask=False,

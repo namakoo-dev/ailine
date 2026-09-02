@@ -462,7 +462,10 @@ def _t_subject_contradiction(tmp_path, monkeypatch, capsys):
         wb.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
-    return _run_main(["run", str(book), "数量と単価をかけた金額列を作って、見出しを太字にして",
+    # ★ 2026-09-02: 「作る」節から名前を外した ── この日、計算列に「依頼文の名前を使う」を
+    #   配線したので、名前を言うと自動命名が起きず、この症状（自動命名された列と依頼文の語の
+    #   食い違い）が作れなくなったため。**見ている性質は変えていない。**
+    return _run_main(["run", str(book), "数量と単価をかけた列を作って、金額の見出しを太字にして",
                        "--copy", "--values"], capsys)
 
 

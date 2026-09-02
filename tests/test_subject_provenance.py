@@ -271,7 +271,20 @@ class TestSubstringDirections:
 
 class TestBar1TruePositives:
     def test_case1_header_word_vs_new_column_target_suppresses_the_check(self, tmp_path, monkeypatch, capsys):
-        """症状そのもの（ブラインド査定2本が独立に致命の筆頭に置いた形）。"""
+        """症状そのもの（ブラインド査定2本が独立に致命の筆頭に置いた形）。
+
+        ★★ 2026-09-02 に検体を組み直した（**番人が見る性質は 1 ミリも変えていない**）:
+          この日、「依頼文が名前を言っているならそれを見出しにする」を計算列に配線した
+          （それまでは『数量*単価』という**式そのもの**が見出しになっていた・A' 原則が
+          抜けた形）。すると、この検体が前提にしていた **自動命名そのものが起きなくなり**、
+          筋書きが成立しなくなった ── 治具が古くなったのではなく、**症状の作り方**が
+          変わった。
+        ★ そこで「作る」節から名前を外し、その語は**別の節に残す**。
+          名前を言わなければ従来どおり自動命名され、依頼文の語との食い違いはそのまま残る。
+        ★ 表に『金額』列を持たせる案も試したが、同じ日に入れた別の規則
+          （依頼した名前が既に在るなら「作る」ではなく「その列を計算し直す」）と
+          噛み合って**症状が別物になる**ので採らなかった。
+        """
         _isolate(monkeypatch, tmp_path)
         p = _book(tmp_path, [["商品", "数量", "単価"], ["a", 2, 100], ["b", 3, 200]])
 
@@ -294,7 +307,7 @@ class TestBar1TruePositives:
             {"op": "COMPUTE_COLUMN", "args": {"operands": ["数量", "単価"], "operator": "*"}},
             {"op": "BOLD", "args": {"target": "col:数量*単価"}}]}, fake_apply)
         rc = ailine.main(run_argv(book=str(p),
-                                  task="数量と単価をかけた金額列を作って、見出しを太字にして",
+                                  task="数量と単価をかけた列を作って、金額の見出しを太字にして",
                                   copy=True, values=True))
         out = capsys.readouterr().out
         assert rc == 0, out
@@ -403,7 +416,13 @@ class TestBar2FalsePositives:
             {"op": "COMPUTE_COLUMN", "args": {"operands": ["売上", "原価"], "operator": "-"}},
             {"op": "SORT", "args": {"col": "利益", "order": "desc"}}]}, fake_apply)
         rc = ailine.main(run_argv(book=str(p),
-                                  task="売上から原価を引いた利益列を作って、利益で降順に並べ替えて",
+                                  # ★★ 2026-09-02: 「作る」節から名前を外した（**番人が見る性質は変えない**）。
+                                  #   この日、計算列に「依頼文の名前を使う」を配線したので、
+                                  #   『利益列を作って』と言うと道具は素直に『利益』と名付ける
+                                  #   ── 自動命名が起きず、この検体の症状が作れなくなった。
+                                  #   ★ 名前を言わなければ従来どおり自動命名され、
+                                  #     2 段目の『利益』との食い違いはそのまま残る。
+                                  task="売上から原価を引いた列を作って、利益で降順に並べ替えて",
                                   copy=True, values=True))
         out = capsys.readouterr().out
         assert rc == 0, out
