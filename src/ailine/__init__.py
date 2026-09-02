@@ -11370,6 +11370,86 @@ def restore_backup(book: Path) -> Path:
     return target
 
 
+class NothingToRedoError(Exception):
+    """やり直せるものが無い（undo をしていない・既に全部やり直した）。"""
+
+
+def redo_last_undo(book: Path) -> Path:
+    """直前の undo を**やり直す**。戻り値は使った退避の Path。
+
+    ★★ 2026-09-02（README の「既知の問題」に自分で書いていた）: undo に redo が無く、
+      戻しすぎると進めなかった。
+    ★ 材料は既に在る ── undo は毎回「戻す前の中身」を棚へ退避している
+      （`_shelve_bytes`・「undo 自体も可逆」）。**取り出す口を作るだけ**で、
+      新しい保管場所も新しい概念も作らない。
+
+    ★ 棚は積み下ろしの山（新しい順）。取り出したものは**棚から外す** ──
+      外さないと、同じ状態を何度もやり直せてしまい「あと何回進めるか」が嘘になる。
+    ★ やり直した後の現在地は「新しい編集の直後」と同じ（どの世代の上でもない）ので、
+      印を消しておく。
+      ★★ 正直に書く: **この 1 行は現状では効いていない**（2026-09-02 に実測）。
+        `_undo_position` は「印が指す世代と今の中身が違えば無効」と見るので、
+        redo の後は必ず印が無効になり、消しても消さなくても同じ場所へ行く。
+        変異試験でも差が出せず、**効くことを示す検体を作れなかった**。
+      ★ それでも残すのは、この repo が「**内容は世代の一意キーではない**」という
+        事故（同じ内容の世代が 2 つ並んで undo が振動した）を実際に踏んでいるから
+        ── 内容の一致だけに頼らない形にしておく。番人は付いていない、と分かるように書く。
+    ★ 壊れた退避を原本に被せない ── undo と**同じ物差し**を当てる
+      （原本が開けるのに退避が開けないなら断る。原本が既に開けないなら救出の最中なので
+        同じ物差しを当てる根拠が無い）。
+    """
+    shelved = list_undo_shelf(book)
+    if not shelved:
+        raise NothingToRedoError(
+            f"{book.name} はやり直せません（直前の undo がありません）")
+    target = shelved[0]
+    if book.exists() and _why_output_is_unusable(book) is None:
+        broken = _why_output_is_unusable(target)
+        if broken:
+            raise BrokenBackupError(
+                f"退避 {target.name} が開けません（{broken}）。"
+                f"原本は変更していません ── 退避は {target.parent} に在ります")
+    shutil.copy2(target, book)
+    # ★ 使った退避は外す（山を 1 つ下ろす）。消せなくても進めたことは事実なので黙って続ける。
+    try:
+        target.unlink()
+    except OSError:
+        pass
+    _write_undo_pointer(book, None)
+    return target
+
+
+def cmd_redo(a: argparse.Namespace) -> int:
+    """`ailine redo` ── 直前の undo をやり直す。
+
+    ★ undo と同じ実行ロックを取る（原本を書き換えるため）。
+    ★ フォルダには redo が無い（undo と同じ理由 ── 戻す対象が構造的に無い）。
+    """
+    book = Path(a.book).resolve()
+    if book.is_dir():
+        print("× フォルダに対する redo はありません"
+               f"（原本は読んでいません）: {book}")
+        return 1
+
+    def _body() -> int:
+        try:
+            used = redo_last_undo(book)
+        except NothingToRedoError as e:
+            print(f"× {e}")
+            print("  → 戻すなら ailine undo、世代の一覧は ailine undo --list")
+            return 1
+        except BrokenBackupError as e:
+            print(f"× {e}")
+            return 1
+        left = len(list_undo_shelf(book))
+        print(f"✓ {book.name} をやり直しました（{used.name} から）")
+        print(f"  あと {left} 回やり直せます" if left
+               else "  これ以上やり直せるものはありません")
+        return 0
+
+    return under_run_lock(_body)
+
+
 def cmd_restore(a: argparse.Namespace) -> int:
     """`ailine restore` は `ailine undo` と**同じ仕事**をする（undo は restore の昇格版）。
 
@@ -17483,6 +17563,10 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("book", help="対象の文書 (.xlsx)")
     u.add_argument("--list", action="store_true", help="バックアップ一覧を表示するだけ（復元しない）")
     u.set_defaults(func=cmd_undo)
+
+    rd = sub.add_parser("redo", help="直前の undo をやり直す（あと何回やり直せるかを表示）")
+    rd.add_argument("book", help="対象の文書 (.xlsx)")
+    rd.set_defaults(func=cmd_redo)
 
     v = sub.add_parser("vocab", help="用語集（税率等の取り決め値）を編集・表示する")
     vsub = v.add_subparsers(dest="vocab_cmd", required=True)
