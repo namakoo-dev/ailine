@@ -92,7 +92,10 @@ def test_the_readme_matches_the_matrix_record():
     """① 文書 vs 記録。"""
     m = _matrix()
     want = f"{m['intended']}/{m['cases']} = {m['intended'] / m['cases'] * 100:.1f}%"
-    assert_all_agree("MATRIX", want)
+    # ★★ 2026-09-02: 印が README にしか無く、demo/手順.md と docs/なぜこの形か.md に
+    #   93 件時代の数字が**残っていた**（番人は全 .md を走査するのに、印が無い所は
+    #   見えない ── 在っても鳴らない）。3 文書に印を置き、**3 箇所以上**を要求する。
+    assert_all_agree("MATRIX", want, at_least=3)
 
 
 def test_the_matrix_record_names_how_it_was_measured():

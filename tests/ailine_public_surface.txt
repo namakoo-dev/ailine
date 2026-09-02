@@ -1,0 +1,675 @@
+value ALIASES_FILE
+value BACKUP_DIR
+value BOOKLIKE_SUFFIXES
+class BookView(path: 'Path', read_only: 'bool' = False)
+class BrokenBackupError(?)
+value CHOICE_PREFIX
+value CLARIFY_HEADER_ROW_QUESTION
+value COLOR_MAP
+value CONTRACT
+value CSV_SUFFIX
+class Choice(key: 'str', text: 'str') -> None
+class Claim(verified: 'bool', basis: 'str', scope: 'str', evidence: 'str', observation_complete: 'bool', observed_on: 'str' = '', observed_after_apply: 'bool' = False) -> None
+value DEFAULT_APPLY_TIMEOUT
+value DEFAULT_HELPERS
+value DEFAULT_KEEP_BACKUPS
+value DEFAULT_MODEL
+value DEFAULT_REFS
+value DEFAULT_VOCAB_MAX_ENTRIES
+value DEFAULT_VOCAB_MAX_TERM_LEN
+class DslStepDeps(format_confirmation_line: 'Callable', maybe_warn_header_col_mismatch: 'Callable', maybe_warn_target_overwrite: 'Callable', interpretation_summary_line: 'Callable', confirm_overwrite_or_gate: 'Callable', basrun_apply: 'Callable', stop_office: 'Callable', snapshot: 'Callable', why_output_is_unusable: 'Callable', diff_snapshots: 'Callable', run_postcondition: 'Callable', progress_start: 'Callable', progress_end: 'Callable', pivot_caveat: 'str', verify_dsl_args: 'Callable', apply_new_column_fallback: 'Callable', build_advisories: 'Callable', structural_advisories: 'Callable', unrequested_new_sheet_advisory: 'Callable', classify_subject_provenance: 'Callable | None' = None, sheet_conflict_gate: 'Callable | None' = None) -> None
+value EXIT_APPLY_FAILED
+value EXIT_ENVIRONMENT
+value EXIT_WRITE_BLOCKED
+value FORMULA_REWRITE_LIMIT
+value GIVING_UP_OPS
+value HERE
+value HISTORY_DIR
+value HISTORY_FILE
+value HISTORY_RECALL_MAX
+value KEEP_FOR_COLUMN_REQUEST
+value MACHINE_DERIVED_ARGS
+value MAX_COLS
+value MAX_ROWS
+value MISCLASS_FILE
+value NEW_COLUMN_ORIGIN
+value NOOP_MACRO
+value NOTICE_V2_FILE
+value NOTICE_V2_TEXT
+class NoOlderBackupError(?)
+class NothingToRedoError(?)
+value OLLAMA
+value OPENPYXL_PROBEABLE_SUFFIXES
+value OPS_DOC
+value OP_DECLARED_SHEET_NAME
+value OP_LABELS
+value OP_META
+value OP_SCHEMA
+value OP_SUBJECT_SLOTS
+value OP_WRITE_TARGET
+value OUT_OF_SCOPE_TERMS
+value PIVOT_CAVEAT
+value PLAN_CHAIN_CONSUMER_OPS
+value PLAN_CHAIN_WARNING_OPS
+value POSTCONDITIONS
+class Path(*args, **kwargs)
+value RUN_LOCK_FILE
+value RUN_LOCK_STALE_SECONDS
+value RUN_SUPPORTED_SUFFIXES
+value STRUCTDUMP_FILENAME
+value STRUCTURAL_NOUNS
+value STRUCT_HEADER_SCAN_ROWS
+value SUBJ_COLUMN
+value SUBJ_INPUT
+value SUBJ_LABEL
+value SUBJ_REGION
+value SUBJ_ROW
+value SUBJ_SHEET
+value SUBJ_SHEET_INPUT
+value SUGGEST_JUDGE_SYSTEM
+class Slot(key: 'str', value: 'str', kind: 'str', context: 'str' = '', derived_from: 'int | None' = None) -> None
+class SubjectConsumed(columns: 'set' = <factory>, rows: 'set' = <factory>, whole: 'bool' = False, sheets: 'set' = <factory>) -> None
+value TRANSIENT_LO_RETRY_NOTICE
+value TRANSLATION_FEWSHOT
+value TRANSLATION_FIXED_OP_SYSTEM
+value TRANSLATION_SYSTEM
+value TRANSLATION_USER
+value UNDO_SHELF_DIRNAME
+value VOCAB_FILE
+value WRITE_EXISTING_COLUMN
+value WRITE_FORMAT_ONLY
+value WRITE_KINDS
+value WRITE_NEW_COLUMN
+value WRITE_NEW_ROW_AT_END
+value WRITE_NEW_SHEET
+value WRITE_REMOVE
+value WRITE_REORDER
+value WRITE_ROW_SHIFT
+value WRITE_SINGLE_CELL
+class WriteTarget(writes: 'tuple' = (), col_key: 'str | None' = None, sheet_key: 'str | None' = None, reads_only: 'tuple' = (), cols_key: 'str | None' = None, keeps_subject: 'bool' = False, col_index_key: 'str | None' = None, proves_which_cells: 'bool' = False) -> None
+value _ANCHOR_AFTER
+value _ANCHOR_BEFORE
+value _APPEND_TOTAL_FORMULA_RE
+value _BACKUP_TS_RE
+value _BACKUP_TS_SEQ_RE
+value _BASIC_COMMENT_LINE_RE
+value _CELL_DEFAULT
+value _CELL_FIELD_LABELS
+value _CHART_KINDS
+value _CHART_KIND_LABELS
+value _CHART_KIND_NUM_RE
+value _CHART_KIND_WORDS
+value _CHART_KIND_YEN_GUARD
+value _CJK_KANJI_RE
+value _COLUMN_ARG_KEYS
+value _COL_AFTER
+value _COL_BEFORE
+value _CONFIRM_FIELDS
+value _CSV_REASON_LABELS
+class _CsvEvaluation(error: 'str' = None, sha256: 'str' = None, encoding: 'object' = None, parsed: 'object' = None, classifications: 'list' = None, warnings: 'list' = None) -> None
+value _DOCTOR_BUSINESS_NOTES
+value _ENDSUB_RE
+value _EXCEPT_WORDS
+value _EXTRACT_CMPS
+value _EXTRACT_CMP_CODE
+value _EXTRACT_CMP_LABELS
+value _EXTRACT_CMP_NEEDS_NUM_NEARBY
+value _EXTRACT_CMP_NUM_RE
+value _EXTRACT_CMP_NUM_WINDOW
+value _EXTRACT_CMP_WORDS
+value _EXTRACT_SHEET_NAME_FORBIDDEN_RE
+value _FIDELITY_RELS_RE
+value _FORMAT_OP_WORDS
+class _FreeformGateAbort(exit_code: 'int')
+value _GENERIC_EXT_RE
+value _HEADER_WORD_RE
+value _HELPER_CALL_RE
+value _HELPER_SUB_DECL_RE
+value _HELPER_SWEEP_THRESHOLD
+value _LEFT_WORDS
+value _MOVED_ROWS_WHY
+value _NEW_COL_MAKE_TAILS
+value _NEW_COL_TAILS
+value _NEW_SHEET_MENTION_RE
+value _NUMFMT_WORDS
+value _OP_SCHEMA_NOTES
+value _PARTICLES
+value _QUOTE_PATTERNS
+value _RATE_BAI_RE
+value _RATE_BARE_NUM_RE
+value _RATE_KAKE_RE
+value _RATE_KEYWORD_RE
+value _RATE_LITERAL_RE
+value _RATE_PCT_RE
+value _RATE_SIGNAL_RE
+value _RATE_WARI_RE
+value _REMOVAL_WORDS
+value _REPAIR_SCOPE_GUARD
+value _RE_COL_KANJI_NUM
+value _RE_COL_LETTER_PREFIX
+value _RE_COL_LETTER_SUFFIX
+value _RE_ROW
+value _RIGHT_WORDS
+value _RUN_LOCK_HANDLE
+value _SUB_OPEN_RE
+value _TAIL_WORDS
+value _TAX_EXCLUSIVE_RE
+value _TAX_INCLUSIVE_RE
+value _VOCAB_MISS_KIND_PREFIX
+value _VOCAB_MISS_REASONS
+value _ZENKAKU_DIGITS
+value _ZERO_TARGET_REASON
+def _announce_format_map_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
+def _announce_lookup_fill_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
+def _announce_report_per_row_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
+def _apply_new_column_fallback(op: 'str', args: 'dict', headers: 'list', new_cols: 'list') -> 'dict'
+def _apply_operator(a, b, operator: 'str')
+def _backup_namespace(book: 'Path') -> 'str'
+def _bg_hex(c) -> 'str'
+def _cell_key_col(key) -> 'int'
+def _cell_ref(row: 'int', col: 'int') -> 'str'
+def _cell_row_name_for(book_meta: 'dict', sheet, row: 'int', header_row: 'int' = 1)
+def _cell_target(args: 'dict')
+def _cells_for_shift(bv, sheet_name, header_row: 'int', last_row: 'int', last_col: 'int') -> 'list'
+def _changed_cells(before: 'dict', after: 'dict') -> 'list'
+def _changed_sheets(before: 'dict', after: 'dict') -> 'set'
+def _chart_paths(path: 'Path') -> 'frozenset'
+def _charts_count(path: 'Path') -> 'int'
+def _check_basrun() -> 'tuple'
+def _check_demo_dir() -> 'tuple'
+def _check_libreoffice() -> 'tuple'
+def _check_model_available(model: 'str', timeout: 'float' = 3.0) -> 'tuple'
+def _check_ollama_reachable(timeout: 'float' = 3.0) -> 'tuple'
+def _check_openpyxl() -> 'tuple'
+def _check_python_version() -> 'tuple'
+def _check_report_router(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def _check_swap_cells(path: 'Path', args: 'dict', header_row: 'int', source_book) -> 'tuple'
+def _classify_fidelity_member(name: 'str') -> 'str | None'
+def _cmd_run_body(a: 'argparse.Namespace') -> 'int'
+def _cmd_run_csv_prestage(a: 'argparse.Namespace') -> 'int'
+def _cmd_run_dispatch(a: 'argparse.Namespace', book: 'Path', workdir: 'Path') -> 'int'
+def _cmd_undo_body(a: 'argparse.Namespace', book: 'Path') -> 'int'
+def _col_index_by_header(ws, name: 'str', header_row: 'int' = 1)
+def _column_block_values(bv, ws, idx: 'int', header_row: 'int', sheet: 'str | None') -> 'list'
+def _column_existing_value_count(book_path: 'Path', sheet_name: 'str', col_name: 'str', header_row: 'int' = 1) -> 'int'
+def _column_values(meta: 'dict', sheet: 'str', col: 'str', limit: 'int' = 500) -> 'list'
+def _confirm_freeform_apply(a: 'argparse.Namespace', sweep_warning: 'str | None' = None, step_prefix: 'str' = '') -> 'int | None'
+def _confirm_overwrite_or_gate(a: 'argparse.Namespace', warn_overwrite: 'str | None', step_prefix: 'str' = '', subject_mismatch: 'bool' = False) -> 'int | None'
+def _console_entry() -> 'int'
+def _count_cf_and_dv(wb) -> 'tuple'
+def _csv_kind_label(cls) -> 'str'
+def _csv_record_label(parsed, raw_idx: 'int', header_offset: 'int') -> 'str'
+def _data_row_count(before: 'dict', sheet: 'str', key_col: 'int') -> 'int'
+class _date_cls(?)
+def _declared_kept_subject_cols(op: 'str', resolved: 'dict', book_meta: 'dict | None') -> 'set'
+def _declared_new_column_letter(op: 'str', resolved: 'dict', book_meta: 'dict') -> 'str | None'
+def _declared_new_column_letters(op: 'str', resolved: 'dict', book_meta: 'dict') -> 'set'
+def _declared_reads_only_sheets(op: 'str | None', resolved: 'dict | None') -> 'set'
+def _dedup_key_display(key_tuple) -> 'str'
+def _dedup_normalize_key_part(v)
+def _dedup_output_sheet_name(keys: 'list') -> 'str'
+def _dedup_step_advisories(entries: 'list') -> 'list'
+def _digit_candidates(raw: 'str', headers: 'list') -> 'list'
+def _doctor_business_note(name: 'str') -> 'str | None'
+def _evaluate_csv(csv_path: 'Path') -> '_CsvEvaluation'
+def _export_csv_out_path(a: 'argparse.Namespace', book_path: 'Path') -> 'tuple'
+def _export_out_path(a: 'argparse.Namespace', default_path: 'Path') -> 'tuple'
+def _extract_column_date_kind(meta: 'dict', sheet: 'str', col: 'str') -> 'tuple'
+def _extract_output_sheet_name(col: 'str', cmp: 'str', value) -> 'str'
+def _extract_predicate(cmp: 'str', threshold, date_mode: 'bool' = False)
+def _fidelity_zip_members(path: 'Path') -> 'set'
+def _file_digest(path: 'Path') -> 'str | None'
+def _find_basrun_path() -> 'Path | None'
+def _finish_apply(a: 'argparse.Namespace', book: 'Path', out_book: 'Path', workdir: 'Path', result: 'dict', machine_verified: 'bool', scope: 'str' = '', scope_note: 'str' = '', warning_count: 'int' = 0) -> 'bool'
+def _finish_failed_apply(a: 'argparse.Namespace', book: 'Path', result: 'dict') -> 'int'
+def _finish_run(a: 'argparse.Namespace', book: 'Path', result: 'dict', failure_kind: 'str', error_detail: 'str | None' = None) -> 'None'
+def _flush_pending_sheet_announce(a: 'argparse.Namespace') -> 'None'
+def _fmt_amount(v) -> 'str'
+def _fmt_cell_value(v) -> 'str'
+def _fmt_elapsed(seconds: 'float') -> 'str'
+def _format_extract_value(value) -> 'str'
+def _format_offending_records(parsed, header_offset: 'int', rec_indices: 'list', col_idx: 'int') -> 'str'
+def _gather_backups(directory: 'Path', stem: 'str', suffix: 'str') -> 'list'
+def _ground_via_fixed_op(a: 'argparse.Namespace', task: 'str', book_meta: 'dict', op: 'str')
+def _group_step_advisories(entries: 'list') -> 'list'
+def _header_index(headers: 'list', name: 'str') -> 'tuple'
+def _header_row_hint_for_missing_col(book_meta: 'dict', sheet_name: 'str', raw_col) -> 'str | None'
+def _interpretation_summary_line(resolved: 'dict', inferred: 'set') -> 'str | None'
+def _is_number(v) -> 'bool'
+def _is_number_like(s) -> 'bool'
+def _is_our_scratch_output(book: 'Path', out_book: 'Path') -> 'bool'
+def _judge_ops_catalog() -> 'str'
+def _kill_process_tree(pid: 'int') -> 'None'
+def _known_helper_names(helper_files: 'list') -> 'set'
+def _last_task_for_book(book: 'Path') -> 'str'
+def _letterlike_header_columns(book_meta: 'dict | None') -> 'set'
+def _load_module_from_path(path: 'Path', name: 'str')
+def _lock_info_path(lock_path) -> 'Path'
+def _lock_is_stale(info: 'dict | None') -> 'bool'
+def _looks_like_rate(value: 'float') -> 'bool'
+def _looks_like_second_book_path(token: 'str') -> 'bool'
+def _make_dsl_step_deps() -> 'DslStepDeps'
+def _match_condition(key_a: 'str', key_b: 'str', amount_a: 'str', amount_b: 'str', book_b_name: 'str', headers_a: 'list', headers_b: 'list') -> 'dict'
+def _match_postcondition_fail(label: 'str', source, output) -> 'int'
+def _maybe_own_prior_output_notice(op: 'str', before: 'dict', after: 'dict', resolved: 'dict | None' = None) -> 'list'
+def _maybe_suggest_or_refuse(a: 'argparse.Namespace', book: 'Path', source_book: 'Path', book_meta: 'dict', sheets: 'list', step: 'dict') -> 'int'
+def _maybe_warn_header_col_mismatch(op: 'str', resolved: 'dict', new_cols: 'list', task: 'str') -> 'str | None'
+def _maybe_warn_target_overwrite(op: 'str', resolved: 'dict', book_meta: 'dict', book_path: 'Path') -> 'str | None'
+def _maybe_warn_write_precondition(op: 'str', before: 'dict', after: 'dict', resolved: 'dict | None' = None)
+def _moved_rows_note(disclosures: 'list', why: 'str' = '動いた行の式の結果が変わっています ── 追加/削除した行を参照する合計式なら正当ですが、機械には区別がつきません') -> 'str'
+def _nested_total_reason(values: 'list', sheet_name: 'str', idx: 'int') -> 'str | None'
+def _new_sheets(before: 'dict', after: 'dict') -> 'list'
+def _normalize_plan_step(data) -> 'dict'
+def _numeric_value(v)
+def _only_this_cell(path: 'Path', args: 'dict', rc: 'tuple', read, label: 'str', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def _op_has_task_grounding(op: 'str', resolved: 'dict', task: 'str') -> 'bool'
+def _op_match_pool(op: 'str') -> 'list'
+def _op_schema_doc(op: 'str') -> 'str'
+def _op_writes(op: 'str | None', kind: 'str') -> 'bool'
+def _own_csv_output_status(path: 'Path', source_sha256: 'str') -> 'tuple'
+def _own_extract_output_status(path: 'Path', col: 'str', cmp: 'str', value) -> 'tuple'
+def _own_match_output_status(path: 'Path', cond: 'dict') -> 'tuple'
+def _own_output_headers(op: 'str', resolved: 'dict | None')
+def _parse_backup_name(name: 'str', stem: 'str', suffix: 'str') -> 'str | None'
+def _peek_match_book(path: 'Path')
+def _phrase_matches_task_allowing_conjugation(phrase: 'str', task: 'str') -> 'bool'
+def _pid_alive(pid: 'int', expect_image: 'str | None' = None) -> 'bool'
+def _prepare_book_for_print(src: 'Path', dst: 'Path', sheet: 'str', orientation=None, fit_to_width: 'bool' = False, keep_only_sheet: 'bool' = False) -> 'None'
+def _preview_and_run_on_alternative_sheet(a: 'argparse.Namespace', conflict) -> 'int'
+def _preview_dsl_plan(a: 'argparse.Namespace', plan: 'list', book_meta: 'dict', vocab: 'dict', book_name: 'str') -> 'list'
+def _pruned_marker_path(book: 'Path') -> 'Path'
+def _rate_explained(value: 'float', task: 'str', vocab: 'dict') -> 'bool'
+def _raw_target_not_embedded_in_task(raw_target: 'str', task: 'str') -> 'bool'
+value _re_a1_col_word
+value _re_add_col_ask
+value _re_after_position
+def _re_anchor(suffix: 'str')
+value _re_bare_number
+value _re_between
+value _re_between_and
+value _re_clause_end
+value _re_col_pair
+value _re_extract_ask
+value _re_extract_cols_ask
+value _re_one_cell_ask
+value _re_quoted_value
+value _re_replace_pair
+value _re_row_number_in_task
+value _re_row_number_word
+value _re_row_of
+value _re_row_unit
+value _re_row_word
+value _re_swap_ask
+value _re_swap_axis_col
+value _re_swap_axis_row
+value _re_threshold_num
+value _re_value_assign
+value _re_verb_tail
+def _read_lock_info(path: 'Path') -> 'dict | None'
+def _read_undo_pointer(book: 'Path') -> 'str | None'
+def _record_csv_conversion_history(csv_path: 'Path', out_path: 'Path', ok: 'bool') -> 'None'
+def _record_csv_export_history(book_path: 'Path', out_path: 'Path', sheet: 'str', ok: 'bool') -> 'None'
+def _record_misclass_suspect(signal: 'str', task: 'str', plan, book) -> 'None'
+def _refuse_edited_output(out: 'Path') -> 'int'
+def _refuse_output_conflict(out: 'Path', mark: 'str | None') -> 'int'
+def _release_os_lock(fd) -> 'None'
+def _renamed_or_moved_note(book: 'Path') -> 'str'
+def _render_csv_report(csv_path: 'Path', out_path: 'Path', evaluation: '_CsvEvaluation', write_result, compare_result) -> 'list'
+def _render_csv_transfer_failure(csv_path: 'Path', out_path: 'Path', evaluation: '_CsvEvaluation', write_result, compare_result) -> 'list'
+def _resolve_named_row(book_meta: 'dict', sheet: 'str | None', name: 'str') -> 'tuple'
+def _resolve_tax_rescue(context_word: 'str', context_text: 'str', vocab: 'dict | None') -> 'tuple'
+def _row_as_shown(bv, sheet_name: 'str', row: 'int', last_col: 'int') -> 'list'
+def _row_char_stats(ws, start_row: 'int', end_row: 'int', start_col: 'int', end_col: 'int') -> 'dict'
+def _row_named_anywhere_in_task(task: 'str', rows: 'dict', headers: 'list', require_possessive: 'bool' = False)
+def _row_word_number(word: 'str') -> 'int'
+def _rows_matching(book_meta: 'dict', sheet: 'str | None', cond_col: 'str', cmp: 'str', threshold, header_row: 'int' = 1)
+def _run_dsl_plan_step(i: 'int', op: 'str', raw_args: 'dict', *, task: 'str', current_meta: 'dict', original_headers: 'dict', first_sheet: 'str | None', out_book: 'Path', workdir: 'Path', helper_files, apply_timeout, use_formula: 'bool', header_rows: 'dict', before_charts: 'int', a: 'argparse.Namespace', vocab: 'dict', book_name: 'str', subject_sink: 'dict | None' = None, suspicion_sink: 'list | None' = None, derived_sheets: 'list | None' = None, before_chart_paths: 'frozenset | None' = None) -> 'tuple'
+def _run_folder_refuse(op: 'str', plan_len: 'int') -> 'int'
+def _sanitize_vocab_term(term) -> 'str | None'
+def _scan_first_rows(path: 'Path', sheet_name: 'str', max_rows: 'int' = 10) -> 'dict'
+def _scan_last_col(ws, header_row: 'int' = 1) -> 'int'
+def _scan_last_row(ws, key_col: 'int' = 1, header_row: 'int' = 1) -> 'int'
+def _scan_last_row_basic(var: 'str' = 'oSheet', key_col: 'str' = '0', start_row: 'str' = '1', min_ok: 'str | None' = None) -> 'str'
+def _sheet_conflict_gate(a: 'argparse.Namespace', op: 'str') -> 'int | None'
+def _sheet_looks_like_template(source_book: 'Path', sheet_name: 'str') -> 'bool'
+def _sheet_only_snapshot(snap: 'dict', sheet: 'str') -> 'dict'
+def _shelve_bytes(book: 'Path', data: 'bytes') -> 'None'
+def _soffice_to_pdf(book_path, out_path, sheet=None, orientation=None, fit_to_width=False) -> 'tuple'
+def _sort_rows_lost_their_identity(source_book, after_rows: 'list', args: 'dict', header_row: 'int', phys_cols: 'int') -> 'str | None'
+def _sorted_newest_first(found: 'list') -> 'list'
+def _stack_attribution_fail(mismatch: 'dict') -> 'int'
+def _stack_json(result: 'dict') -> 'dict'
+def _stack_postcondition_fail(label: 'str', expected, actual) -> 'int'
+def _stdin_isatty() -> 'bool'
+def _stop_office() -> 'None'
+def _struct_dump_info_missing(struct_dump: 'dict', sheets: 'list', target_sheet: 'str | None') -> 'bool'
+def _structdump_macro(out_path: 'Path') -> 'str'
+def _structural_advisories(before: 'dict', after: 'dict', *, op: 'str | None' = None, resolved: 'dict | None' = None, meta: 'dict | None' = None, precondition_broken: 'str | None' = None, after_path: 'Path | None' = None) -> 'list'
+def _subject_slots(op: 'str', resolved: 'dict', sheets: 'list', task: 'str' = '') -> 'list'
+def _swap_axis_hint(task: 'str') -> 'str | None'
+def _swap_pair_resolves(book_meta: 'dict', sheet: 'str | None', a: 'str', b: 'str') -> 'bool'
+def _table_rows_for_anchor(book_meta: 'dict', sheet, header_row: 'int') -> 'tuple'
+def _task_names_a_row(task: 'str', book_meta: 'dict', sheet: 'str | None') -> 'str | None'
+def _task_names_single_real_column(task: 'str', headers: 'list') -> 'str | None'
+def _task_outside_quotes(task: 'str') -> 'str'
+def _timeout_error_message(timeout: 'float') -> 'str'
+def _total_row_left_the_bottom_reason(path: 'Path', source_book: 'Path | None', args: 'dict', header_row: 'int', idx: 'int', sheet_name: 'str') -> 'str | None'
+def _translate_and_dispatch(a: 'argparse.Namespace', book: 'Path', source_book: 'Path', struct_dump: 'dict', sheets: 'list') -> 'int'
+def _truncation_notice(before: 'dict', after: 'dict', exhaustive_postcondition: 'bool') -> 'str | None'
+def _try_os_lock(fd) -> 'bool'
+def _ts_sort_key(ts: 'str')
+def _undo_pointer_path(book: 'Path') -> 'Path'
+def _undo_position(book: 'Path', backups: 'list') -> 'int | None'
+def _unreadable_book_for_match_message(path: 'Path') -> 'str'
+def _untouched_original_line(book: 'Path', out_book: 'Path') -> 'str'
+def _used_extent(ws) -> 'tuple'
+def _used_range(before: 'dict', sheet: 'str') -> 'tuple | None'
+def _utc_ts() -> 'str'
+def _value_changed_cells(before: 'dict', after: 'dict') -> 'list'
+def _vocab_miss_reason(step: 'dict') -> 'str'
+def _why_output_is_unusable(path: 'Path') -> 'str | None'
+def _wrap_basic(body: 'str') -> 'str'
+def _wrap_basic_for_sheet(body: 'str', book_meta: 'dict', target_sheet: 'str | None') -> 'str'
+def _write_csv_output(evaluation: '_CsvEvaluation', out_path: 'Path') -> 'tuple'
+def _write_undo_pointer(book: 'Path', backup_name: 'str | None') -> 'None'
+def acquire_run_lock(path: 'Path | None' = None) -> 'tuple'
+def add_row_values_from_request(task: 'str', book_meta: 'dict', sheet: 'str | None', llm_values, header_row: 'int' = 1) -> 'dict'
+def alias_add(phrase: 'str', op: 'str', path: 'Path | None' = None) -> 'tuple'
+def alias_remove(phrase: 'str', path: 'Path | None' = None) -> 'tuple'
+def alias_undo(path: 'Path | None' = None) -> 'tuple'
+def anchor_column_name(book_meta: 'dict', sheet: 'str | None', names: 'list', header_row: 'int' = 1) -> 'str | None'
+value annotations
+def append_history(entry: 'dict', path: 'Path | None' = None) -> 'None'
+def append_misclass(entry: 'dict', path: 'Path | None' = None) -> 'None'
+def apply_dsl_step(op: 'str', resolved: 'dict', code: 'str', *, apply_target: 'Path', before: 'dict', before_charts: 'int', workdir: 'Path', helper_files, apply_timeout, header_row: 'int', use_formula: 'bool', source_book: 'Path | None', deps: 'DslStepDeps', apply_progress_label: 'str', print_changes: 'bool', step_prefix: 'str' = '', before_chart_paths: 'frozenset | None' = None) -> 'DslApplyResult'
+def ask_choice(lines: 'list', choices: 'list', *, interactive: 'bool', input_fn: 'Callable | None' = None, print_fn: 'Callable | None' = None, prompt: 'str' = '> ') -> 'ChoiceResult'
+def ask_yes_no(question: 'str', *, interactive: 'bool', default: 'bool' = False, input_fn: 'Callable | None' = None) -> 'bool'
+def atomic_replace_inplace(book: 'Path', out_book: 'Path', workdir: 'Path', keep_backups: 'int' = 10) -> 'tuple'
+def backup_path_for(book: 'Path', ts: 'str | None' = None, shelf: 'bool' = False) -> 'Path'
+def bare_value_from_task(task: 'str', row_name: 'str | None', col_name: 'str | None', headers=None) -> 'str | None'
+def basrun_apply(book: 'Path', code: 'str', workdir: 'Path', helper_files=(), timeout: 'float | None' = 180.0) -> 'tuple'
+def basrun_path() -> 'Path'
+def book_columns(path: 'Path', header_rows: 'dict | None' = None) -> 'dict'
+def broken_identity_advisory(source_book, out_book, resolved: 'dict') -> 'list'
+def build_advisories(task: 'str', before: 'dict', after: 'dict', exclude_sheets: 'set | None' = None, *, op: 'str | None' = None, resolved: 'dict | None' = None, meta: 'dict | None' = None, sheet_conflict=None, precondition_broken: 'str | None' = None, after_path: 'Path | None' = None) -> 'list'
+def build_book_meta(path: 'Path', header_rows: 'dict | None' = None) -> 'dict'
+def build_history_entry(result: 'dict', book: 'Path', task: 'str', model: 'str', failure_kind: 'str', error_detail: 'str | None' = None) -> 'dict'
+def build_interpretation(op: 'str', resolved: 'dict | None', inferred, verdicts, books) -> 'tuple'
+def build_parser() -> 'argparse.ArgumentParser'
+def build_struct_dump(normalized_book: 'Path', workdir: 'Path') -> 'dict'
+def build_suggest_judge_messages(task: 'str', about: 'str | None') -> 'list'
+def build_translation_fixed_op_messages(op: 'str', task: 'str', book_meta: 'dict') -> 'list'
+def build_translation_messages(task: 'str', book_meta: 'dict') -> 'list'
+def bundled_demo_dir() -> 'Path'
+def cells_with_multiple_placeholders(placeholders) -> 'list'
+def chain_target_sheet(op: 'str', task: 'str', derived_sheets, sheets, headers) -> 'str | None'
+def chart_data_last_row(path, sheet_name: 'str | None' = None, header_row: 'int' = 1) -> 'int'
+def charts_by_sheet(path) -> 'dict'
+def check_add_column(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_add_row(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_aggregate(path: 'Path', args: 'dict', header_row: 'int' = 1, use_formula: 'bool' = False) -> 'tuple'
+def check_append_total(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
+def check_autofit(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_bold(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_center_align(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_chart(path: 'Path', before_charts: 'int') -> 'tuple'
+def check_chart_series(path, kind: 'str', value_col_letter: 'str', category_col_letter: 'str | None' = None, before_chart_paths: 'set | None' = None) -> 'tuple'
+def check_compute_column(path: 'Path', args: 'dict', header_row: 'int' = 1, use_formula: 'bool' = False, source_book=None) -> 'tuple'
+def check_compute_column_single_factor(path: 'Path', args: 'dict', header_row: 'int' = 1, use_formula: 'bool' = False, source_book=None) -> 'tuple'
+def check_dedup(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_delete_column(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_delete_rows(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_draw_borders(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
+def check_drawing_content_loss(original, produced) -> 'list'
+def check_excel_lock(book: 'Path') -> 'tuple | None'
+def check_extract(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_extract_columns(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_fill_color(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_format_map(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_insert_rows(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_lookup_fill(path: 'Path', args: 'dict', header_row: 'int' = 1, use_formula: 'bool' = False) -> 'tuple'
+def check_merge(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
+def check_number_format(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
+def check_openpyxl_fidelity_loss(original: 'Path', normalized: 'Path') -> 'list'
+def check_pivot(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
+def check_report_per_group(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_report_per_row(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_round_trip_fidelity(original: 'Path', normalized: 'Path') -> 'dict'
+def check_set_cell_value(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_set_column_value(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
+def check_set_where(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_sort(path: 'Path', args: 'dict', header_row: 'int' = 1, use_formula: 'bool' = False, source_book: 'Path | None' = None) -> 'tuple'
+def check_split_cell(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_swap(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
+def check_write_preconditions_detail(writes, before: 'dict', after: 'dict', *, cell_ref: 'Callable', fmt_value: 'Callable', own_output_headers=None, positions_shifted: 'bool' = False)
+def check_zip_fidelity_loss(original: 'Path', normalized: 'Path') -> 'list'
+def classify_date_column(values) -> 'tuple[str, bool]'
+def classify_slots(slots, *, task: 'str', columns=(), header_row: 'int' = 1, sheets=(), qualifier_signal: 'bool' = False, consumed: 'Consumed | None' = None) -> 'list'
+def classify_subject_provenance(op: 'str', resolved: 'dict', meta: 'dict', task: 'str', a=None) -> 'list'
+def cmd_alias(a: 'argparse.Namespace') -> 'int'
+def cmd_demo(a: 'argparse.Namespace') -> 'int'
+def cmd_doctor(a: 'argparse.Namespace') -> 'int'
+def cmd_export_csv(a: 'argparse.Namespace') -> 'int'
+def cmd_export_pdf(a: 'argparse.Namespace') -> 'int'
+def cmd_history(a: 'argparse.Namespace') -> 'int'
+def cmd_ops(a: 'argparse.Namespace') -> 'int'
+def cmd_redo(a: 'argparse.Namespace') -> 'int'
+def cmd_refuse_vocab_miss(a: 'argparse.Namespace', book: 'Path', step: 'dict | None' = None) -> 'int'
+def cmd_restore(a: 'argparse.Namespace') -> 'int'
+def cmd_run(a: 'argparse.Namespace') -> 'int'
+def cmd_run_csv(a: 'argparse.Namespace') -> 'int'
+def cmd_run_dsl(a: 'argparse.Namespace', book: 'Path', source_book: 'Path', book_meta: 'dict', op: 'str', raw_args: 'dict') -> 'int'
+def cmd_run_folder(a: 'argparse.Namespace') -> 'int'
+def cmd_run_format_map(a: 'argparse.Namespace', book: 'Path', source_book: 'Path', book_meta: 'dict', raw_args: 'dict') -> 'int'
+def cmd_run_match(a: 'argparse.Namespace', book_a: 'Path', book_b: 'Path', task: 'str') -> 'int'
+def cmd_run_plan(a: 'argparse.Namespace', book: 'Path', source_book: 'Path', book_meta: 'dict', plan: 'list') -> 'int'
+def cmd_run_report_per_row(a: 'argparse.Namespace', book: 'Path', source_book: 'Path', book_meta: 'dict', raw_args: 'dict') -> 'int'
+def cmd_scan(a: 'argparse.Namespace') -> 'int'
+def cmd_stack(a: 'argparse.Namespace') -> 'int'
+def cmd_stop(a: 'argparse.Namespace') -> 'int'
+def cmd_undo(a: 'argparse.Namespace') -> 'int'
+def cmd_verify(a: 'argparse.Namespace') -> 'int'
+def cmd_vocab(a: 'argparse.Namespace') -> 'int'
+def codegen_dsl(op: 'str', resolved_args: 'dict', book_meta: 'dict', use_formula: 'bool' = True) -> 'str'
+def column_index_from_string(col)
+def column_is_all_numeric(path, sheet_name, col_idx: 'int', header_row: 'int' = 1) -> 'bool'
+def compare_moved_rows(after_rows: 'list', before_rows: 'list', label: 'str') -> 'tuple'
+def compare_report_cells(path, sheet_name: 'str', declared: 'dict') -> 'ReportCellsResult'
+def compose_dsl_step_advisories(mode: 'str', op: 'str', resolved: 'dict', meta: 'dict', task: 'str', before: 'dict', after: 'dict', *, exclude_sheets: 'set | None' = None, sheet_conflict=None, precondition_broken: 'str | None' = None, after_path=None, deps: 'DslStepDeps') -> 'list'
+def conflict_excluded_sheets(conflict: 'SheetNameConflict | None') -> 'set'
+def count_drawing_objects(path) -> 'dict'
+def count_reconciliation(before: 'dict', after: 'dict') -> 'str | None'
+def count_suspicious_advisories(lines) -> 'int'
+def data_extent(ws, header_row: 'int' = 1) -> 'tuple'
+def dataclass(cls=None, /, *, init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False, match_args=True, kw_only=False, slots=False, weakref_slot=False)
+def date_to_serial(d: 'dt.date') -> 'int'
+class datetime(?)
+def describe_book(path: 'Path') -> 'str'
+def describe_cell_change(before: 'tuple | None', after: 'tuple | None') -> 'str'
+def describe_target_sheet(sheets: 'list', target_sheet: 'str | None', source: 'str') -> 'str | None'
+def detect_first_column_gap(ws, header_row: 'int' = 1, look_ahead: 'int' = 200) -> 'str | None'
+def detect_ghost_data(before: 'dict', after: 'dict', *, new_col_letter: 'str | None' = None, new_row_at_end: 'bool' = False) -> 'str | None'
+def detect_header_row(sheet_struct: 'dict') -> 'tuple'
+def detect_helper_sweep(code: 'str', helper_names: 'set') -> 'str | None'
+def detect_uniform_fill(before: 'dict', after: 'dict', single_cell: 'bool' = False, new_col_letter=None, proved: 'bool' = False) -> 'str | None'
+def detect_write_target_type_change(before: 'dict', after: 'dict', *, op: 'str | None', resolved: 'dict | None', meta: 'dict | None', op_write_target: 'dict', is_number: 'Callable', after_path=None) -> 'str | None'
+def diff_snapshots(before: 'dict', after: 'dict') -> 'tuple'
+def doctor_checks(model: 'str' = 'qwen2.5-coder:7b') -> 'list'
+def drop_names_covered_by_longer(task: 'str', names: 'list') -> 'list'
+def duplicate_name_warning(col: 'str', values) -> 'str | None'
+def except_extraction_reading(book_meta: 'dict', sheet: 'str | None', task: 'str', header_row: 'int' = 1) -> 'tuple'
+def existing_sheet_replaced_advisory(before: 'dict', after: 'dict', *, op: 'str | None' = None, precondition_broken: 'str | None' = None) -> 'list'
+def exit_environment(message: 'str')
+def extent_gap(ws, header_row: 'int' = 1, key_col: 'int' = 1) -> 'dict'
+def extract_bas(text: 'str') -> 'str'
+def extract_chart_kind_from_task(task: 'str') -> 'str | None'
+def extract_cmp_from_task(task: 'str') -> 'str | None'
+def extract_quoted_literal(text: 'str') -> 'str | None'
+def extract_rate_factor(text: 'str') -> 'tuple'
+def extract_replace_pair(task: 'str')
+def extract_task_mentions(task: 'str', sheet_names: 'list') -> 'dict'
+def fabricated_subject_refusal(op: 'str', resolved: 'dict', book_meta: 'dict', task: 'str', sheet: 'str | None') -> 'str | None'
+def fold_identical_steps(plan) -> 'tuple'
+def format_confirmation_line(op: 'str', resolved_args: 'dict', inferred: 'set', sheets: 'list | None' = None, target_sheet: 'str | None' = None) -> 'str'
+def format_doctor_report(results: 'list') -> 'tuple'
+def format_fidelity_warning(fidelity: 'dict') -> 'str'
+def format_history_table(entries: 'list') -> 'str'
+def format_op_from_task(task: 'str') -> 'str | None'
+def format_output_fidelity_warning(fidelity: 'dict', name: 'str') -> 'str'
+def format_plan_preview(items: 'list') -> 'list'
+def format_plan_report(items: 'list') -> 'list'
+def format_sheet_field(sheets: 'list', target_sheet: 'str | None') -> 'str | None'
+def formula_columns_to_inherit(book_meta: 'dict', sheet: 'str | None', header_row: 'int', at: 'int', declared: 'set') -> 'tuple'
+def formula_error_advisory(before_path: 'Path', after_path: 'Path', *, cell_ref: 'Callable') -> 'list'
+def formula_for_basic(formula: 'str') -> 'str'
+def formula_rewrites_for_shift(book_meta: 'dict', sheet: 'str | None', shift) -> 'tuple'
+def freeform_notice_reason(op: 'str', about: 'str' = '') -> 'str'
+def get_column_letter(col_idx)
+def header_row_drops_columns(ws, chosen_row: 'int') -> 'str | None'
+def insert_rows_should_have_been_add_row(task: 'str', resolved: 'dict', book_meta: 'dict | None' = None, sheet: 'str | None' = None) -> 'str | None'
+def inspection_sheet_basic_call(sheet_name: 'str', header: 'list', rows: 'list', types: 'str') -> 'str'
+def is_interactive(*, stdin_isatty: 'bool', json_mode: 'bool' = False, dry: 'bool' = False) -> 'bool'
+def is_transient_lo_error(err: 'str | None') -> 'bool'
+def is_truncated_code(code: 'str') -> 'bool'
+def judge_ops_via_llm(task: 'str', about: 'str | None' = None) -> 'list'
+def keep_backups_arg(value: 'str') -> 'int'
+def likely_cause_of_no_change(book_path, sheet_name=None) -> 'list'
+def list_backups(book: 'Path') -> 'list'
+def list_legacy_backups(book: 'Path') -> 'list'
+def list_undo_shelf(book: 'Path') -> 'list'
+def load_aliases(path: 'Path | None' = None) -> 'tuple'
+def load_helpers(helpers_dir: 'Path') -> 'tuple'
+def load_refs(refs_dir: 'Path') -> 'str'
+def load_vocab(path: 'Path | None' = None) -> 'dict'
+def lookup_alias(task: 'str', path: 'Path | None' = None) -> 'str | None'
+def lookup_vocab_factor(text: 'str', vocab: 'dict') -> 'tuple'
+def lookup_vocab_tax_factor(vocab: 'dict') -> 'tuple'
+def main(argv=None) -> 'int'
+def make_backup(book: 'Path', keep: 'int' = 10, shelf: 'bool' = False) -> 'Path'
+def maybe_show_notice_v2(path: 'Path | None' = None) -> 'bool'
+def mention_overlap_advisory(mentions: 'dict', before: 'dict', after: 'dict', exclude_sheets: 'set | None' = None, exclude_cols: 'set | None' = None) -> 'list'
+def name_matches_task(name, task: 'str', others=()) -> 'bool'
+def new_column_name_from_task(task: 'str', headers=None, *, require_position: 'bool' = True) -> 'str | None'
+def new_sheet_advisories(before: 'dict', after: 'dict') -> 'list'
+def normalize_book(book, workdir, timeout=None)
+def note_deleted(args: 'dict', rows) -> 'None'
+def note_extent_gap(out_book: 'Path', resolved_args: 'dict', header_row: 'int' = 1) -> 'None'
+def note_pre_existing_output(out_book: 'Path') -> 'None'
+def note_stringy_numbers(args: 'dict', values) -> 'None'
+def note_unverified(args: 'dict', count: 'int', why: 'str') -> 'None'
+def number_format_target(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)
+def numeric_cells_became_strings(path, cell_refs, sheet_name: 'str | None' = None) -> 'list'
+def observe_book_state(path: 'Path') -> 'tuple'
+def ollama_generate(*a, **k)
+def ollama_generate_json(*a, **k)
+def only_this_column_changed(path: 'Path', source_book, sheet, col_index: 'int', header_row: 'int' = 1, inserted_at: 'int | None' = None) -> 'str | None'
+def op_that_worked_before(task: 'str', entries) -> 'tuple'
+def out_book_path(book: 'Path') -> 'Path'
+def overall_verdict(items: 'list') -> 'tuple'
+def own_image_name() -> 'str'
+def own_prior_output_notice_lines(before: 'dict', after: 'dict', own_output_headers=None) -> 'list'
+def parse_date_literal(raw) -> 'dt.date | None'
+def parse_structdump_raw(text: 'str') -> 'dict'
+def placements_in_plan(plan) -> 'dict'
+def plan_is_all_giving_up(plan) -> 'bool'
+def plan_only_inserts_a_bare_row(plan) -> 'bool'
+def plan_writes_beyond_one_cell(plan) -> 'bool'
+def print_dsl_confirmation(op: 'str', resolved: 'dict', inferred: 'set', task: 'str', *, meta: 'dict', warn_book: 'Path', new_cols: 'list | None', a, deps: 'DslStepDeps', step_prefix: 'str' = '') -> 'DslConfirmResult'
+def progress_end(start: 'float') -> 'None'
+def progress_start(label: 'str') -> 'float'
+def prune_backups(book: 'Path', keep: 'int' = 10, shelf: 'bool' = False) -> 'list'
+def pruned_generations_note(book: 'Path', keep: 'int') -> 'str | None'
+def read_history(path: 'Path | None' = None, max_n: 'int' = 10) -> 'list'
+def redo_last_undo(book: 'Path') -> 'Path'
+def reference_drift_warning(book_meta: 'dict', sheet: 'str | None', *, row_lo: 'int' = 1, row_hi: 'int' = 10000000, col_lo: 'int' = 1, col_hi: 'int' = 10000, rewritten=None, unit: 'str' = '行') -> 'str | None'
+def refuse_if_locked(book: 'Path') -> 'int | None'
+def refuse_if_output_is_someone_elses(book: 'Path') -> 'int | None'
+def refuse_if_run_cannot_handle(book: 'Path') -> 'int | None'
+def release_run_lock(path: 'Path | None' = None) -> 'None'
+def removal_reading(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)
+def render_aborted(step_prefix: 'str' = '') -> 'str'
+def render_alias_listing(aliases: 'dict', order: 'list', aliases_file: 'Path') -> 'list'
+def render_applied_claim(claim: 'Claim', display_name: 'str') -> 'list'
+def render_applied_claim_demoted(claim: 'Claim', display_name: 'str', warning_count: 'int') -> 'list'
+def render_applied_unobservable(display_name: 'str', error: 'str') -> 'list'
+def render_applied_unverified(display_name: 'str', observed: 'str') -> 'list'
+def render_backup_list(book_name: 'str', backups: 'list', shelved: 'int' = 0, shelf_dir=None, legacy: 'list | None' = None) -> 'list'
+def render_choices(choices) -> 'str'
+def render_code_block(header: 'str', code: 'str', step_prefix: 'str' = '') -> 'list'
+def render_excluded_lines(excluded: 'dict') -> 'list'
+def render_folder_routes(subcommands) -> 'list'
+def render_freeform_notice_compact(reason: 'str', step_prefix: 'str' = '') -> 'str'
+def render_legacy_note(legacy: 'list') -> 'list'
+def render_ops_table(op_meta: 'dict', op_schema: 'dict', confirm_fields: 'dict') -> 'list'
+def render_refusal(op: 'str', resolved_or_args, reason: 'str') -> 'list'
+def render_restore_done(book_name: 'str', used_name: 'str', remaining: 'int | None' = None) -> 'str'
+def render_retry_options(step_prefix: 'str', options: 'list') -> 'list'
+def render_run_header(label: 'str', model: 'str', book_name: 'str') -> 'str'
+def render_scan_report(folder_label: 'str', result: 'dict') -> 'list'
+def render_scope_notes(unspoken_subjects: 'list') -> 'list'
+def render_stack_report(folder_label: 'str', out_label: 'str', result: 'dict') -> 'list'
+def render_verify_match_report(out_label: 'str', a_label: 'str', b_label: 'str', result: 'dict') -> 'list'
+def render_verify_report(out_label: 'str', folder_label: 'str', result: 'dict') -> 'list'
+def render_vocab_add_result(ok: 'bool', msg: 'str') -> 'str'
+def render_vocab_listing(vocab: 'dict', vocab_file: 'Path') -> 'list'
+def render_vocab_miss_refusal(about: 'str' = '', sunset_notice: 'bool' = False, translate_error: 'bool' = False) -> 'list'
+def resolve_cell_target_from_task(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)
+def resolve_col_anchor(task: 'str', headers: 'list') -> 'tuple'
+def resolve_col_ref(raw, headers: 'list') -> 'tuple'
+def resolve_dsl_step_args(op: 'str', raw_args: 'dict', task: 'str', meta: 'dict', vocab: 'dict', *, original_headers: 'dict | None' = None, first_sheet: 'str | None' = None, deps: 'DslStepDeps') -> 'DslGroundResult'
+def resolve_header_rows(struct_dump: 'dict', sheets: 'list', target_sheet: 'str | None' = None) -> 'tuple'
+def resolve_home_dir() -> 'Path'
+def resolve_named_cell(book_meta: 'dict', sheet: 'str | None', name: 'str', header_row: 'int' = 1) -> 'tuple'
+def resolve_named_extraction(book_meta: 'dict', sheet: 'str | None', task: 'str', header_row: 'int' = 1) -> 'tuple'
+def resolve_new_column_placement(op: 'str', resolved: 'dict', book_meta: 'dict', task: 'str', sheet: 'str | None') -> 'dict | None'
+def resolve_row_anchor(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1) -> 'tuple'
+def resolve_target_sheet(task: 'str', sheets: 'list', cli_sheet: 'str | None' = None, headers: 'dict | None' = None) -> 'tuple'
+def restore_backup(book: 'Path') -> 'Path'
+def row_anchor_names(task: 'str') -> 'list'
+def row_number_anchor(task: 'str') -> 'tuple'
+def rows_matching_sum_above(values, *, min_terms: 'int' = 2, tolerance: 'float' = 1e-06) -> 'list'
+def run_freeform_plan_step(a: 'argparse.Namespace', task_text: 'str', out_book: 'Path', workdir: 'Path', refs_dir: 'Path', helpers_dir: 'Path', tag: 'str', apply_timeout: 'float | None', step_prefix: 'str' = '', vocab: 'dict | None' = None, op: 'str' = 'FREEFORM', about: 'str' = '') -> 'tuple'
+def run_postcondition(op: 'str', out_book: 'Path', resolved_args: 'dict', before_charts: 'int' = 0, header_row: 'int' = 1, use_formula: 'bool' = False, source_book: 'Path | None' = None, before_chart_paths: 'frozenset | None' = None) -> 'tuple'
+def sanitize_sheet_name(raw: 'str') -> 'str'
+def save_alias(phrase: 'str', op: 'str', path: 'Path | None' = None) -> 'bool'
+def save_aliases(aliases: 'dict', order: 'list', path: 'Path | None' = None) -> 'None'
+def save_vocab(vocab: 'dict', path: 'Path | None' = None) -> 'None'
+def scan_placeholders(ws, max_row: 'int', max_col: 'int') -> 'list'
+def scan_rate_literals(code: 'str', task: 'str', vocab: 'dict | None' = None) -> 'list'
+def sheet_conflict_choice_lines(conflict: 'SheetNameConflict', op: 'str', op_label: 'str') -> 'tuple'
+def sheet_names_mentioned_in(task: 'str', sheets: 'list') -> 'list'
+def sheets_named_explicitly(task: 'str', sheets: 'list') -> 'list'
+def short_error_summary(err: 'str') -> 'str'
+def snapshot(path: 'Path') -> 'dict'
+def success_message(result: 'dict') -> 'str | None'
+def suggest_ops(task: 'str', about: 'str | None' = None, exclude_ops=None) -> 'list'
+def swap_targets_are_cells(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1) -> 'list | None'
+def swap_targets_are_rows(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1) -> 'list | None'
+def task_asks_for_a_conditional_write(task: 'str') -> 'bool'
+def task_asks_for_a_replace(task: 'str') -> 'bool'
+def task_asks_for_a_swap(task: 'str') -> 'bool'
+def task_asks_for_number_format(task: 'str') -> 'bool'
+def task_asks_for_one_cell(task: 'str') -> 'bool'
+def task_asks_to_add_a_column(task: 'str') -> 'bool'
+def task_asks_to_extract_columns(task: 'str') -> 'bool'
+def task_names_a_row_number(task: 'str') -> 'int | None'
+def task_names_real_values(task: 'str', book_meta: 'dict', sheet: 'str | None', col: 'str', header_row: 'int' = 1) -> 'list'
+def task_points_at_one_row(task: 'str', book_meta: 'dict', sheet: 'str | None') -> 'str | None'
+def task_quotes_a_value(task: 'str') -> 'str | None'
+def task_says_except(task: 'str') -> 'bool'
+class timezone(?)
+def too_many_placements(plan) -> 'str | None'
+def total_rows_in(book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1) -> 'list'
+def translate_task(model: 'str', task: 'str', book_meta: 'dict', temperature: 'float' = 0.1) -> 'dict'
+def translate_task_fixed_op(model: 'str', op: 'str', task: 'str', book_meta: 'dict', temperature: 'float' = 0.1) -> 'dict | None'
+def under_run_lock(fn)
+def undo_shelf_dir(book: 'Path') -> 'Path'
+def undo_steps_left(book: 'Path', backups: 'list | None' = None) -> 'int'
+def unique_sheet_name(raw: 'str', used) -> 'str'
+def unrequested_new_sheet_advisory(task: 'str', before: 'dict', after: 'dict', *, op: 'str | None' = None) -> 'list'
+def valid_signature(code: 'str') -> 'bool'
+def value_parses_as_number(value) -> 'float | None'
+def value_written_in_task(task: 'str', llm_value, headers=None) -> 'str | None'
+def verify_dsl_args(op: 'str', args: 'dict', book_meta: 'dict', task: 'str' = '', vocab: 'dict | None' = None, target_sheet: 'str | None' = None) -> 'tuple'
+def vocab_add(term: 'str', value, path: 'Path | None' = None) -> 'tuple'
+def wrap_basic_for_sheet(body: 'str', wrap_default: 'Callable[[str], str]', sheets: 'list', target_sheet: 'str | None') -> 'str'
