@@ -83,6 +83,24 @@ def test_every_code_has_a_japanese_label():
     assert codes <= labels, f"表示名が無い比べ方: {sorted(codes - labels)}"
 
 
+def test_every_code_is_implemented_by_the_python_predicate():
+    """★★ 述語の**3 箇所目**（2026-09-02 に気づいた・初版はここを見ていなかった）。
+
+      `_extract_predicate` は事後条件のための**独立実装**（Basic とは別に同じ勘定を
+      書いて一致を見る）。ここに実装を足し忘れると、Basic は正しく抜き出すのに
+      **事後条件が全部 False** になり、「0 行しか抜き出せていない」という
+      **嘘の失敗**が出る ── 実装が無いことと、条件に合う行が無いことが区別できない。
+    ★ 構造で見る: 関数の中に、その比べ方の名前が現れること。
+      意味そのものは凍結した真理値表（tests/test_predicate_truth_table.py）が守る。
+    """
+    import inspect
+    src = inspect.getsource(ailine._extract_predicate)
+    missing = [c for c in ailine._EXTRACT_CMP_CODE if f'"{c}"' not in src]
+    assert not missing, (
+        f"_extract_predicate が扱っていない比べ方: {missing} ── "
+        "Basic 側だけ実装すると、事後条件が嘘の失敗を出す")
+
+
 def test_the_guard_can_actually_read_the_basic_side():
     """★ 陽性対照 ── 読めていないのに「ずれていない」と言っていないか。
 
