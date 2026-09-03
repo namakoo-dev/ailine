@@ -25,6 +25,26 @@ from datetime import date as _date_cls, datetime
 from ailine_core.date_compare import date_to_serial
 from ailine_core.primitives import is_number as _is_number
 
+# --- 本体と事後条件の層が共有する文言・語彙 -------------------------------------------
+# ★ ここに定数も置く理由（2026-09-03）: この 3 つは「2 群以上」または「群と本体の両方」が
+#   使う。群のどれかに置くと他の群が巻き込まれ、本体に残すと ailine_core → ailine の
+#   循環になる。置き場所を増やさずここへ集約した ── **後から分けられる**（分けるのは
+#   意味が増えた時で、いまは共有であることの方が情報量が多い）。
+# ★ _ZERO_TARGET_REASON は 3 群すべてが使う「対象が 0 件だった時の言い方」。
+#   同じ事情を op ごとに違う文で言うと、同じ穴が別の穴に見える。
+
+COLOR_MAP = {
+    "red": "FF0000", "green": "00B050", "blue": "0000FF", "yellow": "FFFF00",
+    "orange": "FFA500", "purple": "800080", "pink": "FFC0CB", "black": "000000",
+    "white": "FFFFFF", "gray": "808080", "grey": "808080",
+    "lightblue": "ADD8E6", "lightgreen": "90EE90", "lightyellow": "FFFFE0",
+    "lightred": "FFCCCC", "lightgray": "D3D3D3", "lightgrey": "D3D3D3",
+}
+
+PIVOT_CAVEAT = "書式なしの素の表になります。書式つきは『集計表』"
+
+_ZERO_TARGET_REASON = "事後条件の検証対象が0件（何も検証できていない）"
+
 def _numeric_value(v):
     """セルの値を「表計算にとっての数値」にする。数値でなければ None。
 
