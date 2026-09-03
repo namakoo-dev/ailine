@@ -187,6 +187,10 @@ from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出�
 )
 from ailine_core import primitives
 from ailine_core.primitives import is_number as _is_number
+from ailine_core.table_scan import (  # ★ 分割: 表の走査（名前は本体からも引ける）
+    _cell_ref, _col_index_by_header, _scan_last_row, _used_extent,
+    _scan_last_col, extent_gap, data_extent,
+)
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
 DEFAULT_HELPERS = HERE / "helpers"
@@ -865,11 +869,6 @@ _CELL_FIELD_LABELS = ("値", "数値書式", "背景", "太字", "罫線", "配�
 # 片側が辞書に無い(=完全既定)ときは、この既定 tuple で埋める（全 None で埋めると
 # 数値書式が『None→General』という偽の差分を作ってしまう＝実測で見つけた罠）。
 _CELL_DEFAULT = (None, "General", None, False, None, None)
-
-
-def _cell_ref(row: int, col: int) -> str:
-    """0起点の内部行/列表記(r,c)を、人が読める A1 形式（例: B2）にする。"""
-    return f"{get_column_letter(col)}{row}"
 
 
 def _fmt_cell_value(v) -> str:
@@ -6134,77 +6133,6 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
 
 # --- ⑥ op 別事後条件（達成の機械検証。openpyxl で out ファイルを読むだけ・LO 不要） ----
 
-def _col_index_by_header(ws, name: str, header_row: int = 1):
-    """見出し行(既定は物理1行目・header_row で指定可)を左から走査して name に一致する
-       列の1起点インデックスを返す。無ければ None。★ W3: header_row 省略時は旧挙動と同一。
-       ★ W3: header_row>1 の子見出し行で空欄の列は、book_columns() と同じ規則で
-       真上の行を遡って引き継ぐ（多段見出しの先頭列対策。無いと『7月』等キー列より
-       手前の空欄列で走査が誤って打ち切られる）。"""
-    c = 1
-    while True:
-        v = ws.cell(row=header_row, column=c).value
-        if v in (None, "") and header_row > 1:
-            for up in range(header_row - 1, 0, -1):
-                uv = ws.cell(row=up, column=c).value
-                if uv not in (None, ""):
-                    v = uv
-                    break
-        if v in (None, ""):
-            return None
-        if str(v) == name:
-            return c
-        c += 1
-
-
-def _scan_last_row(ws, key_col: int = 1, header_row: int = 1) -> int:
-    """key_col(1起点)を上から走査した最終データ行（見出し行を除く）。データが無ければ
-       header_row。★ W3: header_row 省略時は旧挙動（見出し=1行目・データ開始=2行目）と同一。"""
-    r = header_row + 1
-    while ws.cell(row=r, column=key_col).value not in (None, ""):
-        r += 1
-    return r - 1
-
-
-def _used_extent(ws) -> tuple:
-    """シートの**使用範囲**（行数, 列数）。中身のあるセルが 1 つも無ければ (0, 0)。
-
-    ★ なぜ在るか（盲検の契約レビュー・2026-08-24）: 「雛形は 1 セルも変わっていない」を
-      走査（A 列・1 行目を上/左から見て最初の空で打ち切り）で測っていたため、
-      **A 列を余白にした典型的な請求書雛形**（B2 に「請 求 書」）では比較セル数が 0 になり、
-      雛形が何セル壊れても pass していた。**分母ゼロの主張は主張ではない。**
-    ★ 雛形は「表」ではなく「紙の見た目」なので、走査でなく使用範囲で測るのが正しい。
-      openpyxl の max_row/max_column は書式だけのセルも含んで大きく出ることがあるので、
-      値のあるセルの最大位置を自分で取る。
-    """
-    last_r = last_c = 0
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.value not in (None, ""):
-                if cell.row > last_r:
-                    last_r = cell.row
-                if cell.column > last_c:
-                    last_c = cell.column
-    return last_r, last_c
-
-
-def _scan_last_col(ws, header_row: int = 1) -> int:
-    """見出し行(既定は物理1行目)を左から走査した最終列（1起点）。
-       ★ W3: _col_index_by_header と同じ規則で、子見出し行(header_row>1)の空欄列は
-       真上の行を遡って引き継ぐ（多段見出しの先頭列対策）。"""
-    def _effective(c: int):
-        v = ws.cell(row=header_row, column=c).value
-        if v in (None, "") and header_row > 1:
-            for up in range(header_row - 1, 0, -1):
-                uv = ws.cell(row=up, column=c).value
-                if uv not in (None, ""):
-                    return uv
-        return v
-    c = 1
-    while _effective(c) not in (None, ""):
-        c += 1
-    return c - 1
-
-
 def _apply_operator(a, b, operator: str):
     a = a or 0
     b = b or 0
@@ -6418,34 +6346,6 @@ def note_stringy_numbers(args: dict, values) -> None:
     note_unverified(args, len(stringy),
                     f"数字に見えますが文字列のセルがあり、0 として足されています: "
                     f"{shown}{more} ── 合計がその分だけ小さくなります")
-
-
-def extent_gap(ws, header_row: int = 1, key_col: int = 1) -> dict:
-    """走査で得た範囲と、**物理の使用範囲**の食い違いを数える。
-
-    ★ 2026-08-25（塊②）: 中核 op の盲検が実測した 2 件の根。
-      行: `_scan_last_row` は key_col を上から見て**最初の空で止まる**。末尾に
-          その列が空の行があると、処理からも分母からも消える（「3行中1行が一致」の
-          真の分母は 5 だった）。★ 表の**途中**の空きは ⚠ が出るのに、
-          **末尾だけ鳴らない** ── 警告条件が「下方向に中身があるか」なので原理的に発火しない。
-      列: 並べ替えの範囲は見出し由来（`len(headers)-1`）なので、見出しの無い列は
-          範囲外に落ちる。実測では D 列だけ動かず、**全行で備考が別商品の物に付け替わった**。
-
-    ★ 物理の使用範囲は「値のあるセルの最大位置」で測る（_used_extent と同じ規則。
-      openpyxl の max_row/max_column は書式だけのセルを含んで大きく出るため使わない）。
-    戻り値の rows_* / cols_* はいずれも**見出し行を除いたデータの数**。
-    """
-    phys_r, phys_c = _used_extent(ws)
-    rows_physical = max(0, phys_r - header_row)
-    cols_physical = max(0, phys_c)
-    rows_scanned = max(0, _scan_last_row(ws, key_col=key_col, header_row=header_row) - header_row)
-    cols_scanned = max(0, _scan_last_col(ws, header_row=header_row))
-    return {
-        "rows_scanned": rows_scanned, "rows_physical": rows_physical,
-        "rows_missing": max(0, rows_physical - rows_scanned),
-        "cols_scanned": cols_scanned, "cols_physical": cols_physical,
-        "cols_missing": max(0, cols_physical - cols_scanned),
-    }
 
 
 
@@ -7334,22 +7234,6 @@ def check_append_total(path: Path, args: dict, header_row: int = 1) -> tuple:
 #   ヘルパ本体(helpers/*.bas)が headerRow を取らないのと同じ理由で、これらのチェッカーは
 #   openpyxl の生スキャン(_scan_last_row/_scan_last_col)で実データ範囲を都度見つける
 #   （header_row を渡しはするが、ヘルパが物理1行目前提で動く以上、通常は 1 のまま使う想定）。
-
-def data_extent(ws, header_row: int = 1) -> tuple:
-    """見出しより下のデータの**物理の**広がり (最終行, 最終列)。
-
-    ★★ 2026-08-27（Namakoo が実測・今日 3 箇所目）: `_scan_last_row` は 1 列目を上から
-      見て**最初の空で止まる**。表の途中に空行が 1 本あるだけで、その下が全部消える。
-      ・位置の解決が「みかんが見つかりません」になった
-      ・事後条件が「検証対象が 0 件」になった
-      ・分母が消えた（塊①で直したのと同じ形）
-      ★ 3 箇所で同じ穴を開けたので、**器官を 1 つにする**（それぞれに書き写さない）。
-    """
-    phys_r, phys_c = _used_extent(ws)
-    last = max(phys_r, _scan_last_row(ws, header_row=header_row))
-    cols = max(phys_c, _scan_last_col(ws, header_row=header_row), 1)
-    return last, cols
-
 
 def _cells_for_shift(bv, sheet_name, header_row: int, last_row: int, last_col: int) -> list:
     """行が**丸ごと動くだけ**のはずの操作（挿入・削除）で突き合わせるための読み。
