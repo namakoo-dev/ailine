@@ -20,7 +20,22 @@ from __future__ import annotations
 from openpyxl.utils import get_column_letter
 
 def _cell_ref(row: int, col: int) -> str:
-    """0起点の内部行/列表記(r,c)を、人が読める A1 形式（例: B2）にする。"""
+    """**1 起点**の行/列 (r, c) を、人が読める A1 形式（例: C2）にする。
+
+    ★★ この repo には**起点が 2 つある**（2026-09-03 に数えて確かめた）:
+      ・**0 起点** … LibreOffice Basic 側。`getCellByPosition(列, 行)`、
+        ヘルパの `headerRow` 引数、LLM に見せる「列は 0 起点で 0..N」の説明、
+        `used_range`（ailine.py:643 に 0起点→1起点 の変換が在る）
+      ・**1 起点** … openpyxl 側と検算側。`_col_index_by_header` の戻り値、
+        スナップショットの `r,c`（`for r in range(1, nrow + 1)`）
+
+    ★ この関数は **1 起点の側**にある。docstring は長く「0起点」と書かれていたが、
+      呼び元 8 箇所すべてが 1 起点を渡しており、**実装と呼び元は整合していた** ──
+      説明だけが Basic 側の世界のまま取り残されていた。
+    ★ 0 を渡すと `get_column_letter` が ValueError を投げる（列 0 は存在しない）。
+      それでよい ── **黙って `B0` のような嘘の座標を作るより落ちる方が安全**。
+      この振る舞いは tests/test_cell_ref_is_one_based.py が凍結している。
+    """
     return f"{get_column_letter(col)}{row}"
 
 def _col_index_by_header(ws, name: str, header_row: int = 1):
