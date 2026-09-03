@@ -20,7 +20,6 @@ import openpyxl
 
 from ailine_core import inspection, multifile, total_row, xml_readback
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
-from ailine_core.primitives import fmt_num
 
 PROVENANCE_HEADERS = ("元ファイル", "元行")
 # ★ 赤2 の直し（2026-08-21 実機敵対検分）: 署名判定はサフィックス形（元ファイル_2 等）も

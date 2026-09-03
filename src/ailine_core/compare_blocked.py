@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from ailine_core.primitives import is_number as _is_number
 
 # gte/lte/gt/lt だけが「数値として比べる」比較（eq/contains は文字列でも成立しうる）。
 NUMERIC_CMPS = frozenset({"gte", "lte", "gt", "lt"})

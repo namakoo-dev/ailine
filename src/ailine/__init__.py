@@ -185,6 +185,7 @@ from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
 )
+from ailine_core import primitives
 from ailine_core.primitives import is_number as _is_number
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
@@ -15633,8 +15634,8 @@ def _stack_json(result: dict) -> dict:
 
 def _stack_postcondition_fail(label: str, expected, actual) -> int:
     """事後条件①②が破れた時の唯一の出口。★ tmp_out は移さない（out は無傷のまま）。"""
-    print(f"⚠ 事後条件が破れた: {label}  元(採用時) {multifile_stack.fmt_num(expected)} / "
-          f"出力(書いた直後) {multifile_stack.fmt_num(actual)}")
+    print(f"⚠ 事後条件が破れた: {label}  元(採用時) {primitives.fmt_num(expected)} / "
+          f"出力(書いた直後) {primitives.fmt_num(actual)}")
     return 5
 
 
@@ -15645,8 +15646,8 @@ def _stack_attribution_fail(mismatch: dict) -> int:
        素通りする実機再現が根拠。行数/Σ と同じ『移す前の tmp_out』段で
        verify.verify_output（帰属検算まで含む独立読み）を呼び、ここで拾う。"""
     print(f"⚠ 事後条件が破れた: 帰属  {mismatch['file']} の {mismatch['src_row']}行目 "
-          f"列『{mismatch['column']}』 元(採用時) {multifile_stack.fmt_num(mismatch['source'])} / "
-          f"出力(書いた直後) {multifile_stack.fmt_num(mismatch['output'])}")
+          f"列『{mismatch['column']}』 元(採用時) {primitives.fmt_num(mismatch['source'])} / "
+          f"出力(書いた直後) {primitives.fmt_num(mismatch['output'])}")
     return 5
 
 
@@ -16046,8 +16047,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 if skipped:
                     print("  → この冊の行が『元』に数えられ、出力には現れないため差が出ます")
                     print("     見出しの行や列名を揃えるか、この冊を別フォルダへ移してお試しください")
-                print(f"⚠ 事後条件が破れた: {where}  元 {multifile_stack.fmt_num(m['source'])} / "
-                      f"出力(書いた直後) {multifile_stack.fmt_num(m['output'])}")
+                print(f"⚠ 事後条件が破れた: {where}  元 {primitives.fmt_num(m['source'])} / "
+                      f"出力(書いた直後) {primitives.fmt_num(m['output'])}")
                 print(f"（{out.name} は書き込んでいません。元フォルダも変更していません）")
             return 1
 
@@ -16140,8 +16141,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             "（内訳は --json）")
     for m in mismatches:
         say(f"  ⚠ {m['name']}: 合計行({m['row']}行目) の値 "
-            f"{multifile_stack.fmt_num(m['excluded_value'])} ≠ 明細の和 "
-            f"{multifile_stack.fmt_num(m['adopted_sum'])}")
+            f"{primitives.fmt_num(m['excluded_value'])} ≠ 明細の和 "
+            f"{primitives.fmt_num(m['adopted_sum'])}")
     for w in total_word_warnings:
         say(f"  ⚠ {w['file']} の{w['row']}行目に合計語『{w['word']}』を含む行が"
             "積まれています（除外していません・確認してください）")
@@ -16150,8 +16151,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             "（データ行 = 一致 + 不一致 + 合計行の除外・内訳は --json）")
     say(f"出力データ行数: {total_matched}")
     for col_name, both in post.get("sums", {}).items():
-        say(f"Σ{col_name}: 元 {multifile_stack.fmt_num(both['source'])} / "
-            f"出力 {multifile_stack.fmt_num(both['output'])}")
+        say(f"Σ{col_name}: 元 {primitives.fmt_num(both['source'])} / "
+            f"出力 {primitives.fmt_num(both['output'])}")
     if rebuilt_own_output:
         say(f"（前回の抽出出力『{out.name}』を作り直しました）")
     return 0

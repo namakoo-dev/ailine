@@ -29,7 +29,6 @@ import json
 
 from ailine_core import extract_multi, match, total_row, xml_readback
 from ailine_core.primitives import column_index as _column_index
-from ailine_core.primitives import fmt_num
 
 TOLERANCE = total_row.TOLERANCE
 
