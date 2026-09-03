@@ -1,6 +1,6 @@
 # Changelog
 
-## [v0.2.1](https://github.com/namakoo-dev/ailine/compare/v0.2.0...v0.2.1) - 2026-09-04
+## [v0.2.1](https://github.com/namakoo-dev/ailine/compare/v0.2.0...v0.2.1) - 2026-09-03
 
 表計算の**基本操作を出し切り**、そのうえで**単一ファイルの分割**に着手した版。
 92 commit / 212 ファイル / +23,463 行。主眼は前回までと同じ ──
