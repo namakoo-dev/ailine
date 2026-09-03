@@ -20,3 +20,6 @@ dist/
 #   この形に当たらず commit に紛れていた ── 番人は在ったが、失敗の形では鳴らなかった。
 *（下書き）*.xlsx
 *（捨てた）*.xlsx
+
+# ★ verify_dsl_args の入出力ゴールデンは repo に置く（B の組み替えで前後を比べるため）。
+#   取り直しは AILINE_GOLDEN_OUT=bench/verify_golden.json で全テストを 1 回。
