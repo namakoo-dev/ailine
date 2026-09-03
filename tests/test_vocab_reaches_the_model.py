@@ -96,6 +96,7 @@ def test_the_machine_rereads_actually_exist():
     """★ 上の免除表が**口約束になっていない**こと ── 読み直しが本当に在るかを見る。
        在っても鳴らない、の逆（無いのに在ると書く）を塞ぐ。"""
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    assert REACHED_BY_MACHINE_REREAD, "読み直しで届く op の表が空（★ 空だと黙る）"
     for op in REACHED_BY_MACHINE_REREAD:
         assert f'plan = [{{"op": "{op}"' in src or f"'op': '{op}'" in src, (
             f"{op} は『読み直しで拾う』と書いてあるが、読み直しが見つからない")

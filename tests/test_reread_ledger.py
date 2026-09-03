@@ -90,6 +90,7 @@ def test_the_number_of_speaking_blocks_does_not_shrink():
 
 def test_the_covered_specimens_exist():
     """③ 台帳に書いた検体が、実在すること（名前だけの安心を作らない）。"""
+    assert COVERED, "配線を通す検体の表が空（★ 空だとこの番人は 1 度も回らず黙る）"
     for label, ref in COVERED.items():
         f, _, name = ref.partition("::")
         path = REPO / f

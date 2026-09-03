@@ -162,6 +162,7 @@ def test_intentional_copies_still_agree():
     """
     import importlib
     import inspect as _inspect
+    assert INTENTIONAL_COPIES, "意図的な写しの表が空（★ 空だとこの番人は 1 度も回らず黙る）"
     for (mod_a, name_a, mod_b, name_b), why in INTENTIONAL_COPIES.items():
         fa = getattr(importlib.import_module(mod_a), name_a)
         fb = getattr(importlib.import_module(mod_b), name_b)

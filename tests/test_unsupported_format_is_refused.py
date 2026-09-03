@@ -88,5 +88,9 @@ def test_the_gate_is_not_wired_into_undo():
 def test_the_help_no_longer_promises_ods():
     """★ 約束と実体を合わせる ── help が .ods を約束したままだと、また嘘になる。"""
     src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    for m in re.finditer(r'help="対象の文書 \(([^)]*)\)', src):
+    hits = list(re.finditer(r'help="対象の文書 \(([^)]*)\)', src))
+    # ★ 分母を先に確かめる（2026-09-03）: マッチ 0 件だとループが 1 回も回らず、
+    #   help の文言が変わっただけで黙って通る ──「回らないループ」の形。
+    assert hits, "help の文言が見つからない（番人が空振りしている）"
+    for m in hits:
         assert ".ods" not in m.group(1), f"help がまだ .ods を約束している: {m.group(0)}"
