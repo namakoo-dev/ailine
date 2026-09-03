@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ailine_core.primitives import is_number as _is_number
 
 # ラベル語トリガ。『合計』『小計』『総計』は部分一致で可（『合計金額』も拾う）。
 # 『計』だけは完全一致のみ（正規化後のラベル全体が「計」と一致する時だけ）。
@@ -45,11 +46,6 @@ class TotalRowVerdict:
     excluded: list
     adopted_rows: list
     mismatches: list
-
-
-def _is_number(v) -> bool:
-    """bool は int のサブクラスだが数値としては扱わない（sum_identity._is_number と同じ線）。"""
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _is_blank_cell(v) -> bool:

@@ -20,6 +20,7 @@ import openpyxl
 
 from ailine_core import inspection, multifile, total_row, xml_readback
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
+from ailine_core.primitives import fmt_num
 
 PROVENANCE_HEADERS = ("元ファイル", "元行")
 # ★ 赤2 の直し（2026-08-21 実機敵対検分）: 署名判定はサフィックス形（元ファイル_2 等）も
@@ -367,14 +368,6 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
     finally:
         wb.close()
 
-
-def fmt_num(v) -> str:
-    """数値表示: 整数値は小数点なしで（650.0 でなく 650）。"""
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return str(v)
-    return str(int(f)) if f.is_integer() else str(f)
 
 def split_own_outputs(candidates):
     """入力候補から **ailine 産の出力**を外し、(残った候補, 外した名前) を返す。

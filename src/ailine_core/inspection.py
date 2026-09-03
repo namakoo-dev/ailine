@@ -25,6 +25,7 @@ from openpyxl.comments import Comment
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.hyperlink import Hyperlink
+from ailine_core.primitives import fmt_num
 
 SHEET_NAME = "検分"
 COMMENT_AUTHOR = "ailine"                 # ★ 決定論: 時刻・ユーザー名を使わない固定文字列
@@ -109,15 +110,6 @@ _LEGEND = [
     "・原本には一切印を付けません（塗り・コメントとも出力ブック側だけです）。"
     "リンクの着地セル（クリックすると選択された状態で開きます）が対象のセルです。",
 ]
-
-
-def fmt_num(v) -> str:
-    """数値表示: 整数値は小数点なしで（stack.fmt_num / verify.fmt_num と同じ線）。"""
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return str(v)
-    return str(int(f)) if f.is_integer() else str(f)
 
 
 def cell_ref(col: int, row: int) -> str:

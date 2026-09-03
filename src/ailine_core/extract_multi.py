@@ -21,6 +21,7 @@ import openpyxl
 
 from ailine_core import compare_blocked, inspection, multifile, total_row, xml_readback
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
+from ailine_core.primitives import is_number as _is_number
 
 # ★ 書き手の印。stack.py の CREATOR_MARKS が「将来の extract を先取りして凍結」した
 #   文字列と完全一致させる（own_output_mark / is_own_output が M2 の出力を
@@ -40,11 +41,6 @@ _RESERVED_NAMES = ({"CON", "PRN", "AUX", "NUL"}
                    | {f"LPT{i}" for i in range(1, 10)})
 _MAX_STEM = 100          # 拡張子と親パスの余裕を見た保守的な上限（MAX_PATH 対策）
 _HASH_LEN = 6            # 切り詰め衝突時に足す sha256 の桁数
-
-
-def _is_number(v) -> bool:
-    """bool は int のサブクラスだが数値としては扱わない（total_row._is_number と同じ線）。"""
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def predicate(cmp: str, threshold):

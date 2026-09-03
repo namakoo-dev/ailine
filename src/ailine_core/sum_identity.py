@@ -53,9 +53,16 @@ class SumIdentityHit:
 
 
 def _is_number(v) -> bool:
-    """bool は int のサブクラスだが数値としては扱わない（ailine.py の _is_number と同じ線）。"""
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """bool は int のサブクラスだが数値としては扱わない。
 
+    ★ ailine_core/primitives.is_number と**同じ実装をあえて写している**。
+      このモジュールは『標準ライブラリだけで閉じる』契約を持つ（言語非依存 ──
+      test_module_is_portable_and_needs_no_spreadsheet_library が 
+      `__future__ / dataclasses / typing` 以外の import を赤にする）。
+      ★ 2026-09-03 に重複を畳もうとして、この契約を破って気づいた。
+      **重複が悪とは限らない ── 可搬性のための意図的な写し**なので、畳まない。
+    """
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 def rows_matching_sum_above(values, *, min_terms: int = MIN_TERMS,
                              tolerance: float = TOLERANCE) -> list:

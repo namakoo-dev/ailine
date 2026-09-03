@@ -28,6 +28,8 @@ from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 import json
 
 from ailine_core import extract_multi, match, total_row, xml_readback
+from ailine_core.primitives import column_index as _column_index
+from ailine_core.primitives import fmt_num
 
 TOLERANCE = total_row.TOLERANCE
 
@@ -43,22 +45,6 @@ TOLERANCE = total_row.TOLERANCE
 #   ── 下の verify_output は creator=="ailine csv" を {"unsupported": ...} で正直に返すだけ
 #   （{"unmarked": True} に混ぜて「他人のファイル」と誤判定しない、が今回配線する範囲）。
 _CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv"}
-
-
-def fmt_num(v) -> str:
-    """数値表示: 整数値は小数点なしで（600.0 でなく 600）。"""
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return str(v)
-    return str(int(f)) if f.is_integer() else str(f)
-
-
-def _column_index(headers: list, name: str):
-    try:
-        return headers.index(name) + 1
-    except ValueError:
-        return None
 
 
 def _find_header_row(data: dict, base_headers: list, max_scan: int = 30):

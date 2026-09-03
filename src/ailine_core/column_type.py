@@ -11,10 +11,7 @@ setString（A' 原則: 型を LLM に決めさせず、対象列の実体+書く
 from __future__ import annotations
 
 import openpyxl
-
-
-def _is_number(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+from ailine_core.primitives import is_number as _is_number
 
 
 def column_is_all_numeric(path, sheet_name, col_idx: int, header_row: int = 1) -> bool:

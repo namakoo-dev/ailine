@@ -13,6 +13,7 @@ from pathlib import Path
 import openpyxl
 
 from ailine_core.filetypes import CSV_SUFFIX, OPENPYXL_READABLE_SUFFIX, SCAN_CANDIDATE_SUFFIXES
+from ailine_core.primitives import column_index as _column_index
 
 _TEMP_PREFIX = "~$"                      # Excel の一時ファイル（開いている間だけ現れる隣接ファイル）
 _MAX_HEADER_COLS = 200                   # 見出し行を読む安全上限（ailine.py の MAX_COLS とは独立）
@@ -196,19 +197,6 @@ def duplicate_header_names(headers: list) -> list:
         if seen[name] == 2:
             dupes.append(name)
     return dupes
-
-
-def _column_index(headers: list, name: str) -> int | None:
-    """headers（そのファイル自身の並び）の中で name と同名の列位置（1起点）。無ければ None。
-
-    ★ 同名が複数あるときの扱いは**呼び出し側が先に断る**（duplicate_header_names）。
-      ここで最初の 1 本を返す挙動そのものは変えない ── 変えると位置の意味が経路ごとに
-      食い違い、やる側と見る側でまた別の嘘が生まれる。
-    """
-    try:
-        return headers.index(name) + 1
-    except ValueError:
-        return None
 
 
 def formula_columns_without_cache(path, header_row: int, headers: list,

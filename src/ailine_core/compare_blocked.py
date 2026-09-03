@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from ailine_core.primitives import is_number as _is_number
 
 # gte/lte/gt/lt だけが「数値として比べる」比較（eq/contains は文字列でも成立しうる）。
 NUMERIC_CMPS = frozenset({"gte", "lte", "gt", "lt"})
@@ -27,10 +28,6 @@ NUMERIC_CMPS = frozenset({"gte", "lte", "gt", "lt"})
 # 括弧の負数。★ ここに足すのは「見たことがある形」だけ（推測で広げない）。
 _STRIP_RE = re.compile(r'[¥￥$,\s円]')
 _MINUS_MARKS = ("△", "▲", "−", "―", "ー", "‐", "-")
-
-
-def _is_number(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def looks_numeric(value) -> bool:

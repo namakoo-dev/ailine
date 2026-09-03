@@ -17,10 +17,7 @@ from __future__ import annotations
 import openpyxl
 
 from ailine_core import total_row
-
-
-def _is_number(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+from ailine_core.primitives import is_number as _is_number
 
 
 def chart_data_last_row(path, sheet_name: str | None = None, header_row: int = 1) -> int:

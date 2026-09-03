@@ -185,6 +185,7 @@ from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
     Choice, ask_choice, ask_yes_no, is_interactive,
 )
+from ailine_core.primitives import is_number as _is_number
 HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
 DEFAULT_HELPERS = HERE / "helpers"
@@ -6215,11 +6216,6 @@ def _apply_operator(a, b, operator: str):
     if operator == "/":
         return a / b if b else 0
     raise ValueError(operator)
-
-
-def _is_number(v) -> bool:
-    """★ 止血2: bool は int のサブクラスだが数値セルとしては扱わない（True/False混入対策）。"""
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def duplicate_name_warning(col: str, values) -> str | None:
