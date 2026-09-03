@@ -25,6 +25,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 HEADERS = ["取引先", "項目", "件数", "単価", "金額"]
 ROWS = [["丸和物流", "配送", 12, 4800, 57600],
@@ -190,7 +191,6 @@ def test_the_reread_uses_the_machine_not_the_model():
        ★ また「番人は在るが、失敗が取る形では鳴らない」── 何度も踏む形。
        ★ 直し: 読み直しで LLM に聞く**前に**、機械だけで 2 セルが解けているならそれを使う。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     # ★ 「最初の出現」で切ると、別の門に同じ述語を足したときに外れる（実際に外れた）
     #   ── 入れ替えの読み直しそのもの（plan を SWAP に差し替える所）を狙う。
     # ★★ 2026-09-02: **窓を固定長（1200/600 文字）で切っていて外れた** ──
@@ -198,10 +198,10 @@ def test_the_reread_uses_the_machine_not_the_model():
     #   この repo が何度も書いている「窓は構造で切る」を、ここだけ守っていなかった。
     #   ★ 両端を構造で取る: セルの読み直し（plan を SWAP に差し替える所）から、
     #     LLM への聞き直しまで。間に何を足しても、順序の主張は生き続ける。
-    i = src.index('plan = [{"op": "SWAP", "args": {}}]')
-    start = src.rindex("if (not _reread_done", 0, i)
-    end = src.index('translate_task_fixed_op(a.model, "SWAP"', i)
-    seg = src[start:end]
+    i = product_text().index('plan = [{"op": "SWAP", "args": {}}]')
+    start = product_text().rindex("if (not _reread_done", 0, i)
+    end = product_text().index('translate_task_fixed_op(a.model, "SWAP"', i)
+    seg = product_text()[start:end]
     assert "swap_targets_are_cells(a.task, book_meta, _sheet_h)" in seg, (
         "読み直しが、機械で解けるセルを見ていない")
     # ★ 窓の終わりが LLM への聞き直しそのものなので、機械の判定がその手前に在れば
@@ -243,10 +243,9 @@ def test_the_cell_reread_actually_fires_without_the_llm(tmp_path, monkeypatch, c
 def test_cells_are_resolved_before_the_row_or_column_decision():
     """★ a/b が空でも通ること ── 一段目が降りた回は a/b が無い。
        セルの解決を**行/列の判定より前**に置く（そこで確定して先へ行かない）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index('elif op == "SWAP":')
+    i = product_text().index('elif op == "SWAP":')
     # ★ 窓を固定長で切ると、間に足したぶんで外れる（実際に外れた）── 次の分岐まで見る。
-    seg = src[i:src.index('elif op == "INSERT_ROWS":', i)]
+    seg = product_text()[i:product_text().index('elif op == "INSERT_ROWS":', i)]
     assert seg.index("_cells0 = swap_targets_are_cells") < seg.index("as_col = _a in _headers_s")
     assert "if not _cells0 and (not _a or not _b):" in seg, "a/b が無い回に先に落ちる"
 
@@ -359,8 +358,7 @@ def test_the_new_shape_does_not_hijack(meta, task):
 def test_a_swap_request_is_never_reread_as_a_single_cell_write():
     """★★ 変異試験: 入れ替えの依頼を 1 セル書換の門が拾わないこと。
        ここが緩むと、片方の名前がもう片方のセルに**書き込まれて ✓ が出る**。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("_cell = resolve_cell_target_from_task(a.task, book_meta, _sheet_h)")
-    seg = src[max(0, i - 900):i]
+    i = product_text().index("_cell = resolve_cell_target_from_task(a.task, book_meta, _sheet_h)")
+    seg = product_text()[max(0, i - 900):i]
     assert "not task_asks_for_a_swap(a.task)" in seg, (
         "入れ替えの依頼が 1 セル書換に読み替えられる")

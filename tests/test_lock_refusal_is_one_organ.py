@@ -26,8 +26,9 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は製品コード全体を読む
 
-SRC = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+SRC = product_text()   # ★ 本体決め打ちだと、実装が ailine_core へ移った日に空振りする
 
 
 def test_only_one_place_calls_the_detector():

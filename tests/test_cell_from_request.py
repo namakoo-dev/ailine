@@ -28,6 +28,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 HEADERS = ["取引先", "項目", "件数", "金額"]
 ROWS = [["丸和物流", "配送業務一式", 12, 57600],
@@ -104,9 +105,7 @@ def test_a_number_in_the_request_is_not_a_row_name(tmp_path):
 
 
 def test_the_brakes_are_both_present():
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def resolve_cell_target_from_task(")
-    seg = src[i:i + 3000]
+    seg = window_around("def resolve_cell_target_from_task(", after=3000)
     assert "_is_number_like(name)" in seg, "数字を行の名前にしない歯止めが無い"
     assert 'f"{name}の" not in' in seg, "『〜の』の歯止めが無い"
 
@@ -174,9 +173,8 @@ def test_a_value_the_request_never_mentions_is_never_written(tmp_path):
 def test_the_gate_does_not_close_on_plan_length():
     """★★ 実測: 同じ依頼で 1 段と 2 段の計画が返り分かれ、**2 段の回だけ**素通りして
        いた（4 回中 2 回が別々の結果）。長さは依頼の性質ではなくモデルの気分。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("_cell = resolve_cell_target_from_task(")
-    seg = src[max(0, i - 900):i]
+    i = product_text().index("_cell = resolve_cell_target_from_task(")
+    seg = product_text()[max(0, i - 900):i]
     assert "any(_already_writes_one_cell(st) for st in plan)" in seg, seg[-400:]
     assert "len(plan) == 1" not in seg, "計画の長さで門を閉じている"
 
@@ -236,9 +234,8 @@ def test_the_possessive_rule_only_binds_the_cell_path(tmp_path):
 def test_the_machine_row_overrides_whatever_the_llm_said():
     """★ 実測: 第二段は row に**シート名**を返すことがある（'8月請求'）。
        機械が実表で解いた名前で**上書きする** ── setdefault だと LLM の嘘が勝つ。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index('_why = f"依頼文が『{_named}』の行を名指ししています"')
-    seg = src[max(0, i - 500):i]
+    i = product_text().index('_why = f"依頼文が『{_named}』の行を名指ししています"')
+    seg = product_text()[max(0, i - 500):i]
     assert '_args["row"] = _named' in seg, seg[-300:]
     assert '_args.setdefault("row"' not in seg, "LLM の row が勝つ形に戻っている"
 
@@ -260,8 +257,6 @@ def test_a_value_is_taken_whole(task, want):
 
 
 def test_the_subtraction_runs_before_the_bare_number_regex():
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("_lit = extract_quoted_literal(task)")
-    seg = src[i:i + 1200]
+    seg = window_around("_lit = extract_quoted_literal(task)", after=1200)
     assert seg.index("bare_value_from_task(") < seg.index("_re_bare_number.search"), \
         "裸の数字の正規表現が、機械の引き算より先に走っている"

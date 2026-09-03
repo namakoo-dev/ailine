@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 import ailine  # noqa: E402
 from ailine_core.cli_render import render_ops_table  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _table():
@@ -59,5 +60,4 @@ def test_ops_subcommand_runs_and_exits_zero():
 def test_clarify_points_at_the_way_out():
     """★ 行き止まりに出口を置く。聞き返しは「言い方が悪い」と「未対応」を区別できないので、
     区別する手段を毎回そえる。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert "（頼める操作の一覧: ailine ops）" in src
+    assert "（頼める操作の一覧: ailine ops）" in product_text()

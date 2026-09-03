@@ -23,6 +23,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 @pytest.fixture()
@@ -61,9 +62,7 @@ def test_no_lock_no_complaint(book):
 
 def test_both_lock_shapes_are_checked_in_one_place():
     """★ 片方だけ守る形に戻らないよう、2 つが同じ関数に在ることを縛る。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def check_excel_lock(")
-    seg = src[i:i + 2600]
+    seg = window_around("def check_excel_lock(", after=2600)
     assert 'f"~${book.name}"' in seg, "Excel のロックを見ていない"
     assert 'f".~lock.{book.name}#"' in seg, "LibreOffice のロックを見ていない"
 
@@ -71,8 +70,6 @@ def test_both_lock_shapes_are_checked_in_one_place():
 def test_the_refusal_says_what_would_be_lost():
     """★★ 「書けません」で終わらせない ── **あとで消える**ことを言う。
        それがこの断りの理由そのものなので、文言が消えたら赤くする。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index('elif kind == "libreoffice":')
-    seg = src[i:i + 900]
+    seg = window_around('elif kind == "libreoffice":', after=900)
     assert "開いた時点の内容で上書き" in seg
     assert "残骸" in seg, "残骸だった場合の逃げ道が無い"

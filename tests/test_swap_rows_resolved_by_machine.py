@@ -33,6 +33,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 import ailine  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _book(tmp_path: Path) -> Path:
@@ -138,10 +139,9 @@ def test_the_machine_runs_before_the_llm():
     ★ ここが逆だと、機械が解けるのに LLM の揺れに負ける（今回の症状そのもの）。
     ★ 語ではなく**位置**で縛る。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("swap_targets_are_rows(a.task")
-    j = src.index('translate_task_fixed_op(a.model, "SWAP"', i - 4000 if i > 4000 else 0)
-    assert i < src.index('translate_task_fixed_op(a.model, "SWAP"', i), (
+    i = product_text().index("swap_targets_are_rows(a.task")
+    j = product_text().index('translate_task_fixed_op(a.model, "SWAP"', i - 4000 if i > 4000 else 0)
+    assert i < product_text().index('translate_task_fixed_op(a.model, "SWAP"', i), (
         "機械の解決が LLM への聞き直しより後ろに在る")
     assert j >= 0
 

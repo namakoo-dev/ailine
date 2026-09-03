@@ -34,6 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 from ailine_core import subject  # noqa: E402
+from _product_source import count_in_product, product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 HEADERS = ["取引先", "項目", "件数"]
 ROWS = [["丸和物流", "配送業務一式", 12], ["近江スチール", "鋼材加工", 5],
@@ -152,11 +153,10 @@ def test_a_row_the_request_never_mentioned_is_still_challenged():
 def test_one_source_of_the_arithmetic():
     """★ 位置を決める側と審査する側が**同じ関数**を読んでいること。
        片方だけ賢くすると、また「名前なら通るが番号だと止まる」が戻ってくる。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert src.count("def row_number_anchor(") == 1
-    assert src.count("row_number_anchor(task)") == 2, "決める側／審査する側の 2 箇所のはず"
+    assert count_in_product("def row_number_anchor(") == 1
+    assert count_in_product("row_number_anchor(task)") == 2, "決める側／審査する側の 2 箇所のはず"
     # 引き算（+1）がこの関数の外に写し取られていないこと
-    body = src[src.index("def row_number_anchor("):]
+    body = product_text()[product_text().index("def row_number_anchor("):]
     body = body[:body.index(chr(10) + "def ", 10)]
     assert "n + 1 if after else n" in body
 
@@ -196,9 +196,7 @@ def test_the_switch_is_wired_to_refuse_when_values_cannot_be_decided():
        だが依頼とは違う ── 三項のうち「依頼」を捨てた形の再演。
     ★ 壊す前に止まる。断りっぱなしにせず、通る言い方を必ず添える。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("_clean = add_row_values_from_request(")
-    seg = src[i:i + 2400]
+    seg = window_around("_clean = add_row_values_from_request(", after=2400)
     assert "if _fixed and _clean:" in seg
     assert "？ 入れる値を依頼文から決められません" in seg, "値が無い回に断りが無い"
     assert "空の行が欲しいなら" in seg, "空行が欲しい人への出口が無い"

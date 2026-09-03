@@ -24,6 +24,7 @@ from ailine_core.match import KeyGroup, side_pair  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
+from _product_source import count_in_product, product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _book(path, rows):
@@ -39,9 +40,8 @@ def _book(path, rows):
 
 def test_split_own_outputs_is_the_single_implementation():
     """★ 呼び出し側が自前のループを持たないこと（書き写しの再発防止）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert src.count("split_own_outputs") >= 3, "3 経路すべてが共通関数を呼んでいない"
-    assert "is_own_output(p)" not in src, \
+    assert count_in_product("split_own_outputs") >= 3, "3 経路すべてが共通関数を呼んでいない"
+    assert "is_own_output(p)" not in product_text(), \
         "自己除外のループが手書きで残っている（1 箇所に畳んだはず）"
 
 

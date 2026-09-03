@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ailine  # noqa: E402
 from lo_fake import apply_inspection_sheets  # noqa: E402
 from test_vanishing_shapes import _PIC, _SHAPE, _write_drawing  # noqa: E402
+from _product_source import count_in_product, product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _sealed_book(tmp_path, name="sealed.xlsx"):
@@ -131,10 +132,9 @@ def test_quotes_in_sheet_names_survive():
 
 def test_both_report_and_format_map_use_the_same_builder():
     """E: 書き写しの禁止 ── 2 経路が同じ関数を呼ぶこと。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert src.count("inspection_sheet_basic_call(") >= 3, \
+    assert count_in_product("inspection_sheet_basic_call(") >= 3, \
         "帳票段と様式写像段の両方が共通の組み立てを呼んでいない"
-    assert "_add_report_inspection_sheet(out_book" not in src, \
+    assert "_add_report_inspection_sheet(out_book" not in product_text(), \
         "openpyxl で開き直す旧経路が残っている（図形を捨てる）"
-    assert "_add_format_map_inspection_sheet(out_book" not in src, \
+    assert "_add_format_map_inspection_sheet(out_book" not in product_text(), \
         "様式写像段の旧経路が残っている（片配線）"

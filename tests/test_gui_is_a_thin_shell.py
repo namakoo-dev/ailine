@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _product_source import count_in_product, product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 REPO = Path(__file__).resolve().parent.parent
 GUI = REPO / "gui"
@@ -87,9 +88,8 @@ def test_the_page_knows_exactly_the_verdicts_the_tool_can_emit():
 
     本体が新しい判定を足したのに画面が知らなければ、無印で表示されてしまう。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index('result["verdict"] = (')
-    block = src[i:i + 400]
+    i = product_text().index('result["verdict"] = (')
+    block = product_text()[i:i + 400]
     emitted = set(re.findall(r'"(verified|warned|unverified|unobservable)"', block))
     assert emitted == {"verified", "warned", "unverified", "unobservable"}, emitted
     emitted.add("not_applied")     # 適用まで行かなかった run（_finish_run の既定）
@@ -545,7 +545,7 @@ def test_the_tool_suffixes_live_in_one_place():
     src = (REPO / "gui" / "server.py").read_text(encoding="utf-8")
     assert "_TOOL_SUFFIXES = (DRAFT_SUFFIX, TRASH_SUFFIX, \".out\")" in src
     # 直書きの「（捨てた）」が残っていないこと（定数を使う）
-    assert src.count('"（捨てた）"') == 1, "『（捨てた）』を直書きしている箇所がある"
+    assert count_in_product('"（捨てた）"') == 1, "『（捨てた）』を直書きしている箇所がある"
 
 
 def test_the_sheet_choice_does_not_survive_a_file_change():

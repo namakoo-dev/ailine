@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import functools
 import hashlib
 import json
 import os
@@ -71,6 +72,11 @@ def install():
     import ailine
     orig = ailine.verify_dsl_args
 
+    # ★ functools.wraps で**署名と名前を保つ**（2026-09-04）:
+    #   これが無いと `inspect.signature(ailine.verify_dsl_args)` が変わり、
+    #   公開面の凍結（tests/test_public_surface_is_frozen.py）が必ず赤くなる。
+    #   ★ 基準線を取るたびに 1 件赤くなる状態は、**本物の赤を見落とす原因**になる。
+    @functools.wraps(orig)
     def probe(op, args, book_meta, task="", vocab=None, target_sheet=None):
         r = orig(op, args, book_meta, task=task, vocab=vocab, target_sheet=target_sheet)
         try:

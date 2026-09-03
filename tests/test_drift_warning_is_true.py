@@ -25,6 +25,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 from ailine_core import cellmap as cm  # noqa: E402
+from _product_source import window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 # --- ① 書き直した式は「ずれる式」ではない ------------------------------------------------
@@ -59,9 +60,7 @@ def test_the_note_names_the_axis_it_was_given(unit):
 
 def test_the_swap_passes_the_axis_through():
     """★ 変異試験: 入れ替えが軸を渡していること（既定の「行」に戻ったら赤くする）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("reference_drift_warning(book_meta, _sw_sheet")
-    seg = src[i:i + 300]
+    seg = window_around("reference_drift_warning(book_meta, _sw_sheet", after=300)
     assert 'unit=("列" if as_col else "行")' in seg, seg[:200]
     assert "rewritten=set(_rw)" in seg, "書き直した式を渡していない"
 

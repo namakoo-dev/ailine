@@ -21,6 +21,7 @@ import openpyxl
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import count_in_product  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _book(tmp_path, merge=None):
@@ -64,7 +65,6 @@ def test_unreadable_book_is_silent(tmp_path):
 
 def test_all_failure_paths_share_one_implementation():
     """⑤ 3 つの失敗経路が同じ関数を呼ぶ（実測: この形は今日 3 回片配線を生んだ）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert src.count("適用されたが事後条件を満たさない") == 3, "経路の数が変わった（検体の前提が古い）"
-    assert src.count("likely_cause_of_no_change(") == 4, \
+    assert count_in_product("適用されたが事後条件を満たさない") == 3, "経路の数が変わった（検体の前提が古い）"
+    assert count_in_product("likely_cause_of_no_change(") == 4, \
         "失敗経路の一部が心当たりを言わない（片配線）"

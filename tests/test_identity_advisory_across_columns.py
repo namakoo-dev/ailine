@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 import ailine  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 BASE = [["あ", 12, 4800, 57600], ["い", 5, 12000, 60000],
         ["う", 9, 7200, 64800], ["え", 3, 1000, 3000]]
@@ -104,10 +105,9 @@ def test_the_docstring_promise_matches_the_code():
     ★ 「op を問わず 1 箇所で見る」と書いてあるのに、見出しが変わると降りていた。
       **降りる分岐を戻したら赤くする。**
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def broken_identity_advisory(")
-    j = src.index(chr(10) + "def ", i + 10)
-    body = src[i:j]
+    i = product_text().index("def broken_identity_advisory(")
+    j = product_text().index(chr(10) + "def ", i + 10)
+    body = product_text()[i:j]
     assert "op を問わず" in body, "宣言が消えている（消すなら実装も直すこと）"
     # ★ **コード行だけ**を見る ── コメントに同じ文字列が在っても赤くしない
     #   （初版はここで自分の説明文に引っかかった。番人が「コードか説明か」を

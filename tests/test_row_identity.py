@@ -22,6 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 from ailine_core import row_identity as ri  # noqa: E402
+from _product_source import count_in_product, product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 HEADERS = ["取引先", "件数", "単価", "金額"]
 ROWS = [["丸和物流", 12, 4800, 57600],
@@ -84,9 +85,8 @@ def test_the_advisory_is_wired_to_every_declared_path():
       （最初は 5 箇所すべてに配って NameError を 2 回出した。呼び出し側の変数名に
        頼る書き方をやめ、渡すものを resolved 1 つに減らして直した。）
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert src.count("broken_identity_advisory(") == 5, "定義 1 + 呼び出し 4 のはず"
-    assert "broken_identity_advisory(stepsource, out_book, resolved" not in src or         src.count("broken_identity_advisory(stepsource") == 1, "FREEFORM 段に配っている"
+    assert count_in_product("broken_identity_advisory(") == 5, "定義 1 + 呼び出し 4 のはず"
+    assert "broken_identity_advisory(stepsource, out_book, resolved" not in product_text() or         count_in_product("broken_identity_advisory(stepsource") == 1, "FREEFORM 段に配っている"
 
 
 @pytest.mark.local

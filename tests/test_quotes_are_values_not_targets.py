@@ -25,6 +25,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import count_in_product, product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 H = ["取引先", "項目", "金額"]
 ROWS = [["丸和物流", "配送", 57600], ["近江スチール", "鋼材", 60000], ["合計", "", 117600]]
@@ -66,9 +67,7 @@ def test_a_name_outside_the_quotes_still_works(meta):
 
 def test_the_leak_is_sealed_at_the_junction():
     """★ 4 つの呼び出しの合流点 1 箇所で塞ぐ（呼び出し側に配らない＝片配線を作らない）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def _row_named_anywhere_in_task(")
-    seg = src[i:i + 1800]
+    seg = window_around("def _row_named_anywhere_in_task(", after=1800)
     assert "_task_outside_quotes(task)" in seg, "合流点が生の依頼文を見ている"
     assert 'text = task or ""' not in seg
 
@@ -78,12 +77,11 @@ def test_the_leak_is_sealed_at_the_junction():
 def test_the_reread_resolves_on_the_target_sheet():
     """★★ 画面で『雛形』を選んでいるのに『8月請求』の行を根拠にしていた。
        対象シートは既に 1 箇所で決まっている ── それを使う。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     # 読み直しの塊が 1 枚目を仮定していないこと
-    assert src.count('_sheet_hint = (getattr(a, "_target_sheet", None)') == 1
-    assert src.count('_sheet_h = (getattr(a, "_target_sheet", None)') == 1
-    assert '_sheet_hint = (book_meta.get("sheets") or [None])[0]' not in src
-    assert '_sheet_h = (book_meta.get("sheets") or [None])[0]' not in src
+    assert count_in_product('_sheet_hint = (getattr(a, "_target_sheet", None)') == 1
+    assert count_in_product('_sheet_h = (getattr(a, "_target_sheet", None)') == 1
+    assert '_sheet_hint = (book_meta.get("sheets") or [None])[0]' not in product_text()
+    assert '_sheet_h = (book_meta.get("sheets") or [None])[0]' not in product_text()
 
 
 # --- ③ 見出しの無い列を「『』」と出さない ------------------------------------------------

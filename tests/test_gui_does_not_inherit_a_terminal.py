@@ -20,6 +20,7 @@
 import importlib.util
 import sys
 from pathlib import Path
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 REPO = Path(__file__).resolve().parent.parent
 SERVER_PY = REPO / "gui" / "server.py"
@@ -76,6 +77,5 @@ def test_the_gate_itself_is_untouched():
 
     ★ 「画面が固まらない」を、関所を外すことで達成していないか見る。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert "except EOFError:" in src
-    assert "上書きしますか？" in src
+    assert "except EOFError:" in product_text()
+    assert "上書きしますか？" in product_text()

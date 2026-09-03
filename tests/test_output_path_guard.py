@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ailine  # noqa: E402
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
+from _product_source import count_in_product, product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _book(tmp_path, name="売上.xlsx"):
@@ -38,10 +39,9 @@ def _book(tmp_path, name="売上.xlsx"):
 
 def test_out_path_has_one_implementation():
     """④ 4 箇所が同じ形を書き写していた ── 畳んだことを構造で縛る。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert src.count('with_name(book.stem + ".out"') <= 1, \
+    assert count_in_product('with_name(book.stem + ".out"') <= 1, \
         ".out の場所を決める式が複数ある（書き写し）"
-    assert "def out_book_path(" in src, "共通の実装が無い"
+    assert "def out_book_path(" in product_text(), "共通の実装が無い"
 
 
 def test_refuses_when_a_human_file_sits_at_the_output_path(tmp_path, monkeypatch, capsys):

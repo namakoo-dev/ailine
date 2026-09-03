@@ -35,6 +35,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 HEADERS = ["取引先", "項目", "金額"]
 ROWS = [["丸和物流", "配送", 57600], ["近江スチール", "鋼材", 60000],
@@ -146,9 +147,7 @@ def test_a_real_name_is_still_found(meta):
 
 def test_the_numeric_guard_is_at_the_junction():
     """★ 4 つの呼び出しの合流点に置く（呼び出し側に配らない）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def _row_named_anywhere_in_task(")
-    seg = src[i:i + 2600]
+    seg = window_around("def _row_named_anywhere_in_task(", after=2600)
     assert "_is_number_like(v)" in seg, "合流点で数を弾いていない"
 
 

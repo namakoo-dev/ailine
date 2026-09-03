@@ -29,6 +29,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _ops_in_prompt() -> set:
@@ -95,10 +96,9 @@ def test_the_unreachable_ones_are_exactly_the_ones_we_know_about():
 def test_the_machine_rereads_actually_exist():
     """★ 上の免除表が**口約束になっていない**こと ── 読み直しが本当に在るかを見る。
        在っても鳴らない、の逆（無いのに在ると書く）を塞ぐ。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     assert REACHED_BY_MACHINE_REREAD, "読み直しで届く op の表が空（★ 空だと黙る）"
     for op in REACHED_BY_MACHINE_REREAD:
-        assert f'plan = [{{"op": "{op}"' in src or f"'op': '{op}'" in src, (
+        assert f'plan = [{{"op": "{op}"' in product_text() or f"'op': '{op}'" in product_text(), (
             f"{op} は『読み直しで拾う』と書いてあるが、読み直しが見つからない")
 
 

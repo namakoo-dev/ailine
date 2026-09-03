@@ -23,9 +23,16 @@ SRC = REPO / "src"
 
 
 def product_files() -> list:
-    """製品コードの .py を全部（本体 + ailine_core の全モジュール）。"""
+    """製品コードの .py を全部（本体 ＋ ailine_core ＋ ★ GUI）。
+
+    ★ GUI を含める理由（2026-09-04）: 初版は src/ だけを見ていたため、
+      `gui/server.py` にしか無い文字列を数えると **0 件**になり、
+      「1 箇所だけ」の契約が「どこにも無い」と誤判定された。
+      ★ 画面も製品の一部 ── 出荷されるコードは src/ だけではない。
+    """
     files = [SRC / "ailine" / "__init__.py"]
     files += sorted(p for p in (SRC / "ailine_core").rglob("*.py"))
+    files += sorted((REPO / "gui").glob("*.py"))
     return files
 
 
@@ -53,3 +60,12 @@ def window_around(anchor: str, after: int = 4000, before: int = 0) -> str:
     text = hits[0].read_bytes().decode("utf-8")
     i = text.index(anchor)
     return text[max(0, i - before): i + after]
+
+def product_text() -> str:
+    """製品コード全体を 1 つの文字列として返す（★ 「どこかに在るか」を見る用）。
+
+    ★ 使い分け: `X in product_text()` は「製品のどこかに在る」を見る。
+      **位置は見ない** ── ファイルが連結されているので、`.index()` で切った窓は
+      ファイル境界をまたぐ。窓が要るときは `window_around()` を使うこと。
+    """
+    return chr(10).join(p.read_bytes().decode("utf-8") for p in product_files())

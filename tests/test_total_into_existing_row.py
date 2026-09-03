@@ -24,6 +24,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 HEADERS = ["取引先", "件数", "単価", "金額"]
 ROWS = [["丸和物流", 12, 4800, 57600], ["ヤマノ食品", 28, 1500, 42000]]
@@ -125,10 +126,8 @@ def test_the_run_is_declared_as_a_single_cell_write(tmp_path):
          ・末尾に新しい行を足すはずが、既存の行の値を 1 件書き換えました
        ★ 直しは op の宣言ではなく、**その回の引数**で外す（位置がずれる回に
          位置ベースの前提を外すのと同じ形）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("_writes = write_target.writes")
-    seg = src[i:i + 700]
+    seg = window_around("_writes = write_target.writes", after=700)
     assert 'get("_at_row")' in seg and "WRITE_NEW_ROW_AT_END" in seg, seg[:300]
     assert "WRITE_SINGLE_CELL" in seg, seg[:300]
-    j = src.index('{"single_cell": (_op_writes(op, WRITE_SINGLE_CELL)')
-    assert '_at_row' in src[j:j + 200], src[j:j + 200]
+    j = product_text().index('{"single_cell": (_op_writes(op, WRITE_SINGLE_CELL)')
+    assert '_at_row' in product_text()[j:j + 200], product_text()[j:j + 200]

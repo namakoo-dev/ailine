@@ -22,6 +22,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 META = {"sheets": ["売上"], "headers": {"売上": ["商品", "売上", "原価"]},
          "header_rows": {"売上": 1}}
@@ -83,9 +84,8 @@ def test_codegen_appends_the_move_in_one_place():
 
 def test_no_op_specific_wiring_for_the_move():
     """② codegen に op 名で分けた移動のコードが無いこと（横断層 1 箇所で足す）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     # ★ コメントは数えない（説明は何度書いてもよい）。**生成する Call は 1 箇所だけ**。
-    calls = [l for l in src.splitlines()
+    calls = [l for l in product_text().splitlines()
               if "MoveColumnTo" in l and not l.lstrip().startswith("#")]
     assert len(calls) == 1, f"移動の配線が 2 箇所以上ある: {calls}"
 

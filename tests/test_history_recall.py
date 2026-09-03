@@ -23,6 +23,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import count_in_product, product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _h(task, ok, op, ts, **extra):
@@ -97,9 +98,8 @@ def test_history_entry_carries_plan_steps():
 
 def test_all_result_sites_record_the_op():
     """★ 同じ result dict を 4 箇所が組んでいる（片配線の温床）── 全部に載っていること。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    dsl_sites = src.count('"path": "dsl", "command": confirm.line')
-    with_op = src.count('"op": op,')
+    dsl_sites = count_in_product('"path": "dsl", "command": confirm.line')
+    with_op = count_in_product('"op": op,')
     assert dsl_sites == 3, f"dsl の組み立てが 3 箇所でない（{dsl_sites}）── 検体の前提が古い"
     assert with_op >= 3, f"op を載せていない組み立てが残っている（{with_op}/3）"
-    assert '"op": "PLAN"' in src, "plan 経路に op が無い"
+    assert '"op": "PLAN"' in product_text(), "plan 経路に op が無い"

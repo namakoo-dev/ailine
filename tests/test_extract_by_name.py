@@ -21,6 +21,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 ROWS = [["商品", "売上", "原価"], ["りんご", 1200, 700],
          ["みかん", 800, 300], ["ぶどう", 1500, 900], ["青りんご", 300, 100]]
@@ -200,7 +201,6 @@ def test_a_condition_request_is_never_stolen_by_the_named_extraction_reread():
        **名指しの抽出**として横取りしかねない。比較語が在る依頼には触らない。"""
     assert ailine.extract_cmp_from_task("原価が500以上の行を抜き出して") == "gte"
     assert ailine.extract_cmp_from_task("みかんの行とりんごの行だけを抽出して") is None
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("_re_extract_ask.search(a.task")
-    assert "extract_cmp_from_task(a.task) is None" in src[i:i + 400], \
+    i = product_text().index("_re_extract_ask.search(a.task")
+    assert "extract_cmp_from_task(a.task) is None" in product_text()[i:i + 400], \
         "名指しの読み直しが、比較語のある依頼まで拾う形になっている"

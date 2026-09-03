@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 import ailine                                        # noqa: E402
 from ailine_core.filetypes import RUN_SUPPORTED_SUFFIXES   # noqa: E402
+from _product_source import window_around, product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def test_an_unsupported_suffix_is_refused_before_reading(tmp_path, capsys):
@@ -75,19 +76,19 @@ def test_the_gate_is_not_wired_into_undo():
       **undo も通る場所**なので、壊れた形式のブックが復元できなくなる。
       2026-08 の盲検所見「全形式に広げよう」を却下した理由そのもの。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def _cmd_undo_body(")
-    j = src.index("\ndef ", i + 10)
-    assert "refuse_if_run_cannot_handle" not in src[i:j], (
+    # ★ 窓はファイルをまたがない（window_around が anchor の在るファイルだけを切る）
+    seg = window_around("def _cmd_undo_body(", after=4000)
+    seg = seg[:seg.index(chr(10) + "def ", 10)] if (chr(10) + "def ") in seg[10:] else seg
+    assert "refuse_if_run_cannot_handle" not in seg, (
         "undo に形式の関所が掛かっている ── 命綱が塞がる")
-    # ★ 呼ばれているのは 1 箇所だけ（定義を除く）
-    calls = [m for m in re.finditer(r"refuse_if_run_cannot_handle\(", src)]
+    # ★ 呼ばれているのは 1 箇所だけ（定義を除く）── 製品コード全体で数える
+    calls = [m for m in re.finditer(r"refuse_if_run_cannot_handle\(", product_text())]
     assert len(calls) == 2, f"定義 1 + 呼び出し 1 のはず（実際 {len(calls)}）"
 
 
 def test_the_help_no_longer_promises_ods():
     """★ 約束と実体を合わせる ── help が .ods を約束したままだと、また嘘になる。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    src = product_text()   # ★ 同上（help の定義がどこへ移っても追う）
     hits = list(re.finditer(r'help="対象の文書 \(([^)]*)\)', src))
     # ★ 分母を先に確かめる（2026-09-03）: マッチ 0 件だとループが 1 回も回らず、
     #   help の文言が変わっただけで黙って通る ──「回らないループ」の形。

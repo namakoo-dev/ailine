@@ -27,6 +27,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 # ★ 3 つとも別世界の表（在庫・名簿・献立）。同じ規則が効くことを見る。
 TABLES = {
@@ -164,10 +165,9 @@ def test_the_anchor_names_are_never_written_as_values(tmp_path):
 def test_the_gate_is_built_from_declarations_not_op_names():
     """★★ 実測: 同じ依頼文で INSERT_ROWS / CLARIFY / EXTRACT を返し分ける。
        op 名を数え上げても必ず漏れる ── 宣言で門を作る。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert '_reread_ops = (' not in src, "op 名の列挙が残っている"
-    i = src.index("def _already_places_a_row(st):")
-    seg = src[i:i + 1600]
+    assert '_reread_ops = (' not in product_text(), "op 名の列挙が残っている"
+    i = product_text().index("def _already_places_a_row(st):")
+    seg = product_text()[i:i + 1600]
     # ★ 2026-08-29: 条件を「行をずらす**かつ**末尾に置く」から「**新しい行に中身を置く**」
     #   の 1 点に絞った ── 合計行のようにずらさずに置く op（APPEND_TOTAL）が素通りして
     #   いたため（Namakoo の通しで実測: 「件数の合計も合計行に入れて」が行追加に化けた）。
@@ -177,9 +177,7 @@ def test_the_gate_is_built_from_declarations_not_op_names():
 
 def test_the_verb_list_is_gone():
     """★ 『追加/足し/入れ』の列挙が戻ったら、また別の動詞で漏れる。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def insert_rows_should_have_been_add_row(")
-    seg = src[i:i + 2600]
+    seg = window_around("def insert_rows_should_have_been_add_row(", after=2600)
     assert '"追加" in text or "足し" in text' not in seg, "動詞の列挙が戻っている"
 
 
@@ -246,10 +244,9 @@ def test_a_genuine_compound_is_not_refused():
 
 def test_the_gate_runs_before_anything_is_applied():
     """★ 当て物でなく**関所**であること（畳めなかった回に、壊す前に止まる）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("if (_dup := too_many_placements(plan)):")
-    j = src.index("if len(plan) == 1:", i)
-    assert j > i and "return 3" in src[i:j], src[i:i + 300]
+    i = product_text().index("if (_dup := too_many_placements(plan)):")
+    j = product_text().index("if len(plan) == 1:", i)
+    assert j > i and "return 3" in product_text()[i:j], product_text()[i:i + 300]
 
 
 # --- 値に助詞は入らない（文法の線で弾く）-----------------------------------------------
@@ -361,9 +358,7 @@ def test_the_anchor_is_never_written_even_when_the_llm_offers_nothing_else(tmp_p
 
 def test_the_sieve_is_on_the_path_every_add_row_takes():
     """★ 経路が増えても篩が外れない形になっていること（片配線の再演を止める）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index('if (_st or {}).get("op") != "ADD_ROW":')
-    seg = src[max(0, i - 700):i + 500]
+    seg = window_around('if (_st or {}).get("op") != "ADD_ROW":', after=500, before=700)
     assert "for _st in plan:" in seg, seg[:300]
     assert "add_row_values_from_request(" in seg, seg[-300:]
 

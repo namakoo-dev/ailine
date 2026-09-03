@@ -26,6 +26,7 @@ import ailine  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _book(tmp_path: Path, first: str) -> Path:
@@ -153,11 +154,10 @@ def test_every_write_path_goes_through_the_lock_gate():
     ★ 「1 本で N 経路を縛る」と docstring が宣言している以上、**N を数える側**が要る。
       新しい口（今回の redo）を足した時に、配線忘れがここで赤くなる。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     for fn in ("_cmd_undo_body", "cmd_redo"):
-        i = src.index(f"def {fn}(")
-        j = src.index(chr(10) + "def ", i + 10)
-        assert "refuse_if_locked" in src[i:j], f"{fn} がロックの関所を通っていない"
+        i = product_text().index(f"def {fn}(")
+        j = product_text().index(chr(10) + "def ", i + 10)
+        assert "refuse_if_locked" in product_text()[i:j], f"{fn} がロックの関所を通っていない"
 
 
 def test_a_broken_shelf_item_is_refused(tmp_path, monkeypatch):
@@ -177,10 +177,9 @@ def test_a_broken_shelf_item_is_refused(tmp_path, monkeypatch):
 
 def test_the_command_takes_the_run_lock():
     """⑥ 原本を書き換えるので run と同じロックを取る（undo と同じ作法）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def cmd_redo(")
-    j = src.index("\ndef ", i + 10)
-    assert "under_run_lock" in src[i:j], "redo が実行ロックを取っていない"
+    i = product_text().index("def cmd_redo(")
+    j = product_text().index("\ndef ", i + 10)
+    assert "under_run_lock" in product_text()[i:j], "redo が実行ロックを取っていない"
 
 
 def test_the_cli_exposes_redo(tmp_path, monkeypatch, capsys):

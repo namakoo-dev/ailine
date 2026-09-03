@@ -27,6 +27,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 ROWS = [["取引先", "件数", "担当"], ["丸和物流", 10, "田中"], ["ヤマノ食品", 20, "鈴木"],
          ["北斗精機", 30, ""], ["ヤマノ食品", 40, ""]]
@@ -179,18 +180,15 @@ def test_a_request_without_a_quoted_value_is_never_stolen():
 
 def test_a_conditional_request_is_never_stolen():
     """★ 「原価が500以上の…に『◎』を付けて」は 1 行ではない ── 比較語で止める。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("if not _reread_done and plan_writes_beyond_one_cell(plan):")
-    assert "extract_cmp_from_task(a.task) is None" in src[i:i + 900], \
+    i = product_text().index("if not _reread_done and plan_writes_beyond_one_cell(plan):")
+    assert "extract_cmp_from_task(a.task) is None" in product_text()[i:i + 900], \
         "1 セルの読み直しが、条件つき書換の依頼まで拾う形になっている"
 
 
 def test_pointing_at_a_row_never_falls_back_to_the_whole_column():
     """★★ この repo で一番効いた形の再演: 落とせなかったら**断る**。
        ここを『列全体を書く』に戻すと、依頼を見ない ✓ が復活する。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("if _points and not _one_cell:")
-    seg = src[i:i + 1200]
+    seg = window_around("if _points and not _one_cell:", after=1200)
     # ★ 2026-08-29: 行き止まりの断りから「選べる形」に変えた（文言も変わった）。
     #   守っている不変は同じ ── **列全体には落とさない**。
     assert "列全体は勝手に書き換えません" in seg and "return 3" in seg, seg[:300]

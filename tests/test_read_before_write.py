@@ -26,6 +26,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _fresh_env(tmp_path):
@@ -62,10 +63,9 @@ def _book(tmp_path, name="b.xlsx"):
 
 def test_the_run_command_takes_a_fixed_op():
     """★ 画面の「選び直す」はこの旗を通る ── 旗が消えたら画面の道も消える。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert 'r.add_argument("--op"' in src, "--op が無い"
-    i = src.index('forced_op = getattr(a, "op", None)')
-    seg = src[i:i + 1400]
+    assert 'r.add_argument("--op"' in product_text(), "--op が無い"
+    i = product_text().index('forced_op = getattr(a, "op", None)')
+    seg = product_text()[i:i + 1400]
     assert "translate_task_fixed_op" in seg, "固定 op が第二段へ配線されていない"
     assert "OP_SCHEMA" in seg, "実在しない op 名を弾いていない"
 
@@ -85,9 +85,8 @@ def test_an_unknown_op_is_refused(tmp_path):
 def test_the_dry_path_never_reaches_the_apply_step():
     """★ 素の環境（LLM 無し）でも見られる分。翻訳まで行かなくても、`--dry` が
        適用の手前で返す形になっていることは、コードの側から確かめられる。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert 'r.add_argument("--dry"' in src
-    assert "getattr(a, \"dry\", False)" in src or "a.dry" in src, "--dry を見ていない"
+    assert 'r.add_argument("--dry"' in product_text()
+    assert "getattr(a, \"dry\", False)" in product_text() or "a.dry" in product_text(), "--dry を見ていない"
 
 
 @pytest.mark.local
@@ -117,17 +116,14 @@ def test_a_dry_read_does_not_touch_the_file(tmp_path):
 def test_a_forced_op_skips_every_reread():
     """★★ 画面に「こう読みました」と出したあとで別の op に化けたら、その表示は嘘になる。
        読み直しの層は**印 1 つ**で丸ごと止める（層が増えても止まり続ける）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert '_reread_done = bool(getattr(a, "_forced_op", None))' in src, \
+    assert '_reread_done = bool(getattr(a, "_forced_op", None))' in product_text(), \
         "固定 op のときに読み直しを止めていない"
 
 
 def test_pointing_at_one_row_with_a_column_wide_op_is_refused():
     """★ ④: 人が『一括書換』を選んでも、依頼が 1 行を指しているなら断る
        （画面に出した読みと結果が食い違う唯一の道を塞ぐ）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index('forced_op = getattr(a, "op", None)')
-    seg = src[i:i + 1600]
+    seg = window_around('forced_op = getattr(a, "op", None)', after=1600)
     assert "plan_writes_beyond_one_cell" in seg and "task_points_at_one_row" in seg, seg[:400]
     assert "1セル書換" in seg, "選び直す先を名指ししていない"
 
@@ -197,9 +193,7 @@ def test_choices_are_machine_readable_and_describe_the_effect():
 def test_the_one_cell_vs_whole_column_refusal_offers_both():
     """★★ ここは**本物の 2 択**が残っている唯一の場所（1 セルか、列ぜんぶか）。
        行き止まりの断りにせず、両方を候補として出していること。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("列全体は勝手に書き換えません")
-    seg = src[i:i + 900]
+    seg = window_around("列全体は勝手に書き換えません", after=900)
     assert "render_choices(" in seg, seg[:300]
     assert "SET_CELL_VALUE" in seg and "SET_COLUMN_VALUE" in seg, seg[:400]
 
