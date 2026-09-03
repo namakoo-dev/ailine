@@ -28,6 +28,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 from ailine_core import report_group as rg  # noqa: E402
+from _product_source import window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 class _Ph:
@@ -217,9 +218,7 @@ def test_a_horizontal_merge_is_left_alone(tmp_path):
 def test_the_postcondition_is_routed_by_the_declaration_not_the_op_name():
     """★ `_groups` が在れば別の証明を使う ── 1 つの関数に混ぜると、片方の分岐が
        恒真でも全体は緑に見える。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def _check_report_router(")
-    seg = src[i:i + 900]
+    seg = window_around("def _check_report_router(", after=900)
     assert 'args.get("_groups")' in seg and "check_report_per_group" in seg, seg[:300]
     assert ailine.POSTCONDITIONS["REPORT_PER_ROW"] is ailine._check_report_router
 

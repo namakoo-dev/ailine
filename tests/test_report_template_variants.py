@@ -25,6 +25,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 DATA = [["取引先", "金額", "担当"], ["丸和物流", 57600, "田中"], ["近江スチール", 60000, "佐藤"]]
 
@@ -135,8 +136,6 @@ def test_a_missing_declared_sheet_is_still_caught(tmp_path):
 
 def test_the_orphan_check_reads_the_before_book():
     """★ 分母が入力側から来ていること（出力側から作り直すと恒真に戻る）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("declared_sheet_names = {rr[")
-    seg = src[i:i + 1800]
+    seg = window_around("declared_sheet_names = {rr[", after=1800)
     assert "before_sheets" in seg and "BookView(source_book)" in seg, seg[:400]
     assert "born = set(bv.sheetnames) - before_sheets" in seg, seg[:400]

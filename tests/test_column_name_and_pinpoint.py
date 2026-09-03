@@ -25,6 +25,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 H = ["取引先", "項目", "件数", "単価", "金額", "締め日", "担当"]
 
@@ -58,9 +59,7 @@ def test_the_name_reaches_the_interpretation_line():
 
 def test_the_request_beats_the_invented_label():
     """★★ 変異試験: 依頼文の名前を、道具が作る「税込〜」より先に見ること。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index('if not resolved.get("target"):')
-    seg = src[i:i + 900]
+    seg = window_around('if not resolved.get("target"):', after=900)
     j_asked = seg.index("new_column_name_from_task")
     j_tax = seg.index("_TAX_INCLUSIVE_RE")
     assert j_asked < j_tax, "作った名前のほうが先に当たっている"
@@ -136,8 +135,6 @@ def test_the_column_letter_in_the_request_beats_the_llm(book):
 def test_the_check_looks_at_the_coordinate_not_the_old_name():
     """★ 見出しを書き換えると、その列は**元の名前で引けなくなる**。
        実測で「列『税込み金額』が見つからない」と落ちた（書き込みは成功していたのに）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def check_set_cell_value(")
-    seg = src[i:i + 3000]
+    seg = window_around("def check_set_cell_value(", after=3000)
     assert '_writes_header' in seg and '_col_index' in seg, "検算が名前で引いたまま"
     assert "_scan_from" in seg, "見出し行が「変わったセル」の数え上げに入っていない"

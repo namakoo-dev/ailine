@@ -20,6 +20,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import count_in_product, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def test_the_default_reason_still_talks_about_rows():
@@ -39,14 +40,11 @@ def test_the_swap_reason_talks_about_columns_not_rows():
 
 def test_the_swap_check_uses_the_column_reason():
     """★ 変異試験: 入れ替えの断り文に、行の理由が混ざらないこと。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("を入れ替えたあと、式の計算結果が変わっています")
-    seg = src[i:i + 500]
+    seg = window_around("を入れ替えたあと、式の計算結果が変わっています", after=500)
     assert "why=" in seg, "入れ替えが既定の（行の）理由をそのまま使っている"
     assert "二列にまたがる合計" in seg, seg[:300]
 
 
 def test_the_note_is_still_assembled_in_one_place():
     """★ 理由を差し替えられるようにしたせいで、並べ方が写し取られていないこと。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert src.count("（ほか {len(disclosures) - 5} 件）") == 1
+    assert count_in_product("（ほか {len(disclosures) - 5} 件）") == 1

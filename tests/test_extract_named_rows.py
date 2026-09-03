@@ -30,17 +30,17 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import count_in_product  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 # --- ① 検算は「見えている値」と比べる -----------------------------------------------------
 
 def test_the_check_compares_what_is_shown_not_the_formula_text():
     """★ 変異試験: 元セルが式なら、比べる相手はキャッシュ値。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert src.count("def _row_as_shown(") == 1
+    assert count_in_product("def _row_as_shown(") == 1
     # 抽出と重複除去の両方がその関数を通ること（片配線を作らない）
     # 定義 1 + 呼び出し 2（抽出と重複除去）── 片方だけ直さない
-    assert src.count("_row_as_shown(") == 3, "片方だけが計算結果と比べている"
+    assert count_in_product("_row_as_shown(") == 3, "片方だけが計算結果と比べている"
 
 
 def test_a_formula_row_is_read_as_its_value(tmp_path):

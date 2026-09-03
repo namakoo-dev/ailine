@@ -25,6 +25,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _product_source import count_in_product, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 HEADERS = ["取引先", "金額"]
 DATA = [["丸和物流", 57600], ["近江スチール", 60000], ["北斗精機", 114000]]
@@ -138,9 +139,8 @@ def test_a_wrong_order_still_fails(tmp_path):
 
 
 def test_the_end_row_reaches_every_denominator():
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     # 検算の後ろ側と前側の両方で使われていること
-    assert src.count('args.get("_sort_end_row")') >= 2, "分母の片側にしか配っていない"
+    assert count_in_product('args.get("_sort_end_row")') >= 2, "分母の片側にしか配っていない"
 
 
 def test_the_disclosure_actually_reaches_the_screen():
@@ -157,9 +157,8 @@ def test_the_disclosure_actually_reaches_the_screen():
     for op in sorted(setters):
         keys = {k for _label, k, _fn in ailine._CONFIRM_FIELDS[op]}
         assert "_skip_label" in keys, f"{op} の解釈行に『対象から外した行』が無い"
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
     # ★ 作る側と見せる側の数が合っていること（片方だけ増やす事故を止める）
-    assert src.count('resolved["_skip_label"] = ') == len(setters)
+    assert count_in_product('resolved["_skip_label"] = ') == len(setters)
 
 
 # --- ★ 列の入れ替えで合計行の見出しが動く（言うだけ・挙動は変えない）--------------------
@@ -174,8 +173,6 @@ def test_a_column_swap_names_the_total_label_as_a_likely_cause():
     ★ 挙動は 1 ビットも変えない ── 心当たりを名指しするだけ。
       Excel でも同じことが起きるので、直すより**言う**のが正しい。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("1 列目が空のため走査がそこで止まり")
-    seg = src[max(0, i - 900):i + 600]
+    seg = window_around("1 列目が空のため走査がそこで止まり", after=600, before=900)
     assert '_axis") or "") == "column"' in seg, "軸を見ていない（行の操作でも出てしまう）"
     assert "合計行の見出しが 1 列目に在ると" in seg, "心当たりを言っていない"
