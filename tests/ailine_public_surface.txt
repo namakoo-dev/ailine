@@ -366,7 +366,32 @@ def _used_extent(ws) -> 'tuple'
 def _used_range(before: 'dict', sheet: 'str') -> 'tuple | None'
 def _utc_ts() -> 'str'
 def _value_changed_cells(before: 'dict', after: 'dict') -> 'list'
+def _verify_add_column(resolved, inferred, book_meta, task, sheets, headers)
+def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op)
+def _verify_aggregate(resolved, inferred, first_sheet, resolve_in)
+def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in, args, task, vocab, headers)
+def _verify_autofit()
+def _verify_bold(resolved, inferred, first_sheet, headers, op)
+def _verify_chart(resolved, inferred, first_sheet, resolve_in, task, headers)
+def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers, op)
+def _verify_dedup(resolved, inferred, first_sheet, headers)
+def _verify_delete_column(resolved, inferred, book_meta, sheets, headers)
+def _verify_draw_borders()
+def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op)
+def _verify_extract_columns(resolved, inferred, first_sheet, book_meta, task, headers)
+def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers)
+def _verify_insert_rows(resolved, inferred, book_meta, task, sheets, op)
+def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, task, headers, op)
+def _verify_merge(resolved, inferred)
+def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in)
+def _verify_pivot(resolved, inferred, first_sheet, resolve_in)
+def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers)
+def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers, op)
+def _verify_set_column_value(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers)
+def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op)
 def _verify_sort(resolved: 'dict', inferred: 'set', first_sheet: 'str', book_meta: 'dict', resolve_in) -> 'tuple | None'
+def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in)
+def _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, headers)
 def _vocab_miss_reason(step: 'dict') -> 'str'
 def _why_output_is_unusable(path: 'Path') -> 'str | None'
 def _wrap_basic(body: 'str') -> 'str'

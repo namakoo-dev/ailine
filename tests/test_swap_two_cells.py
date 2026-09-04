@@ -243,9 +243,11 @@ def test_the_cell_reread_actually_fires_without_the_llm(tmp_path, monkeypatch, c
 def test_cells_are_resolved_before_the_row_or_column_decision():
     """★ a/b が空でも通ること ── 一段目が降りた回は a/b が無い。
        セルの解決を**行/列の判定より前**に置く（そこで確定して先へ行かない）。"""
-    i = product_text().index('elif op == "SWAP":')
-    # ★ 窓を固定長で切ると、間に足したぶんで外れる（実際に外れた）── 次の分岐まで見る。
-    seg = product_text()[i:product_text().index('elif op == "INSERT_ROWS":', i)]
+    # ★ 2026-09-04: SWAP の中身は verify_dsl_args から _verify_swap() へ切り出された。
+    #   窓を「分岐の間」で切ると**切り出した日に空になる**（実際そうなった）ので、
+    #   関数を**名前で**引く ── 名前は公開面の凍結が守っているので、移動に追随する。
+    import inspect
+    seg = inspect.getsource(ailine._verify_swap)
     assert seg.index("_cells0 = swap_targets_are_cells") < seg.index("as_col = _a in _headers_s")
     assert "if not _cells0 and (not _a or not _b):" in seg, "a/b が無い回に先に落ちる"
 

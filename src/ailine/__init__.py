@@ -3480,6 +3480,1839 @@ def _verify_sort(resolved: dict, inferred: set, first_sheet: str, book_meta: dic
     return None
 
 
+def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers, op):
+    """COMPUTE_COLUMN の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    operands = resolved.get("operands")
+    # ★ W10b 項目3: 税込み/税抜き等「1列 × 率」パターン。operands が列名1つだけの
+    #   配列なら『既存列×倍率』とみなす（2列の四則演算とは別モード）。倍率(factor)は
+    #   APPEND_TOTAL と同じ A' 原則で LLM から受け取らず機械確定する
+    #   （extract_rate_factor/lookup_vocab_factor・regex のみ）。
+    single_factor_mode = isinstance(operands, list) and len(operands) == 1
+    if not single_factor_mode and not (isinstance(operands, list) and len(operands) == 2):
+        return False, resolved, inferred, "演算対象が2つの列名になっていません"
+
+    if single_factor_mode:
+        v, was_inferred, err = resolve_col_ref(operands[0], headers.get(first_sheet, []))
+        if err:
+            return False, resolved, inferred, err
+        resolved["operands"] = [v]
+        if was_inferred:
+            inferred.add("operands")
+        if resolved.get("operator") not in ("*", "/"):
+            return False, resolved, inferred, (
+                f"演算子『{resolved.get('operator')}』は列1つの計算（税込み/税抜き等）"
+                "では * か / のみ対応です")
+
+        llm_factor_raw = resolved.pop("factor", None)
+        text_factor, text_snippet = extract_rate_factor(task)
+        vocab_factor, vocab_term = (None, None)
+        if text_factor is None:
+            vocab_factor, vocab_term = lookup_vocab_factor(task, vocab or {})
+
+        sources: dict = {}
+        if text_factor is not None:
+            resolved["factor"] = text_factor
+            sources["factor"] = f"依頼文: {text_snippet}"
+        elif vocab_factor is not None:
+            resolved["factor"] = vocab_factor
+            sources["factor"] = f"用語集: {vocab_term}"
+        else:
+            # ★ W10c 高: 依頼文に率らしい語が一切無いのに「1列×率」（税込み/税抜き専用）へ
+            #   分類されているのは、分類そのものが誤っている可能性が高い（実測: 「氏名の
+            #   列を全部『退職済み』に書き換えて」のような値の一括書き換え依頼が、税率の
+            #   話と誤認されて COMPUTE_COLUMN の単列モードに落ちることがあった）。
+            #   その場合は「倍率が分からない」でなく、分類自体を疑う文言に変える
+            #   （率を要求する op に分類されたのに率の手がかりが無い＝CLARIFY の理由を
+            #   正直に言い換える。指示は意図・保証は機械＝プロンプト側だけに頼らない）。
+            if not _RATE_SIGNAL_RE.search(task or ""):
+                return False, resolved, inferred, (
+                    f"依頼「{task}」は『{v}』列に何らかの倍率（税率等）を掛ける操作として"
+                    "解釈しましたが、依頼文に倍率らしき手がかりが見当たりません。"
+                    "列の値をそのまま書き換える操作は今のところ対応していません。"
+                    "倍率を掛ける処理であれば、依頼文に率を書く（例:「消費税10%」）か、"
+                    "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
+                )
+            # ★ 致命③(2026-08-23レビュー): 敗者復活（_resolve_tax_rescue・APPEND_TOTAL と
+            #   共有）。第一照合（上の text_factor/vocab_factor）の優先順は変えない ──
+            #   ここに来るのはその両方が外れ、かつ依頼文に率らしき語（税/込を含む）が
+            #   ある場合だけ（片配線の解消: 登録済みの税語彙で「登録してください」と
+            #   嘘をつかない）。
+            tax_factor, tax_term, tax_err = _resolve_tax_rescue("依頼", task or "", vocab)
+            if tax_factor is not None:
+                resolved["factor"] = tax_factor
+                sources["factor"] = f"用語集: {tax_term}（依頼『{task}』の税に適用）"
+            elif tax_err:
+                return False, resolved, inferred, tax_err
+            else:
+                return False, resolved, inferred, (
+                    "倍率（税率等）が分かりません。依頼文に率を書く（例:「消費税10%」）か、"
+                    "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
+                )
+        if resolved["factor"] <= 0:
+            return False, resolved, inferred, f"倍率『{resolved['factor']}』は正の数でなければなりません"
+        if sources:
+            resolved["_sources"] = sources
+        # ★ W10c 中: 新規列の見出しの自然化。旧実装は見出しを f"{op1}{operator}{factor:g}"
+        #   （例:「金額*1.1」）という数式風の文字列にしていた（査定で名指し）。target
+        #   無指定(新規列作成)かつ依頼文が税込み/税抜きと分かる言い方の場合だけ、
+        #   その日本語ラベルを見出しに使う（A' 原則: LLM を使わず正規表現の有無のみで
+        #   決める。手がかりが無ければ従来どおりの数式風見出しにフォールバック）。
+        if not resolved.get("target"):
+            # ★★ 2026-08-30: **依頼文に名前が在るなら、それが名前**（作らない）。
+            #   下の「税込〜」は、人が名前を書かなかった時だけの間に合わせ。
+            _asked = new_column_name_from_task(task, headers.get(first_sheet, []))
+            if _asked:
+                resolved["_new_col_label"] = _asked
+            elif _TAX_INCLUSIVE_RE.search(task or ""):
+                resolved["_new_col_label"] = f"税込{v}"
+            elif _TAX_EXCLUSIVE_RE.search(task or ""):
+                resolved["_new_col_label"] = f"税抜{v}"
+            elif _RATE_KEYWORD_RE.search(task or ""):
+                resolved["_new_col_label"] = f"税込{v}" if resolved["operator"] == "*" else f"税抜{v}"
+        if llm_factor_raw not in (None, ""):
+            try:
+                llm_factor = float(llm_factor_raw)
+            except (TypeError, ValueError):
+                llm_factor = None
+            if llm_factor is not None and abs(llm_factor - resolved["factor"]) > 1e-9:
+                mfactor = resolved["factor"]
+                resolved["_warnings"] = [
+                    f"LLM が返した倍率({llm_factor:g})と機械抽出の倍率({mfactor:g})が"
+                    f"食い違うため機械抽出({mfactor:g})を採用しました"
+                ]
+    else:
+        new_operands = []
+        for o in operands:
+            v, was_inferred, err = resolve_col_ref(o, headers.get(first_sheet, []))
+            if err:
+                return False, resolved, inferred, err
+            new_operands.append(v)
+            if was_inferred:
+                inferred.add("operands")
+        resolved["operands"] = new_operands
+        if resolved.get("operator") not in ("+", "-", "*", "/"):
+            return False, resolved, inferred, f"演算子『{resolved.get('operator')}』が不明です"
+    # ★ M2c: target(任意) — 依頼が既存列を名指し（「小計に」等）した場合はその列に書く。
+    #   無指定なら従来どおり新規列（codegen_dsl 側で分岐）。
+    # ★ W3: target が実在しない場合、翻訳が「新しい列の名前」（例:「利益列を作って」の
+    #   『利益』）を target と誤って埋めていることが多いと実測された（qwen2.5-coder:7b が
+    #   『既存列に書く/新規に作る』の区別を安定して守らない）。実在しない＝一意に決まらない
+    #   （複数解釈で曖昧）のとは別の理由なので、その場合だけ target を無指定として扱い
+    #   新規列作成にフォールバックする（推測で断定しない CLARIFY の原則は、真に曖昧な
+    #   ケース＝digit_candidates の複数一致にだけ残す）。
+    # ★ W3 改定(2026-08-20): 上の前提（実在しない target＝ほぼ捏造）が古くなった実測が
+    #   出た。「金額を数量×単価で埋めて」（金額列がまだ実在しない構成）で翻訳は正しく
+    #   target:"金額" を返す。だが無条件に捨てる旧実装はそれも落とし、新規列が
+    #   『数量*単価』に自動命名されていた（利用者が名前を言っているのに無視される・
+    #   2026-08-19 のデモ制作で3回踏んだ実害）。★ 依頼文を判定者にする: raw_target が
+    #   依頼文に実在する語として機械照合できるなら（単位B の name_matches_task を再利用
+    #   ── 素朴な in 判定はしない。「税込金額を…」+target「金額」のような片方向の部分
+    #   文字列の穴は単位B が塞いだ形そのものなので、同じ判定を2箇所に書かず呼ぶ）、
+    #   捏造ではなく利用者の指名とみなして新規列の名前として使う。依頼文に語が無ければ
+    #   従来どおり捏造とみなして捨てる（W3 本来の防御は生きている）。
+    if resolved.get("target"):
+        raw_target = resolved["target"]
+        v, was_inferred, err = resolve_col_ref(raw_target, headers.get(first_sheet, []))
+        if err:
+            if "一意に決まりません" in err:
+                return False, resolved, inferred, err
+            # ★ 単位B 照合の断片ガード（呼び出し側・上の _raw_target_not_embedded_in_task
+            #   docstring 参照）: raw_target は「実在するか未確認」の生の文字列なので、
+            #   name_matches_task を素通しに使う前に (1) 1文字を弾き (2) 依頼文中の全出現が
+            #   「他の複合語（実在列とは限らない）の内部」でしかないなら弾く。
+            if (len(raw_target) >= 2
+                    and _raw_target_not_embedded_in_task(raw_target, task)
+                    and name_matches_task(raw_target, task, others=headers.get(first_sheet, []))):
+                resolved["_new_col_label"] = raw_target
+            del resolved["target"]
+        elif (task_asks_to_add_a_column(task)
+                and not name_matches_task(v, task,
+                                           others=headers.get(first_sheet, []))):
+            # ★★ 2026-09-02（130 件の器を広げて初めて見えた・実測）:
+            #   「単価の右に、数量と単価をかけた**列を作って**」で、一段目が
+            #   target='メモ'（実在するが**空**の列）を返し、道具は新しい列を作らずに
+            #   **その列へ書いて ✓ を出していた**。頼んでいない場所に書いている。
+            #   ★ W3 は「**実在しない** target ＝ ほぼ捏造」を捨てる。抜けていたのは
+            #     「**実在するが、依頼文に無い**」列 ── そこだけ素通りだった。
+            #   ★ 判定に語彙の一覧は要らない: 依頼文が「作る」と言っているか
+            #     （閉じた文法）と、その名前が依頼文と機械照合できるか（既存の
+            #     provenance 層）の 2 つだけ。新しい言い回しが来ても足すものは無い。
+            #   ★ 道具は既に気づいていた（★で開示していた）── **止めていなかった**だけ。
+            del resolved["target"]          # → 新しい列を作る（自動命名 or 依頼文の名前）
+        else:
+            resolved["target"] = v
+            if was_inferred:
+                inferred.add("target")
+                # ★ W10a 項目3: 数字指定→列名解決の元の表記を残す（解釈要約の表示用・
+                #   例:「列5」→「在庫」列と解決した時、確認行の直後にその経緯を見せる）。
+                resolved["_target_raw"] = raw_target
+    # ★★ 2026-09-02: 2 項の演算（売上 − 原価）でも、依頼文の名前を拾う。
+    #   名前の抽出は**倍率の枝（税込/税抜）にしかなかった**ので、
+    #   「売上から原価を引いた**利益**の列を作って」の見出しが
+    #   『売上-原価』（式そのもの）になっていた ── A' 原則が抜けた形。
+    #   ★ 人が名前を書いていない時だけ従来どおり式風の見出しに落ちる。
+    if not resolved.get("target") and not resolved.get("_new_col_label"):
+        # ★ 見出しの一覧を**渡さずに**呼ぶ ── 「既に在る名前」も受け取りたいから。
+        _asked_c = new_column_name_from_task(task, [], require_position=False)
+        _heads_c = [str(h) for h in (headers.get(first_sheet) or [])]
+        if _asked_c and _asked_c in _heads_c:
+            # ★★ 2026-09-02（実測で捕まえた実害）: 依頼した名前が**既に在る**時、
+            #   「新しい列の名前ではない」として捨てて自動命名に落ちていた。すると
+            #   「売上から原価を引いた利益の列を作って」を 2 回実行すると、
+            #   1 回目『利益』・2 回目『売上-原価』になり、**見出しが違うので
+            #   「見出しも値も同一の列を作りました」の関所が鳴らない** ──
+            #   値がそっくり同じ列が静かに 2 本目として増え、✓ まで出た。
+            #   （盲検 operator 査定が見つけた事故「不安でもう一回実行」の再来）
+            #   ★ 意味で考えても、これは「作る」ではなく「**もう在る**」。
+            #     その列を計算し直す依頼と読み、既存の**上書きの関所**に載せる
+            #     ── 新しい関所も新しい終了コードも作らない。
+            resolved["target"] = _asked_c
+        elif _asked_c:
+            resolved["_new_col_label"] = _asked_c
+    return None
+
+
+def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, task, headers, op):
+    """LOOKUP_FILL の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := check_sheet("target_sheet")):
+        return False, resolved, inferred, err
+    if (err := check_sheet("source_sheet")):
+        return False, resolved, inferred, err
+    # ★ 挙動変更#2: 旧実装はここで「対象シートは1枚目のみ対応しています」と拒否していた
+    #   （散在した『1枚目固定』の一つ・査定の致命そのもの）。LOOKUP_FILL は元々
+    #   target_sheet を自分の必須 slot として名前で受け取り check_sheet で実在確認まで
+    #   済ませているので、この制限を外すだけで対応できる。resolved["_target_sheet"] は
+    #   LOOKUP_FILL 自身の target_sheet を正とする（他 op 用の一般解決 first_sheet より
+    #   こちらを優先 — 依頼文に転記先/参照元の2シート名が両方出て一般解決が曖昧に
+    #   フォールバックしていても、LOOKUP_FILL のここでの解決は影響を受けない）。
+    resolved["_target_sheet"] = resolved["target_sheet"]
+    # ★★ 塊③(2/2)・中核 op 致命2（2026-08-24 の盲検）:
+    #   書き手（VLookupFromTable）は参照表の**列1（2 番目の列）を値**と決め打ちし、
+    #   検算（check_lookup_fill）も同じ決め打ちで期待値を作る ── やる側と見る側が
+    #   同じ思い込みを共有しているので必ず一致する（恒真）。
+    #   実測: マスタ = 商品/区分/**単価**（3 列目）で「単価を転記して」と頼むと、
+    #   **単価の列に「果物」が入って ✓** が出た。数値であるべき列に文字列が入る。
+    #   ★ 商品コード/商品名/単価 のような 3 列マスタは実務でごく普通。
+    #   → 書く**前**に前提を照合する: 頼まれた列名が参照表の 2 列目でなければ断る。
+    #   ★ 見出しが読めない参照表では断らない（根拠が無い時に止めない）。
+    #   ★ 断らずに**開示する**理由（実測で 1 度誤爆した）:
+    #     事故の形   マスタ=[商品,区分,単価] → 2 列目は「区分」
+    #     正しい依頼 明細  =[商品,数量,単価] → 2 列目は「数量」
+    #     どちらも「2 列目 ≠ 頼まれた列」で、**列の位置だけでは区別できない**。
+    #     断ると正しい依頼まで止める（既存検体で実証）。判定は変えず、
+    #     何が書かれるかを名指しして ✓ を △ に降ろす（決裁③の機構に乗せる）。
+    _src_headers = list((book_meta.get("headers") or {}).get(resolved["source_sheet"], []))
+    _want = resolved.get("target_col")
+    if len(_src_headers) > 2 and isinstance(_want, str) and _want in _src_headers:
+        _at = _src_headers.index(_want) + 1
+        if _at != 2:
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"参照表『{resolved['source_sheet']}』では『{_want}』が {_at} 列目ですが、"
+                f"この転記は 2 列目を値として読む仕組みです（1 列目がキー・2 列目が値）。"
+                f"実際に書き込まれるのは『{_src_headers[1]}』の値です ── "
+                f"意図と違う場合は、キーと『{_want}』だけの表を用意してください"]
+    # ★ W10c 致命2: target_col は COMPUTE_COLUMN の target と違い OP_SCHEMA 上は必須
+    #   slot なので、LLM は「存在しないなら空にする」を選べない。実測（監査再現）:
+    #   対象シートに『単価』列がまだ無いのに転記を頼むと、LLM がそれと無関係な
+    #   *実在する*既存列（例:「数量」）の名前を代わりに返すことがある。resolve_col_ref
+    #   は実在列名なら無条件で素通しするため、これだけでは見分けられない（そのまま
+    #   進めると「数量」が確認なしで上書きされる事故になる）。
+    #   ここでは「実在するから信用する」をやめ、根拠を要求する:
+    #   ①依頼文にその列名が書かれている ②転記元（source_sheet）の値列
+    #   （VLookupFromTable ヘルパの仕様どおり常に列1＝2番目の列）と同じ名前
+    #   のどちらかが無いと、実在列であっても信用しない。
+    target_headers = headers.get(resolved["target_sheet"], [])
+    source_headers = headers.get(resolved["source_sheet"], [])
+    value_col_hint = source_headers[1] if len(source_headers) > 1 else None
+    raw_target_col = resolved.get("target_col")
+    raw_str = str(raw_target_col) if raw_target_col not in (None, "") else ""
+    exists = raw_str in target_headers
+    mentioned = bool(raw_str) and raw_str in task
+    matches_value_col = value_col_hint is not None and raw_str == value_col_hint
+
+    if exists and (mentioned or matches_value_col):
+        pass   # 根拠つきで実在列を指名＝そのまま使う（上書き注意は破壊の関所が別途担当）
+    elif not exists:
+        cands = _digit_candidates(raw_str, target_headers)
+        if len(cands) == 1:
+            resolved["target_col"] = cands[0]   # 数字表記の推定は従来どおり許容
+            inferred.add("target_col")
+        elif mentioned:
+            # ★ 依頼文にも同じ列名が書かれている＝新規作成が正しい解釈（COMPUTE_COLUMN の
+            #   target 無指定＝新規列と同じ考え方）。target_col はそのまま残し、
+            #   codegen_dsl 側で新規列として作る。
+            pass
+        else:
+            known = ", ".join(target_headers) if target_headers else "(無し)"
+            return False, resolved, inferred, (
+                f"転記先の列『{raw_target_col}』が『{resolved['target_sheet']}』シートに"
+                f"見つかりません。ある列: {known}。新しい列として作る場合は、依頼文に"
+                f"その列名を書いてください（例:「{raw_target_col}という列を作って転記して」）"
+            )
+    else:
+        # ★ 実測の事故そのもの: exists=True だが根拠が無い（依頼文にも書かれておらず、
+        #   転記元の値列とも一致しない）＝上書き対象を取り違えている可能性が高い。
+        hint = f"（参照表『{resolved['source_sheet']}』の値の列は『{value_col_hint}』です）" \
+            if value_col_hint else ""
+        return False, resolved, inferred, (
+            f"転記先の列『{raw_target_col}』は実在しますが、依頼文にその列名が見当たらず、"
+            f"転記元の値とも対応が確認できません{hint}。上書き対象を取り違えている"
+            "可能性があるため、意図した列名を依頼文に明記してください"
+        )
+    if (err := resolve_in("key_col", resolved["target_sheet"])):
+        return False, resolved, inferred, err
+    return None
+
+
+def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in, args, task, vocab, headers):
+    """APPEND_TOTAL の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := resolve_in("col", first_sheet)):
+        return False, resolved, inferred, err
+    # ★ W6: label は既定値を持つ任意項目。ここで確定させ、codegen/事後条件/
+    #   確認行の全部に同じ既定解決を一貫して渡す。
+    resolved["label"] = str(resolved.get("label") or "合計")
+    label = resolved["label"]
+
+    # ★★ 2026-08-29（Namakoo が実測）: 合計行が**既に在る**表で「単価列の合計行に
+    #   単価の合計を書いて」と頼むと、10 行目に『単価合計』という**別の行**が増えた。
+    #   ★ 真因: 合計行を「データ行」と数えて、その下に足していた。
+    #   ★ 合計行が 1 つに決まり、その列がまだ空なら、**その行に書く**（行は増やさない）。
+    #     判定は既存の凍結規則を借りる（total_rows_in → row_has_total_word）──
+    #     ここで新しい規則を書かない。同じことを 2 箇所が決めると必ずずれる。
+    _tot_sheet = resolved.get("_target_sheet") or first_sheet
+    _tot_hr = int((book_meta.get("header_rows") or {}).get(_tot_sheet, 1) or 1)
+    _tot_rows = total_rows_in(book_meta, _tot_sheet, _tot_hr)
+    if len(_tot_rows) == 1:
+        _tr = _tot_rows[0]
+        _theads = [str(h) for h in ((book_meta.get("headers") or {}).get(_tot_sheet) or [])]
+        _tidx = _theads.index(resolved["col"]) + 1 if resolved["col"] in _theads else 0
+        _cur = None
+        if _tidx:
+            try:
+                with BookView(Path(book_meta["path"])) as _bv:
+                    _cur = _bv.sheet(_tot_sheet).cell(row=_tr, column=_tidx).value
+            except Exception:
+                _tidx = 0
+        if _tidx and (_cur in (None, "") or str(_cur).startswith("=SUM(")):
+            resolved["_at_row"] = _tr
+            resolved["_at_basis"] = f"既にある合計行＝{_tr}行目（行は増やしません）"
+            # ★ ラベルは**その行に既に在る物**が正（LLM の案『単価合計』で検算しない）。
+            try:
+                with BookView(Path(book_meta["path"])) as _bv2:
+                    _lbl = _bv2.sheet(_tot_sheet).cell(row=_tr, column=1).value
+                if _lbl not in (None, ""):
+                    resolved["label"] = str(_lbl)
+                    label = resolved["label"]
+            except Exception:
+                pass
+        # ★★ 2026-08-29: ここで「既に値が入っています」と**断るのはやめた**。
+        #   既存の番人（事後条件の算術の検算＝二重計上に ✓ を出さない／単位F の関所）が
+        #   同じ事故を既に止めていて、断りを重ねると**その番人の出番が消える**
+        #   ── 過去の事故を守っている検体が通らなくなる（実測で 3 本落ちた）。
+        #   ★ 埋められる時だけ埋め、それ以外は今までどおり深い番人に任せる。
+
+    # ★ A': factor は LLM から受け取らない。LLM が返した値(あれば)はいったん取り出して
+    #   おき、機械抽出/用語集の結果と食い違う場合だけ WARN として記録する（常に機械が勝つ）。
+    llm_factor_raw = resolved.pop("factor", None)
+
+    text_factor, text_snippet = extract_rate_factor(task)
+    vocab_factor, vocab_term = (None, None)
+    if text_factor is None:
+        vocab_factor, vocab_term = lookup_vocab_factor(task, vocab or {})
+
+    sources: dict = {}
+    if text_factor is not None:
+        resolved["factor"] = text_factor
+        sources["factor"] = f"依頼文: {text_snippet}"
+    elif vocab_factor is not None:
+        resolved["factor"] = vocab_factor
+        sources["factor"] = f"用語集: {vocab_term}"
+    else:
+        resolved["factor"] = 1.0
+
+    if resolved["factor"] <= 0:
+        return False, resolved, inferred, f"倍率『{resolved['factor']}』は正の数でなければなりません"
+
+    # ★ 恒真式の番人（最優先）: label が「税」/「込」を含むのに倍率が確定できず既定
+    #   1.0 のままだと、税抜き金額に「税込み」ラベルが付いた恒真の誤りを事後条件が
+    #   pass にしてしまう（args 基準の検証だから）。ここで機械的に CLARIFY へ倒す
+    #   （語リストは 税/込 の2語で凍結・むやみに増やさない）。
+    # ★ operator8 ②: CLARIFY に倒す直前に敗者復活（lookup_vocab_tax_factor・
+    #   docstring 参照）。第一照合（上の text_factor/vocab_factor）の優先順は変えない
+    #   ―― ここに来るのはその両方が外れた場合だけ。
+    if resolved["factor"] == 1.0 and any(k in label for k in ("税", "込")):
+        tax_factor, tax_term, tax_err = _resolve_tax_rescue("ラベル", label, vocab)
+        if tax_factor is not None:
+            resolved["factor"] = tax_factor
+            sources["factor"] = f"用語集: {tax_term}（ラベル『{label}』の税に適用）"
+        elif tax_err:
+            return False, resolved, inferred, tax_err
+
+    if sources:
+        resolved["_sources"] = sources
+    if llm_factor_raw not in (None, ""):
+        try:
+            llm_factor = float(llm_factor_raw)
+        except (TypeError, ValueError):
+            llm_factor = None
+        if llm_factor is not None and abs(llm_factor - resolved["factor"]) > 1e-9:
+            mfactor = resolved["factor"]
+            resolved["_warnings"] = [
+                f"LLM が返した倍率({llm_factor:g})と機械抽出の倍率({mfactor:g})が"
+                f"食い違うため機械抽出({mfactor:g})を採用しました"
+            ]
+
+# --- ★ 2026-08-26: 表の基本操作 3 種（追加・行削除・列削除）---------------
+    return None
+
+
+def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op):
+    """EXTRACT の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    # ★★ 2026-08-31（Namakoo が実測）:「**5行目の**ヤマノ食品を抜き出して」で
+    #   ヤマノ食品が **2 行とも**抜き出されていた（5行目という限定が無視された）。
+    #   ★ 三項の番人は鳴っていた（「依頼文が指しているのは: 5行目」）が、
+    #     **⚠ を出して進んで**いた ── 何が無視されたかを言っておらず、
+    #     利用者からは「効かなかった」に見える。
+    #   ★★ そして、そもそも**行番号での抜き出しは語彙に無い**（EXTRACT は
+    #     列×比較×値しか持たない）。できないことは ⚠ でなく**断る**。
+    #   ★ この分岐には**早い出口が 2 つ**ある（依頼文が実在の値を名指しした道と、
+    #     LLM の値をそのまま使う道）。最初は片方にだけ足して**素通り**した
+    #     ── 判定は必ず**両方の手前**に置く（今日 3 度目の片配線）。
+    if (_x_n := task_names_a_row_number(task)):
+        return False, resolved, inferred, (
+            f"行番号での抜き出し（{_x_n}行目）には対応していません ── "
+            "抜き出しは「どの列がどうなっている行か」で指してください"
+            "（例:「取引先がヤマノ食品の行を抜き出して」）")
+    # ★★ 2026-08-31（Namakoo の実測から辿って出た別件）:
+    #   「金額が60000以上の行を抜き出して」で **合計行（356400）まで抜き出されていた**。
+    #   条件には合っているが、**合計はデータ行ではない**。
+    #   ★ 並べ替え・条件つき書換では既に外していたのに、**抽出だけ外していなかった**
+    #     ── また片配線。判定は凍結済みの規則（total_rows_in）を借りる。
+    #   ★ ここも**早い出口より前**に置く（後ろに置いて 1 度素通りさせた）。
+    _x_hr = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+    if (_x_tot := total_rows_in(book_meta, first_sheet, _x_hr)):
+        resolved["_skip_rows"] = list(_x_tot)
+        resolved["_skip_label"] = ("合計行 " + "、".join(
+            f"{r}行目" for r in _x_tot) + "（データ行でないため抜き出しません）")
+    if (err := resolve_in("col", first_sheet)):
+        return False, resolved, inferred, err
+    # ★★ 2026-08-27（Namakoo「みかんの行とりんごの行だけを抽出して」）:
+    #   実測で一段目は `contains "リンゴ"`（片仮名の幻覚）や `eq "みかんとりんご"`
+    #   （連結）を返していた。どちらも 0 行に当たり、**空の抽出結果が ✓ で出る**。
+    #   ★ 比較語（以上/以下/…）が依頼文に**無い**なら、それは条件でなく**名指し**。
+    #     表に実在する値のうち依頼文に現れるものを機械が拾い、「どれか」で抽出する。
+    #   ★ 比較語が在る時は触らない ── 「原価が500以上」の 500 を名前と読まない。
+    _hr_x = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+    if extract_cmp_from_task(task) is None:
+        _named_vals = task_names_real_values(task, book_meta, first_sheet,
+                                              resolved["col"], _hr_x)
+        if _named_vals:
+            if str(resolved.get("value") or "") not in _named_vals:
+                resolved["_warnings"] = resolved.get("_warnings", []) + [
+                    f"LLM が返した値『{resolved.get('value')}』は列『{resolved['col']}』に"
+                    f"無いため、依頼文が名指しする実在の値"
+                    f"（{'、'.join(_named_vals)}）を採用しました"]
+            # ★★ 2026-09-02（実測で捕まえた・検体が警告していた事故の再演）:
+            #   ここは「依頼文が実在の値を名指ししたら機械が勝つ」という正しい規則
+            #   だが、**否定を知らなかった**。そのため「味噌汁以外を抜き出して」で
+            #   読み直しが cmp=nin を立てた直後にここが `eq` へ上書きし、
+            #   **味噌汁だけを抜き出して △ を出していた** ── 逆のことをして合格。
+            #   ★ 片配線そのもの: 読み直しに足して、決定の場所に足し忘れた。
+            _neg = task_says_except(task)
+            if _neg:
+                resolved["cmp"] = "nin"
+                resolved["value"] = list(_named_vals)
+            else:
+                resolved["cmp"] = "in" if len(_named_vals) > 1 else "eq"
+                resolved["value"] = (_named_vals if len(_named_vals) > 1
+                                      else _named_vals[0])
+            resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
+            resolved["_new_sheet"] = _extract_output_sheet_name(
+                resolved["col"], resolved["cmp"], resolved["value"])
+            return True, resolved, inferred, None
+    llm_cmp_raw = str(resolved.get("cmp", "")).strip().lower()
+    # ★ operator9 ①: cmp も A' 原則の中へ。依頼文からの機械抽出が非 None かつ LLM の cmp と
+    #   食い違えば機械が勝つ（factor/value と同じ作法）。一致 or 機械 None なら現状どおり。
+    mechanical_cmp = extract_cmp_from_task(task)
+    if mechanical_cmp is not None and mechanical_cmp != llm_cmp_raw:
+        cmp = mechanical_cmp
+        resolved["_warnings"] = resolved.get("_warnings", []) + [
+            f"LLM が返した比較({llm_cmp_raw or '(空)'})と依頼文の機械抽出({mechanical_cmp})が"
+            f"食い違うため機械抽出({mechanical_cmp})を採用しました"
+        ]
+    else:
+        cmp = llm_cmp_raw
+    if cmp not in _EXTRACT_CMPS:
+        return False, resolved, inferred, (
+            f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません"
+        )
+    resolved["cmp"] = cmp
+    raw_value = resolved.get("value")
+    if raw_value in (None, ""):
+        return False, resolved, inferred, "抽出する値(value)が依頼文から読み取れません"
+    if cmp == "contains":
+        resolved["value"] = str(raw_value)
+    else:
+        try:
+            resolved["value"] = float(raw_value)
+        except (TypeError, ValueError):
+            # ★ 日付の範囲比較（台帳 DATE_RANGE_AGG 2件の正体・2026-08-24）。
+            #   「2026/3/26 以降」は数値ではないが、対象列が日付列なら
+            #   シリアル値に直せば既存の数値比較でそのまま通る（Basic 側は無改造）。
+            #   ★ resolved["value"] は**元の文字列のまま**残す ── 表示（解釈行・出力
+            #   シート名）が 46107 になるのを防ぐ。codegen だけが _value_serial を見る。
+            parsed_date = parse_date_literal(raw_value)
+            # ★ 2026-08-24（盲検の使い勝手レビュー）: 依頼文が「3月26日から4月25日まで」と
+            #   年を言っていないのに、LLM が **2023 年**を入れてきた（データは全部 2026 年）。
+            #   A' 原則 ── 依頼文に無い年は機械が受け取らない。年は人が決めることで、
+            #   LLM が埋めてよい空白ではない。
+            if parsed_date is not None and str(parsed_date.year) not in (task or ""):
+                return False, resolved, inferred, (
+                    f"依頼文に年が書かれていないため、『{raw_value}』の"
+                    f"{parsed_date.year} 年は使えません"
+                    f"（何年かを書いて、もう一度お試しください）")
+            col_kind, col_has_time = _extract_column_date_kind(
+                book_meta, first_sheet, resolved["col"])
+            if parsed_date is not None and col_kind == "date":
+                resolved["value"] = str(raw_value)
+                resolved["_value_serial"] = date_compare.threshold_for(cmp, parsed_date)
+                resolved["_date_compare"] = True
+                if cmp == "eq" and col_has_time:
+                    resolved["_warnings"] = resolved.get("_warnings", []) + [
+                        f"『{raw_value}』と一致で抽出しますが、列『{resolved['col']}』には"
+                        f"時刻が入っています（0時ちょうどの行しか当たりません）"
+                    ]
+            elif parsed_date is not None and col_kind == "text_date":
+                # ★ 辞書順で黙って比べない ── "2026/3/26" > "2026/12/1" になる。
+                return False, resolved, inferred, (
+                    f"列『{resolved['col']}』は日付が**文字列**で入っているため、"
+                    f"『{raw_value}』との日付比較ができません"
+                    f"（日付の書式に直してから、もう一度お試しください）"
+                )
+            elif cmp != "eq":
+                return False, resolved, inferred, (
+                    f"比較『{cmp}』には数値の値が必要ですが『{raw_value}』は数値に変換できません"
+                )
+            else:
+                resolved["value"] = str(raw_value)
+    # ★ 単位H: 出力シートの見出し署名(= 元シートの見出し行そのもの)を _own_output_headers
+    #   が組めるよう、決めた材料をここで resolved に積む（他 op の _target_sheet と同じ作法）。
+    resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
+    resolved["_new_sheet"] = _extract_output_sheet_name(resolved["col"], cmp, resolved["value"])
+
+# ★ DEDUP（EXTRACT の兄弟）: 判定キー列（1つ以上）の値の組が同じ行のうち最初の1行だけを
+#   新シートへ残す。★ keys が無い/空なら CLARIFY ── 全列一致を黙って既定にしない
+#   （「取引先が同じなら重複」は人の意図であって機械が推測してよい既定ではない）。
+    return None
+
+
+def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers):
+    """REPORT_PER_ROW の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := check_sheet("template_sheet")):
+        return False, resolved, inferred, err
+    template_sheet = resolved["template_sheet"]
+    if template_sheet == first_sheet:
+        return False, resolved, inferred, (
+            f"雛形シートとデータシートが同じ『{template_sheet}』です。"
+            "雛形は別のシートに用意してください")
+    if (err := resolve_in("name_col", first_sheet)):
+        return False, resolved, inferred, err
+
+    book_path = book_meta.get("path")
+    if book_path is None:
+        return False, resolved, inferred, (
+            "帳票段はファイルの実体が無いと検証できません（book_meta に path が無い）")
+    data_headers = headers.get(first_sheet, [])
+    header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
+
+    try:
+        wb_tpl = openpyxl.load_workbook(book_path)
+    except Exception as e:
+        return False, resolved, inferred, f"雛形の読み込みに失敗しました: {e}"
+    try:
+        tpl_ws = wb_tpl[template_sheet]
+        placeholders = scan_placeholders(tpl_ws, tpl_ws.max_row or 1, tpl_ws.max_column or 1)
+        # ★ 縦の結合セルは、明細行を増やすと崩れる（値は合うので事後条件は通ってしまう）。
+        #   日本の請求書の雛形は結合だらけなので、起きる方に賭けるべき事象（設計査読）。
+        tpl_vmerges = [(m.min_row, m.max_row, m.coord)
+                        for m in tpl_ws.merged_cells.ranges if m.min_row != m.max_row]
+    finally:
+        wb_tpl.close()
+
+    if not placeholders:
+        return False, resolved, inferred, (
+            f"雛形『{template_sheet}』に印（{{{{列名}}}}）が見つかりません。"
+            "転記したいセルに {{列名}} の形で印を置いてください")
+
+    # ★ 2026-08-24: 1 セルに印が 2 つ以上あるなら、埋めずに断る。埋めると 1 セルに
+    #   2 回書くことになり後の値が前を消す ── 「それらしく埋まって片方が生で残る」
+    #   （盲検の査定で名指しされた事故）より、雛形を直してくださいと言う方が正しい。
+    if (dupes := cells_with_multiple_placeholders(placeholders)):
+        cell, names = dupes[0]
+        return False, resolved, inferred, (
+            f"雛形『{template_sheet}』の {cell} に印が {len(names)} つあります"
+            f"（{chr(12539).join(names)}）。1 つのセルに置ける印は 1 つまでです ── "
+            f"別々のセルに分けてください")
+
+    # ★★ 2026-08-28（Namakoo「同名の取引先から複数の発注があるケースでは
+    #   請求書を一枚にまとめないといけない」）: 印を 3 種類に仕分ける。
+    #   {{列名}} / {{明細:列名}} / {{合計:列名}}。**雛形が形を決める**ので、
+    #   依頼文にも一段目の語彙（OPS_DOC）にも 1 文字も足さない。
+    mark_layout, layout_err = report_group.classify_placeholders(placeholders)
+    if layout_err:
+        return False, resolved, inferred, f"雛形『{template_sheet}』: {layout_err}"
+    if mark_layout.detail_row is not None:
+        crossing = [c for lo, hi, c in tpl_vmerges if lo <= mark_layout.detail_row <= hi]
+        if crossing:
+            return False, resolved, inferred, (
+                f"雛形『{template_sheet}』の明細行（{mark_layout.detail_row}行目）を、"
+                f"縦に結合したセルが横切っています（{'・'.join(crossing[:3])}）。"
+                "明細行は件数ぶん増えるので、この結合は崩れます ── "
+                "結合を解くか、明細行の外へずらしてください")
+
+    resolved_placeholders = []
+    for ph in placeholders:
+        ph_kind, ph_col = report_group.mark_kind(ph.column_name)
+        if ph_col not in data_headers:
+            return False, resolved, inferred, (
+                f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
+                f"（{ph.cell}）が指す列『{ph_col}』は、データシート"
+                f"『{first_sheet}』に見つかりません。実在する列名を印にしてください"
+            )
+        col_idx = data_headers.index(ph_col) + 1
+        if ph_kind == "total" and not ph.whole:
+            return False, resolved, inferred, (
+                f"雛形『{template_sheet}』の合計の印『{{{{{ph.column_name}}}}}』"
+                f"（{ph.cell}）は、セル全体を印にしてください（合計は数値です）")
+        if not ph.whole:
+            # ★ 訂正3: 部分一致の印は原理的に文字列にしかなれない ── 数値列には使わせない
+            #   （検体には無いが自分の検体で固定する境界。設計文書の指示どおり）。
+            try:
+                is_numeric = column_is_all_numeric(book_path, first_sheet, col_idx,
+                                                    header_row_here)
+            except Exception:
+                is_numeric = False
+            if is_numeric:
+                return False, resolved, inferred, (
+                    f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
+                    f"（{ph.cell}）はセルの一部分（部分一致）ですが、列『{ph_col}』は"
+                    "数値です。数値列には部分一致の印を使えません"
+                    "（セル全体を印にしてください: 例 " + "{{" + ph.column_name + "}}）"
+                )
+        resolved_placeholders.append({
+            "cell": ph.cell, "row": ph.row, "col": ph.col,
+            "column_name": ph_col, "kind": ph_kind, "mark": ph.column_name,
+            "whole": ph.whole, "raw": ph.raw, "col_idx": col_idx,
+        })
+    resolved["_placeholders"] = resolved_placeholders
+
+    try:
+        wb_data = openpyxl.load_workbook(book_path, data_only=True)
+    except Exception as e:
+        return False, resolved, inferred, f"データシートの読み込みに失敗しました: {e}"
+    try:
+        src_ws = wb_data[first_sheet]
+        last_row = _scan_last_row(src_ws, header_row=header_row_here)
+        rows_in = []
+        for r in range(header_row_here + 1, last_row + 1):
+            label_val = src_ws.cell(row=r, column=1).value
+            vals = {h: src_ws.cell(row=r, column=i + 1).value
+                    for i, h in enumerate(data_headers)}
+            rows_in.append((r, label_val, vals))
+    finally:
+        wb_data.close()
+    verdict = total_row.split_total_rows_multi(rows_in) if rows_in else total_row.TotalRowVerdict(
+        excluded=[], adopted_rows=[], mismatches=[])
+    row_values = {r: v for r, _l, v in rows_in}
+
+    # ★★ まとめるか、1 行 1 枚か ── **雛形と実表の両方**が決める（人に選ばせない）:
+    #   ・雛形に明細/合計の印が在る → まとめる（1 件でも同じ道を通る）
+    #   ・印は無いが同じ名前が 2 行以上ある → **断る**（2 枚に割れた紙は仕事にならない）
+    name_col_here = resolved["name_col"]
+    name_idx = data_headers.index(name_col_here) + 1
+    groups = report_group.build_groups(
+        [(r, [row_values[r].get(h) for h in data_headers]) for r in verdict.adopted_rows],
+        name_idx)
+    grouped = mark_layout.detail_row is not None or bool(mark_layout.total)
+    # ★★ 2026-08-28（設計査読で名指しされた・自分で開けかけた穴）:
+    #   ここで**断って**はいけない。同名が 2 行あっても正しい帳票がある ──
+    #   領収書・納品書は取引ごとに 1 枚だし、締め日違いの月別請求も同じ形
+    #   （OPS_DOC 自身が REPORT_PER_ROW の用途に領収書を挙げている）。
+    #   既に在る処方は「断ること」ではなく「✓ を出さないこと」だった（2026-08-24）。
+    #   ★ 反転させずに、△ の警告文へ**まとめ方への道**を足すだけにする。
+
+    used = set(sheets) | {template_sheet}
+    report_rows = []
+    if grouped:
+        for g in groups:
+            sheet_name = unique_sheet_name(str(g.name), used)
+            used.add(sheet_name)
+            report_rows.append({"row": g.rows[0], "sheet": sheet_name,
+                                 "name": g.name, "rows": list(g.rows)})
+    else:
+        for r in verdict.adopted_rows:
+            raw_name = row_values[r].get(name_col_here)
+            sheet_name = unique_sheet_name(str(raw_name), used)
+            used.add(sheet_name)
+            report_rows.append({"row": r, "sheet": sheet_name})
+    if not report_rows:
+        return False, resolved, inferred, (
+            "帳票にするデータ行がありません（表が空か、全行が合計行と判定されました）"
+        )
+    inspection_sheet = unique_sheet_name(inspection.SHEET_NAME, used)
+    used.add(inspection_sheet)
+
+    if grouped:
+        # ★ 1 枚に 1 つしか書けない欄が、グループの中で食い違っていないか。
+        #   食い違ったら**埋めずに断る** ── 推測で選ぶと、別の担当者の名前が客に届く。
+        by_name = {g.name: g for g in groups}
+        for rr in report_rows:
+            g = by_name[rr["name"]]
+            for ph in resolved_placeholders:
+                if ph["kind"] == "value":
+                    vals = report_group.value_conflicts(g, row_values, ph["column_name"])
+                    if vals:
+                        # ★ 「足すなら {{合計:担当}}」は、担当のような文字列の列では
+                        #   意味を成さない ── 出せる道だけを名指しする。
+                        _way = f"『{{{{明細:{ph['column_name']}}}}}』にしてください"
+                        if all(report_group.is_numeric(v) for v in vals):
+                            _way = (f"『{{{{明細:{ph['column_name']}}}}}』、"
+                                     f"足すなら『{{{{合計:{ph['column_name']}}}}}』"
+                                     "にしてください")
+                        return False, resolved, inferred, (
+                            f"『{g.name}』の {list(g.rows)}行目で"
+                            f"『{ph['column_name']}』が食い違っています（{vals}）。"
+                            f"1 枚の紙には 1 つしか書けません ── 明細に出すなら{_way}")
+                elif ph["kind"] == "total":
+                    _s, serr = report_group.sum_for(g, row_values, ph["column_name"])
+                    if serr:
+                        return False, resolved, inferred, f"『{g.name}』: {serr}"
+        resolved["_groups"] = [{"sheet": rr["sheet"], "name": rr["name"],
+                                 "rows": rr["rows"]} for rr in report_rows]
+        resolved["_detail_row"] = mark_layout.detail_row
+    else:
+        # ★ 2026-08-24: 重複を知った瞬間に言う（`_2` を付けたのがその瞬間）。
+        #   実測: 3 社の売上表（4 行）で請求書 4 枚・同じ取引先が 2 枚に分かれて ✓ が出た。
+        #   ★ 付きなので count_suspicious_advisories が拾い、決裁③で ✓→△ に降格する。
+        if (dup := duplicate_name_warning(
+                name_col_here,
+                [row_values[r].get(name_col_here) for r in verdict.adopted_rows])):
+            resolved["_warnings"] = resolved.get("_warnings", []) + [dup]
+    resolved["_report_rows"] = report_rows
+    resolved["_report_sheet_names"] = [rr["sheet"] for rr in report_rows]
+    resolved["_inspection_sheet"] = inspection_sheet
+    resolved["_source_headers"] = tuple(data_headers)
+    return None
+
+
+def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers, op):
+    """SET_CELL_VALUE の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    # ★ 2026-08-27（Namakoo「梨の売上にピンポイントで入れたい」）:
+    #   SET_COLUMN_VALUE は**列を丸ごと**同じ値にする op で、1 セルを狙えなかった。
+    _sheet_c = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    _headers_c = [str(h) for h in
+                   ((book_meta.get("headers") or {}).get(_sheet_c) or [])]
+    _row_name = str(resolved.get("row", "")).strip()
+    _col_name = str(resolved.get("col", "")).strip()
+    _row_no = resolved.get("row_number")
+    # ★★ 2026-08-30（Namakoo「行と列による一意の指定も出来た方がいい」→ 実測）:
+    #   「1行F列を「税込金額(10%)」にして」で、第二段は col に**書き込む値**を入れて
+    #   きた（col=『税込金額(10%)』）。列の名前と値が入れ替わっている。
+    #   ★ 依頼文が英字で列を名指ししているなら、それが正 ── 機械が実表から決める
+    #     （行番号を機械が決めるのと同じ分担・LLM の欄の中身に頼らない）。
+    _letters = {m.group(0) for m in _re_a1_col_word.finditer(_task_outside_quotes(task))}
+    if len(_letters) == 1:
+        _cand = next(iter(_letters)).replace("列", "").strip()
+        _v2, _inf2, _err2 = resolve_col_ref(_cand, _headers_c)
+        if not _err2:
+            _col_name = _v2
+    # ★ 2026-08-28: 列は**列文字でも**指せる（「F列に」）── resolve_col_ref が解く。
+    if _col_name not in _headers_c:
+        _v, _inf, _err = resolve_col_ref(_col_name, _headers_c)
+        if _err:
+            return False, resolved, inferred, (
+                f"列『{_col_name}』がこの表にありません"
+                f"（ある列: {"、".join(_headers_c)}）")
+        if _inf:
+            inferred.add("col")
+        _col_name = _v
+    if not _row_name and not _row_no:
+        return False, resolved, inferred, (
+            "どの行かが読み取れません（行の名前か行番号で指してください）")
+    # ★★ 2026-08-28: 行番号で指された時は**番号を正**にする（人が数えて言っている）。
+    #   ★ 名前も同時に在るなら、その行に本当にその名前が在るかを確かめる ──
+    #     三項（依頼・宣言・実体）。食い違ったら書かずに断る。
+    if _row_no:
+        _hr_c = int((book_meta.get("header_rows") or {}).get(_sheet_c, 1) or 1)
+        _path_c = book_meta.get("path")
+        try:
+            with BookView(Path(_path_c)) as _bvc:
+                _wsc = _bvc.sheet(_sheet_c)
+                _lastc, _colsc = data_extent(_wsc, _hr_c)
+                _rowvals = [str(_wsc.cell(row=int(_row_no), column=c).value or "").strip()
+                             for c in range(1, _colsc + 1)] if int(_row_no) <= _lastc else None
+        except Exception as e:
+            return False, resolved, inferred, f"表を読めませんでした（{type(e).__name__}）"
+        # ★★ 2026-08-30（Namakoo「行と列による一意の指定も出来た方がいい。
+        #   ピンポイントに操作できるようになる」）: それまで見出し行は一律で断って
+        #   いたので、**列の名前を直す手段が 1 つも無かった**（実測: 計算列の見出しが
+        #   「金額*1.1」に化けた表を、人が直せない）。
+        #   ★ 人が**行番号と列を書いて名指しした**のは、いちばん強い証拠 ──
+        #     見出しでも書かせる。ただし黙って書かない（解釈行で必ず言う）。
+        #   ★ LLM が推した行・名前から解いた行では、この道は開けない（下の else 側）。
+        if _rowvals is None and int(_row_no) > _hr_c:
+            return False, resolved, inferred, (
+                f"{_row_no}行目はこの表の範囲外です（見出しは{_hr_c}行目・データは"
+                f"{_hr_c + 1}〜{_lastc}行目）")
+        if int(_row_no) < _hr_c:
+            return False, resolved, inferred, (
+                f"{_row_no}行目は見出し行（{_hr_c}行目）より上です ── "
+                "表の外には書けません")
+        if int(_row_no) == _hr_c:
+            if task_names_a_row_number(task) != int(_row_no):
+                return False, resolved, inferred, (
+                    f"{_row_no}行目は見出し行です ── 見出しの名前を変えるなら、"
+                    f"行番号と列で名指ししてください"
+                    f"（例:「{_hr_c}行G列を「新しい名前」にして」）")
+            resolved["_writes_header"] = True
+        # ★ 実測: 第二段は row に**行番号そのもの**を入れてくることがある（"7"）。
+        #   それは名前ではないので、名前としては扱わない（食い違い扱いにしない）。
+        if _row_name.isdigit() or _row_name == str(_row_no):
+            _row_name = ""
+        if _row_name and _row_name not in _rowvals:
+            return False, resolved, inferred, (
+                f"{_row_no}行目に『{_row_name}』がありません"
+                f"（その行: {"、".join(v for v in _rowvals if v)}）── "
+                "行番号と名前が食い違っています")
+        _hitrow = int(_row_no)
+        _note_c = f"{_hitrow}行目（依頼文の行番号）"
+        if resolved.get("_writes_header"):
+            # ★ 見出しを書き換える回に「対象の行:取引先」と出ると読み手を誤らせる
+            #   （実測で出た）── 何をしているのかを、その言葉で言う。
+            _row_name = "見出し"
+            _note_c = f"{_hitrow}行目（見出し行）── **見出しの名前を変えます**"
+        else:
+            _row_name = _row_name or (_rowvals[0] if _rowvals and _rowvals[0] else str(_hitrow))
+    else:
+        # ★ 行が実在し・1 つに決まることを**適用前に**確かめる（推測で別の行に書かない）。
+        _hitrow, _note_c = _resolve_named_row(book_meta, _sheet_c, _row_name)
+        if _hitrow is None:
+            return False, resolved, inferred, _note_c
+    resolved["_row_index"] = _hitrow
+    # ★ 見出しを書き換えると、**その列は元の名前で引けなくなる** ── 位置を残す
+    #   （検算は名前でなく座標で見る）。実測で「列『税込み金額』が見つからない」と
+    #   落ちた（書き込み自体は成功していたのに）。
+    if _col_name in _headers_c:
+        resolved["_col_index"] = _headers_c.index(_col_name) + 1
+    resolved["row"] = _row_name
+    resolved["col"] = _col_name
+    resolved["_headers"] = _headers_c
+    resolved["_at_basis"] = _note_c
+    # ★ 値は LLM に決めさせず、依頼文から機械が取る（A' 原則・SET_COLUMN_VALUE と同じ線）。
+    #   ★ ただし 1 セルなので**裸の数字も受ける** ── 「梨の売上を2000にして」を
+    #     引用符の有無で断るのは、道具の都合を人に押し付けている（実測の困りごと）。
+    _lit = extract_quoted_literal(task)
+    if _lit is None:
+        # ★★ 2026-08-29（Namakoo が実測・直した先で出た穴）:
+        #   「丸山工業の締め日を**2026/08/31**にして」で **31** が書かれて ✓ が出た。
+        #   裸の数字を拾う正規表現が、日付の**末尾だけ**を掴んでいた。
+        #   ★ 先に機械の引き算（依頼文から、既に分かっている物を引く）を通す ──
+        #     こちらは値を**丸ごと**取るので、途中で切れない。
+        _lit = bare_value_from_task(task, _row_name, _col_name, _headers_c)
+    if _lit is None:
+        _m = _re_bare_number.search(task or "")
+        _lit = _m.group(1) if _m else None
+    if _lit is None:
+        # ★★ 2026-08-29（Namakoo が実測）: 「丸山重工の右にPCパーツ」が
+        #   『文字なら「」で囲んで』で断られていた。**引用符は道具の都合**であって、
+        #   人の書き方の問題ではない（この repo が何度も自分に言ってきた線）。
+        #   ★ A' 原則の芯は「引用符が在ること」ではなく「**依頼文に在る値**であること」。
+        #     だから条件をそちらへ置き直す: 依頼文に literal で在り・見出しの語でなく・
+        #     行の名前でもない値なら、引用符が無くても受ける。
+        #   ★ それでも**画面に出してから書く**（「こう読みました」に値が出る）。
+        _cand = str((resolved.get("value") if resolved.get("value") is not None else ""))
+        _cand = _cand.strip()
+        _bad = {str(h) for h in _headers_c} | {str(_row_name), str(_col_name)}
+        if _cand and _cand in (task or "") and _cand not in _bad:
+            _lit = _cand
+    if _lit is None:
+        return False, resolved, inferred, (
+            "書き込む値が依頼文から読み取れません"
+            "（依頼文に書かれている値をそのまま使います ── "
+            "紛らわしいときは「」で囲んでください）")
+    resolved["value"] = _lit
+    # ★ 2026-08-27（実測）: `_is_number` は**型**で見るので、文字列 "2000" は False。
+    #   ここへ来る値は必ず文字列なので、**数字として読めるか**で判定する。
+    #   ★ これを外すと `'2000'` が文字列でセルに入り、下流の SUM が静かに壊れる
+    #     （この repo が何度も測ってきた形）。
+    try:
+        resolved["_write_numeric_value"] = float(str(_lit).replace(",", ""))
+        resolved["_write_numeric"] = True
+    except ValueError:
+        pass
+    return None
+
+
+def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers):
+    """FORMAT_MAP の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := check_sheet("template_sheet")):
+        return False, resolved, inferred, err
+    template_sheet = resolved["template_sheet"]
+    if template_sheet == first_sheet:
+        return False, resolved, inferred, (
+            f"雛形シートとデータシートが同じ『{template_sheet}』です。"
+            "雛形は別のシートに用意してください")
+
+    book_path = book_meta.get("path")
+    if book_path is None:
+        return False, resolved, inferred, (
+            "様式写像段はファイルの実体が無いと検証できません（book_meta に path が無い）")
+    data_headers = headers.get(first_sheet, [])
+    header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
+
+    try:
+        wb_tpl = openpyxl.load_workbook(book_path)
+    except Exception as e:
+        return False, resolved, inferred, f"雛形の読み込みに失敗しました: {e}"
+    try:
+        tpl_ws = wb_tpl[template_sheet]
+        placeholders = scan_placeholders(tpl_ws, tpl_ws.max_row or 1, tpl_ws.max_column or 1)
+        if not placeholders:
+            return False, resolved, inferred, (
+                f"雛形『{template_sheet}』に印（{{{{列名}}}}）が見つかりません。"
+                "出力したい列の直下のセルに {{列名}} の形で印を置いてください")
+
+        # ★ 2026-08-24: 1 セルに印が 2 つ以上あるなら、埋めずに断る。埋めると 1 セルに
+        #   2 回書くことになり後の値が前を消す ── 「それらしく埋まって片方が生で残る」
+        #   （盲検の査定で名指しされた事故）より、雛形を直してくださいと言う方が正しい。
+        if (dupes := cells_with_multiple_placeholders(placeholders)):
+            cell, names = dupes[0]
+            return False, resolved, inferred, (
+                f"雛形『{template_sheet}』の {cell} に印が {len(names)} つあります"
+                f"（{chr(12539).join(names)}）。1 つのセルに置ける印は 1 つまでです ── "
+                f"別々のセルに分けてください")
+
+        # ★ 第一波: 印は全部1つの行に置かれている前提（設計文書「見出し行 + 直下1行に印」）。
+        #   最初に見つかった印の行を「印行」、その直上を「見出し行」とみなす。
+        ph_row = placeholders[0].row
+        header_tpl_row = ph_row - 1
+        if header_tpl_row < 1:
+            return False, resolved, inferred, (
+                f"雛形『{template_sheet}』の印（{ph_row}行目）の上に見出し行がありません。"
+                "印の1つ上の行に出力したい列名を書いてください")
+
+        row_placeholders = sorted(
+            (ph for ph in placeholders if ph.row == ph_row), key=lambda p: p.col)
+        resolved_placeholders = []
+        header_texts = []
+        for ph in row_placeholders:
+            if ph.column_name not in data_headers:
+                return False, resolved, inferred, (
+                    f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
+                    f"（{ph.cell}）が指す列『{ph.column_name}』は、データシート"
+                    f"『{first_sheet}』に見つかりません。実在する列名を印にしてください"
+                )
+            col_idx = data_headers.index(ph.column_name) + 1
+            if not ph.whole:
+                # ★ REPORT_PER_ROW と同じ境界: 部分一致の印は原理的に文字列にしかなれない。
+                try:
+                    is_numeric = column_is_all_numeric(book_path, first_sheet, col_idx,
+                                                        header_row_here)
+                except Exception:
+                    is_numeric = False
+                if is_numeric:
+                    return False, resolved, inferred, (
+                        f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
+                        f"（{ph.cell}）はセルの一部分（部分一致）ですが、列『{ph.column_name}』は"
+                        "数値です。数値列には部分一致の印を使えません"
+                        "（セル全体を印にしてください: 例 " + "{{" + ph.column_name + "}}）"
+                    )
+            header_texts.append(tpl_ws.cell(row=header_tpl_row, column=ph.col).value)
+            resolved_placeholders.append({
+                "cell": ph.cell, "row": ph.row, "col": ph.col,
+                "column_name": ph.column_name, "whole": ph.whole, "raw": ph.raw,
+                "col_idx": col_idx, "out_col": len(resolved_placeholders) + 1,
+            })
+    finally:
+        wb_tpl.close()
+    resolved["_placeholders"] = resolved_placeholders
+    resolved["_header_texts"] = header_texts
+    resolved["_header_tpl_row"] = header_tpl_row
+    resolved["_placeholder_tpl_row"] = ph_row
+
+    try:
+        wb_data = openpyxl.load_workbook(book_path, data_only=True)
+    except Exception as e:
+        return False, resolved, inferred, f"データシートの読み込みに失敗しました: {e}"
+    try:
+        src_ws = wb_data[first_sheet]
+        last_row = _scan_last_row(src_ws, header_row=header_row_here)
+        rows_in = []
+        for r in range(header_row_here + 1, last_row + 1):
+            label_val = src_ws.cell(row=r, column=1).value
+            vals = {h: src_ws.cell(row=r, column=i + 1).value
+                    for i, h in enumerate(data_headers)}
+            rows_in.append((r, label_val, vals))
+    finally:
+        wb_data.close()
+    verdict = total_row.split_total_rows_multi(rows_in) if rows_in else total_row.TotalRowVerdict(
+        excluded=[], adopted_rows=[], mismatches=[])
+    if not verdict.adopted_rows:
+        return False, resolved, inferred, (
+            "写す行がありません（表が空か、全行が合計行と判定されました）"
+        )
+
+    used = set(sheets) | {template_sheet}
+    output_sheet = unique_sheet_name(str(template_sheet) + "_出力", used)
+    used.add(output_sheet)
+    inspection_sheet = unique_sheet_name(inspection.SHEET_NAME, used)
+    used.add(inspection_sheet)
+
+    resolved["_data_rows"] = list(verdict.adopted_rows)
+    resolved["_output_sheet"] = output_sheet
+    resolved["_inspection_sheet"] = inspection_sheet
+    resolved["_source_headers"] = tuple(data_headers)
+    return None
+
+
+def _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, headers):
+    """SWAP の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    # ★★ 2026-08-31: セルの入れ替えは **a/b を要求する前**に見る。
+    #   実測: 一段目が OUT_OF_VOCAB を返す言い方（「みどり建設の単価と丸和物流の
+    #   単価を入れ替えて」）では a/b が空で、ここで先に落ちていた。
+    #   ★ 座標は依頼文と実表だけで解ける ── LLM の返事に依存させない。
+    _sheet_s0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    _hr_s0 = int((book_meta.get("header_rows") or {}).get(_sheet_s0, 1) or 1)
+    _cells0 = swap_targets_are_cells(task, book_meta, _sheet_s0, _hr_s0)
+    _a = str(resolved.get("a", "")).strip()
+    _b = str(resolved.get("b", "")).strip()
+    if not _cells0 and (not _a or not _b):
+        return False, resolved, inferred, (
+            "入れ替える 2 つを取り出せませんでした"
+            "（『みかんとぶどうを入れ替えて』のように 2 つの名前を書いてください）")
+    if not _cells0 and _a == _b:
+        return False, resolved, inferred, (
+            f"『{_a}』と『{_b}』が同じものです（入れ替えになりません）")
+    _sheet_s = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    _hr_s = int((book_meta.get("header_rows") or {}).get(_sheet_s, 1) or 1)
+    _headers_s = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_s) or [])]
+    resolved["_headers"] = _headers_s
+    resolved["_header_row"] = _hr_s
+    resolved["a"], resolved["b"] = _a, _b
+    # ★★ 2026-08-31: 行/列を決める**前に**、セルの入れ替えでないかを見る。
+    #   実測: 「丸和物流の単価とみどり建設の単価を入れ替えて」で行を丸ごと
+    #   入れ替えて ✓ を出していた（頼んだのは 2 セル）。
+    if (_cells := _cells0):
+        # ★ 中身は**実表から読む**（LLM に値を作らせない・A' 原則）。
+        _p_s = book_meta.get("path")
+        try:
+            with BookView(Path(_p_s)) as _bv_s:
+                _ws_s = _bv_s.sheet(_sheet_s)
+                _vals = [_ws_s.cell(row=r, column=c).value for r, c in _cells]
+        except Exception as _e:
+            return False, resolved, inferred, f"表を読めませんでした（{type(_e).__name__}）"
+        if _vals[0] == _vals[1]:
+            return False, resolved, inferred, (
+                "入れ替える 2 つのセルの中身が同じです（入れ替えになりません）")
+        resolved["_axis"] = "cell"
+        # ★ 2026-08-31: a/b が空の経路（一段目が OUT_OF_VOCAB だった回）だと
+        #   解釈行に「入れ替える一方: もう一方:」と**空欄**が出ていた。
+        #   嘘の空欄を見せない ── その行を人が呼ぶ名前（1 列目）で埋める。
+        if not _a or not _b:
+            _n0 = _cell_row_name_for(book_meta, _sheet_s, _cells[0][0], _hr_s)
+            _n1 = _cell_row_name_for(book_meta, _sheet_s, _cells[1][0], _hr_s)
+            resolved["a"] = _a or (str(_n0) if _n0 else f"{_cells[0][0]}行目")
+            resolved["b"] = _b or (str(_n1) if _n1 else f"{_cells[1][0]}行目")
+        resolved["_cells"] = [list(c) for c in _cells]
+        resolved["_cell_values"] = list(_vals)
+        resolved["_a_pos"], resolved["_b_pos"] = _cells[0][0], _cells[1][0]
+        resolved["_axis_label"] = (
+            f"セル（{_headers_s[_cells[0][1] - 1]} の {_cells[0][0]}行目 と "
+            f"{_headers_s[_cells[1][1] - 1]} の {_cells[1][0]}行目）")
+        return True, resolved, inferred, None
+    as_col = _a in _headers_s and _b in _headers_s
+    _ra, _note_a = _resolve_named_row(book_meta, _sheet_s, _a)
+    _rb, _note_b = _resolve_named_row(book_meta, _sheet_s, _b)
+    as_row = _ra is not None and _rb is not None
+    hint = _swap_axis_hint(task)
+    # ★ 三項（依頼・宣言・実体）: 依頼文の「行/列」という語と、LLM が挙げた 2 つの名前と、
+    #   実際の表。どれか 2 つだけで決めると、欠けた項を代用して恒真になる。
+    if as_col and as_row:
+        if hint is None:
+            return False, resolved, inferred, (
+                f"『{_a}』『{_b}』は列の見出しにも、行の中身にも両方あります ── "
+                "どちらを入れ替えるのか決められません"
+                "（『〜の列を入れ替えて』『〜の行を入れ替えて』と書いてください）")
+        as_col, as_row = (hint == "column"), (hint == "row")
+    if hint == "row" and not as_row:
+        return False, resolved, inferred, f"行として決められません（{_note_a}／{_note_b}）"
+    if hint == "column" and not as_col:
+        return False, resolved, inferred, (
+            f"列として決められません（ある列: {"、".join(_headers_s)}）")
+    if not as_col and not as_row:
+        return False, resolved, inferred, (
+            f"入れ替える対象を決められません（{_note_a}／{_note_b}／"
+            f"ある列: {"、".join(_headers_s)}）")
+    resolved["_headers"] = _headers_s
+    resolved["_header_row"] = _hr_s
+    resolved["a"], resolved["b"] = _a, _b
+    if as_col:
+        resolved["_axis"] = "column"
+        resolved["_axis_label"] = "列（見出しで一致）"
+        resolved["_a_pos"] = _headers_s.index(_a) + 1
+        resolved["_b_pos"] = _headers_s.index(_b) + 1
+    else:
+        resolved["_axis"] = "row"
+        resolved["_axis_label"] = f"行（{_note_a}／{_note_b}）"
+        resolved["_a_pos"] = _ra
+        resolved["_b_pos"] = _rb
+        if min(_ra, _rb) <= _hr_s:
+            return False, resolved, inferred, (
+                f"見出し行（{_hr_s}行目）を巻き込む入れ替えは受け付けません")
+    # ★★ 2026-08-29: 入れ替えは「表に写像 π を掛ける」ことで、式もその対象。
+    #   LibreOffice の自動付け替えに任せず、**π を通した式を自分で書き戻す**。
+    _sh = (cellmap.swap_cols(resolved["_a_pos"], resolved["_b_pos"]) if as_col
+            else cellmap.swap_rows(resolved["_a_pos"], resolved["_b_pos"]))
+    _rw, _rw_why = formula_rewrites_for_shift(
+        book_meta, resolved.get("_target_sheet") or first_sheet, _sh)
+    if _rw_why and "実行しません" in _rw_why:
+        return False, resolved, inferred, _rw_why
+    if _rw:
+        resolved["_formula_rewrites"] = sorted(
+            (r, c, f) for (r, c), f in _rw.items())
+        resolved["_formula_rewrites_label"] = (
+            f"{len(_rw)} 個の式を、入れ替え後の位置に合わせて書き直します"
+            "（操作前と同じ計算結果に戻ることを、適用後に読み戻して確かめます）")
+    elif _rw_why:
+        resolved["_warnings"] = resolved.get("_warnings", []) + [_rw_why]
+    # ★ 入れ替えでも「指す先の中身が変わる式」を名指しする（並べ替えと同じ目）。
+    #   ★ 軸で区画が変わるだけ ── 行なら 2 行、列なら 2 列（行と列を同じ形で書く）。
+    _sw_sheet = resolved.get("_target_sheet") or first_sheet
+    _lo, _hi = min(resolved["_a_pos"], resolved["_b_pos"]), max(resolved["_a_pos"],
+                                                                 resolved["_b_pos"])
+    _kw = ({"col_lo": _lo, "col_hi": _hi} if as_col
+            else {"row_lo": _lo, "row_hi": _hi})
+    # ★★ 2026-08-31（Namakoo「この指す中身が変わるとはどういうこと？」→ 実測）:
+    #   「金額と単価を入れ替えて」で ⚠ が出るが、**中身が 3 つとも事実に反していた**:
+    #     ・「指す先の中身が変わる」→ 変わらない（税込金額は金額を指し続けた）
+    #     ・「**行**が入れ替わる」   → 入れ替えたのは列
+    #     ・「直していません」       → **直している**（=E2*1.1 → =D2*1.1）
+    #   そして嘘の ⚠ のせいで、正しく動いた操作の ✓ が △ に落ちていた。
+    #   ★ 片配線の**逆**: 警告は並べ替え（式を直さない）用に作って入れ替えにも配線し、
+    #     そのあと入れ替えだけ式を直すようになったのに、警告は昔の前提のまま残った。
+    #   ★ 書き直す式は名指しから外す（別シートから指す式は書き直さないので残す）。
+    if (_dw := reference_drift_warning(book_meta, _sw_sheet,
+                                        rewritten=set(_rw),
+                                        unit=("列" if as_col else "行"), **_kw)):
+        resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
+    return None
+
+
+def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op):
+    """SET_WHERE の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := resolve_in("col", first_sheet)):
+        return False, resolved, inferred, err
+    # ★ 2026-08-27（Namakoo「置き換えができない」）: 「『A』を『B』に」の形は、
+    #   **同じ列の中で A の行だけを B にする**＝条件つき書換の特別な場合
+    #   （条件列＝書き込み先列・比較は「等しい」）。新しい op は要らない。
+    #   ★ 条件も値も**引用の対**から機械が取る（LLM に決めさせない）。
+    _pair = extract_replace_pair(task)
+    if _pair:
+        resolved.setdefault("cond_col", resolved["col"])
+    if (err := resolve_in("cond_col", first_sheet)):
+        return False, resolved, inferred, err
+    if _pair:
+        resolved["cmp"], resolved["cond_value"], resolved["value"] = "eq", _pair[0], _pair[1]
+        resolved["_sources"] = {**resolved.get("_sources", {}),
+                                 "value": f"依頼文: 「{_pair[0]}」→「{_pair[1]}」"}
+        resolved["_headers"] = [str(h) for h in (headers.get(first_sheet) or [])]
+        resolved["_header_row"] = int(
+            (book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+        resolved["_cond_label"] = (f"『{resolved['cond_col']}』が『{_pair[0]}』の行"
+                                    f"（→『{_pair[1]}』に）")
+        # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
+        resolved["_skip_rows"] = total_rows_in(book_meta, first_sheet, resolved["_header_row"])
+        if resolved["_skip_rows"]:
+            resolved["_skip_label"] = ("合計行 " + "、".join(
+                f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
+        _hits_r = _rows_matching(book_meta, first_sheet, resolved["cond_col"], "eq",
+                                  _pair[0], resolved["_header_row"])
+        if _hits_r is not None:
+            if not _hits_r:
+                return False, resolved, inferred, (
+                    f"『{resolved['cond_col']}』に『{_pair[0]}』の行がありません"
+                    "（ファイルには何も書いていません）")
+            resolved["_match_rows"] = _hits_r
+            resolved["_match_label"] = (
+                f"{len(_hits_r)} 行（{'、'.join(str(r) for r in _hits_r[:5])}行目"
+                + ("…）" if len(_hits_r) > 5 else "）"))
+        return True, resolved, inferred, None
+    # ★ 比較は機械が勝つ（EXTRACT と同じ作法・LLM の写し間違いで境界行が混入する）
+    _llm_cmp = str(resolved.get("cmp", "")).strip().lower()
+    _mech_cmp = extract_cmp_from_task(task)
+    if _mech_cmp is not None and _mech_cmp != _llm_cmp:
+        resolved["_warnings"] = resolved.get("_warnings", []) + [
+            f"LLM が返した比較({_llm_cmp or '(空)'})と依頼文の機械抽出({_mech_cmp})が"
+            f"食い違うため機械抽出({_mech_cmp})を採用しました"]
+        _cmp = _mech_cmp
+    else:
+        _cmp = _llm_cmp
+    if _cmp not in _EXTRACT_CMPS:
+        return False, resolved, inferred, (
+            f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません")
+    resolved["cmp"] = _cmp
+    # ★ 閾値は**依頼文の数字**から機械が取る（LLM に確定させない）。
+    _nums = _re_threshold_num.findall((task or "").translate(_ZENKAKU_DIGITS))
+    if _cmp == "contains":
+        _thr = resolved.get("cond_value")
+        if _thr in (None, ""):
+            return False, resolved, inferred, "条件の値が依頼文から読み取れません"
+        resolved["cond_value"] = str(_thr)
+    else:
+        if len(set(_nums)) != 1:
+            return False, resolved, inferred, (
+                "条件の数値が依頼文から一意に読み取れません"
+                f"（見つかった数: {'、'.join(sorted(set(_nums))) or 'なし'}）── "
+                "「原価が500以上の行の…」のように 1 つだけ書いてください")
+        resolved["cond_value"] = float(_nums[0])
+    # ★ 書き込む値は引用符から（SET_COLUMN_VALUE と同じ関所 ── LLM に作らせない）
+    _q = extract_quoted_literal(task)
+    if _q is None:
+        return False, resolved, inferred, (
+            "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで"
+            "書いてください（例:「原価が500以上の行のチェック列に『◎』を付けて」）")
+    resolved["value"] = _q
+    resolved["_sources"] = {**resolved.get("_sources", {}), "value": f"依頼文: 「{_q}」"}
+    resolved["_headers"] = [str(h) for h in (headers.get(first_sheet) or [])]
+    resolved["_header_row"] = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+    _lab = _EXTRACT_CMP_LABELS.get(_cmp, _cmp)
+    # ★ 500.0 でなく 500 と出す（人が依頼文に書いた形に近づける・整数なら整数で）
+    _cv = resolved["cond_value"]
+    _shown = (_cv if _cmp == "contains"
+               else (str(int(_cv)) if float(_cv).is_integer() else _fmt_cell_value(_cv)))
+    resolved["_cond_label"] = f"『{resolved['cond_col']}』が {_shown} {_lab}"
+    # ★ 当てはまる行を**先に数えて画面に出す**（0 行なら、走らせる前に断る ──
+    #   「何も起きなかった」を後から × で知らせるのは、正しくても不親切）。
+    # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
+    resolved["_skip_rows"] = total_rows_in(book_meta, first_sheet, resolved["_header_row"])
+    if resolved["_skip_rows"]:
+        resolved["_skip_label"] = ("合計行 " + "、".join(
+            f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
+    _hits = _rows_matching(book_meta, first_sheet, resolved["cond_col"],
+                            _cmp, resolved["cond_value"], resolved["_header_row"])
+    if _hits is not None:
+        if not _hits:
+            return False, resolved, inferred, (
+                f"{resolved['_cond_label']} に当てはまる行がありません"
+                "（条件か値を確かめてください・ファイルには何も書いていません）")
+        resolved["_match_label"] = f"{len(_hits)} 行（{'、'.join(str(r) for r in _hits[:5])}行目"
+        resolved["_match_label"] += "…）" if len(_hits) > 5 else "）"
+        resolved["_match_rows"] = _hits
+    return None
+
+
+def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
+    """ADD_ROW の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    # ★★ 2026-08-27（Namakoo が実測）: 「みかんの下に梨を追加して」が動かなかった。
+    #   位置を**行番号**でしか受け取れないのに、人は相対で言う。LLM に数えさせると
+    #   外し、空行だけの INSERT_ROWS に落ちていた。
+    #   ★ 分担を変える: LLM は「誰の隣か」を言うだけ／**行番号は機械が実表を数えて決める**
+    #     （列名の解決を機械 3 段でやっているのと同じ形）。
+    #   ★ 機械が決めた位置は LLM の数字より優先する ── 実表を見た側が正しい。
+    _sheet0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    _hr0 = int((book_meta.get("header_rows") or {}).get(_sheet0, 1) or 1)
+    _at_anchor, _anchor_note = resolve_row_anchor(task, book_meta, _sheet0, header_row=_hr0)
+    if _anchor_note and _at_anchor is None:
+        return False, resolved, inferred, _anchor_note
+    if _at_anchor is not None:
+        resolved["at"] = _at_anchor
+        resolved["_at_basis"] = _anchor_note
+    at_raw = str(resolved.get("at", "")).strip()
+    if not (at_raw.isdigit() and int(at_raw) >= 1):
+        return False, resolved, inferred, f"行番号『{resolved.get('at')}』が不正です（1以上の整数）"
+    resolved["at"] = int(at_raw)
+    _sheet = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    _hr = int((book_meta.get("header_rows") or {}).get(_sheet, 1) or 1)
+    # ★ 見出し行より上を触らせない（表の骨格を壊す操作は受け付けない）。
+    if int(at_raw) <= _hr:
+        return False, resolved, inferred, (
+            f"{at_raw}行目は見出し行（{_hr}行目）またはその上です ── "
+            "見出しを壊す操作は受け付けません")
+    if op == "DELETE_ROWS":
+        c = resolved.get("count")
+        if c in (None, ""):
+            resolved["count"] = 1
+            inferred.add("count")
+        else:
+            cs = str(c).strip()
+            if not (cs.isdigit() and int(cs) >= 1):
+                return False, resolved, inferred, f"削除行数『{c}』が不正です（1以上の整数）"
+            resolved["count"] = int(cs)
+    else:
+        # ★ 値は**列名で**受ける。実在しない列名はここで弾く（幻覚の封鎖）。
+        vals = resolved.get("values")
+        # ★ 2026-08-27（実測）: LLM は values を**並び**で返すことがある
+        #   （['梨', 600, 300]）。列名の対応は**機械が付けられる** ── 左から順に
+        #   当てる。多すぎる時だけ断る（推測で余りを捨てない）。
+        #   ★ 決めた対応は解釈行に出す（_values_label）── 黙って割り当てない。
+        _headers_now = (book_meta.get("headers") or {}).get(
+            resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
+        if isinstance(vals, (list, tuple)):
+            if len(vals) > len(_headers_now):
+                return False, resolved, inferred, (
+                    f"入れる値が {len(vals)} 個ありますが、列は {len(_headers_now)} 本です"
+                    f"（ある列: {"、".join(map(str, _headers_now))}）")
+            # ★ 2026-08-27（実測・俺が入れた壊し方）: LLM は埋まらない列を None で
+            #   返すことがある（['梨', None, None]）。そのまま渡すと codegen が
+            #   `str(None)` を書き、セルに**文字列 "None"** が入った。
+            #   ★ 指定の無い列には**何も書かない**（空欄のままにする）。
+            #   ★ 事後条件はこの壊れ方を捕まえていた（rc=1）── 番人は効いていたが、
+            #     壊れた物を作ってから気づく形だったので、入口で落とす。
+            vals = {str(h): v for h, v in zip(_headers_now, vals)
+                     if v is not None and v != ""}
+            resolved["values"] = vals
+            inferred.add("values")
+        if not isinstance(vals, dict) or not vals:
+            return False, resolved, inferred, (
+                "入れる値が読み取れません（列名と値の組で書いてください）")
+        headers = (book_meta.get("headers") or {}).get(
+            resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
+        unknown = [k for k in vals if str(k) not in [str(h) for h in headers]]
+        if unknown:
+            return False, resolved, inferred, (
+                f"列『{"、".join(map(str, unknown))}』がこの表にありません"
+                f"（ある列: {"、".join(map(str, headers))}）")
+        # ★ 同上: 値が空の列は書かない（"None" という文字列を作らない）。
+        resolved["values"] = {str(k): v for k, v in vals.items()
+                               if v is not None and v != ""}
+        resolved["_headers"] = [str(h) for h in headers]
+        resolved["_values_label"] = "／".join(
+            f"{k}={v}" for k, v in resolved["values"].items())
+        # ★★ 2026-09-02（README の「既知の問題」に自分で書いていた）:
+        #   追加した行に既存の式が引き継がれず、利益列が**空のまま**だった。
+        #   宣言した値は正しいので ✓ は正しいが、人の期待とは違う。
+        #   ★ 引き継ぐのは「全データ行が式を持つ列」だけ ── 形で決める（列挙しない）。
+        #     合計列は E2..E7 が直値なので自然に外れる。
+        #   ★ **黙ってやらない。**解釈行に出す（_inherit_label）。
+        if op == "ADD_ROW" and resolved.get("at"):
+            _ih_sheet = resolved.get("_target_sheet")
+            _ih_hr = int(resolved.get("_header_row") or 1)
+            _ih_cols, _ih_from = formula_columns_to_inherit(
+                book_meta, _ih_sheet, _ih_hr, int(resolved["at"]),
+                set(resolved["values"].keys()))
+            if _ih_cols and _ih_from:
+                resolved["_inherit_cols"] = _ih_cols
+                resolved["_inherit_from"] = _ih_from
+                _hd = resolved["_headers"]
+                resolved["_inherit_label"] = "／".join(
+                    (_hd[c] if 0 <= c < len(_hd) else f"{c + 1}列目")
+                    for c in _ih_cols) + f"（{_ih_from}行目から）"
+    return None
+
+
+def _verify_add_column(resolved, inferred, book_meta, task, sheets, headers):
+    """ADD_COLUMN の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    _sheet_c = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    _hr_c = int((book_meta.get("header_rows") or {}).get(_sheet_c, 1) or 1)
+    _headers_c = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_c) or [])]
+    _name_c = str(resolved.get("name") or "").strip()
+    # ★★ 2026-08-27（実測）: 名前を言っていない依頼に対し、LLM が「新しい列」という
+    #   **依頼文に無い名前を作って**返す回があった（3 回中 1 回）。A' 原則の違反 ──
+    #   値は LLM に確定させない。**依頼文に現れない名前は採らない**（空欄に倒す）。
+    #   ★ 空欄は誤った名前より安い: 見出しが空なら △ になり、人が気づける。
+    #     もっともらしい名前が付くと、人は「自分がそう言った」と思ってしまう。
+    if _name_c and _name_c not in (task or ""):
+        resolved["_name_dropped"] = _name_c
+        _name_c = ""
+    # ★ 同名の列が既に在るなら断る（黙って 2 本目を作らない ── 後で列名の解決が
+    #   「2 つあります」で詰まる形を、作る側で防ぐ）。
+    if _name_c and _name_c in _headers_c:
+        return False, resolved, inferred, (
+            f"列『{_name_c}』は既にあります（{_headers_c.index(_name_c) + 1}列目）")
+    _at_c, _note_c = resolve_col_anchor(task, _headers_c)
+    if _at_c is None and _note_c:
+        return False, resolved, inferred, _note_c
+    if _at_c is None:
+        # 位置の言い回しが無い＝末尾。**黙って決めない**ので根拠を必ず出す。
+        _at_c = len(_headers_c) + 1
+        _note_c = f"末尾＝{_at_c}列目（依頼文に位置の指定が無いため）"
+    # ★★ 2026-08-27（Namakoo が GUI で実測）: 見出しも値も無い列を**末尾**に足すと、
+    #   セルは 1 つも増えないので機械には**何も変わって見えない**（物理の使用範囲は
+    #   値のあるセルで測るため）。事後条件は正しく「列数が合わない」で × を出すが、
+    #   利用者には「動かなかった」としか見えない ── **やる前に断って理由を言う**。
+    #   ★ 途中に挿す場合は右の列がずれるので見える（そちらは通す）。
+    if not _name_c and int(_at_c) > len(_headers_c):
+        return False, resolved, inferred, (
+            "見出しも値も無い列を末尾に足しても、ファイルの中身は何も変わりません"
+            "（空の列はセルを持たないので機械にも見えません）── "
+            "見出しの名前を言ってください（例: 「原価の右にチェックという列を追加して」）")
+    resolved["name"] = _name_c
+    resolved["_at_col"] = int(_at_c)
+    resolved["_at_basis"] = _note_c
+    resolved["_headers"] = _headers_c
+    resolved["_header_row"] = _hr_c
+    # ★ 名前が無いなら「空のまま」と画面に書く（黙って空欄を作らない）。
+    # ★ 見出しが空の列を作ると、**その右にある列も走査できなくなる**
+    #   （走査は見出し行の最初の空で止まる）── 作る前に言う。判定は △ に落ちる。
+    _dropped = resolved.get("_name_dropped")
+    resolved["_name_label"] = _name_c or (
+        ("（依頼文に無い名前『%s』は採りませんでした・" % _dropped if _dropped
+          else "（名前なし・")
+        + "見出しは空のまま ── 右にある列も走査できなくなり、判定は △ になります）")
+    return None
+
+
+def _verify_bold(resolved, inferred, first_sheet, headers, op):
+    """BOLD の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    target = str(resolved.get("target", ""))
+    if target == "all":
+        if op != "CENTER_ALIGN":
+            return False, resolved, inferred, f"対象『all』は {OP_LABELS[op]} では未対応です"
+    elif target.startswith("row:"):
+        n = target[4:]
+        if not (n.isdigit() and int(n) >= 1):
+            return False, resolved, inferred, f"行番号『{n}』が不正です"
+        # ★ 単位I: 契約文(1743)・codegen(2588)は CENTER_ALIGN に row: を認めておらず、
+        #   ここだけが少数派だった（実測: row:N を通した先で codegen が素の traceback）。
+        #   codegen に row: を実装するのは別作業 ―― ここは契約文に合わせて拒否するだけ。
+        if op == "CENTER_ALIGN":
+            return False, resolved, inferred, (
+                f"対象『{target}』は {OP_LABELS[op]} では未対応です"
+                "（col:列名 か all を使ってください）"
+            )
+    elif target.startswith("col:"):
+        colname = target[4:]
+        v, was_inferred, err = resolve_col_ref(colname, headers.get(first_sheet, []))
+        if err:
+            return False, resolved, inferred, err
+        resolved["target"] = f"col:{v}"
+        if was_inferred:
+            inferred.add("target")
+    elif target.startswith("cell:"):
+        # ★ cell: は**機械が作る**形（LLM には出させない）。R,C は 1 起点。
+        try:
+            _r, _c = (int(x) for x in target[5:].split(","))
+        except ValueError:
+            return False, resolved, inferred, f"セルの指定『{target}』が読めません"
+        if _r < 1 or _c < 1:
+            return False, resolved, inferred, f"セルの指定『{target}』が範囲外です"
+    else:
+        return False, resolved, inferred, (
+            f"対象『{target}』の形式が不明です（row:N / col:列名 / cell:行,列 / all）")
+    if op == "FILL_COLOR":
+        color = str(resolved.get("color", "")).lower()
+        if color not in COLOR_MAP:
+            return False, resolved, inferred, f"色『{color}』は未対応です。使える色: {', '.join(sorted(COLOR_MAP))}"
+        resolved["color"] = color
+    return None
+
+
+def _verify_set_column_value(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers):
+    """SET_COLUMN_VALUE の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := resolve_in("col", first_sheet)):
+        return False, resolved, inferred, err
+    llm_value_raw = resolved.pop("value", None)
+    quoted = extract_quoted_literal(task)
+    if quoted is None:
+        return False, resolved, inferred, (
+            "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで"
+            "書いてください（例:「備考列を全部『確認済み』にして」）"
+        )
+    resolved["value"] = quoted
+    resolved["_sources"] = {**resolved.get("_sources", {}), "value": f"依頼文: 「{quoted}」"}
+    if llm_value_raw not in (None, "") and str(llm_value_raw) != quoted:
+        resolved["_warnings"] = resolved.get("_warnings", []) + [
+            f"LLM が返した値('{llm_value_raw}')と依頼文の引用('{quoted}')が食い違うため"
+            f"依頼文側('{quoted}')を採用しました"
+        ]
+    # ★ operator10 ④: 書き込む型を列の実体から機械決定する（A' 原則: LLM に決めさせない）。
+    #   book_meta にファイルパスがある（実行時）場合だけ実体を読める ── 手組みの
+    #   book_meta（単体テスト等）では従来どおり判定しない（_write_numeric を付けない）。
+    book_path = book_meta.get("path")
+    if book_path is not None:
+        numeric_value = value_parses_as_number(quoted)
+        write_numeric = False
+        if numeric_value is not None:
+            header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
+            col_idx1 = headers[first_sheet].index(resolved["col"]) + 1
+            try:
+                write_numeric = column_is_all_numeric(book_path, first_sheet, col_idx1,
+                                                       header_row_here)
+            except Exception:
+                write_numeric = False
+        resolved["_write_numeric"] = write_numeric
+        if write_numeric:
+            resolved["_write_numeric_value"] = numeric_value
+    return None
+
+
+def _verify_chart(resolved, inferred, first_sheet, resolve_in, task, headers):
+    """CHART の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := resolve_in("value_col", first_sheet)):
+        return False, resolved, inferred, err
+    # ★ グラフ段①: kind も A' 原則の中へ（cmp と同じ作法）。依頼文からの機械抽出が
+    #   非 None かつ LLM の kind と食い違えば機械が勝つ（EXTRACT の cmp と同じ形）。
+    llm_kind_raw = str(resolved.get("kind") or "").strip().lower()
+    mechanical_kind = extract_chart_kind_from_task(task)
+    if mechanical_kind is not None and mechanical_kind != llm_kind_raw:
+        kind = mechanical_kind
+        resolved["_warnings"] = resolved.get("_warnings", []) + [
+            f"LLM が返した種類({llm_kind_raw or '(空)'})と依頼文の機械抽出({mechanical_kind})が"
+            f"食い違うため機械抽出({mechanical_kind})を採用しました"
+        ]
+    else:
+        kind = llm_kind_raw or "bar"
+    if kind not in _CHART_KINDS:
+        return False, resolved, inferred, (
+            f"グラフ種類『{resolved.get('kind')}』は {'/'.join(_CHART_KINDS)} のどれでもありません"
+        )
+    resolved["kind"] = kind
+    # ★ グラフ段②: category_col(省略可・既定は先頭列)。指定があれば実在列検証。
+    raw_cat = resolved.get("category_col")
+    if raw_cat in (None, ""):
+        first_col = (headers.get(first_sheet) or [None])[0]
+        if first_col is None:
+            return False, resolved, inferred, f"シート『{first_sheet}』に列がありません"
+        resolved["category_col"] = first_col
+        inferred.add("category_col")
+    elif (err := resolve_in("category_col", first_sheet)):
+        return False, resolved, inferred, err
+    return None
+
+
+def _verify_insert_rows(resolved, inferred, book_meta, task, sheets, op):
+    """INSERT_ROWS の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    # ★ 2026-08-27（実測）:「みかんの下に空行を入れて」で LLM が 3 行目と言った
+    #   （みかんが 3 行目なので、下は 4 行目）。**位置は op に関係なく位置** ──
+    #   同じ機械の解決を通す（片配線を作らない）。
+    _sheet_i = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    _hr_i = int((book_meta.get("header_rows") or {}).get(_sheet_i, 1) or 1)
+    _at_i, _note_i = resolve_row_anchor(task, book_meta, _sheet_i, header_row=_hr_i)
+    # ★ 2026-08-27（実測）: 見つからなかった時に**黙って LLM の行番号へ落ちて**いた。
+    #   位置を名指しした依頼で場所が特定できないなら、推測で挿さずに断る
+    #   （静かに別の場所へ入るのが一番こわい ── ADD_ROW と同じ線に揃える）。
+    if _note_i and _at_i is None:
+        return False, resolved, inferred, _note_i
+    if _at_i is not None:
+        resolved["at"] = _at_i
+        resolved["_at_basis"] = _note_i
+    at_raw = str(resolved.get("at", "")).strip()
+    if not (at_raw.isdigit() and int(at_raw) >= 1):
+        return False, resolved, inferred, f"行番号『{resolved.get('at')}』が不正です（1以上の整数）"
+    resolved["at"] = int(at_raw)
+    count_raw = resolved.get("count")
+    if count_raw in (None, ""):
+        resolved["count"] = 1
+        inferred.add("count")
+    else:
+        count_str = str(count_raw).strip()
+        if not (count_str.isdigit() and int(count_str) >= 1):
+            return False, resolved, inferred, f"挿入行数『{count_raw}』が不正です（1以上の整数）"
+        resolved["count"] = int(count_str)
+    return None
+
+
+def _verify_extract_columns(resolved, inferred, first_sheet, book_meta, task, headers):
+    """EXTRACT_COLUMNS の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    _sheet_x = resolved.get("_target_sheet") or first_sheet
+    _hdrs_x = [str(h) for h in (headers.get(_sheet_x) or [])]
+    # ★ 値は LLM に作らせない: **依頼文に現れる実在の列名**を、出現順に機械が拾う。
+    #   LLM の cols は「候補の当たり」としてだけ使い、実在照合を通ったものだけ採る。
+    _asked = [c for c in _hdrs_x if c and c in (task or "")]
+    _llm_cols = resolved.get("cols")
+    if isinstance(_llm_cols, str):
+        _llm_cols = [x.strip() for x in _llm_cols.split(",") if x.strip()]
+    _llm_cols = [str(c) for c in (_llm_cols or []) if str(c) in _hdrs_x]
+    _cols_x = _asked or _llm_cols
+    if not _cols_x:
+        return False, resolved, inferred, (
+            "残す列が依頼文から読み取れません"
+            f"（ある列: {'、'.join(_hdrs_x)}）── 列名をそのまま書いてください")
+    if len(_cols_x) >= len(_hdrs_x):
+        return False, resolved, inferred, (
+            "全部の列が指定されています（抜き出す意味がありません）")
+    # ★ 依頼文の出現順に並べる（人が書いた順で出す ── 表の順に勝手に直さない）
+    _cols_x = sorted(set(_cols_x), key=lambda c: (task or "").find(c))
+    resolved["cols"] = _cols_x
+    resolved["_cols_label"] = "・".join(_cols_x)
+    resolved["_headers"] = _hdrs_x
+    resolved["_header_row"] = int((book_meta.get("header_rows") or {}).get(_sheet_x, 1) or 1)
+    resolved["_source_headers"] = tuple(_hdrs_x)
+    resolved["_new_sheet"] = _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub(
+        "_", "・".join(_cols_x) + "だけ")[:31]
+    return None
+
+
+def _verify_dedup(resolved, inferred, first_sheet, headers):
+    """DEDUP の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    raw_keys = resolved.get("keys")
+    if not isinstance(raw_keys, list) or not raw_keys:
+        return False, resolved, inferred, (
+            "重複を判定する列が依頼文から読み取れません。どの列が同じなら重複とみなすか、"
+            "依頼文に列名を書いてください（例:「取引先が同じ行を重複として除いて」）"
+        )
+    resolved_keys = []
+    for raw_key in raw_keys:
+        v, was_inferred, err = resolve_col_ref(raw_key, headers.get(first_sheet, []))
+        if err:
+            return False, resolved, inferred, err
+        resolved_keys.append(v)
+        if was_inferred:
+            inferred.add("keys")
+    resolved["keys"] = resolved_keys
+    # ★ 単位H: EXTRACT と同じ作法（出力シートの見出し署名の材料を resolved に積む）。
+    resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
+    resolved["_new_sheet"] = _dedup_output_sheet_name(resolved_keys)
+    return None
+
+
+def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in):
+    """SPLIT_CELL の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := resolve_in("col", first_sheet)):
+        return False, resolved, inferred, err
+    sep = split_cell.normalize_separator(resolved.get("sep"))
+    if not sep:
+        return False, resolved, inferred, (
+            "区切り(sep)が読み取れません（改行/カンマ/、/スペース などで指定してください）"
+        )
+    resolved["sep"] = sep
+    # ★ 何列必要かは**実データ**が決める（LLM に数えさせない）。
+    values = _column_values(book_meta, first_sheet, resolved["col"])
+    parts = split_cell.max_parts(values, sep)
+    if parts < 2:
+        return False, resolved, inferred, (
+            f"列『{resolved['col']}』に区切り『{split_cell.describe_separator(sep)}』が"
+            f"見つからないため、分けられません"
+        )
+    resolved["_parts"] = parts
+    resolved["_new_cols"] = [f"{resolved['col']}_{k}" for k in range(1, parts + 1)]
+    return None
+
+
+def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in):
+    """NUMBER_FORMAT の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    # ★ 2026-08-29: 行にも掛けられるようにした（行と列は軸違い）。
+    #   行が指定されている回は列を要求しない。
+    if resolved.get("row_number"):
+        _nf_sheet = resolved.get("_target_sheet") or first_sheet
+        _nf_hr = int((book_meta.get("header_rows") or {}).get(_nf_sheet, 1) or 1)
+        _nf_row = int(resolved["row_number"])
+        if _nf_row <= _nf_hr:
+            return False, resolved, inferred, (
+                f"{_nf_row}行目は見出し行（{_nf_hr}行目）またはその上です")
+        resolved["_row_index"] = _nf_row
+        resolved.pop("col", None)
+        resolved["_at_basis"] = f"{_nf_row}行目"
+    elif (err := resolve_in("col", first_sheet)):
+        return False, resolved, inferred, err
+    if resolved.get("style") != "thousands":
+        return False, resolved, inferred, f"書式『{resolved.get('style')}』は未対応です（対応: thousands）"
+    return None
+
+
+def _verify_delete_column(resolved, inferred, book_meta, sheets, headers):
+    """DELETE_COLUMN の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    name = str(resolved.get("col", "")).strip()
+    headers = (book_meta.get("headers") or {}).get(
+        resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
+    if name not in [str(h) for h in headers]:
+        return False, resolved, inferred, (
+            f"列『{name}』がこの表にありません（ある列: {"、".join(map(str, headers))}）")
+    if len([h for h in headers if str(h) != ""]) <= 1:
+        return False, resolved, inferred, "列が 1 本しかないので削除できません"
+    resolved["col"] = name
+    resolved["_headers"] = [str(h) for h in headers]
+    return None
+
+
+def _verify_pivot(resolved, inferred, first_sheet, resolve_in):
+    """PIVOT の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    # ★ AGGREGATE と同じ2 slot（group_col/value_col）。列名の実在確認だけ共有する。
+    if (err := resolve_in("group_col", first_sheet)):
+        return False, resolved, inferred, err
+    if (err := resolve_in("value_col", first_sheet)):
+        return False, resolved, inferred, err
+    return None
+
+
+def _verify_aggregate(resolved, inferred, first_sheet, resolve_in):
+    """AGGREGATE の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if (err := resolve_in("group_col", first_sheet)):
+        return False, resolved, inferred, err
+    if (err := resolve_in("value_col", first_sheet)):
+        return False, resolved, inferred, err
+    return None
+
+
+def _verify_merge(resolved, inferred):
+    """MERGE の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    if not re.fullmatch(r"[A-Za-z]{1,3}\d+:[A-Za-z]{1,3}\d+", str(resolved.get("range", ""))):
+        return False, resolved, inferred, f"範囲『{resolved.get('range')}』の形式が不正です（例: A1:C1）"
+    return None
+
+
+def _verify_draw_borders():
+    """DRAW_BORDERS の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    pass   # 引数無し・表全体が対象（検証することが無い）
+    return None
+
+
+def _verify_autofit():
+    """AUTOFIT の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
+
+    ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
+      何も返さずチェーンを抜ける」の 2 通りしかないので、この形で 1 つずつ剥がせる。
+    ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
+    ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
+    """
+    pass   # 引数無し・全列が対象（検証することが無い）
+    return None
+
+
 def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab: dict | None = None,
                      target_sheet: str | None = None) -> tuple:
     """② 検証。(ok, resolved_args, inferred_keys, error_message)。
@@ -3549,1627 +5382,146 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return r
 
     elif op == "COMPUTE_COLUMN":
-        operands = resolved.get("operands")
-        # ★ W10b 項目3: 税込み/税抜き等「1列 × 率」パターン。operands が列名1つだけの
-        #   配列なら『既存列×倍率』とみなす（2列の四則演算とは別モード）。倍率(factor)は
-        #   APPEND_TOTAL と同じ A' 原則で LLM から受け取らず機械確定する
-        #   （extract_rate_factor/lookup_vocab_factor・regex のみ）。
-        single_factor_mode = isinstance(operands, list) and len(operands) == 1
-        if not single_factor_mode and not (isinstance(operands, list) and len(operands) == 2):
-            return False, resolved, inferred, "演算対象が2つの列名になっていません"
-
-        if single_factor_mode:
-            v, was_inferred, err = resolve_col_ref(operands[0], headers.get(first_sheet, []))
-            if err:
-                return False, resolved, inferred, err
-            resolved["operands"] = [v]
-            if was_inferred:
-                inferred.add("operands")
-            if resolved.get("operator") not in ("*", "/"):
-                return False, resolved, inferred, (
-                    f"演算子『{resolved.get('operator')}』は列1つの計算（税込み/税抜き等）"
-                    "では * か / のみ対応です")
-
-            llm_factor_raw = resolved.pop("factor", None)
-            text_factor, text_snippet = extract_rate_factor(task)
-            vocab_factor, vocab_term = (None, None)
-            if text_factor is None:
-                vocab_factor, vocab_term = lookup_vocab_factor(task, vocab or {})
-
-            sources: dict = {}
-            if text_factor is not None:
-                resolved["factor"] = text_factor
-                sources["factor"] = f"依頼文: {text_snippet}"
-            elif vocab_factor is not None:
-                resolved["factor"] = vocab_factor
-                sources["factor"] = f"用語集: {vocab_term}"
-            else:
-                # ★ W10c 高: 依頼文に率らしい語が一切無いのに「1列×率」（税込み/税抜き専用）へ
-                #   分類されているのは、分類そのものが誤っている可能性が高い（実測: 「氏名の
-                #   列を全部『退職済み』に書き換えて」のような値の一括書き換え依頼が、税率の
-                #   話と誤認されて COMPUTE_COLUMN の単列モードに落ちることがあった）。
-                #   その場合は「倍率が分からない」でなく、分類自体を疑う文言に変える
-                #   （率を要求する op に分類されたのに率の手がかりが無い＝CLARIFY の理由を
-                #   正直に言い換える。指示は意図・保証は機械＝プロンプト側だけに頼らない）。
-                if not _RATE_SIGNAL_RE.search(task or ""):
-                    return False, resolved, inferred, (
-                        f"依頼「{task}」は『{v}』列に何らかの倍率（税率等）を掛ける操作として"
-                        "解釈しましたが、依頼文に倍率らしき手がかりが見当たりません。"
-                        "列の値をそのまま書き換える操作は今のところ対応していません。"
-                        "倍率を掛ける処理であれば、依頼文に率を書く（例:「消費税10%」）か、"
-                        "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
-                    )
-                # ★ 致命③(2026-08-23レビュー): 敗者復活（_resolve_tax_rescue・APPEND_TOTAL と
-                #   共有）。第一照合（上の text_factor/vocab_factor）の優先順は変えない ──
-                #   ここに来るのはその両方が外れ、かつ依頼文に率らしき語（税/込を含む）が
-                #   ある場合だけ（片配線の解消: 登録済みの税語彙で「登録してください」と
-                #   嘘をつかない）。
-                tax_factor, tax_term, tax_err = _resolve_tax_rescue("依頼", task or "", vocab)
-                if tax_factor is not None:
-                    resolved["factor"] = tax_factor
-                    sources["factor"] = f"用語集: {tax_term}（依頼『{task}』の税に適用）"
-                elif tax_err:
-                    return False, resolved, inferred, tax_err
-                else:
-                    return False, resolved, inferred, (
-                        "倍率（税率等）が分かりません。依頼文に率を書く（例:「消費税10%」）か、"
-                        "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
-                    )
-            if resolved["factor"] <= 0:
-                return False, resolved, inferred, f"倍率『{resolved['factor']}』は正の数でなければなりません"
-            if sources:
-                resolved["_sources"] = sources
-            # ★ W10c 中: 新規列の見出しの自然化。旧実装は見出しを f"{op1}{operator}{factor:g}"
-            #   （例:「金額*1.1」）という数式風の文字列にしていた（査定で名指し）。target
-            #   無指定(新規列作成)かつ依頼文が税込み/税抜きと分かる言い方の場合だけ、
-            #   その日本語ラベルを見出しに使う（A' 原則: LLM を使わず正規表現の有無のみで
-            #   決める。手がかりが無ければ従来どおりの数式風見出しにフォールバック）。
-            if not resolved.get("target"):
-                # ★★ 2026-08-30: **依頼文に名前が在るなら、それが名前**（作らない）。
-                #   下の「税込〜」は、人が名前を書かなかった時だけの間に合わせ。
-                _asked = new_column_name_from_task(task, headers.get(first_sheet, []))
-                if _asked:
-                    resolved["_new_col_label"] = _asked
-                elif _TAX_INCLUSIVE_RE.search(task or ""):
-                    resolved["_new_col_label"] = f"税込{v}"
-                elif _TAX_EXCLUSIVE_RE.search(task or ""):
-                    resolved["_new_col_label"] = f"税抜{v}"
-                elif _RATE_KEYWORD_RE.search(task or ""):
-                    resolved["_new_col_label"] = f"税込{v}" if resolved["operator"] == "*" else f"税抜{v}"
-            if llm_factor_raw not in (None, ""):
-                try:
-                    llm_factor = float(llm_factor_raw)
-                except (TypeError, ValueError):
-                    llm_factor = None
-                if llm_factor is not None and abs(llm_factor - resolved["factor"]) > 1e-9:
-                    mfactor = resolved["factor"]
-                    resolved["_warnings"] = [
-                        f"LLM が返した倍率({llm_factor:g})と機械抽出の倍率({mfactor:g})が"
-                        f"食い違うため機械抽出({mfactor:g})を採用しました"
-                    ]
-        else:
-            new_operands = []
-            for o in operands:
-                v, was_inferred, err = resolve_col_ref(o, headers.get(first_sheet, []))
-                if err:
-                    return False, resolved, inferred, err
-                new_operands.append(v)
-                if was_inferred:
-                    inferred.add("operands")
-            resolved["operands"] = new_operands
-            if resolved.get("operator") not in ("+", "-", "*", "/"):
-                return False, resolved, inferred, f"演算子『{resolved.get('operator')}』が不明です"
-        # ★ M2c: target(任意) — 依頼が既存列を名指し（「小計に」等）した場合はその列に書く。
-        #   無指定なら従来どおり新規列（codegen_dsl 側で分岐）。
-        # ★ W3: target が実在しない場合、翻訳が「新しい列の名前」（例:「利益列を作って」の
-        #   『利益』）を target と誤って埋めていることが多いと実測された（qwen2.5-coder:7b が
-        #   『既存列に書く/新規に作る』の区別を安定して守らない）。実在しない＝一意に決まらない
-        #   （複数解釈で曖昧）のとは別の理由なので、その場合だけ target を無指定として扱い
-        #   新規列作成にフォールバックする（推測で断定しない CLARIFY の原則は、真に曖昧な
-        #   ケース＝digit_candidates の複数一致にだけ残す）。
-        # ★ W3 改定(2026-08-20): 上の前提（実在しない target＝ほぼ捏造）が古くなった実測が
-        #   出た。「金額を数量×単価で埋めて」（金額列がまだ実在しない構成）で翻訳は正しく
-        #   target:"金額" を返す。だが無条件に捨てる旧実装はそれも落とし、新規列が
-        #   『数量*単価』に自動命名されていた（利用者が名前を言っているのに無視される・
-        #   2026-08-19 のデモ制作で3回踏んだ実害）。★ 依頼文を判定者にする: raw_target が
-        #   依頼文に実在する語として機械照合できるなら（単位B の name_matches_task を再利用
-        #   ── 素朴な in 判定はしない。「税込金額を…」+target「金額」のような片方向の部分
-        #   文字列の穴は単位B が塞いだ形そのものなので、同じ判定を2箇所に書かず呼ぶ）、
-        #   捏造ではなく利用者の指名とみなして新規列の名前として使う。依頼文に語が無ければ
-        #   従来どおり捏造とみなして捨てる（W3 本来の防御は生きている）。
-        if resolved.get("target"):
-            raw_target = resolved["target"]
-            v, was_inferred, err = resolve_col_ref(raw_target, headers.get(first_sheet, []))
-            if err:
-                if "一意に決まりません" in err:
-                    return False, resolved, inferred, err
-                # ★ 単位B 照合の断片ガード（呼び出し側・上の _raw_target_not_embedded_in_task
-                #   docstring 参照）: raw_target は「実在するか未確認」の生の文字列なので、
-                #   name_matches_task を素通しに使う前に (1) 1文字を弾き (2) 依頼文中の全出現が
-                #   「他の複合語（実在列とは限らない）の内部」でしかないなら弾く。
-                if (len(raw_target) >= 2
-                        and _raw_target_not_embedded_in_task(raw_target, task)
-                        and name_matches_task(raw_target, task, others=headers.get(first_sheet, []))):
-                    resolved["_new_col_label"] = raw_target
-                del resolved["target"]
-            elif (task_asks_to_add_a_column(task)
-                    and not name_matches_task(v, task,
-                                               others=headers.get(first_sheet, []))):
-                # ★★ 2026-09-02（130 件の器を広げて初めて見えた・実測）:
-                #   「単価の右に、数量と単価をかけた**列を作って**」で、一段目が
-                #   target='メモ'（実在するが**空**の列）を返し、道具は新しい列を作らずに
-                #   **その列へ書いて ✓ を出していた**。頼んでいない場所に書いている。
-                #   ★ W3 は「**実在しない** target ＝ ほぼ捏造」を捨てる。抜けていたのは
-                #     「**実在するが、依頼文に無い**」列 ── そこだけ素通りだった。
-                #   ★ 判定に語彙の一覧は要らない: 依頼文が「作る」と言っているか
-                #     （閉じた文法）と、その名前が依頼文と機械照合できるか（既存の
-                #     provenance 層）の 2 つだけ。新しい言い回しが来ても足すものは無い。
-                #   ★ 道具は既に気づいていた（★で開示していた）── **止めていなかった**だけ。
-                del resolved["target"]          # → 新しい列を作る（自動命名 or 依頼文の名前）
-            else:
-                resolved["target"] = v
-                if was_inferred:
-                    inferred.add("target")
-                    # ★ W10a 項目3: 数字指定→列名解決の元の表記を残す（解釈要約の表示用・
-                    #   例:「列5」→「在庫」列と解決した時、確認行の直後にその経緯を見せる）。
-                    resolved["_target_raw"] = raw_target
-        # ★★ 2026-09-02: 2 項の演算（売上 − 原価）でも、依頼文の名前を拾う。
-        #   名前の抽出は**倍率の枝（税込/税抜）にしかなかった**ので、
-        #   「売上から原価を引いた**利益**の列を作って」の見出しが
-        #   『売上-原価』（式そのもの）になっていた ── A' 原則が抜けた形。
-        #   ★ 人が名前を書いていない時だけ従来どおり式風の見出しに落ちる。
-        if not resolved.get("target") and not resolved.get("_new_col_label"):
-            # ★ 見出しの一覧を**渡さずに**呼ぶ ── 「既に在る名前」も受け取りたいから。
-            _asked_c = new_column_name_from_task(task, [], require_position=False)
-            _heads_c = [str(h) for h in (headers.get(first_sheet) or [])]
-            if _asked_c and _asked_c in _heads_c:
-                # ★★ 2026-09-02（実測で捕まえた実害）: 依頼した名前が**既に在る**時、
-                #   「新しい列の名前ではない」として捨てて自動命名に落ちていた。すると
-                #   「売上から原価を引いた利益の列を作って」を 2 回実行すると、
-                #   1 回目『利益』・2 回目『売上-原価』になり、**見出しが違うので
-                #   「見出しも値も同一の列を作りました」の関所が鳴らない** ──
-                #   値がそっくり同じ列が静かに 2 本目として増え、✓ まで出た。
-                #   （盲検 operator 査定が見つけた事故「不安でもう一回実行」の再来）
-                #   ★ 意味で考えても、これは「作る」ではなく「**もう在る**」。
-                #     その列を計算し直す依頼と読み、既存の**上書きの関所**に載せる
-                #     ── 新しい関所も新しい終了コードも作らない。
-                resolved["target"] = _asked_c
-            elif _asked_c:
-                resolved["_new_col_label"] = _asked_c
+        r = _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers, op)
+        if r is not None:
+            return r
 
     elif op == "LOOKUP_FILL":
-        if (err := check_sheet("target_sheet")):
-            return False, resolved, inferred, err
-        if (err := check_sheet("source_sheet")):
-            return False, resolved, inferred, err
-        # ★ 挙動変更#2: 旧実装はここで「対象シートは1枚目のみ対応しています」と拒否していた
-        #   （散在した『1枚目固定』の一つ・査定の致命そのもの）。LOOKUP_FILL は元々
-        #   target_sheet を自分の必須 slot として名前で受け取り check_sheet で実在確認まで
-        #   済ませているので、この制限を外すだけで対応できる。resolved["_target_sheet"] は
-        #   LOOKUP_FILL 自身の target_sheet を正とする（他 op 用の一般解決 first_sheet より
-        #   こちらを優先 — 依頼文に転記先/参照元の2シート名が両方出て一般解決が曖昧に
-        #   フォールバックしていても、LOOKUP_FILL のここでの解決は影響を受けない）。
-        resolved["_target_sheet"] = resolved["target_sheet"]
-        # ★★ 塊③(2/2)・中核 op 致命2（2026-08-24 の盲検）:
-        #   書き手（VLookupFromTable）は参照表の**列1（2 番目の列）を値**と決め打ちし、
-        #   検算（check_lookup_fill）も同じ決め打ちで期待値を作る ── やる側と見る側が
-        #   同じ思い込みを共有しているので必ず一致する（恒真）。
-        #   実測: マスタ = 商品/区分/**単価**（3 列目）で「単価を転記して」と頼むと、
-        #   **単価の列に「果物」が入って ✓** が出た。数値であるべき列に文字列が入る。
-        #   ★ 商品コード/商品名/単価 のような 3 列マスタは実務でごく普通。
-        #   → 書く**前**に前提を照合する: 頼まれた列名が参照表の 2 列目でなければ断る。
-        #   ★ 見出しが読めない参照表では断らない（根拠が無い時に止めない）。
-        #   ★ 断らずに**開示する**理由（実測で 1 度誤爆した）:
-        #     事故の形   マスタ=[商品,区分,単価] → 2 列目は「区分」
-        #     正しい依頼 明細  =[商品,数量,単価] → 2 列目は「数量」
-        #     どちらも「2 列目 ≠ 頼まれた列」で、**列の位置だけでは区別できない**。
-        #     断ると正しい依頼まで止める（既存検体で実証）。判定は変えず、
-        #     何が書かれるかを名指しして ✓ を △ に降ろす（決裁③の機構に乗せる）。
-        _src_headers = list((book_meta.get("headers") or {}).get(resolved["source_sheet"], []))
-        _want = resolved.get("target_col")
-        if len(_src_headers) > 2 and isinstance(_want, str) and _want in _src_headers:
-            _at = _src_headers.index(_want) + 1
-            if _at != 2:
-                resolved["_warnings"] = resolved.get("_warnings", []) + [
-                    f"参照表『{resolved['source_sheet']}』では『{_want}』が {_at} 列目ですが、"
-                    f"この転記は 2 列目を値として読む仕組みです（1 列目がキー・2 列目が値）。"
-                    f"実際に書き込まれるのは『{_src_headers[1]}』の値です ── "
-                    f"意図と違う場合は、キーと『{_want}』だけの表を用意してください"]
-        # ★ W10c 致命2: target_col は COMPUTE_COLUMN の target と違い OP_SCHEMA 上は必須
-        #   slot なので、LLM は「存在しないなら空にする」を選べない。実測（監査再現）:
-        #   対象シートに『単価』列がまだ無いのに転記を頼むと、LLM がそれと無関係な
-        #   *実在する*既存列（例:「数量」）の名前を代わりに返すことがある。resolve_col_ref
-        #   は実在列名なら無条件で素通しするため、これだけでは見分けられない（そのまま
-        #   進めると「数量」が確認なしで上書きされる事故になる）。
-        #   ここでは「実在するから信用する」をやめ、根拠を要求する:
-        #   ①依頼文にその列名が書かれている ②転記元（source_sheet）の値列
-        #   （VLookupFromTable ヘルパの仕様どおり常に列1＝2番目の列）と同じ名前
-        #   のどちらかが無いと、実在列であっても信用しない。
-        target_headers = headers.get(resolved["target_sheet"], [])
-        source_headers = headers.get(resolved["source_sheet"], [])
-        value_col_hint = source_headers[1] if len(source_headers) > 1 else None
-        raw_target_col = resolved.get("target_col")
-        raw_str = str(raw_target_col) if raw_target_col not in (None, "") else ""
-        exists = raw_str in target_headers
-        mentioned = bool(raw_str) and raw_str in task
-        matches_value_col = value_col_hint is not None and raw_str == value_col_hint
-
-        if exists and (mentioned or matches_value_col):
-            pass   # 根拠つきで実在列を指名＝そのまま使う（上書き注意は破壊の関所が別途担当）
-        elif not exists:
-            cands = _digit_candidates(raw_str, target_headers)
-            if len(cands) == 1:
-                resolved["target_col"] = cands[0]   # 数字表記の推定は従来どおり許容
-                inferred.add("target_col")
-            elif mentioned:
-                # ★ 依頼文にも同じ列名が書かれている＝新規作成が正しい解釈（COMPUTE_COLUMN の
-                #   target 無指定＝新規列と同じ考え方）。target_col はそのまま残し、
-                #   codegen_dsl 側で新規列として作る。
-                pass
-            else:
-                known = ", ".join(target_headers) if target_headers else "(無し)"
-                return False, resolved, inferred, (
-                    f"転記先の列『{raw_target_col}』が『{resolved['target_sheet']}』シートに"
-                    f"見つかりません。ある列: {known}。新しい列として作る場合は、依頼文に"
-                    f"その列名を書いてください（例:「{raw_target_col}という列を作って転記して」）"
-                )
-        else:
-            # ★ 実測の事故そのもの: exists=True だが根拠が無い（依頼文にも書かれておらず、
-            #   転記元の値列とも一致しない）＝上書き対象を取り違えている可能性が高い。
-            hint = f"（参照表『{resolved['source_sheet']}』の値の列は『{value_col_hint}』です）" \
-                if value_col_hint else ""
-            return False, resolved, inferred, (
-                f"転記先の列『{raw_target_col}』は実在しますが、依頼文にその列名が見当たらず、"
-                f"転記元の値とも対応が確認できません{hint}。上書き対象を取り違えている"
-                "可能性があるため、意図した列名を依頼文に明記してください"
-            )
-        if (err := resolve_in("key_col", resolved["target_sheet"])):
-            return False, resolved, inferred, err
+        r = _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, task, headers, op)
+        if r is not None:
+            return r
 
     elif op == "AGGREGATE":
-        if (err := resolve_in("group_col", first_sheet)):
-            return False, resolved, inferred, err
-        if (err := resolve_in("value_col", first_sheet)):
-            return False, resolved, inferred, err
+        r = _verify_aggregate(resolved, inferred, first_sheet, resolve_in)
+        if r is not None:
+            return r
 
     elif op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
-        target = str(resolved.get("target", ""))
-        if target == "all":
-            if op != "CENTER_ALIGN":
-                return False, resolved, inferred, f"対象『all』は {OP_LABELS[op]} では未対応です"
-        elif target.startswith("row:"):
-            n = target[4:]
-            if not (n.isdigit() and int(n) >= 1):
-                return False, resolved, inferred, f"行番号『{n}』が不正です"
-            # ★ 単位I: 契約文(1743)・codegen(2588)は CENTER_ALIGN に row: を認めておらず、
-            #   ここだけが少数派だった（実測: row:N を通した先で codegen が素の traceback）。
-            #   codegen に row: を実装するのは別作業 ―― ここは契約文に合わせて拒否するだけ。
-            if op == "CENTER_ALIGN":
-                return False, resolved, inferred, (
-                    f"対象『{target}』は {OP_LABELS[op]} では未対応です"
-                    "（col:列名 か all を使ってください）"
-                )
-        elif target.startswith("col:"):
-            colname = target[4:]
-            v, was_inferred, err = resolve_col_ref(colname, headers.get(first_sheet, []))
-            if err:
-                return False, resolved, inferred, err
-            resolved["target"] = f"col:{v}"
-            if was_inferred:
-                inferred.add("target")
-        elif target.startswith("cell:"):
-            # ★ cell: は**機械が作る**形（LLM には出させない）。R,C は 1 起点。
-            try:
-                _r, _c = (int(x) for x in target[5:].split(","))
-            except ValueError:
-                return False, resolved, inferred, f"セルの指定『{target}』が読めません"
-            if _r < 1 or _c < 1:
-                return False, resolved, inferred, f"セルの指定『{target}』が範囲外です"
-        else:
-            return False, resolved, inferred, (
-                f"対象『{target}』の形式が不明です（row:N / col:列名 / cell:行,列 / all）")
-        if op == "FILL_COLOR":
-            color = str(resolved.get("color", "")).lower()
-            if color not in COLOR_MAP:
-                return False, resolved, inferred, f"色『{color}』は未対応です。使える色: {', '.join(sorted(COLOR_MAP))}"
-            resolved["color"] = color
+        r = _verify_bold(resolved, inferred, first_sheet, headers, op)
+        if r is not None:
+            return r
 
     elif op == "NUMBER_FORMAT":
-        # ★ 2026-08-29: 行にも掛けられるようにした（行と列は軸違い）。
-        #   行が指定されている回は列を要求しない。
-        if resolved.get("row_number"):
-            _nf_sheet = resolved.get("_target_sheet") or first_sheet
-            _nf_hr = int((book_meta.get("header_rows") or {}).get(_nf_sheet, 1) or 1)
-            _nf_row = int(resolved["row_number"])
-            if _nf_row <= _nf_hr:
-                return False, resolved, inferred, (
-                    f"{_nf_row}行目は見出し行（{_nf_hr}行目）またはその上です")
-            resolved["_row_index"] = _nf_row
-            resolved.pop("col", None)
-            resolved["_at_basis"] = f"{_nf_row}行目"
-        elif (err := resolve_in("col", first_sheet)):
-            return False, resolved, inferred, err
-        if resolved.get("style") != "thousands":
-            return False, resolved, inferred, f"書式『{resolved.get('style')}』は未対応です（対応: thousands）"
+        r = _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in)
+        if r is not None:
+            return r
 
     elif op == "MERGE":
-        if not re.fullmatch(r"[A-Za-z]{1,3}\d+:[A-Za-z]{1,3}\d+", str(resolved.get("range", ""))):
-            return False, resolved, inferred, f"範囲『{resolved.get('range')}』の形式が不正です（例: A1:C1）"
+        r = _verify_merge(resolved, inferred)
+        if r is not None:
+            return r
 
     elif op == "CHART":
-        if (err := resolve_in("value_col", first_sheet)):
-            return False, resolved, inferred, err
-        # ★ グラフ段①: kind も A' 原則の中へ（cmp と同じ作法）。依頼文からの機械抽出が
-        #   非 None かつ LLM の kind と食い違えば機械が勝つ（EXTRACT の cmp と同じ形）。
-        llm_kind_raw = str(resolved.get("kind") or "").strip().lower()
-        mechanical_kind = extract_chart_kind_from_task(task)
-        if mechanical_kind is not None and mechanical_kind != llm_kind_raw:
-            kind = mechanical_kind
-            resolved["_warnings"] = resolved.get("_warnings", []) + [
-                f"LLM が返した種類({llm_kind_raw or '(空)'})と依頼文の機械抽出({mechanical_kind})が"
-                f"食い違うため機械抽出({mechanical_kind})を採用しました"
-            ]
-        else:
-            kind = llm_kind_raw or "bar"
-        if kind not in _CHART_KINDS:
-            return False, resolved, inferred, (
-                f"グラフ種類『{resolved.get('kind')}』は {'/'.join(_CHART_KINDS)} のどれでもありません"
-            )
-        resolved["kind"] = kind
-        # ★ グラフ段②: category_col(省略可・既定は先頭列)。指定があれば実在列検証。
-        raw_cat = resolved.get("category_col")
-        if raw_cat in (None, ""):
-            first_col = (headers.get(first_sheet) or [None])[0]
-            if first_col is None:
-                return False, resolved, inferred, f"シート『{first_sheet}』に列がありません"
-            resolved["category_col"] = first_col
-            inferred.add("category_col")
-        elif (err := resolve_in("category_col", first_sheet)):
-            return False, resolved, inferred, err
+        r = _verify_chart(resolved, inferred, first_sheet, resolve_in, task, headers)
+        if r is not None:
+            return r
 
     elif op == "APPEND_TOTAL":
-        if (err := resolve_in("col", first_sheet)):
-            return False, resolved, inferred, err
-        # ★ W6: label は既定値を持つ任意項目。ここで確定させ、codegen/事後条件/
-        #   確認行の全部に同じ既定解決を一貫して渡す。
-        resolved["label"] = str(resolved.get("label") or "合計")
-        label = resolved["label"]
+        r = _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in, args, task, vocab, headers)
+        if r is not None:
+            return r
 
-        # ★★ 2026-08-29（Namakoo が実測）: 合計行が**既に在る**表で「単価列の合計行に
-        #   単価の合計を書いて」と頼むと、10 行目に『単価合計』という**別の行**が増えた。
-        #   ★ 真因: 合計行を「データ行」と数えて、その下に足していた。
-        #   ★ 合計行が 1 つに決まり、その列がまだ空なら、**その行に書く**（行は増やさない）。
-        #     判定は既存の凍結規則を借りる（total_rows_in → row_has_total_word）──
-        #     ここで新しい規則を書かない。同じことを 2 箇所が決めると必ずずれる。
-        _tot_sheet = resolved.get("_target_sheet") or first_sheet
-        _tot_hr = int((book_meta.get("header_rows") or {}).get(_tot_sheet, 1) or 1)
-        _tot_rows = total_rows_in(book_meta, _tot_sheet, _tot_hr)
-        if len(_tot_rows) == 1:
-            _tr = _tot_rows[0]
-            _theads = [str(h) for h in ((book_meta.get("headers") or {}).get(_tot_sheet) or [])]
-            _tidx = _theads.index(resolved["col"]) + 1 if resolved["col"] in _theads else 0
-            _cur = None
-            if _tidx:
-                try:
-                    with BookView(Path(book_meta["path"])) as _bv:
-                        _cur = _bv.sheet(_tot_sheet).cell(row=_tr, column=_tidx).value
-                except Exception:
-                    _tidx = 0
-            if _tidx and (_cur in (None, "") or str(_cur).startswith("=SUM(")):
-                resolved["_at_row"] = _tr
-                resolved["_at_basis"] = f"既にある合計行＝{_tr}行目（行は増やしません）"
-                # ★ ラベルは**その行に既に在る物**が正（LLM の案『単価合計』で検算しない）。
-                try:
-                    with BookView(Path(book_meta["path"])) as _bv2:
-                        _lbl = _bv2.sheet(_tot_sheet).cell(row=_tr, column=1).value
-                    if _lbl not in (None, ""):
-                        resolved["label"] = str(_lbl)
-                        label = resolved["label"]
-                except Exception:
-                    pass
-            # ★★ 2026-08-29: ここで「既に値が入っています」と**断るのはやめた**。
-            #   既存の番人（事後条件の算術の検算＝二重計上に ✓ を出さない／単位F の関所）が
-            #   同じ事故を既に止めていて、断りを重ねると**その番人の出番が消える**
-            #   ── 過去の事故を守っている検体が通らなくなる（実測で 3 本落ちた）。
-            #   ★ 埋められる時だけ埋め、それ以外は今までどおり深い番人に任せる。
-
-        # ★ A': factor は LLM から受け取らない。LLM が返した値(あれば)はいったん取り出して
-        #   おき、機械抽出/用語集の結果と食い違う場合だけ WARN として記録する（常に機械が勝つ）。
-        llm_factor_raw = resolved.pop("factor", None)
-
-        text_factor, text_snippet = extract_rate_factor(task)
-        vocab_factor, vocab_term = (None, None)
-        if text_factor is None:
-            vocab_factor, vocab_term = lookup_vocab_factor(task, vocab or {})
-
-        sources: dict = {}
-        if text_factor is not None:
-            resolved["factor"] = text_factor
-            sources["factor"] = f"依頼文: {text_snippet}"
-        elif vocab_factor is not None:
-            resolved["factor"] = vocab_factor
-            sources["factor"] = f"用語集: {vocab_term}"
-        else:
-            resolved["factor"] = 1.0
-
-        if resolved["factor"] <= 0:
-            return False, resolved, inferred, f"倍率『{resolved['factor']}』は正の数でなければなりません"
-
-        # ★ 恒真式の番人（最優先）: label が「税」/「込」を含むのに倍率が確定できず既定
-        #   1.0 のままだと、税抜き金額に「税込み」ラベルが付いた恒真の誤りを事後条件が
-        #   pass にしてしまう（args 基準の検証だから）。ここで機械的に CLARIFY へ倒す
-        #   （語リストは 税/込 の2語で凍結・むやみに増やさない）。
-        # ★ operator8 ②: CLARIFY に倒す直前に敗者復活（lookup_vocab_tax_factor・
-        #   docstring 参照）。第一照合（上の text_factor/vocab_factor）の優先順は変えない
-        #   ―― ここに来るのはその両方が外れた場合だけ。
-        if resolved["factor"] == 1.0 and any(k in label for k in ("税", "込")):
-            tax_factor, tax_term, tax_err = _resolve_tax_rescue("ラベル", label, vocab)
-            if tax_factor is not None:
-                resolved["factor"] = tax_factor
-                sources["factor"] = f"用語集: {tax_term}（ラベル『{label}』の税に適用）"
-            elif tax_err:
-                return False, resolved, inferred, tax_err
-
-        if sources:
-            resolved["_sources"] = sources
-        if llm_factor_raw not in (None, ""):
-            try:
-                llm_factor = float(llm_factor_raw)
-            except (TypeError, ValueError):
-                llm_factor = None
-            if llm_factor is not None and abs(llm_factor - resolved["factor"]) > 1e-9:
-                mfactor = resolved["factor"]
-                resolved["_warnings"] = [
-                    f"LLM が返した倍率({llm_factor:g})と機械抽出の倍率({mfactor:g})が"
-                    f"食い違うため機械抽出({mfactor:g})を採用しました"
-                ]
-
-    # --- ★ 2026-08-26: 表の基本操作 3 種（追加・行削除・列削除）---------------
     elif op in ("ADD_ROW", "DELETE_ROWS"):
-        # ★★ 2026-08-27（Namakoo が実測）: 「みかんの下に梨を追加して」が動かなかった。
-        #   位置を**行番号**でしか受け取れないのに、人は相対で言う。LLM に数えさせると
-        #   外し、空行だけの INSERT_ROWS に落ちていた。
-        #   ★ 分担を変える: LLM は「誰の隣か」を言うだけ／**行番号は機械が実表を数えて決める**
-        #     （列名の解決を機械 3 段でやっているのと同じ形）。
-        #   ★ 機械が決めた位置は LLM の数字より優先する ── 実表を見た側が正しい。
-        _sheet0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
-        _hr0 = int((book_meta.get("header_rows") or {}).get(_sheet0, 1) or 1)
-        _at_anchor, _anchor_note = resolve_row_anchor(task, book_meta, _sheet0, header_row=_hr0)
-        if _anchor_note and _at_anchor is None:
-            return False, resolved, inferred, _anchor_note
-        if _at_anchor is not None:
-            resolved["at"] = _at_anchor
-            resolved["_at_basis"] = _anchor_note
-        at_raw = str(resolved.get("at", "")).strip()
-        if not (at_raw.isdigit() and int(at_raw) >= 1):
-            return False, resolved, inferred, f"行番号『{resolved.get('at')}』が不正です（1以上の整数）"
-        resolved["at"] = int(at_raw)
-        _sheet = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
-        _hr = int((book_meta.get("header_rows") or {}).get(_sheet, 1) or 1)
-        # ★ 見出し行より上を触らせない（表の骨格を壊す操作は受け付けない）。
-        if int(at_raw) <= _hr:
-            return False, resolved, inferred, (
-                f"{at_raw}行目は見出し行（{_hr}行目）またはその上です ── "
-                "見出しを壊す操作は受け付けません")
-        if op == "DELETE_ROWS":
-            c = resolved.get("count")
-            if c in (None, ""):
-                resolved["count"] = 1
-                inferred.add("count")
-            else:
-                cs = str(c).strip()
-                if not (cs.isdigit() and int(cs) >= 1):
-                    return False, resolved, inferred, f"削除行数『{c}』が不正です（1以上の整数）"
-                resolved["count"] = int(cs)
-        else:
-            # ★ 値は**列名で**受ける。実在しない列名はここで弾く（幻覚の封鎖）。
-            vals = resolved.get("values")
-            # ★ 2026-08-27（実測）: LLM は values を**並び**で返すことがある
-            #   （['梨', 600, 300]）。列名の対応は**機械が付けられる** ── 左から順に
-            #   当てる。多すぎる時だけ断る（推測で余りを捨てない）。
-            #   ★ 決めた対応は解釈行に出す（_values_label）── 黙って割り当てない。
-            _headers_now = (book_meta.get("headers") or {}).get(
-                resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
-            if isinstance(vals, (list, tuple)):
-                if len(vals) > len(_headers_now):
-                    return False, resolved, inferred, (
-                        f"入れる値が {len(vals)} 個ありますが、列は {len(_headers_now)} 本です"
-                        f"（ある列: {"、".join(map(str, _headers_now))}）")
-                # ★ 2026-08-27（実測・俺が入れた壊し方）: LLM は埋まらない列を None で
-                #   返すことがある（['梨', None, None]）。そのまま渡すと codegen が
-                #   `str(None)` を書き、セルに**文字列 "None"** が入った。
-                #   ★ 指定の無い列には**何も書かない**（空欄のままにする）。
-                #   ★ 事後条件はこの壊れ方を捕まえていた（rc=1）── 番人は効いていたが、
-                #     壊れた物を作ってから気づく形だったので、入口で落とす。
-                vals = {str(h): v for h, v in zip(_headers_now, vals)
-                         if v is not None and v != ""}
-                resolved["values"] = vals
-                inferred.add("values")
-            if not isinstance(vals, dict) or not vals:
-                return False, resolved, inferred, (
-                    "入れる値が読み取れません（列名と値の組で書いてください）")
-            headers = (book_meta.get("headers") or {}).get(
-                resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
-            unknown = [k for k in vals if str(k) not in [str(h) for h in headers]]
-            if unknown:
-                return False, resolved, inferred, (
-                    f"列『{"、".join(map(str, unknown))}』がこの表にありません"
-                    f"（ある列: {"、".join(map(str, headers))}）")
-            # ★ 同上: 値が空の列は書かない（"None" という文字列を作らない）。
-            resolved["values"] = {str(k): v for k, v in vals.items()
-                                   if v is not None and v != ""}
-            resolved["_headers"] = [str(h) for h in headers]
-            resolved["_values_label"] = "／".join(
-                f"{k}={v}" for k, v in resolved["values"].items())
-            # ★★ 2026-09-02（README の「既知の問題」に自分で書いていた）:
-            #   追加した行に既存の式が引き継がれず、利益列が**空のまま**だった。
-            #   宣言した値は正しいので ✓ は正しいが、人の期待とは違う。
-            #   ★ 引き継ぐのは「全データ行が式を持つ列」だけ ── 形で決める（列挙しない）。
-            #     合計列は E2..E7 が直値なので自然に外れる。
-            #   ★ **黙ってやらない。**解釈行に出す（_inherit_label）。
-            if op == "ADD_ROW" and resolved.get("at"):
-                _ih_sheet = resolved.get("_target_sheet")
-                _ih_hr = int(resolved.get("_header_row") or 1)
-                _ih_cols, _ih_from = formula_columns_to_inherit(
-                    book_meta, _ih_sheet, _ih_hr, int(resolved["at"]),
-                    set(resolved["values"].keys()))
-                if _ih_cols and _ih_from:
-                    resolved["_inherit_cols"] = _ih_cols
-                    resolved["_inherit_from"] = _ih_from
-                    _hd = resolved["_headers"]
-                    resolved["_inherit_label"] = "／".join(
-                        (_hd[c] if 0 <= c < len(_hd) else f"{c + 1}列目")
-                        for c in _ih_cols) + f"（{_ih_from}行目から）"
+        r = _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op)
+        if r is not None:
+            return r
 
     elif op == "SET_CELL_VALUE":
-        # ★ 2026-08-27（Namakoo「梨の売上にピンポイントで入れたい」）:
-        #   SET_COLUMN_VALUE は**列を丸ごと**同じ値にする op で、1 セルを狙えなかった。
-        _sheet_c = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
-        _headers_c = [str(h) for h in
-                       ((book_meta.get("headers") or {}).get(_sheet_c) or [])]
-        _row_name = str(resolved.get("row", "")).strip()
-        _col_name = str(resolved.get("col", "")).strip()
-        _row_no = resolved.get("row_number")
-        # ★★ 2026-08-30（Namakoo「行と列による一意の指定も出来た方がいい」→ 実測）:
-        #   「1行F列を「税込金額(10%)」にして」で、第二段は col に**書き込む値**を入れて
-        #   きた（col=『税込金額(10%)』）。列の名前と値が入れ替わっている。
-        #   ★ 依頼文が英字で列を名指ししているなら、それが正 ── 機械が実表から決める
-        #     （行番号を機械が決めるのと同じ分担・LLM の欄の中身に頼らない）。
-        _letters = {m.group(0) for m in _re_a1_col_word.finditer(_task_outside_quotes(task))}
-        if len(_letters) == 1:
-            _cand = next(iter(_letters)).replace("列", "").strip()
-            _v2, _inf2, _err2 = resolve_col_ref(_cand, _headers_c)
-            if not _err2:
-                _col_name = _v2
-        # ★ 2026-08-28: 列は**列文字でも**指せる（「F列に」）── resolve_col_ref が解く。
-        if _col_name not in _headers_c:
-            _v, _inf, _err = resolve_col_ref(_col_name, _headers_c)
-            if _err:
-                return False, resolved, inferred, (
-                    f"列『{_col_name}』がこの表にありません"
-                    f"（ある列: {"、".join(_headers_c)}）")
-            if _inf:
-                inferred.add("col")
-            _col_name = _v
-        if not _row_name and not _row_no:
-            return False, resolved, inferred, (
-                "どの行かが読み取れません（行の名前か行番号で指してください）")
-        # ★★ 2026-08-28: 行番号で指された時は**番号を正**にする（人が数えて言っている）。
-        #   ★ 名前も同時に在るなら、その行に本当にその名前が在るかを確かめる ──
-        #     三項（依頼・宣言・実体）。食い違ったら書かずに断る。
-        if _row_no:
-            _hr_c = int((book_meta.get("header_rows") or {}).get(_sheet_c, 1) or 1)
-            _path_c = book_meta.get("path")
-            try:
-                with BookView(Path(_path_c)) as _bvc:
-                    _wsc = _bvc.sheet(_sheet_c)
-                    _lastc, _colsc = data_extent(_wsc, _hr_c)
-                    _rowvals = [str(_wsc.cell(row=int(_row_no), column=c).value or "").strip()
-                                 for c in range(1, _colsc + 1)] if int(_row_no) <= _lastc else None
-            except Exception as e:
-                return False, resolved, inferred, f"表を読めませんでした（{type(e).__name__}）"
-            # ★★ 2026-08-30（Namakoo「行と列による一意の指定も出来た方がいい。
-            #   ピンポイントに操作できるようになる」）: それまで見出し行は一律で断って
-            #   いたので、**列の名前を直す手段が 1 つも無かった**（実測: 計算列の見出しが
-            #   「金額*1.1」に化けた表を、人が直せない）。
-            #   ★ 人が**行番号と列を書いて名指しした**のは、いちばん強い証拠 ──
-            #     見出しでも書かせる。ただし黙って書かない（解釈行で必ず言う）。
-            #   ★ LLM が推した行・名前から解いた行では、この道は開けない（下の else 側）。
-            if _rowvals is None and int(_row_no) > _hr_c:
-                return False, resolved, inferred, (
-                    f"{_row_no}行目はこの表の範囲外です（見出しは{_hr_c}行目・データは"
-                    f"{_hr_c + 1}〜{_lastc}行目）")
-            if int(_row_no) < _hr_c:
-                return False, resolved, inferred, (
-                    f"{_row_no}行目は見出し行（{_hr_c}行目）より上です ── "
-                    "表の外には書けません")
-            if int(_row_no) == _hr_c:
-                if task_names_a_row_number(task) != int(_row_no):
-                    return False, resolved, inferred, (
-                        f"{_row_no}行目は見出し行です ── 見出しの名前を変えるなら、"
-                        f"行番号と列で名指ししてください"
-                        f"（例:「{_hr_c}行G列を「新しい名前」にして」）")
-                resolved["_writes_header"] = True
-            # ★ 実測: 第二段は row に**行番号そのもの**を入れてくることがある（"7"）。
-            #   それは名前ではないので、名前としては扱わない（食い違い扱いにしない）。
-            if _row_name.isdigit() or _row_name == str(_row_no):
-                _row_name = ""
-            if _row_name and _row_name not in _rowvals:
-                return False, resolved, inferred, (
-                    f"{_row_no}行目に『{_row_name}』がありません"
-                    f"（その行: {"、".join(v for v in _rowvals if v)}）── "
-                    "行番号と名前が食い違っています")
-            _hitrow = int(_row_no)
-            _note_c = f"{_hitrow}行目（依頼文の行番号）"
-            if resolved.get("_writes_header"):
-                # ★ 見出しを書き換える回に「対象の行:取引先」と出ると読み手を誤らせる
-                #   （実測で出た）── 何をしているのかを、その言葉で言う。
-                _row_name = "見出し"
-                _note_c = f"{_hitrow}行目（見出し行）── **見出しの名前を変えます**"
-            else:
-                _row_name = _row_name or (_rowvals[0] if _rowvals and _rowvals[0] else str(_hitrow))
-        else:
-            # ★ 行が実在し・1 つに決まることを**適用前に**確かめる（推測で別の行に書かない）。
-            _hitrow, _note_c = _resolve_named_row(book_meta, _sheet_c, _row_name)
-            if _hitrow is None:
-                return False, resolved, inferred, _note_c
-        resolved["_row_index"] = _hitrow
-        # ★ 見出しを書き換えると、**その列は元の名前で引けなくなる** ── 位置を残す
-        #   （検算は名前でなく座標で見る）。実測で「列『税込み金額』が見つからない」と
-        #   落ちた（書き込み自体は成功していたのに）。
-        if _col_name in _headers_c:
-            resolved["_col_index"] = _headers_c.index(_col_name) + 1
-        resolved["row"] = _row_name
-        resolved["col"] = _col_name
-        resolved["_headers"] = _headers_c
-        resolved["_at_basis"] = _note_c
-        # ★ 値は LLM に決めさせず、依頼文から機械が取る（A' 原則・SET_COLUMN_VALUE と同じ線）。
-        #   ★ ただし 1 セルなので**裸の数字も受ける** ── 「梨の売上を2000にして」を
-        #     引用符の有無で断るのは、道具の都合を人に押し付けている（実測の困りごと）。
-        _lit = extract_quoted_literal(task)
-        if _lit is None:
-            # ★★ 2026-08-29（Namakoo が実測・直した先で出た穴）:
-            #   「丸山工業の締め日を**2026/08/31**にして」で **31** が書かれて ✓ が出た。
-            #   裸の数字を拾う正規表現が、日付の**末尾だけ**を掴んでいた。
-            #   ★ 先に機械の引き算（依頼文から、既に分かっている物を引く）を通す ──
-            #     こちらは値を**丸ごと**取るので、途中で切れない。
-            _lit = bare_value_from_task(task, _row_name, _col_name, _headers_c)
-        if _lit is None:
-            _m = _re_bare_number.search(task or "")
-            _lit = _m.group(1) if _m else None
-        if _lit is None:
-            # ★★ 2026-08-29（Namakoo が実測）: 「丸山重工の右にPCパーツ」が
-            #   『文字なら「」で囲んで』で断られていた。**引用符は道具の都合**であって、
-            #   人の書き方の問題ではない（この repo が何度も自分に言ってきた線）。
-            #   ★ A' 原則の芯は「引用符が在ること」ではなく「**依頼文に在る値**であること」。
-            #     だから条件をそちらへ置き直す: 依頼文に literal で在り・見出しの語でなく・
-            #     行の名前でもない値なら、引用符が無くても受ける。
-            #   ★ それでも**画面に出してから書く**（「こう読みました」に値が出る）。
-            _cand = str((resolved.get("value") if resolved.get("value") is not None else ""))
-            _cand = _cand.strip()
-            _bad = {str(h) for h in _headers_c} | {str(_row_name), str(_col_name)}
-            if _cand and _cand in (task or "") and _cand not in _bad:
-                _lit = _cand
-        if _lit is None:
-            return False, resolved, inferred, (
-                "書き込む値が依頼文から読み取れません"
-                "（依頼文に書かれている値をそのまま使います ── "
-                "紛らわしいときは「」で囲んでください）")
-        resolved["value"] = _lit
-        # ★ 2026-08-27（実測）: `_is_number` は**型**で見るので、文字列 "2000" は False。
-        #   ここへ来る値は必ず文字列なので、**数字として読めるか**で判定する。
-        #   ★ これを外すと `'2000'` が文字列でセルに入り、下流の SUM が静かに壊れる
-        #     （この repo が何度も測ってきた形）。
-        try:
-            resolved["_write_numeric_value"] = float(str(_lit).replace(",", ""))
-            resolved["_write_numeric"] = True
-        except ValueError:
-            pass
+        r = _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers, op)
+        if r is not None:
+            return r
 
     elif op == "DELETE_COLUMN":
-        name = str(resolved.get("col", "")).strip()
-        headers = (book_meta.get("headers") or {}).get(
-            resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
-        if name not in [str(h) for h in headers]:
-            return False, resolved, inferred, (
-                f"列『{name}』がこの表にありません（ある列: {"、".join(map(str, headers))}）")
-        if len([h for h in headers if str(h) != ""]) <= 1:
-            return False, resolved, inferred, "列が 1 本しかないので削除できません"
-        resolved["col"] = name
-        resolved["_headers"] = [str(h) for h in headers]
+        r = _verify_delete_column(resolved, inferred, book_meta, sheets, headers)
+        if r is not None:
+            return r
 
     # --- ★ 2026-08-27: 列の抽出（残す列を依頼文の実在列から機械が拾う）------------
     elif op == "EXTRACT_COLUMNS":
-        _sheet_x = resolved.get("_target_sheet") or first_sheet
-        _hdrs_x = [str(h) for h in (headers.get(_sheet_x) or [])]
-        # ★ 値は LLM に作らせない: **依頼文に現れる実在の列名**を、出現順に機械が拾う。
-        #   LLM の cols は「候補の当たり」としてだけ使い、実在照合を通ったものだけ採る。
-        _asked = [c for c in _hdrs_x if c and c in (task or "")]
-        _llm_cols = resolved.get("cols")
-        if isinstance(_llm_cols, str):
-            _llm_cols = [x.strip() for x in _llm_cols.split(",") if x.strip()]
-        _llm_cols = [str(c) for c in (_llm_cols or []) if str(c) in _hdrs_x]
-        _cols_x = _asked or _llm_cols
-        if not _cols_x:
-            return False, resolved, inferred, (
-                "残す列が依頼文から読み取れません"
-                f"（ある列: {'、'.join(_hdrs_x)}）── 列名をそのまま書いてください")
-        if len(_cols_x) >= len(_hdrs_x):
-            return False, resolved, inferred, (
-                "全部の列が指定されています（抜き出す意味がありません）")
-        # ★ 依頼文の出現順に並べる（人が書いた順で出す ── 表の順に勝手に直さない）
-        _cols_x = sorted(set(_cols_x), key=lambda c: (task or "").find(c))
-        resolved["cols"] = _cols_x
-        resolved["_cols_label"] = "・".join(_cols_x)
-        resolved["_headers"] = _hdrs_x
-        resolved["_header_row"] = int((book_meta.get("header_rows") or {}).get(_sheet_x, 1) or 1)
-        resolved["_source_headers"] = tuple(_hdrs_x)
-        resolved["_new_sheet"] = _EXTRACT_SHEET_NAME_FORBIDDEN_RE.sub(
-            "_", "・".join(_cols_x) + "だけ")[:31]
+        r = _verify_extract_columns(resolved, inferred, first_sheet, book_meta, task, headers)
+        if r is not None:
+            return r
 
     # --- ★ 2026-08-27: 条件つき書換（値と比較は機械が依頼文から取る）--------------
     elif op == "SET_WHERE":
-        if (err := resolve_in("col", first_sheet)):
-            return False, resolved, inferred, err
-        # ★ 2026-08-27（Namakoo「置き換えができない」）: 「『A』を『B』に」の形は、
-        #   **同じ列の中で A の行だけを B にする**＝条件つき書換の特別な場合
-        #   （条件列＝書き込み先列・比較は「等しい」）。新しい op は要らない。
-        #   ★ 条件も値も**引用の対**から機械が取る（LLM に決めさせない）。
-        _pair = extract_replace_pair(task)
-        if _pair:
-            resolved.setdefault("cond_col", resolved["col"])
-        if (err := resolve_in("cond_col", first_sheet)):
-            return False, resolved, inferred, err
-        if _pair:
-            resolved["cmp"], resolved["cond_value"], resolved["value"] = "eq", _pair[0], _pair[1]
-            resolved["_sources"] = {**resolved.get("_sources", {}),
-                                     "value": f"依頼文: 「{_pair[0]}」→「{_pair[1]}」"}
-            resolved["_headers"] = [str(h) for h in (headers.get(first_sheet) or [])]
-            resolved["_header_row"] = int(
-                (book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
-            resolved["_cond_label"] = (f"『{resolved['cond_col']}』が『{_pair[0]}』の行"
-                                        f"（→『{_pair[1]}』に）")
-            # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
-            resolved["_skip_rows"] = total_rows_in(book_meta, first_sheet, resolved["_header_row"])
-            if resolved["_skip_rows"]:
-                resolved["_skip_label"] = ("合計行 " + "、".join(
-                    f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
-            _hits_r = _rows_matching(book_meta, first_sheet, resolved["cond_col"], "eq",
-                                      _pair[0], resolved["_header_row"])
-            if _hits_r is not None:
-                if not _hits_r:
-                    return False, resolved, inferred, (
-                        f"『{resolved['cond_col']}』に『{_pair[0]}』の行がありません"
-                        "（ファイルには何も書いていません）")
-                resolved["_match_rows"] = _hits_r
-                resolved["_match_label"] = (
-                    f"{len(_hits_r)} 行（{'、'.join(str(r) for r in _hits_r[:5])}行目"
-                    + ("…）" if len(_hits_r) > 5 else "）"))
-            return True, resolved, inferred, None
-        # ★ 比較は機械が勝つ（EXTRACT と同じ作法・LLM の写し間違いで境界行が混入する）
-        _llm_cmp = str(resolved.get("cmp", "")).strip().lower()
-        _mech_cmp = extract_cmp_from_task(task)
-        if _mech_cmp is not None and _mech_cmp != _llm_cmp:
-            resolved["_warnings"] = resolved.get("_warnings", []) + [
-                f"LLM が返した比較({_llm_cmp or '(空)'})と依頼文の機械抽出({_mech_cmp})が"
-                f"食い違うため機械抽出({_mech_cmp})を採用しました"]
-            _cmp = _mech_cmp
-        else:
-            _cmp = _llm_cmp
-        if _cmp not in _EXTRACT_CMPS:
-            return False, resolved, inferred, (
-                f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません")
-        resolved["cmp"] = _cmp
-        # ★ 閾値は**依頼文の数字**から機械が取る（LLM に確定させない）。
-        _nums = _re_threshold_num.findall((task or "").translate(_ZENKAKU_DIGITS))
-        if _cmp == "contains":
-            _thr = resolved.get("cond_value")
-            if _thr in (None, ""):
-                return False, resolved, inferred, "条件の値が依頼文から読み取れません"
-            resolved["cond_value"] = str(_thr)
-        else:
-            if len(set(_nums)) != 1:
-                return False, resolved, inferred, (
-                    "条件の数値が依頼文から一意に読み取れません"
-                    f"（見つかった数: {'、'.join(sorted(set(_nums))) or 'なし'}）── "
-                    "「原価が500以上の行の…」のように 1 つだけ書いてください")
-            resolved["cond_value"] = float(_nums[0])
-        # ★ 書き込む値は引用符から（SET_COLUMN_VALUE と同じ関所 ── LLM に作らせない）
-        _q = extract_quoted_literal(task)
-        if _q is None:
-            return False, resolved, inferred, (
-                "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで"
-                "書いてください（例:「原価が500以上の行のチェック列に『◎』を付けて」）")
-        resolved["value"] = _q
-        resolved["_sources"] = {**resolved.get("_sources", {}), "value": f"依頼文: 「{_q}」"}
-        resolved["_headers"] = [str(h) for h in (headers.get(first_sheet) or [])]
-        resolved["_header_row"] = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
-        _lab = _EXTRACT_CMP_LABELS.get(_cmp, _cmp)
-        # ★ 500.0 でなく 500 と出す（人が依頼文に書いた形に近づける・整数なら整数で）
-        _cv = resolved["cond_value"]
-        _shown = (_cv if _cmp == "contains"
-                   else (str(int(_cv)) if float(_cv).is_integer() else _fmt_cell_value(_cv)))
-        resolved["_cond_label"] = f"『{resolved['cond_col']}』が {_shown} {_lab}"
-        # ★ 当てはまる行を**先に数えて画面に出す**（0 行なら、走らせる前に断る ──
-        #   「何も起きなかった」を後から × で知らせるのは、正しくても不親切）。
-        # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
-        resolved["_skip_rows"] = total_rows_in(book_meta, first_sheet, resolved["_header_row"])
-        if resolved["_skip_rows"]:
-            resolved["_skip_label"] = ("合計行 " + "、".join(
-                f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
-        _hits = _rows_matching(book_meta, first_sheet, resolved["cond_col"],
-                                _cmp, resolved["cond_value"], resolved["_header_row"])
-        if _hits is not None:
-            if not _hits:
-                return False, resolved, inferred, (
-                    f"{resolved['_cond_label']} に当てはまる行がありません"
-                    "（条件か値を確かめてください・ファイルには何も書いていません）")
-            resolved["_match_label"] = f"{len(_hits)} 行（{'、'.join(str(r) for r in _hits[:5])}行目"
-            resolved["_match_label"] += "…）" if len(_hits) > 5 else "）"
-            resolved["_match_rows"] = _hits
+        r = _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op)
+        if r is not None:
+            return r
 
     # --- ★ 2026-08-27: 列の追加（位置は機械が見出しから決める）--------------------
     elif op == "ADD_COLUMN":
-        _sheet_c = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
-        _hr_c = int((book_meta.get("header_rows") or {}).get(_sheet_c, 1) or 1)
-        _headers_c = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_c) or [])]
-        _name_c = str(resolved.get("name") or "").strip()
-        # ★★ 2026-08-27（実測）: 名前を言っていない依頼に対し、LLM が「新しい列」という
-        #   **依頼文に無い名前を作って**返す回があった（3 回中 1 回）。A' 原則の違反 ──
-        #   値は LLM に確定させない。**依頼文に現れない名前は採らない**（空欄に倒す）。
-        #   ★ 空欄は誤った名前より安い: 見出しが空なら △ になり、人が気づける。
-        #     もっともらしい名前が付くと、人は「自分がそう言った」と思ってしまう。
-        if _name_c and _name_c not in (task or ""):
-            resolved["_name_dropped"] = _name_c
-            _name_c = ""
-        # ★ 同名の列が既に在るなら断る（黙って 2 本目を作らない ── 後で列名の解決が
-        #   「2 つあります」で詰まる形を、作る側で防ぐ）。
-        if _name_c and _name_c in _headers_c:
-            return False, resolved, inferred, (
-                f"列『{_name_c}』は既にあります（{_headers_c.index(_name_c) + 1}列目）")
-        _at_c, _note_c = resolve_col_anchor(task, _headers_c)
-        if _at_c is None and _note_c:
-            return False, resolved, inferred, _note_c
-        if _at_c is None:
-            # 位置の言い回しが無い＝末尾。**黙って決めない**ので根拠を必ず出す。
-            _at_c = len(_headers_c) + 1
-            _note_c = f"末尾＝{_at_c}列目（依頼文に位置の指定が無いため）"
-        # ★★ 2026-08-27（Namakoo が GUI で実測）: 見出しも値も無い列を**末尾**に足すと、
-        #   セルは 1 つも増えないので機械には**何も変わって見えない**（物理の使用範囲は
-        #   値のあるセルで測るため）。事後条件は正しく「列数が合わない」で × を出すが、
-        #   利用者には「動かなかった」としか見えない ── **やる前に断って理由を言う**。
-        #   ★ 途中に挿す場合は右の列がずれるので見える（そちらは通す）。
-        if not _name_c and int(_at_c) > len(_headers_c):
-            return False, resolved, inferred, (
-                "見出しも値も無い列を末尾に足しても、ファイルの中身は何も変わりません"
-                "（空の列はセルを持たないので機械にも見えません）── "
-                "見出しの名前を言ってください（例: 「原価の右にチェックという列を追加して」）")
-        resolved["name"] = _name_c
-        resolved["_at_col"] = int(_at_c)
-        resolved["_at_basis"] = _note_c
-        resolved["_headers"] = _headers_c
-        resolved["_header_row"] = _hr_c
-        # ★ 名前が無いなら「空のまま」と画面に書く（黙って空欄を作らない）。
-        # ★ 見出しが空の列を作ると、**その右にある列も走査できなくなる**
-        #   （走査は見出し行の最初の空で止まる）── 作る前に言う。判定は △ に落ちる。
-        _dropped = resolved.get("_name_dropped")
-        resolved["_name_label"] = _name_c or (
-            ("（依頼文に無い名前『%s』は採りませんでした・" % _dropped if _dropped
-              else "（名前なし・")
-            + "見出しは空のまま ── 右にある列も走査できなくなり、判定は △ になります）")
+        r = _verify_add_column(resolved, inferred, book_meta, task, sheets, headers)
+        if r is not None:
+            return r
 
     # --- ★ 2026-08-27: 入れ替え（行か列かは**機械が実表を見て**決める）------------
     elif op == "SWAP":
-        # ★★ 2026-08-31: セルの入れ替えは **a/b を要求する前**に見る。
-        #   実測: 一段目が OUT_OF_VOCAB を返す言い方（「みどり建設の単価と丸和物流の
-        #   単価を入れ替えて」）では a/b が空で、ここで先に落ちていた。
-        #   ★ 座標は依頼文と実表だけで解ける ── LLM の返事に依存させない。
-        _sheet_s0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
-        _hr_s0 = int((book_meta.get("header_rows") or {}).get(_sheet_s0, 1) or 1)
-        _cells0 = swap_targets_are_cells(task, book_meta, _sheet_s0, _hr_s0)
-        _a = str(resolved.get("a", "")).strip()
-        _b = str(resolved.get("b", "")).strip()
-        if not _cells0 and (not _a or not _b):
-            return False, resolved, inferred, (
-                "入れ替える 2 つを取り出せませんでした"
-                "（『みかんとぶどうを入れ替えて』のように 2 つの名前を書いてください）")
-        if not _cells0 and _a == _b:
-            return False, resolved, inferred, (
-                f"『{_a}』と『{_b}』が同じものです（入れ替えになりません）")
-        _sheet_s = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
-        _hr_s = int((book_meta.get("header_rows") or {}).get(_sheet_s, 1) or 1)
-        _headers_s = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_s) or [])]
-        resolved["_headers"] = _headers_s
-        resolved["_header_row"] = _hr_s
-        resolved["a"], resolved["b"] = _a, _b
-        # ★★ 2026-08-31: 行/列を決める**前に**、セルの入れ替えでないかを見る。
-        #   実測: 「丸和物流の単価とみどり建設の単価を入れ替えて」で行を丸ごと
-        #   入れ替えて ✓ を出していた（頼んだのは 2 セル）。
-        if (_cells := _cells0):
-            # ★ 中身は**実表から読む**（LLM に値を作らせない・A' 原則）。
-            _p_s = book_meta.get("path")
-            try:
-                with BookView(Path(_p_s)) as _bv_s:
-                    _ws_s = _bv_s.sheet(_sheet_s)
-                    _vals = [_ws_s.cell(row=r, column=c).value for r, c in _cells]
-            except Exception as _e:
-                return False, resolved, inferred, f"表を読めませんでした（{type(_e).__name__}）"
-            if _vals[0] == _vals[1]:
-                return False, resolved, inferred, (
-                    "入れ替える 2 つのセルの中身が同じです（入れ替えになりません）")
-            resolved["_axis"] = "cell"
-            # ★ 2026-08-31: a/b が空の経路（一段目が OUT_OF_VOCAB だった回）だと
-            #   解釈行に「入れ替える一方: もう一方:」と**空欄**が出ていた。
-            #   嘘の空欄を見せない ── その行を人が呼ぶ名前（1 列目）で埋める。
-            if not _a or not _b:
-                _n0 = _cell_row_name_for(book_meta, _sheet_s, _cells[0][0], _hr_s)
-                _n1 = _cell_row_name_for(book_meta, _sheet_s, _cells[1][0], _hr_s)
-                resolved["a"] = _a or (str(_n0) if _n0 else f"{_cells[0][0]}行目")
-                resolved["b"] = _b or (str(_n1) if _n1 else f"{_cells[1][0]}行目")
-            resolved["_cells"] = [list(c) for c in _cells]
-            resolved["_cell_values"] = list(_vals)
-            resolved["_a_pos"], resolved["_b_pos"] = _cells[0][0], _cells[1][0]
-            resolved["_axis_label"] = (
-                f"セル（{_headers_s[_cells[0][1] - 1]} の {_cells[0][0]}行目 と "
-                f"{_headers_s[_cells[1][1] - 1]} の {_cells[1][0]}行目）")
-            return True, resolved, inferred, None
-        as_col = _a in _headers_s and _b in _headers_s
-        _ra, _note_a = _resolve_named_row(book_meta, _sheet_s, _a)
-        _rb, _note_b = _resolve_named_row(book_meta, _sheet_s, _b)
-        as_row = _ra is not None and _rb is not None
-        hint = _swap_axis_hint(task)
-        # ★ 三項（依頼・宣言・実体）: 依頼文の「行/列」という語と、LLM が挙げた 2 つの名前と、
-        #   実際の表。どれか 2 つだけで決めると、欠けた項を代用して恒真になる。
-        if as_col and as_row:
-            if hint is None:
-                return False, resolved, inferred, (
-                    f"『{_a}』『{_b}』は列の見出しにも、行の中身にも両方あります ── "
-                    "どちらを入れ替えるのか決められません"
-                    "（『〜の列を入れ替えて』『〜の行を入れ替えて』と書いてください）")
-            as_col, as_row = (hint == "column"), (hint == "row")
-        if hint == "row" and not as_row:
-            return False, resolved, inferred, f"行として決められません（{_note_a}／{_note_b}）"
-        if hint == "column" and not as_col:
-            return False, resolved, inferred, (
-                f"列として決められません（ある列: {"、".join(_headers_s)}）")
-        if not as_col and not as_row:
-            return False, resolved, inferred, (
-                f"入れ替える対象を決められません（{_note_a}／{_note_b}／"
-                f"ある列: {"、".join(_headers_s)}）")
-        resolved["_headers"] = _headers_s
-        resolved["_header_row"] = _hr_s
-        resolved["a"], resolved["b"] = _a, _b
-        if as_col:
-            resolved["_axis"] = "column"
-            resolved["_axis_label"] = "列（見出しで一致）"
-            resolved["_a_pos"] = _headers_s.index(_a) + 1
-            resolved["_b_pos"] = _headers_s.index(_b) + 1
-        else:
-            resolved["_axis"] = "row"
-            resolved["_axis_label"] = f"行（{_note_a}／{_note_b}）"
-            resolved["_a_pos"] = _ra
-            resolved["_b_pos"] = _rb
-            if min(_ra, _rb) <= _hr_s:
-                return False, resolved, inferred, (
-                    f"見出し行（{_hr_s}行目）を巻き込む入れ替えは受け付けません")
-        # ★★ 2026-08-29: 入れ替えは「表に写像 π を掛ける」ことで、式もその対象。
-        #   LibreOffice の自動付け替えに任せず、**π を通した式を自分で書き戻す**。
-        _sh = (cellmap.swap_cols(resolved["_a_pos"], resolved["_b_pos"]) if as_col
-                else cellmap.swap_rows(resolved["_a_pos"], resolved["_b_pos"]))
-        _rw, _rw_why = formula_rewrites_for_shift(
-            book_meta, resolved.get("_target_sheet") or first_sheet, _sh)
-        if _rw_why and "実行しません" in _rw_why:
-            return False, resolved, inferred, _rw_why
-        if _rw:
-            resolved["_formula_rewrites"] = sorted(
-                (r, c, f) for (r, c), f in _rw.items())
-            resolved["_formula_rewrites_label"] = (
-                f"{len(_rw)} 個の式を、入れ替え後の位置に合わせて書き直します"
-                "（操作前と同じ計算結果に戻ることを、適用後に読み戻して確かめます）")
-        elif _rw_why:
-            resolved["_warnings"] = resolved.get("_warnings", []) + [_rw_why]
-        # ★ 入れ替えでも「指す先の中身が変わる式」を名指しする（並べ替えと同じ目）。
-        #   ★ 軸で区画が変わるだけ ── 行なら 2 行、列なら 2 列（行と列を同じ形で書く）。
-        _sw_sheet = resolved.get("_target_sheet") or first_sheet
-        _lo, _hi = min(resolved["_a_pos"], resolved["_b_pos"]), max(resolved["_a_pos"],
-                                                                     resolved["_b_pos"])
-        _kw = ({"col_lo": _lo, "col_hi": _hi} if as_col
-                else {"row_lo": _lo, "row_hi": _hi})
-        # ★★ 2026-08-31（Namakoo「この指す中身が変わるとはどういうこと？」→ 実測）:
-        #   「金額と単価を入れ替えて」で ⚠ が出るが、**中身が 3 つとも事実に反していた**:
-        #     ・「指す先の中身が変わる」→ 変わらない（税込金額は金額を指し続けた）
-        #     ・「**行**が入れ替わる」   → 入れ替えたのは列
-        #     ・「直していません」       → **直している**（=E2*1.1 → =D2*1.1）
-        #   そして嘘の ⚠ のせいで、正しく動いた操作の ✓ が △ に落ちていた。
-        #   ★ 片配線の**逆**: 警告は並べ替え（式を直さない）用に作って入れ替えにも配線し、
-        #     そのあと入れ替えだけ式を直すようになったのに、警告は昔の前提のまま残った。
-        #   ★ 書き直す式は名指しから外す（別シートから指す式は書き直さないので残す）。
-        if (_dw := reference_drift_warning(book_meta, _sw_sheet,
-                                            rewritten=set(_rw),
-                                            unit=("列" if as_col else "行"), **_kw)):
-            resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
+        r = _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, headers)
+        if r is not None:
+            return r
 
     # --- ★ W9: 検証済みヘルパ4種の語彙昇格 -----------------------------------
     elif op == "INSERT_ROWS":
-        # ★ 2026-08-27（実測）:「みかんの下に空行を入れて」で LLM が 3 行目と言った
-        #   （みかんが 3 行目なので、下は 4 行目）。**位置は op に関係なく位置** ──
-        #   同じ機械の解決を通す（片配線を作らない）。
-        _sheet_i = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
-        _hr_i = int((book_meta.get("header_rows") or {}).get(_sheet_i, 1) or 1)
-        _at_i, _note_i = resolve_row_anchor(task, book_meta, _sheet_i, header_row=_hr_i)
-        # ★ 2026-08-27（実測）: 見つからなかった時に**黙って LLM の行番号へ落ちて**いた。
-        #   位置を名指しした依頼で場所が特定できないなら、推測で挿さずに断る
-        #   （静かに別の場所へ入るのが一番こわい ── ADD_ROW と同じ線に揃える）。
-        if _note_i and _at_i is None:
-            return False, resolved, inferred, _note_i
-        if _at_i is not None:
-            resolved["at"] = _at_i
-            resolved["_at_basis"] = _note_i
-        at_raw = str(resolved.get("at", "")).strip()
-        if not (at_raw.isdigit() and int(at_raw) >= 1):
-            return False, resolved, inferred, f"行番号『{resolved.get('at')}』が不正です（1以上の整数）"
-        resolved["at"] = int(at_raw)
-        count_raw = resolved.get("count")
-        if count_raw in (None, ""):
-            resolved["count"] = 1
-            inferred.add("count")
-        else:
-            count_str = str(count_raw).strip()
-            if not (count_str.isdigit() and int(count_str) >= 1):
-                return False, resolved, inferred, f"挿入行数『{count_raw}』が不正です（1以上の整数）"
-            resolved["count"] = int(count_str)
+        r = _verify_insert_rows(resolved, inferred, book_meta, task, sheets, op)
+        if r is not None:
+            return r
 
     elif op == "DRAW_BORDERS":
-        pass   # 引数無し・表全体が対象（検証することが無い）
+        r = _verify_draw_borders()
+        if r is not None:
+            return r
 
     elif op == "AUTOFIT":
-        pass   # 引数無し・全列が対象（検証することが無い）
+        r = _verify_autofit()
+        if r is not None:
+            return r
 
     elif op == "PIVOT":
-        # ★ AGGREGATE と同じ2 slot（group_col/value_col）。列名の実在確認だけ共有する。
-        if (err := resolve_in("group_col", first_sheet)):
-            return False, resolved, inferred, err
-        if (err := resolve_in("value_col", first_sheet)):
-            return False, resolved, inferred, err
+        r = _verify_pivot(resolved, inferred, first_sheet, resolve_in)
+        if r is not None:
+            return r
 
     # ★ 致命3(W10e): 一括定数書き換え。値は LLM に確定させない（A' 原則）。
     elif op == "SET_COLUMN_VALUE":
-        if (err := resolve_in("col", first_sheet)):
-            return False, resolved, inferred, err
-        llm_value_raw = resolved.pop("value", None)
-        quoted = extract_quoted_literal(task)
-        if quoted is None:
-            return False, resolved, inferred, (
-                "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで"
-                "書いてください（例:「備考列を全部『確認済み』にして」）"
-            )
-        resolved["value"] = quoted
-        resolved["_sources"] = {**resolved.get("_sources", {}), "value": f"依頼文: 「{quoted}」"}
-        if llm_value_raw not in (None, "") and str(llm_value_raw) != quoted:
-            resolved["_warnings"] = resolved.get("_warnings", []) + [
-                f"LLM が返した値('{llm_value_raw}')と依頼文の引用('{quoted}')が食い違うため"
-                f"依頼文側('{quoted}')を採用しました"
-            ]
-        # ★ operator10 ④: 書き込む型を列の実体から機械決定する（A' 原則: LLM に決めさせない）。
-        #   book_meta にファイルパスがある（実行時）場合だけ実体を読める ── 手組みの
-        #   book_meta（単体テスト等）では従来どおり判定しない（_write_numeric を付けない）。
-        book_path = book_meta.get("path")
-        if book_path is not None:
-            numeric_value = value_parses_as_number(quoted)
-            write_numeric = False
-            if numeric_value is not None:
-                header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
-                col_idx1 = headers[first_sheet].index(resolved["col"]) + 1
-                try:
-                    write_numeric = column_is_all_numeric(book_path, first_sheet, col_idx1,
-                                                           header_row_here)
-                except Exception:
-                    write_numeric = False
-            resolved["_write_numeric"] = write_numeric
-            if write_numeric:
-                resolved["_write_numeric_value"] = numeric_value
+        r = _verify_set_column_value(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers)
+        if r is not None:
+            return r
 
     # ★ EXTRACT: 単一条件（col × cmp × value）に一致する行を新シートへ抜き出す
     #   （コミット 2edcb08「EXTRACT op」参照）。col は実在検証、cmp は語彙の6値に限定、value は
     #   gte/lte/gt/lt なら数値必須・eq は数値化できればそのまま数値・できなければ文字列・
     #   contains は常に文字列（A' 原則: 数値化は機械が行う。LLM の言い分をそのまま信じない）。
     elif op == "EXTRACT":
-        # ★★ 2026-08-31（Namakoo が実測）:「**5行目の**ヤマノ食品を抜き出して」で
-        #   ヤマノ食品が **2 行とも**抜き出されていた（5行目という限定が無視された）。
-        #   ★ 三項の番人は鳴っていた（「依頼文が指しているのは: 5行目」）が、
-        #     **⚠ を出して進んで**いた ── 何が無視されたかを言っておらず、
-        #     利用者からは「効かなかった」に見える。
-        #   ★★ そして、そもそも**行番号での抜き出しは語彙に無い**（EXTRACT は
-        #     列×比較×値しか持たない）。できないことは ⚠ でなく**断る**。
-        #   ★ この分岐には**早い出口が 2 つ**ある（依頼文が実在の値を名指しした道と、
-        #     LLM の値をそのまま使う道）。最初は片方にだけ足して**素通り**した
-        #     ── 判定は必ず**両方の手前**に置く（今日 3 度目の片配線）。
-        if (_x_n := task_names_a_row_number(task)):
-            return False, resolved, inferred, (
-                f"行番号での抜き出し（{_x_n}行目）には対応していません ── "
-                "抜き出しは「どの列がどうなっている行か」で指してください"
-                "（例:「取引先がヤマノ食品の行を抜き出して」）")
-        # ★★ 2026-08-31（Namakoo の実測から辿って出た別件）:
-        #   「金額が60000以上の行を抜き出して」で **合計行（356400）まで抜き出されていた**。
-        #   条件には合っているが、**合計はデータ行ではない**。
-        #   ★ 並べ替え・条件つき書換では既に外していたのに、**抽出だけ外していなかった**
-        #     ── また片配線。判定は凍結済みの規則（total_rows_in）を借りる。
-        #   ★ ここも**早い出口より前**に置く（後ろに置いて 1 度素通りさせた）。
-        _x_hr = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
-        if (_x_tot := total_rows_in(book_meta, first_sheet, _x_hr)):
-            resolved["_skip_rows"] = list(_x_tot)
-            resolved["_skip_label"] = ("合計行 " + "、".join(
-                f"{r}行目" for r in _x_tot) + "（データ行でないため抜き出しません）")
-        if (err := resolve_in("col", first_sheet)):
-            return False, resolved, inferred, err
-        # ★★ 2026-08-27（Namakoo「みかんの行とりんごの行だけを抽出して」）:
-        #   実測で一段目は `contains "リンゴ"`（片仮名の幻覚）や `eq "みかんとりんご"`
-        #   （連結）を返していた。どちらも 0 行に当たり、**空の抽出結果が ✓ で出る**。
-        #   ★ 比較語（以上/以下/…）が依頼文に**無い**なら、それは条件でなく**名指し**。
-        #     表に実在する値のうち依頼文に現れるものを機械が拾い、「どれか」で抽出する。
-        #   ★ 比較語が在る時は触らない ── 「原価が500以上」の 500 を名前と読まない。
-        _hr_x = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
-        if extract_cmp_from_task(task) is None:
-            _named_vals = task_names_real_values(task, book_meta, first_sheet,
-                                                  resolved["col"], _hr_x)
-            if _named_vals:
-                if str(resolved.get("value") or "") not in _named_vals:
-                    resolved["_warnings"] = resolved.get("_warnings", []) + [
-                        f"LLM が返した値『{resolved.get('value')}』は列『{resolved['col']}』に"
-                        f"無いため、依頼文が名指しする実在の値"
-                        f"（{'、'.join(_named_vals)}）を採用しました"]
-                # ★★ 2026-09-02（実測で捕まえた・検体が警告していた事故の再演）:
-                #   ここは「依頼文が実在の値を名指ししたら機械が勝つ」という正しい規則
-                #   だが、**否定を知らなかった**。そのため「味噌汁以外を抜き出して」で
-                #   読み直しが cmp=nin を立てた直後にここが `eq` へ上書きし、
-                #   **味噌汁だけを抜き出して △ を出していた** ── 逆のことをして合格。
-                #   ★ 片配線そのもの: 読み直しに足して、決定の場所に足し忘れた。
-                _neg = task_says_except(task)
-                if _neg:
-                    resolved["cmp"] = "nin"
-                    resolved["value"] = list(_named_vals)
-                else:
-                    resolved["cmp"] = "in" if len(_named_vals) > 1 else "eq"
-                    resolved["value"] = (_named_vals if len(_named_vals) > 1
-                                          else _named_vals[0])
-                resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
-                resolved["_new_sheet"] = _extract_output_sheet_name(
-                    resolved["col"], resolved["cmp"], resolved["value"])
-                return True, resolved, inferred, None
-        llm_cmp_raw = str(resolved.get("cmp", "")).strip().lower()
-        # ★ operator9 ①: cmp も A' 原則の中へ。依頼文からの機械抽出が非 None かつ LLM の cmp と
-        #   食い違えば機械が勝つ（factor/value と同じ作法）。一致 or 機械 None なら現状どおり。
-        mechanical_cmp = extract_cmp_from_task(task)
-        if mechanical_cmp is not None and mechanical_cmp != llm_cmp_raw:
-            cmp = mechanical_cmp
-            resolved["_warnings"] = resolved.get("_warnings", []) + [
-                f"LLM が返した比較({llm_cmp_raw or '(空)'})と依頼文の機械抽出({mechanical_cmp})が"
-                f"食い違うため機械抽出({mechanical_cmp})を採用しました"
-            ]
-        else:
-            cmp = llm_cmp_raw
-        if cmp not in _EXTRACT_CMPS:
-            return False, resolved, inferred, (
-                f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません"
-            )
-        resolved["cmp"] = cmp
-        raw_value = resolved.get("value")
-        if raw_value in (None, ""):
-            return False, resolved, inferred, "抽出する値(value)が依頼文から読み取れません"
-        if cmp == "contains":
-            resolved["value"] = str(raw_value)
-        else:
-            try:
-                resolved["value"] = float(raw_value)
-            except (TypeError, ValueError):
-                # ★ 日付の範囲比較（台帳 DATE_RANGE_AGG 2件の正体・2026-08-24）。
-                #   「2026/3/26 以降」は数値ではないが、対象列が日付列なら
-                #   シリアル値に直せば既存の数値比較でそのまま通る（Basic 側は無改造）。
-                #   ★ resolved["value"] は**元の文字列のまま**残す ── 表示（解釈行・出力
-                #   シート名）が 46107 になるのを防ぐ。codegen だけが _value_serial を見る。
-                parsed_date = parse_date_literal(raw_value)
-                # ★ 2026-08-24（盲検の使い勝手レビュー）: 依頼文が「3月26日から4月25日まで」と
-                #   年を言っていないのに、LLM が **2023 年**を入れてきた（データは全部 2026 年）。
-                #   A' 原則 ── 依頼文に無い年は機械が受け取らない。年は人が決めることで、
-                #   LLM が埋めてよい空白ではない。
-                if parsed_date is not None and str(parsed_date.year) not in (task or ""):
-                    return False, resolved, inferred, (
-                        f"依頼文に年が書かれていないため、『{raw_value}』の"
-                        f"{parsed_date.year} 年は使えません"
-                        f"（何年かを書いて、もう一度お試しください）")
-                col_kind, col_has_time = _extract_column_date_kind(
-                    book_meta, first_sheet, resolved["col"])
-                if parsed_date is not None and col_kind == "date":
-                    resolved["value"] = str(raw_value)
-                    resolved["_value_serial"] = date_compare.threshold_for(cmp, parsed_date)
-                    resolved["_date_compare"] = True
-                    if cmp == "eq" and col_has_time:
-                        resolved["_warnings"] = resolved.get("_warnings", []) + [
-                            f"『{raw_value}』と一致で抽出しますが、列『{resolved['col']}』には"
-                            f"時刻が入っています（0時ちょうどの行しか当たりません）"
-                        ]
-                elif parsed_date is not None and col_kind == "text_date":
-                    # ★ 辞書順で黙って比べない ── "2026/3/26" > "2026/12/1" になる。
-                    return False, resolved, inferred, (
-                        f"列『{resolved['col']}』は日付が**文字列**で入っているため、"
-                        f"『{raw_value}』との日付比較ができません"
-                        f"（日付の書式に直してから、もう一度お試しください）"
-                    )
-                elif cmp != "eq":
-                    return False, resolved, inferred, (
-                        f"比較『{cmp}』には数値の値が必要ですが『{raw_value}』は数値に変換できません"
-                    )
-                else:
-                    resolved["value"] = str(raw_value)
-        # ★ 単位H: 出力シートの見出し署名(= 元シートの見出し行そのもの)を _own_output_headers
-        #   が組めるよう、決めた材料をここで resolved に積む（他 op の _target_sheet と同じ作法）。
-        resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
-        resolved["_new_sheet"] = _extract_output_sheet_name(resolved["col"], cmp, resolved["value"])
+        r = _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op)
+        if r is not None:
+            return r
 
-    # ★ DEDUP（EXTRACT の兄弟）: 判定キー列（1つ以上）の値の組が同じ行のうち最初の1行だけを
-    #   新シートへ残す。★ keys が無い/空なら CLARIFY ── 全列一致を黙って既定にしない
-    #   （「取引先が同じなら重複」は人の意図であって機械が推測してよい既定ではない）。
     elif op == "SPLIT_CELL":
-        if (err := resolve_in("col", first_sheet)):
-            return False, resolved, inferred, err
-        sep = split_cell.normalize_separator(resolved.get("sep"))
-        if not sep:
-            return False, resolved, inferred, (
-                "区切り(sep)が読み取れません（改行/カンマ/、/スペース などで指定してください）"
-            )
-        resolved["sep"] = sep
-        # ★ 何列必要かは**実データ**が決める（LLM に数えさせない）。
-        values = _column_values(book_meta, first_sheet, resolved["col"])
-        parts = split_cell.max_parts(values, sep)
-        if parts < 2:
-            return False, resolved, inferred, (
-                f"列『{resolved['col']}』に区切り『{split_cell.describe_separator(sep)}』が"
-                f"見つからないため、分けられません"
-            )
-        resolved["_parts"] = parts
-        resolved["_new_cols"] = [f"{resolved['col']}_{k}" for k in range(1, parts + 1)]
+        r = _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in)
+        if r is not None:
+            return r
 
     elif op == "DEDUP":
-        raw_keys = resolved.get("keys")
-        if not isinstance(raw_keys, list) or not raw_keys:
-            return False, resolved, inferred, (
-                "重複を判定する列が依頼文から読み取れません。どの列が同じなら重複とみなすか、"
-                "依頼文に列名を書いてください（例:「取引先が同じ行を重複として除いて」）"
-            )
-        resolved_keys = []
-        for raw_key in raw_keys:
-            v, was_inferred, err = resolve_col_ref(raw_key, headers.get(first_sheet, []))
-            if err:
-                return False, resolved, inferred, err
-            resolved_keys.append(v)
-            if was_inferred:
-                inferred.add("keys")
-        resolved["keys"] = resolved_keys
-        # ★ 単位H: EXTRACT と同じ作法（出力シートの見出し署名の材料を resolved に積む）。
-        resolved["_source_headers"] = tuple(headers.get(first_sheet, []))
-        resolved["_new_sheet"] = _dedup_output_sheet_name(resolved_keys)
+        r = _verify_dedup(resolved, inferred, first_sheet, headers)
+        if r is not None:
+            return r
 
     # ★ 帳票段: REPORT_PER_ROW（DESIGN-20260823-report-per-row.md）。表の1行を、人が作った
     #   雛形シートの1枚に転写してN枚出す。憲法の適用: 機械が触ってよいのは雛形の中の
     #   印({{列名}})が置かれたセルだけ ── ここで印を実在検証し、印以外は一切触らない前提を
     #   固める（型の出し分け・出力シート名・合計行の除外まで、すべて機械が決め切る）。
     elif op == "REPORT_PER_ROW":
-        if (err := check_sheet("template_sheet")):
-            return False, resolved, inferred, err
-        template_sheet = resolved["template_sheet"]
-        if template_sheet == first_sheet:
-            return False, resolved, inferred, (
-                f"雛形シートとデータシートが同じ『{template_sheet}』です。"
-                "雛形は別のシートに用意してください")
-        if (err := resolve_in("name_col", first_sheet)):
-            return False, resolved, inferred, err
-
-        book_path = book_meta.get("path")
-        if book_path is None:
-            return False, resolved, inferred, (
-                "帳票段はファイルの実体が無いと検証できません（book_meta に path が無い）")
-        data_headers = headers.get(first_sheet, [])
-        header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
-
-        try:
-            wb_tpl = openpyxl.load_workbook(book_path)
-        except Exception as e:
-            return False, resolved, inferred, f"雛形の読み込みに失敗しました: {e}"
-        try:
-            tpl_ws = wb_tpl[template_sheet]
-            placeholders = scan_placeholders(tpl_ws, tpl_ws.max_row or 1, tpl_ws.max_column or 1)
-            # ★ 縦の結合セルは、明細行を増やすと崩れる（値は合うので事後条件は通ってしまう）。
-            #   日本の請求書の雛形は結合だらけなので、起きる方に賭けるべき事象（設計査読）。
-            tpl_vmerges = [(m.min_row, m.max_row, m.coord)
-                            for m in tpl_ws.merged_cells.ranges if m.min_row != m.max_row]
-        finally:
-            wb_tpl.close()
-
-        if not placeholders:
-            return False, resolved, inferred, (
-                f"雛形『{template_sheet}』に印（{{{{列名}}}}）が見つかりません。"
-                "転記したいセルに {{列名}} の形で印を置いてください")
-
-        # ★ 2026-08-24: 1 セルに印が 2 つ以上あるなら、埋めずに断る。埋めると 1 セルに
-        #   2 回書くことになり後の値が前を消す ── 「それらしく埋まって片方が生で残る」
-        #   （盲検の査定で名指しされた事故）より、雛形を直してくださいと言う方が正しい。
-        if (dupes := cells_with_multiple_placeholders(placeholders)):
-            cell, names = dupes[0]
-            return False, resolved, inferred, (
-                f"雛形『{template_sheet}』の {cell} に印が {len(names)} つあります"
-                f"（{chr(12539).join(names)}）。1 つのセルに置ける印は 1 つまでです ── "
-                f"別々のセルに分けてください")
-
-        # ★★ 2026-08-28（Namakoo「同名の取引先から複数の発注があるケースでは
-        #   請求書を一枚にまとめないといけない」）: 印を 3 種類に仕分ける。
-        #   {{列名}} / {{明細:列名}} / {{合計:列名}}。**雛形が形を決める**ので、
-        #   依頼文にも一段目の語彙（OPS_DOC）にも 1 文字も足さない。
-        mark_layout, layout_err = report_group.classify_placeholders(placeholders)
-        if layout_err:
-            return False, resolved, inferred, f"雛形『{template_sheet}』: {layout_err}"
-        if mark_layout.detail_row is not None:
-            crossing = [c for lo, hi, c in tpl_vmerges if lo <= mark_layout.detail_row <= hi]
-            if crossing:
-                return False, resolved, inferred, (
-                    f"雛形『{template_sheet}』の明細行（{mark_layout.detail_row}行目）を、"
-                    f"縦に結合したセルが横切っています（{'・'.join(crossing[:3])}）。"
-                    "明細行は件数ぶん増えるので、この結合は崩れます ── "
-                    "結合を解くか、明細行の外へずらしてください")
-
-        resolved_placeholders = []
-        for ph in placeholders:
-            ph_kind, ph_col = report_group.mark_kind(ph.column_name)
-            if ph_col not in data_headers:
-                return False, resolved, inferred, (
-                    f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
-                    f"（{ph.cell}）が指す列『{ph_col}』は、データシート"
-                    f"『{first_sheet}』に見つかりません。実在する列名を印にしてください"
-                )
-            col_idx = data_headers.index(ph_col) + 1
-            if ph_kind == "total" and not ph.whole:
-                return False, resolved, inferred, (
-                    f"雛形『{template_sheet}』の合計の印『{{{{{ph.column_name}}}}}』"
-                    f"（{ph.cell}）は、セル全体を印にしてください（合計は数値です）")
-            if not ph.whole:
-                # ★ 訂正3: 部分一致の印は原理的に文字列にしかなれない ── 数値列には使わせない
-                #   （検体には無いが自分の検体で固定する境界。設計文書の指示どおり）。
-                try:
-                    is_numeric = column_is_all_numeric(book_path, first_sheet, col_idx,
-                                                        header_row_here)
-                except Exception:
-                    is_numeric = False
-                if is_numeric:
-                    return False, resolved, inferred, (
-                        f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
-                        f"（{ph.cell}）はセルの一部分（部分一致）ですが、列『{ph_col}』は"
-                        "数値です。数値列には部分一致の印を使えません"
-                        "（セル全体を印にしてください: 例 " + "{{" + ph.column_name + "}}）"
-                    )
-            resolved_placeholders.append({
-                "cell": ph.cell, "row": ph.row, "col": ph.col,
-                "column_name": ph_col, "kind": ph_kind, "mark": ph.column_name,
-                "whole": ph.whole, "raw": ph.raw, "col_idx": col_idx,
-            })
-        resolved["_placeholders"] = resolved_placeholders
-
-        try:
-            wb_data = openpyxl.load_workbook(book_path, data_only=True)
-        except Exception as e:
-            return False, resolved, inferred, f"データシートの読み込みに失敗しました: {e}"
-        try:
-            src_ws = wb_data[first_sheet]
-            last_row = _scan_last_row(src_ws, header_row=header_row_here)
-            rows_in = []
-            for r in range(header_row_here + 1, last_row + 1):
-                label_val = src_ws.cell(row=r, column=1).value
-                vals = {h: src_ws.cell(row=r, column=i + 1).value
-                        for i, h in enumerate(data_headers)}
-                rows_in.append((r, label_val, vals))
-        finally:
-            wb_data.close()
-        verdict = total_row.split_total_rows_multi(rows_in) if rows_in else total_row.TotalRowVerdict(
-            excluded=[], adopted_rows=[], mismatches=[])
-        row_values = {r: v for r, _l, v in rows_in}
-
-        # ★★ まとめるか、1 行 1 枚か ── **雛形と実表の両方**が決める（人に選ばせない）:
-        #   ・雛形に明細/合計の印が在る → まとめる（1 件でも同じ道を通る）
-        #   ・印は無いが同じ名前が 2 行以上ある → **断る**（2 枚に割れた紙は仕事にならない）
-        name_col_here = resolved["name_col"]
-        name_idx = data_headers.index(name_col_here) + 1
-        groups = report_group.build_groups(
-            [(r, [row_values[r].get(h) for h in data_headers]) for r in verdict.adopted_rows],
-            name_idx)
-        grouped = mark_layout.detail_row is not None or bool(mark_layout.total)
-        # ★★ 2026-08-28（設計査読で名指しされた・自分で開けかけた穴）:
-        #   ここで**断って**はいけない。同名が 2 行あっても正しい帳票がある ──
-        #   領収書・納品書は取引ごとに 1 枚だし、締め日違いの月別請求も同じ形
-        #   （OPS_DOC 自身が REPORT_PER_ROW の用途に領収書を挙げている）。
-        #   既に在る処方は「断ること」ではなく「✓ を出さないこと」だった（2026-08-24）。
-        #   ★ 反転させずに、△ の警告文へ**まとめ方への道**を足すだけにする。
-
-        used = set(sheets) | {template_sheet}
-        report_rows = []
-        if grouped:
-            for g in groups:
-                sheet_name = unique_sheet_name(str(g.name), used)
-                used.add(sheet_name)
-                report_rows.append({"row": g.rows[0], "sheet": sheet_name,
-                                     "name": g.name, "rows": list(g.rows)})
-        else:
-            for r in verdict.adopted_rows:
-                raw_name = row_values[r].get(name_col_here)
-                sheet_name = unique_sheet_name(str(raw_name), used)
-                used.add(sheet_name)
-                report_rows.append({"row": r, "sheet": sheet_name})
-        if not report_rows:
-            return False, resolved, inferred, (
-                "帳票にするデータ行がありません（表が空か、全行が合計行と判定されました）"
-            )
-        inspection_sheet = unique_sheet_name(inspection.SHEET_NAME, used)
-        used.add(inspection_sheet)
-
-        if grouped:
-            # ★ 1 枚に 1 つしか書けない欄が、グループの中で食い違っていないか。
-            #   食い違ったら**埋めずに断る** ── 推測で選ぶと、別の担当者の名前が客に届く。
-            by_name = {g.name: g for g in groups}
-            for rr in report_rows:
-                g = by_name[rr["name"]]
-                for ph in resolved_placeholders:
-                    if ph["kind"] == "value":
-                        vals = report_group.value_conflicts(g, row_values, ph["column_name"])
-                        if vals:
-                            # ★ 「足すなら {{合計:担当}}」は、担当のような文字列の列では
-                            #   意味を成さない ── 出せる道だけを名指しする。
-                            _way = f"『{{{{明細:{ph['column_name']}}}}}』にしてください"
-                            if all(report_group.is_numeric(v) for v in vals):
-                                _way = (f"『{{{{明細:{ph['column_name']}}}}}』、"
-                                         f"足すなら『{{{{合計:{ph['column_name']}}}}}』"
-                                         "にしてください")
-                            return False, resolved, inferred, (
-                                f"『{g.name}』の {list(g.rows)}行目で"
-                                f"『{ph['column_name']}』が食い違っています（{vals}）。"
-                                f"1 枚の紙には 1 つしか書けません ── 明細に出すなら{_way}")
-                    elif ph["kind"] == "total":
-                        _s, serr = report_group.sum_for(g, row_values, ph["column_name"])
-                        if serr:
-                            return False, resolved, inferred, f"『{g.name}』: {serr}"
-            resolved["_groups"] = [{"sheet": rr["sheet"], "name": rr["name"],
-                                     "rows": rr["rows"]} for rr in report_rows]
-            resolved["_detail_row"] = mark_layout.detail_row
-        else:
-            # ★ 2026-08-24: 重複を知った瞬間に言う（`_2` を付けたのがその瞬間）。
-            #   実測: 3 社の売上表（4 行）で請求書 4 枚・同じ取引先が 2 枚に分かれて ✓ が出た。
-            #   ★ 付きなので count_suspicious_advisories が拾い、決裁③で ✓→△ に降格する。
-            if (dup := duplicate_name_warning(
-                    name_col_here,
-                    [row_values[r].get(name_col_here) for r in verdict.adopted_rows])):
-                resolved["_warnings"] = resolved.get("_warnings", []) + [dup]
-        resolved["_report_rows"] = report_rows
-        resolved["_report_sheet_names"] = [rr["sheet"] for rr in report_rows]
-        resolved["_inspection_sheet"] = inspection_sheet
-        resolved["_source_headers"] = tuple(data_headers)
+        r = _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers)
+        if r is not None:
+            return r
 
     # ★ 様式写像段: FORMAT_MAP（DESIGN-20260824-format-map.md）。REPORT_PER_ROW の兄弟
     #   （縦の展開）── 表の1行を、人が作った雛形の1行に転写して N行の新シートを1枚出す。
     #   憲法の適用は同じ: 機械が触ってよいのは雛形の中の印({{列名}})が置かれたセルだけ。
     elif op == "FORMAT_MAP":
-        if (err := check_sheet("template_sheet")):
-            return False, resolved, inferred, err
-        template_sheet = resolved["template_sheet"]
-        if template_sheet == first_sheet:
-            return False, resolved, inferred, (
-                f"雛形シートとデータシートが同じ『{template_sheet}』です。"
-                "雛形は別のシートに用意してください")
-
-        book_path = book_meta.get("path")
-        if book_path is None:
-            return False, resolved, inferred, (
-                "様式写像段はファイルの実体が無いと検証できません（book_meta に path が無い）")
-        data_headers = headers.get(first_sheet, [])
-        header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
-
-        try:
-            wb_tpl = openpyxl.load_workbook(book_path)
-        except Exception as e:
-            return False, resolved, inferred, f"雛形の読み込みに失敗しました: {e}"
-        try:
-            tpl_ws = wb_tpl[template_sheet]
-            placeholders = scan_placeholders(tpl_ws, tpl_ws.max_row or 1, tpl_ws.max_column or 1)
-            if not placeholders:
-                return False, resolved, inferred, (
-                    f"雛形『{template_sheet}』に印（{{{{列名}}}}）が見つかりません。"
-                    "出力したい列の直下のセルに {{列名}} の形で印を置いてください")
-
-            # ★ 2026-08-24: 1 セルに印が 2 つ以上あるなら、埋めずに断る。埋めると 1 セルに
-            #   2 回書くことになり後の値が前を消す ── 「それらしく埋まって片方が生で残る」
-            #   （盲検の査定で名指しされた事故）より、雛形を直してくださいと言う方が正しい。
-            if (dupes := cells_with_multiple_placeholders(placeholders)):
-                cell, names = dupes[0]
-                return False, resolved, inferred, (
-                    f"雛形『{template_sheet}』の {cell} に印が {len(names)} つあります"
-                    f"（{chr(12539).join(names)}）。1 つのセルに置ける印は 1 つまでです ── "
-                    f"別々のセルに分けてください")
-
-            # ★ 第一波: 印は全部1つの行に置かれている前提（設計文書「見出し行 + 直下1行に印」）。
-            #   最初に見つかった印の行を「印行」、その直上を「見出し行」とみなす。
-            ph_row = placeholders[0].row
-            header_tpl_row = ph_row - 1
-            if header_tpl_row < 1:
-                return False, resolved, inferred, (
-                    f"雛形『{template_sheet}』の印（{ph_row}行目）の上に見出し行がありません。"
-                    "印の1つ上の行に出力したい列名を書いてください")
-
-            row_placeholders = sorted(
-                (ph for ph in placeholders if ph.row == ph_row), key=lambda p: p.col)
-            resolved_placeholders = []
-            header_texts = []
-            for ph in row_placeholders:
-                if ph.column_name not in data_headers:
-                    return False, resolved, inferred, (
-                        f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
-                        f"（{ph.cell}）が指す列『{ph.column_name}』は、データシート"
-                        f"『{first_sheet}』に見つかりません。実在する列名を印にしてください"
-                    )
-                col_idx = data_headers.index(ph.column_name) + 1
-                if not ph.whole:
-                    # ★ REPORT_PER_ROW と同じ境界: 部分一致の印は原理的に文字列にしかなれない。
-                    try:
-                        is_numeric = column_is_all_numeric(book_path, first_sheet, col_idx,
-                                                            header_row_here)
-                    except Exception:
-                        is_numeric = False
-                    if is_numeric:
-                        return False, resolved, inferred, (
-                            f"雛形『{template_sheet}』の印『{{{{{ph.column_name}}}}}』"
-                            f"（{ph.cell}）はセルの一部分（部分一致）ですが、列『{ph.column_name}』は"
-                            "数値です。数値列には部分一致の印を使えません"
-                            "（セル全体を印にしてください: 例 " + "{{" + ph.column_name + "}}）"
-                        )
-                header_texts.append(tpl_ws.cell(row=header_tpl_row, column=ph.col).value)
-                resolved_placeholders.append({
-                    "cell": ph.cell, "row": ph.row, "col": ph.col,
-                    "column_name": ph.column_name, "whole": ph.whole, "raw": ph.raw,
-                    "col_idx": col_idx, "out_col": len(resolved_placeholders) + 1,
-                })
-        finally:
-            wb_tpl.close()
-        resolved["_placeholders"] = resolved_placeholders
-        resolved["_header_texts"] = header_texts
-        resolved["_header_tpl_row"] = header_tpl_row
-        resolved["_placeholder_tpl_row"] = ph_row
-
-        try:
-            wb_data = openpyxl.load_workbook(book_path, data_only=True)
-        except Exception as e:
-            return False, resolved, inferred, f"データシートの読み込みに失敗しました: {e}"
-        try:
-            src_ws = wb_data[first_sheet]
-            last_row = _scan_last_row(src_ws, header_row=header_row_here)
-            rows_in = []
-            for r in range(header_row_here + 1, last_row + 1):
-                label_val = src_ws.cell(row=r, column=1).value
-                vals = {h: src_ws.cell(row=r, column=i + 1).value
-                        for i, h in enumerate(data_headers)}
-                rows_in.append((r, label_val, vals))
-        finally:
-            wb_data.close()
-        verdict = total_row.split_total_rows_multi(rows_in) if rows_in else total_row.TotalRowVerdict(
-            excluded=[], adopted_rows=[], mismatches=[])
-        if not verdict.adopted_rows:
-            return False, resolved, inferred, (
-                "写す行がありません（表が空か、全行が合計行と判定されました）"
-            )
-
-        used = set(sheets) | {template_sheet}
-        output_sheet = unique_sheet_name(str(template_sheet) + "_出力", used)
-        used.add(output_sheet)
-        inspection_sheet = unique_sheet_name(inspection.SHEET_NAME, used)
-        used.add(inspection_sheet)
-
-        resolved["_data_rows"] = list(verdict.adopted_rows)
-        resolved["_output_sheet"] = output_sheet
-        resolved["_inspection_sheet"] = inspection_sheet
-        resolved["_source_headers"] = tuple(data_headers)
+        r = _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers)
+        if r is not None:
+            return r
 
     else:
         return False, resolved, inferred, f"未対応の操作: {op}"
