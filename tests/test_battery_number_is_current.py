@@ -82,6 +82,88 @@ def test_the_interview_script_is_bound_to_the_record_too():
     assert any("想定問答" in f for f in files), (
         "demo/想定問答.md に MATRIX の印が無い ── 当日読み上げる紙が縛られていない")
 
+
+# ★ 「N 件中」と書いてよい (文書, N) の対。
+#   ★★ 数字だけの白名簿にしない ── 2026-09-04 の変異試験で見つけた穴:
+#     想定問答のために 93 を許したら、**README に「93 件中」を書いても通った**。
+#     ある紙のための許可が、全部の紙に効いてしまう。だから対で持つ。
+#   ★ 白名簿は宣言駆動 ── 増やすときは、なぜ歴史として残すのかをここに書く。
+_CASES_IN_TEXT_ALLOWED = {
+    ("PREREG_translation_v7.md", 2),   # 事前登録（別の測定・2 件の予測）
+    ("想定問答.md", 10),                # 「1B だと 10 件中 6 件が的外れ」（モデル比較）
+    ("想定問答.md", 93),                # Q8 のモデル比較表 ── 2026-08-30 に 93 件で測った
+                                        #   **過去の測定**。小さいモデルはその後測り直して
+                                        #   いないので分母は当時のまま残す（測り直さずに
+                                        #   分母だけ書き換えると、測っていない数字を主張する）
+}
+
+
+def test_no_document_quotes_a_superseded_case_count():
+    """★ 「N 件中」の N が、記録の件数でも白名簿でもなければ赤くする（2026-09-04）。
+
+    ★ なぜ足したか: MATRIX の印は**印の中しか守らない**。同じ日に 2 度、
+      印の外で古い数字が見つかった ──
+      ① README「断り 3」/ 手順書「下の 190 件」「残りの 1 件」
+      ② 想定問答「93 件中 92 件（98.9%）」（41 行目・印を置いて解決）と、
+         **同じ紙の 206 行目にもう 1 つ**「93 件中 98.9%」（こちらは見落としていた）。
+      ★ 1 箇所直して安心した所に 2 つ目が在った。だから「印を置く」だけでなく
+        **古い分母を名指しで禁じる**側も要る。
+    """
+    import re
+    rec = _matrix()
+    cur = int(rec["cases"])
+    bad = []
+    for path in sorted(REPO.rglob("*.md")):
+        if any(x in str(path) for x in (".git", "node_modules", "CHANGELOG")):
+            continue
+        text = path.read_text(encoding="utf-8")
+        # 印の中は別の番人が見ているので外す
+        text = re.sub(r"<!-- [A-Z_]+ -->.*?<!-- /[A-Z_]+ -->", "", text, flags=re.S)
+        for m in re.finditer(r"(\d+)\s*件中", text):
+            n = int(m.group(1))
+            if n == cur:
+                continue
+            if any(f in str(path) and n == k for f, k in _CASES_IN_TEXT_ALLOWED):
+                continue
+            bad.append((str(path.relative_to(REPO)), m.group(0)))
+    assert not bad, (
+        f"古い分母が文書に残っている: {bad}（今は {rec['cases']} 件）── "
+        "歴史として残すなら _CASES_IN_TEXT_ALLOWED に理由つきで足すこと")
+
+
+def test_no_document_claims_zero_failures_when_there_are_failures():
+    """★ 記録に失敗が在る間は、どの文書も「壊した 0 / 壊していない 100%」と書けない。
+
+    ★ なぜ足したか（2026-09-04）: 段2.5 で**語彙の中の穴**が 2 件見つかり、
+      記録の failed が 0 でなくなった。この時いちばん危ないのは、
+      **見出しの主張だけが古いまま残る**こと ── しかもそれは
+      「読み上げる紙」に載っている。数字でなく**主張**を記録に縛る。
+    ★ 逆向き（failed が 0 に戻ったのに 99.1% と書いたまま）は
+      MATRIX の印が捕まえる。
+    """
+    import re
+    rec = _matrix()
+    if int(rec["failed"]) == 0:
+        return
+    banned = ("壊した 0", "壊していない 100%", "失敗 0")
+    # ★ 過去の別の測定として残す文言（★ 数字だけでなく**文書と文言の対**で許す ──
+    #   2026-09-04 の変異試験で「数字だけの白名簿は全部の紙に効く」穴を踏んだ）。
+    allowed = {("想定問答.md", "壊した 0→9")}   # 語彙を広げた実験（0→9）の対比
+    bad = []
+    for path in sorted(REPO.rglob("*.md")):
+        if any(x in str(path) for x in (".git", "node_modules", "CHANGELOG")):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for word in banned:
+            for m2 in re.finditer(re.escape(word), text):
+                around = text[m2.start():m2.start() + 24]
+                if any(f in str(path) and around.startswith(w) for f, w in allowed):
+                    continue
+                bad.append((str(path.relative_to(REPO)), word))
+                break
+    assert not bad, (
+        f"記録の失敗が {rec['failed']} 件なのに「壊していない」と書いた文書がある: {bad}")
+
 @pytest.mark.local
 def test_the_record_still_matches_the_machine():
     """② 記録 vs 実測。実物の ollama が要るので実機側。

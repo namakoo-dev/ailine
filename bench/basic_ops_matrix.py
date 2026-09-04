@@ -772,6 +772,66 @@ def _cases_for(key: str):
     out.append(("row_blank", "3行目の前に1行挿入して", blank_rows_inserted(3)))
     out.append(("row_blank", "2行目と3行目の間に空行を1行入れて", blank_rows_inserted(3)))
 
+    # ⑬ 条件の指し方 ── ★ 2026-09-04 に足した分母（段2.5・Namakoo「全部系と
+    #   〜以外系は結構あると思う」）。★ 名簿でだけ測る（所属が 営業/経理/総務 と
+    #   割れている唯一の表）。
+    #   ★★ 実測で見立てが外れた: 疑っていたのは**否定**だったが、壊れていたのは
+    #     **文字列の条件そのもの**だった（否定以前）。肯定の対照を対で置いていたから
+    #     分かった ── 否定だけ測っていたら「否定が壊れている」と報告していた。
+    #   ★ 直したのは 2 箇所とも**兄弟間の片配線**:
+    #     ① SET_WHERE の eq が必ず数字を要求していた（兄弟の EXTRACT は
+    #        「数値化できれば数値・できなければ文字列」と明記して受けている）
+    #     ② 解釈行の表示が「contains 以外＝数値」を前提にしていた（.bas 側は
+    #        2026-08-27 の事故で既に直っていた ── 同じ判断の片方だけが古かった）
+    if key == "名簿":
+        # 文字列の条件（比較語つき）── ★ ここが今日直した所
+        out.append(("cond_str", "所属が営業と等しい行のメモに「○」を付けて",
+                    only_these_rows_marked({2}, 4, "○")))
+        out.append(("cond_str", "所属に営業を含む行のメモに「○」を付けて",
+                    only_these_rows_marked({2}, 4, "○")))
+        # 数値の条件（対照 ── 今までどおり通るはず。直した枝が既存を壊していないか）
+        out.append(("cond_str", "内線が200以上の行のメモに「○」を付けて",
+                    only_these_rows_marked({3, 4}, 4, "○")))
+        out.append(("cond_str", "内線が202と等しい行のメモに「○」を付けて",
+                    only_these_rows_marked({3}, 4, "○")))
+        # 抽出は文字列でも否定でも通る（機械の読み直しが在るから）── 対照
+        out.append(("neg_pick", "所属が営業以外の行を抜き出して",
+                    new_sheet_is_exactly_rows([3, 4])))
+        out.append(("neg_pick", "所属が営業の行を抜き出して",
+                    new_sheet_is_exactly_rows([2])))
+        # 同じ列の OR は語彙に在る（in）── 通るのが正解
+        out.append(("cond_or", "所属が営業または経理の行を抜き出して",
+                    new_sheet_is_exactly_rows([2, 3])))
+        # ★★ 未解決（B 待ち）── **落とさずに分母に残す**。
+        #   ここを外せば「壊していない 100%」に戻るが、それは検体を甘くしただけ。
+        #   実測で製品は**間違ったことをして exit 0 で書く**（下の 3 件）。
+        #   ★ 製品は嘘はついていない: 最終行は「⚠ 機械保証はありません」で、
+        #     「対象が依頼文の語と機械照合できません」も出る。だが結果は間違い。
+        out.append(("cond_bare", "所属が営業の行のメモに「○」を付けて",
+                    only_these_rows_marked({2}, 4, "○")))
+        out.append(("cond_bare", "所属が営業以外の行のメモに「○」を付けて",
+                    only_these_rows_marked({3, 4}, 4, "○")))
+        out.append(("gap_multi", "所属が営業かつ内線が200以上の行を抜き出して",
+                    MustRefuse("", why="複数条件(AND)は語彙に無いので断るはず")))
+
+        # ★★ 保留（B）── 今は通らない。**断りでもなく、行追加に化ける**。
+        #   ここに検体を置かないのは、期待値を書けないから（✓ でも断りでもない）。
+        #   実測で起きること: 「所属が営業の行のメモに『○』を付けて」（比較語なし）は
+        #   一段目が ADD_ROW を返し、条件つき書換の読み直しが起動しない
+        #   （読み直しの門は「と等しい／を含む」等の比較語が在る時だけ開く）。
+        #   ★ 製品は嘘はついていない ── 最終行は「⚠ 機械保証はありません」で、
+        #     「対象が依頼文の語と機械照合できません」も出る。だが exit 0 で書かれる。
+        #   ★ 直し方の当て（B）: 抽出には「列名＋値」を実表から読み直す口
+        #     （resolve_named_extraction）が在り、素の言い方も拾える。
+        #     同じ口を条件つき書換にも配線すれば、比較語の無い言い方も、
+        #     そして「〜以外」も同じ道に乗る。
+        #   ★ やらなかった理由: 読み直しの門が増えると「どちらが先に立つか」で
+        #     事故が起きる（2026-08-27 に 5 つ並んで上書きし合った）。今日は
+        #     門を増やさない ① だけにした。
+        #   ★ 発火条件: 比較語の無い言い方が実需で来たら／ADD_ROW への化けが
+        #     この表以外でも出たら／「〜以外」を条件つき書換で使いたくなったら。
+
+
     # ⑨ 書式 ── ★ 値の格子には出ない op（2026-09-04 に足した分母）。
     #   ★ ここが無防備だった理由: 太字やけい線は**値を壊しても格子に差が出ない**ので、
     #     効果の検体では 1 件も測れていなかった。事後条件の台帳でも DRAW_BORDERS /
@@ -790,6 +850,91 @@ def _cases_for(key: str):
     # ★ セル結合は「1 行目を横につなぐ」が最も素直な依頼
     out.append(("fmt_merge", "1行目のA列とB列を結合して", format_applied("merge")))
     return out
+
+
+# ★★ 別枠（2026-09-04・Namakoo の判断②）。
+#
+#   「壊していない 100%」は**語彙の中で受けた依頼**についての主張なので、
+#   「語彙に無い」と文書に明記してある操作を同じ分母に混ぜると、主張の意味が変わる。
+#   ★ だが隠さない ── 同じ画面・同じ紙に必ず併記する。分けるのは主張の範囲を
+#     正しく切るためで、数字を良く見せるためではない。
+#   ★ 逆に、語彙の**中**にあるのに失敗する検体（cond_bare = 条件つき書換に
+#     届かず行追加に化ける）は本体の分母に残す ── そこは主張の範囲の中の穴。
+GAP_OPS = ("gap_multi",)
+
+
+
+class MustRefuse:
+    """★ この依頼は**断るのが正解**（2026-09-04）。
+
+    ★ なぜ要るか: いままで判定は pass / refused / failed の 3 値で、
+      **断りが正しいかどうかは人が読んでいた**（「これは既知の家系」と手で仕分けた）。
+      つまり断りは分母に載っておらず、**断るはずの依頼が通ってしまっても
+      数字が 1 も動かない**。★ それがいちばん危ない向きの事故
+      （語彙に無い操作を、黙って別の操作として実行する）。
+
+    使い方: 検算の代わりに MustRefuse("断り文に必ず入る言葉") を置く。
+      断って言葉が合えば ✓、断らずに通れば ×（★ 逆にならない）。
+      ★ 理由まで見るのは、**たまたま別の理由で断った**回を ✓ にしないため。
+    """
+
+    def __init__(self, contains: str, why: str = ""):
+        self.contains, self.why = contains, why
+
+
+def only_these_rows_marked(rows, mark_col: int, mark):
+    """★ **この行だけ**が変わったこと。rows は 1 起点の行番号（見出しを 1 行目とする）。
+
+    ★★ 2026-09-04: この検算は**述語を一切持たない**。
+      条件（「営業以外」等）を検算の側で計算すると、製品と同じ式で数えることになり、
+      **式が逆でも必ず ✓ が出る**（恒真）。だから該当行は人が先に数えて直書きする。
+      ── 「検証は本体と別実装で」。ここは別実装ですらなく、実装を持たない。
+    """
+    want = set(rows)
+
+    def check(before, after):
+        if len(after) != len(before):
+            return False, f'行数が変わった {len(before)}→{len(after)}'
+        got = set()
+        for r in range(1, len(before)):
+            n = r + 1
+            if before[r] != after[r]:
+                got.add(n)
+            if str(after[r][mark_col - 1]).strip() == str(mark):
+                got.add(n)
+        if got != want:
+            miss = sorted(want - got)
+            extra = sorted(got - want)
+            return False, (f'印が付いた行が {sorted(got)}（{sorted(want)} のはず）'
+                           + (f' ── 付いていない: {miss}' if miss else '')
+                           + (f' ── 余計に付いた: {extra}' if extra else ''))
+        for r in range(1, len(before)):
+            if (r + 1) not in want and before[r] != after[r]:
+                return False, f'対象外の {r+1}行目が変わった'
+        return True, ''
+    return check
+
+
+def new_sheet_is_exactly_rows(rows):
+    """★ 新しいシートの中身が、元の**この行**（1 起点）と完全に一致すること。
+
+    ★ 行数だけ見ない ── 3 行の表で 2 行選ぶ問題なら数で分かるが、
+      半分ずつに割れる表では**逆に選んでも数が同じ**になる。中身を見る。
+    ★ ここも述語を持たない（該当行は人が先に数えて直書き）。
+    """
+    want = list(rows)
+
+    def check(before, after, books):
+        if before != after:
+            return False, '元のシートが変わった（新しいシートを作るのが契約）'
+        got, why = books.new_sheet_grid()
+        if got is None:
+            return False, why
+        expect = [before[0]] + [before[n - 1] for n in want]
+        if got != expect:
+            return False, f'新しいシートの中身が違う: {got}（{expect} のはず）'
+        return True, ''
+    return check
 
 
 def run_one(table_key: str, task: str, check, workdir: Path, timeout: float):
@@ -811,7 +956,18 @@ def run_one(table_key: str, task: str, check, workdir: Path, timeout: float):
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=timeout, cwd=str(ROOT), env=env)
     stdout = p.stdout or ""
-    if p.returncode == 3 or "？" in stdout.split("\n")[-6:] and p.returncode != 0:
+    _refused = (p.returncode == 3
+                or ("？" in stdout.split(chr(10))[-6:] and p.returncode != 0))
+    # ★ 2026-09-04: 「断るはず」の検体は、断りを ✓ として数える（分母に載せる）。
+    #   ★ 通ってしまった回を × にするのが本題。
+    if isinstance(check, MustRefuse):
+        if not _refused:
+            return "failed", f"★ 断るはずが通った（{check.why or check.contains}）"
+        _msg = _first_line(stdout, "？")
+        if check.contains and check.contains not in stdout:
+            return "failed", f"断ったが理由が違う（『{check.contains}』を期待）: {_msg}"
+        return "pass", ""
+    if _refused:
         return "refused", _first_line(stdout, "？")
     if p.returncode != 0:
         return "failed", _first_line(stdout, "×") or f"exit {p.returncode}"
@@ -845,7 +1001,9 @@ def main() -> int:
     ns = ap.parse_args()
 
     keys = [ns.table] if ns.table else sorted(TABLES)
-    results, tally = [], {"pass": 0, "refused": 0, "failed": 0}
+    results = []
+    tally = {"pass": 0, "refused": 0, "failed": 0}
+    gap = {"pass": 0, "refused": 0, "failed": 0}
     with tempfile.TemporaryDirectory(prefix="ailine_matrix_") as tmp:
         work = Path(tmp)
         for key in keys:
@@ -856,21 +1014,26 @@ def main() -> int:
                     verdict, why = run_one(key, task, check, work, ns.timeout)
                 except subprocess.TimeoutExpired:
                     verdict, why = "failed", "時間切れ"
-                tally[verdict] += 1
+                (gap if op in GAP_OPS else tally)[verdict] += 1
                 results.append({"table": key, "op": op, "task": task,
                                  "verdict": verdict, "why": why})
                 mark = {"pass": "✓", "refused": "？", "failed": "×"}[verdict]
                 print(f"{mark} [{key}/{op}] {task}" + (f"  ── {why}" if why else ""))
 
     n = sum(tally.values())
+    g = sum(gap.values())
     print()
     print(f"合計 {n} 件: ✓ {tally['pass']}  ？断り {tally['refused']}  × 失敗 {tally['failed']}")
     if n:
         print(f"  意図どおり {tally['pass'] / n * 100:.1f}%  "
-               f"／ 壊していない（✓+断り） {(tally['pass'] + tally['refused']) / n * 100:.1f}%")
+              f"／ 壊していない（✓+断り） {(tally['pass'] + tally['refused']) / n * 100:.1f}%")
+    if g:
+        # ★ 別枠は**必ず同じ画面に出す**（隠すために分けたのではない）。
+        print(f"  ── 別枠（語彙に無いと明記した操作）{g} 件: "
+              f"✓ {gap['pass']}  ？断り {gap['refused']}  × 失敗 {gap['failed']}")
     if ns.out:
         Path(ns.out).write_text(json.dumps(
-            {"tally": tally, "results": results}, ensure_ascii=False, indent=2),
+            {"tally": tally, "gap": gap, "results": results}, ensure_ascii=False, indent=2),
             encoding="utf-8")
         print(f"  → {ns.out}")
     return 0

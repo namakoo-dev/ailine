@@ -4717,16 +4717,47 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
     resolved["cmp"] = _cmp
     # ★ 閾値は**依頼文の数字**から機械が取る（LLM に確定させない）。
     _nums = _re_threshold_num.findall((task or "").translate(_ZENKAKU_DIGITS))
+    _hr_here = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+    # ★★ 2026-09-04（段2.5 の実測）: **文字列の条件が構造的に表現できなかった**。
+    #   「所属が営業と等しい行のメモに『○』を付けて」は、読み直しが正しく
+    #   条件つき書換まで来ているのに「条件の**数値**が読み取れません」で止まっていた
+    #   ── eq が必ず数字を要求していたため。「所属に営業を含む行の…」も
+    #   「条件の値が読み取れません」で止まった（LLM が cond_value を空で返す回）。
+    #   ★ 兄弟の EXTRACT は「eq は数値化できれば数値・できなければ文字列」と
+    #     明記して受けている。**同じ eq で扱いが違う**＝兄弟間の片配線だったので揃える。
+    #   ★ 値は LLM でなく**実表**から取る（A' 原則・resolve_named_extraction が
+    #     抽出で使っているのと同じ task_names_real_values）。
+    #   ★ 置き場所に注意: **数字が 1 つ在る回は今までどおり**の道を通す。
+    #     この枝は「今まで断っていた所」にだけ増える ── 既存の成功は 1 件も変わらない。
+    _named_cond = []
+    if _cmp in ("eq", "contains") and len(set(_nums)) != 1:
+        try:
+            _named_cond = list(task_names_real_values(
+                task, book_meta, first_sheet, resolved["cond_col"], _hr_here) or [])
+        except Exception:
+            _named_cond = []
     if _cmp == "contains":
         _thr = resolved.get("cond_value")
+        if _thr in (None, "") and len(_named_cond) == 1:
+            _thr = _named_cond[0]
+            resolved["_sources"] = {**resolved.get("_sources", {}),
+                                    "cond_value": f"実表の『{resolved["cond_col"]}』列に在る値"}
         if _thr in (None, ""):
-            return False, resolved, inferred, "条件の値が依頼文から読み取れません"
+            return False, resolved, inferred, (
+                "条件の値が依頼文から読み取れません"
+                + (f"（『{resolved["cond_col"]}』に当てはまる値が "
+                   f"{len(_named_cond)} 個ありました）" if _named_cond else ""))
         resolved["cond_value"] = str(_thr)
+    elif _cmp == "eq" and len(set(_nums)) != 1 and len(_named_cond) == 1:
+        # ★ 文字列の等値。**1 個に決まった時だけ**採る（0 個/複数なら決めない＝断る側へ）。
+        resolved["cond_value"] = str(_named_cond[0])
+        resolved["_sources"] = {**resolved.get("_sources", {}),
+                                "cond_value": f"実表の『{resolved["cond_col"]}』列に在る値"}
     else:
         if len(set(_nums)) != 1:
             return False, resolved, inferred, (
                 "条件の数値が依頼文から一意に読み取れません"
-                f"（見つかった数: {'、'.join(sorted(set(_nums))) or 'なし'}）── "
+                f"（見つかった数: {"、".join(sorted(set(_nums))) or "なし"}）── "
                 "「原価が500以上の行の…」のように 1 つだけ書いてください")
         resolved["cond_value"] = float(_nums[0])
     # ★ 書き込む値は引用符から（SET_COLUMN_VALUE と同じ関所 ── LLM に作らせない）
@@ -4741,9 +4772,15 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
     resolved["_header_row"] = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
     _lab = _EXTRACT_CMP_LABELS.get(_cmp, _cmp)
     # ★ 500.0 でなく 500 と出す（人が依頼文に書いた形に近づける・整数なら整数で）
+    #   ★★ 2026-09-04: 「contains 以外＝数値」という前提が**ここにだけ残っていた**。
+    #     文字列の等値（『所属』が『営業』）を通した回に float("営業") で落ちた。
+    #     .bas の側は 2026-08-27 の事故で既に直っていて、「数値かどうかは **cmp では
+    #     なく値そのもの**で決まる」と書いてある ── 同じ判断が 2 箇所にあって
+    #     片方しか直っていなかった（片配線）。判定を .bas 側と同じ形に揃える。
     _cv = resolved["cond_value"]
-    _shown = (_cv if _cmp == "contains"
-               else (str(int(_cv)) if float(_cv).is_integer() else _fmt_cell_value(_cv)))
+    _shown = (str(int(_cv)) if (_is_number(_cv) and not isinstance(_cv, bool)
+                                and float(_cv).is_integer())
+              else (_fmt_cell_value(_cv) if _is_number(_cv) else _cv))
     resolved["_cond_label"] = f"『{resolved['cond_col']}』が {_shown} {_lab}"
     # ★ 当てはまる行を**先に数えて画面に出す**（0 行なら、走らせる前に断る ──
     #   「何も起きなかった」を後から × で知らせるのは、正しくても不親切）。
