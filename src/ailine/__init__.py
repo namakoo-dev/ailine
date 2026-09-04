@@ -2906,8 +2906,27 @@ def fabricated_subject_refusal(op: str, resolved: dict, book_meta: dict, task: s
             if w.endswith(suffix) and w[: -len(suffix)] in sheet_names:
                 return True
         return False
+    # ★★ 2026-09-04: **『で』以外の名指しも掴む**。
+    #   すぐ上に「正直に残す穴: 『金額を並べ替えて』（を）は掴めない ── 同じ事故が
+    #   『を』で再来したら測り直す」と書いてあった。**『の』で再来した。**
+    #     「原価の列を削除して」（在庫表に原価は無い）→ 模型が col=備考 に差し替え、
+    #     機械は実在列なので通し、**✓ 機械検証済み**を出して備考を消した（4/4 再現）。
+    #     ★ 静かなデータ喪失で、⚠ ですらなく ✓ が出ていた。
+    #   ★ 当時『を』で絞れなかった理由は「売上高の列を作って」のような**新しい列名**まで
+    #     掴むから ── だがそれは**助詞の問題ではない**。分かれ目は
+    #     「この op が列を新しく作るか」で、それは既に**宣言**に書いてある。
+    #     助詞で当てずに宣言で分ける（新しい表は増やさない）。
+    #   ★ 『を』は今も掴まない ── 「合計を出して」と区別できないという当時の判断は
+    #     まだ有効。今回足したのは「〜の列」「〜列」と**列だと明示された**名指しだけ。
+    def _named_as_a_column(w: str) -> bool:
+        return (w + "の列") in task or (w + "列") in task
+
+    _wt = OP_WRITE_TARGET.get(op)
+    _creates_column = WRITE_NEW_COLUMN in (getattr(_wt, "writes", None) or ())
     ghosts = [w for w in left
-               if w not in headers and (w + "で") in task and not _is_real_elsewhere(w)]
+               if w not in headers and not _is_real_elsewhere(w)
+               and ((w + "で") in task
+                     or (not _creates_column and _named_as_a_column(w)))]
     if not ghosts:
         return None      # 無指定・修飾語だけ（②のまま・従来どおり通す）
     ghost = "・".join(f"『{w}』" for w in ghosts)
@@ -7333,6 +7352,39 @@ def render_refusal(op: str, resolved_or_args, reason: str) -> list:
                       + "／".join(f"「{p}」" for p in phrases[:3]))
     lines.append("  読み方そのものが違うなら、言い直してください（頼める操作の一覧: ailine ops）")
     return lines
+
+def _refuse_unresolved_args(a, book, op, raw_args, err) -> int:
+    """引数が解けなかった断りを画面に出し、**台帳にも残して** exit 3 を返す。
+
+    ★★ なぜ 1 関数に畳むか（2026-09-04）: この 5 行が**一字一句同じ形で 3 箇所**に
+      あった。同じ判断が N 箇所にあると M 箇所だけ直る（この repo が何度も踏んだ形）。
+      呼び出し側に判断を持たせない。
+
+    ★★ なぜ台帳に残すか（同日・実測）: **断りは 1 件も記録されていなかった**。
+      「ナットを削除して」は台帳では 47 回すべて DELETE_ROWS ✓ に見えるが、
+      実測では 5 回に 1 回 DELETE_COLUMN に化けて断られている
+      （機械は「列『ナット』がこの表にありません」と正しく止める＝fail closed）。
+      ★ つまり台帳が**生存者バイアス**を持ち、いちばん知りたい「何を何と取り違えたか」が
+        ちょうど抜け落ちていた。断りを入れて初めて取り違えの行列が本物になる。
+
+    ★ ok=False で入るので op_that_worked_before（過去に成功した op を思い出す）は
+      これを材料にしない ── 断りを「前はこれで通った」と勧める事故は起きない。
+
+    ★ 中身について（Namakoo の判断・2026-09-04）: 断りの理由文と LLM の生の引数も残す。
+      理由文には**表の見出しや値**が入る（例:「ある列: 品名、棚、数量、備考」）。
+      置き場は AILINE_HOME 配下（既定 ~/.ailine）で、外へは送らない。
+      分析に理由文が要らなくなったら、この 2 キーを落とせば op と種別だけになる。
+    """
+    for _ln in render_refusal(op, raw_args, err):
+        print(_ln)
+    entry = build_history_entry(
+        {"ok": False, "op": op, "attempts": 0}, book, a.task, a.model, "refused/args")
+    entry["refused_reason"] = err
+    entry["refused_args"] = raw_args if isinstance(raw_args, dict) else None
+    append_history(entry)
+    return 3
+
+
 
 
 def render_choices(choices) -> str:
@@ -11943,9 +11995,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
     ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, first_sheet=first_sheet, deps=deps)
     if not ground.ok:
-        for _ln in render_refusal(op, raw_args, ground.err):
-            print(_ln)
-        return 3
+        return _refuse_unresolved_args(a, book, op, raw_args, ground.err)
     resolved, inferred = ground.resolved, ground.inferred
 
     # ★ 挙動変更#2: header_row は「本当の」対象シート(resolved["_target_sheet"])で引き直す。
@@ -12146,9 +12196,7 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
     first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
     ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, first_sheet=first_sheet, deps=deps)
     if not ground.ok:
-        for _ln in render_refusal(op, raw_args, ground.err):
-            print(_ln)
-        return 3
+        return _refuse_unresolved_args(a, book, op, raw_args, ground.err)
     resolved, inferred = ground.resolved, ground.inferred
 
     first_sheet = resolved.get("_target_sheet") or first_sheet
@@ -12313,9 +12361,7 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
     first_sheet = getattr(a, "_target_sheet", None) or (book_meta["sheets"][0] if book_meta.get("sheets") else None)
     ground = resolve_dsl_step_args(op, raw_args, a.task, book_meta, vocab, first_sheet=first_sheet, deps=deps)
     if not ground.ok:
-        for _ln in render_refusal(op, raw_args, ground.err):
-            print(_ln)
-        return 3
+        return _refuse_unresolved_args(a, book, op, raw_args, ground.err)
     resolved, inferred = ground.resolved, ground.inferred
 
     first_sheet = resolved.get("_target_sheet") or first_sheet
