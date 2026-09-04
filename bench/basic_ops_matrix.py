@@ -110,6 +110,51 @@ TABLES = {
                  ["森田", "03-5555-6666", "経理", ""],
                  ["大西", "06-7777-8888、080-9999-0000", "総務", ""]],
     },
+    # ★★ 2026-09-04（段3）: 新しい表を作る 7 op を測るための土台。
+    #   ★ また**表の側**が足りなかった: 集計は同じ分類が 2 行以上ある表でしか測れず、
+    #     参照埋めは別シートの対応表が、帳票／様式写像は雛形シートが要る。
+    "売上": {
+        "sheet": "売上",
+        "headers": ["部門", "担当", "金額", "月"],
+        # ★ 恒真を潰すための数の選び方（設計時に 1 つ見つけて直した）:
+        #   経理を 1 行だけにすると「経理の合計 120」が**元の行の値と同じ**になり、
+        #   集計せずその行を写しただけでも通ってしまう。だから経理も 2 行にする。
+        #   ★ 総務は 1 行のまま残す ── 「グループが 1 行のとき」を測るのに要る。
+        #     恒真は他の 2 群で潰せている。
+        #   期待: 営業 300+250=550 ／ 経理 120+45=165 ／ 総務 80 ／ 総計 795
+        "rows": [["営業", "佐藤", 300, 4], ["経理", "鈴木", 120, 4],
+                 ["営業", "高橋", 250, 5], ["総務", "大西", 80, 5],
+                 ["経理", "森田", 45, 5]],
+    },
+    "注文": {
+        "sheet": "注文",
+        "headers": ["コード", "数量", "商品名"],
+        # ★ A-1 が 2 回出る ── 「1 行目だけ写した」では通らないようにする。
+        "rows": [["A-1", 3, None], ["B-2", 7, None], ["A-1", 2, None]],
+        "sheets": [{"name": "商品表",
+                    "rows": [["コード", "商品名"], ["A-1", "ボルト"], ["B-2", "ナット"]]}],
+    },
+    "請求データ": {
+        "sheet": "請求データ",
+        "headers": ["取引先", "品名", "金額"],
+        "rows": [["あかね商事", "机", 12000], ["うえだ物産", "椅子", 8000]],
+        # ★ 雛形は行にも列にも散らばるので cells で書く。
+        #   ★ 「金額: {{金額}}」のような**部分一致の印は数値列に使えない**（製品が
+        #     正しく断る ── 探りの 1 回目で踏んだ）。ラベルと印はセルを分ける。
+        "sheets": [{"name": "雛形",
+                    "cells": {"A1": "請求書", "A2": "{{取引先}}", "B2": "様",
+                              "A3": "品名", "B3": "{{品名}}",
+                              "A4": "金額", "B4": "{{金額}}"}}],
+    },
+    "受注書": {
+        "sheet": "受注書",
+        "headers": ["取引先", "品名", "数量"],
+        "rows": [["あかね商事", "机", 3], ["うえだ物産", "椅子", 7]],
+        # ★ 様式写像は**行の雛形**（1 行に印が並ぶ）── 帳票の雛形とは別物なので表を分ける。
+        "sheets": [{"name": "出荷様式",
+                    "cells": {"A1": "出荷先", "B1": "商品", "C1": "個数",
+                              "A2": "{{取引先}}", "B2": "{{品名}}", "C2": "{{数量}}"}}],
+    },
 }
 
 
@@ -121,6 +166,17 @@ def _build(table_key: str, path: Path) -> Path:
     ws.append(t["headers"])
     for r in t["rows"]:
         ws.append(list(r))
+    # ★★ 2026-09-04（段3）: 2 枚目以降のシートを書けるようにした。
+    #   参照埋め（別シートの対応表）・帳票／様式写像（雛形シート）は、
+    #   **1 枚のブックでは原理的に測れない**。表の側が痩せていて op が測れない、
+    #   という同じ形を今日 3 度踏んでいる（計算列・書式・行/列）。
+    #   ★ cells は "A1" → 値 の辞書（雛形は行や列に散らばるので rows では書けない）。
+    for extra in t.get("sheets") or []:
+        s2 = wb.create_sheet(extra["name"])
+        for r in extra.get("rows") or []:
+            s2.append(list(r))
+        for ref, v in (extra.get("cells") or {}).items():
+            s2[ref] = v
     wb.save(path)
     return path
 
@@ -236,22 +292,40 @@ class _Books:
     def __init__(self, src, out, sheet):
         self.src, self.out, self.sheet = src, out, sheet
 
-    def new_sheet_grid(self):
-        """★ 操作が**新しく作ったシート**の格子を返す（無い/2 枚以上なら None と理由）。
-
-        ★ なぜ要るか（2026-09-04）: 重複除去・セル分割・抽出などは
-          **元のシートを 1 文字も変えず、結果を新しいシートに書く**のが契約。
-          元シートだけを見る検算は、正しく動いていても「何も起きていない」と読む
-          （実測: DEDUP 4 件が全部 × になり、製品は正しかった）。
-        """
+    def new_sheets(self):
+        """★ 操作が**新しく作ったシート**を {名前: 格子} で返す（順序は作られた順）。"""
         was = set(openpyxl.load_workbook(self.src).sheetnames)
         wb = openpyxl.load_workbook(self.out)
-        made = [n for n in wb.sheetnames if n not in was]
+        out = {}
+        for n in wb.sheetnames:
+            if n in was:
+                continue
+            ws = wb[n]
+            out[n] = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+                      for r in range(1, ws.max_row + 1)]
+        return out
+
+    def new_sheet_grid(self):
+        """★ 新しいシートが**ちょうど 1 枚**のときだけ、その格子を返す。
+
+        ★ なぜ要るか（2026-09-04）: 重複除去・列抽出・集計などは
+          **元のシートを 1 文字も変えず、結果を新しいシートに書く**のが契約。
+          元シートだけを見る検算は、正しく動いていても「何も起きていない」と読む。
+        ★ 段3 で分かった: 帳票（REPORT_PER_ROW）は **N+1 枚**、様式写像は 2 枚作る
+          （どちらも「検分」という台帳シートが付く）。だから 1 枚を前提にした
+          この口は使えず、new_sheets() の方を使う。
+        """
+        made = self.new_sheets()
         if len(made) != 1:
-            return None, f'新しいシートが {len(made)} 枚（1 枚のはず）: {made}'
-        ws = wb[made[0]]
-        return [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
-                for r in range(1, ws.max_row + 1)], made[0]
+            return None, f'新しいシートが {len(made)} 枚（1 枚のはず）: {list(made)}'
+        name, grid = next(iter(made.items()))
+        return grid, name
+
+    def charts(self):
+        """★ 出来上がったファイルに入っているグラフの部品名（値の格子には出ない）。"""
+        import zipfile
+        with zipfile.ZipFile(self.out) as z:
+            return [n for n in z.namelist() if n.startswith("xl/charts/chart")]
 
     def cells(self, which):
         """(前 or 後) のシートを開いて、セルの二次元配列を返す。"""
@@ -630,6 +704,64 @@ def _cases_for(key: str):
     # ★★ 2026-09-04: 「受注」「連絡」は**専用の 1 op だけを測る表**。汎用の 6 op は
     #   回さない（請求と同じ扱い）。★ ここを分解より前に置くのは、受注が 4 行あって
     #   下の `r1, r2, r3 = ...` が数の不一致で落ちるため。
+    # ★★ 段3（2026-09-04）: **新しい表を作る 7 op**。ここまで 1 件も測れていなかった。
+    #   ★ 出力先は op ごとに違う ── 書く前に 1 回ずつ走らせて実際に見た
+    #     （DEDUP=新シート／SPLIT_CELL=その場、で 1 度外しているので推測しない）。
+    #       集計・ピボット・列抽出 → 新シート 1 枚
+    #       参照埋め・グラフ       → **その場**
+    #       帳票                   → N 枚 ＋『検分』
+    #       様式写像               → 出力 1 枚 ＋『検分』
+    if key == "売上":
+        # 集計 ── 期待値は人が先に足して直書き（営業 550／経理 165／総務 80／総計 795）
+        _agg = [["部門", "合計 - 金額"], ["営業", 550], ["経理", 165],
+                ["総務", 80], ["合計", 795]]
+        for task in ("部門ごとに金額をまとめて", "部門別の金額合計がみたい",
+                     "部門ごとに金額を集計して"):
+            out.append(("aggregate", task, new_sheet_is_exactly(_agg)))
+        # ピボット ── ★「ピボット」の語が在る時だけ。形が集計と違う（頭に 2 行・末尾の綴りも別）
+        _piv = [["フィルター", None], [None, None], ["部門", "合計 - 金額"],
+                ["営業", 550], ["経理", 165], ["総務", 80], ["合計 結果", 795]]
+        for task in ("部門ごとにピボットテーブルで集計して",
+                     "部門でピボットテーブルを作って"):
+            out.append(("pivot", task, new_sheet_is_exactly(_piv)))
+        # 列抽出 ── 行は減らさない（抽出と混ざらないこと）
+        _cols = [["部門", "金額"], ["営業", 300], ["経理", 120], ["営業", 250],
+                 ["総務", 80], ["経理", 45]]
+        for task in ("部門と金額の列だけ取り出して", "部門と金額の列だけ抜き出して"):
+            out.append(("col_pick", task, new_sheet_is_exactly(_cols)))
+        # グラフ ── 値の格子には出ない
+        for task in ("金額の棒グラフを作って", "部門ごとの金額を棒グラフにして"):
+            out.append(("chart", task, chart_added()))
+        return out
+
+    if key == "注文":
+        # 参照埋め ── ★ A-1 が 2 回出るので「1 行目だけ写した」では通らない
+        for task in ("商品表から商品名を注文シートに転記して",
+                     "商品表を参照して商品名を埋めて"):
+            out.append(("lookup", task, column_became(3, ["ボルト", "ナット", "ボルト"])))
+        return out
+
+    if key == "請求データ":
+        _want = {
+            "あかね商事": [["請求書", None], ["あかね商事", "様"],
+                           ["品名", "机"], ["金額", 12000]],
+            "うえだ物産": [["請求書", None], ["うえだ物産", "様"],
+                           ["品名", "椅子"], ["金額", 8000]],
+        }
+        for task in ("雛形を使って取引先ごとの請求書を作って",
+                     "雛形で取引先ごとに 1 枚ずつ作って"):
+            out.append(("report", task, report_sheets_are(_want)))
+        return out
+
+    if key == "受注書":
+        _out = [["出荷先", "商品", "個数"], ["あかね商事", "机", 3],
+                ["うえだ物産", "椅子", 7]]
+        for task in ("出荷様式に合わせて受注を写して",
+                     "出荷様式の形に合わせて写して"):
+            out.append(("fmtmap", task,
+                        report_sheets_are({"出荷様式_出力": _out})))
+        return out
+
     if key == "受注":
         # ⑩ 重複除去 ── キー列を**名指しした**依頼だけを測る（名指しが無い依頼は
         #   CLARIFY が正しい挙動で、それは効果の格子では測れない）。
@@ -867,6 +999,83 @@ def _cases_for(key: str):
     # ★ セル結合は「1 行目を横につなぐ」が最も素直な依頼
     out.append(("fmt_merge", "1行目のA列とB列を結合して", format_applied("merge")))
     return out
+
+
+
+def new_sheet_is_exactly(expected):
+    """★ 新しいシートが**ちょうど 1 枚**でき、その中身が expected と完全一致すること。
+
+    ★ 期待する格子は**丸ごと直書き**する（述語も式も持たない）。製品と同じ式で
+      足した分母は、式が間違っていても必ず ✓ を出す（恒真）。
+    ★ 元のシートが 1 文字も変わっていないことも同時に見る（非破壊が契約）。
+    """
+    def check(before, after, books):
+        if before != after:
+            return False, '元のシートが変わった（新しいシートを作るのが契約）'
+        got, why = books.new_sheet_grid()
+        if got is None:
+            return False, why
+        if got != expected:
+            return False, f'中身が違う: {got}（{expected} のはず）'
+        return True, ''
+    return check
+
+
+def report_sheets_are(expected_sheets):
+    """★ 帳票: 名前つきのシートが**この顔ぶれちょうど**でき、中身が一致すること。
+
+    ★ 段3 の探りで分かった: 帳票は N 枚に加えて『検分』という台帳シートも作る
+      （何行目から何枚出して印を何個埋めたか）。だから「新しいシート 1 枚」を
+      前提にした口では読めない ── 顔ぶれごと数え上げる。
+    """
+    def check(before, after, books):
+        if before != after:
+            return False, '元のシートが変わった（新しいシートを作るのが契約）'
+        made = books.new_sheets()
+        want = set(expected_sheets) | {"検分"}
+        if set(made) != want:
+            return False, f'できたシートが {sorted(made)}（{sorted(want)} のはず）'
+        for name, grid in expected_sheets.items():
+            if made[name] != grid:
+                return False, f'[{name}] が {made[name]}（{grid} のはず）'
+        return True, ''
+    return check
+
+
+def column_became(col_index: int, values):
+    """★ その列のデータ行が values になり、**他の列は 1 セルも変わっていない**こと。
+
+    ★ 参照埋めは新シートを作らず**その場**で埋まる（探りで確認）。
+    ★ values は人が先に引いて直書きする（対応表を検算の側で引き直さない ── 恒真）。
+    """
+    def check(before, after):
+        if len(after) != len(before):
+            return False, f'行数が変わった {len(before)}→{len(after)}'
+        got = [after[r][col_index - 1] for r in range(1, len(after))]
+        if got != list(values):
+            return False, f'{got}（{list(values)} のはず）'
+        for r in range(1, len(after)):
+            for c in range(len(after[r])):
+                if c != col_index - 1 and before[r][c] != after[r][c]:
+                    return False, f'他の列が変わった（{r+1}行{c+1}列）'
+        return True, ''
+    return check
+
+
+def chart_added():
+    """★ グラフが 1 つ増え、**値の格子は 1 セルも変わっていない**こと。
+
+    ★ グラフは値の格子に出ない（書式 op と同じ）ので、ファイルの中の
+      xl/charts/chart*.xml を直接数える。
+    """
+    def check(before, after, books):
+        if before != after:
+            return False, '値が変わった（グラフを足すだけのはず）'
+        ch = books.charts()
+        if len(ch) != 1:
+            return False, f'グラフが {len(ch)} 個（1 個のはず）: {ch}'
+        return True, ''
+    return check
 
 
 # ★★ 別枠（2026-09-04・Namakoo の判断②）。

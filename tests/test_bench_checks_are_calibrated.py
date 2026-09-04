@@ -189,3 +189,87 @@ def test_split_check_wants_the_parts_and_the_original_column_together():
                ["川口", "03-1、090-2", "営業", "03-1"],
                ["森田", "03-5", "経理", "03-5"]]
     assert not _run(chk, S, partial), "片方しか出ていなければ落とす"
+
+
+# --- ⑦ 段3: 新しい表を作る op（2026-09-04）--------------------------------
+#
+# ★ 段3 の期待値は**実測を見てから**書いた（出力先が op ごとに違うため）。
+#   実測から期待値を作ると、検算が「実測をそのまま写しただけ」＝恒真になりやすい。
+#   だから壊した出力を落とすことを、ここで明示的に確かめる。
+
+_AGG = [["部門", "合計 - 金額"], ["営業", 550], ["経理", 165],
+        ["総務", 80], ["合計", 795]]
+
+
+class _FakeBook:
+    def __init__(self, made):
+        self._made = made
+
+    def new_sheets(self):
+        return self._made
+
+    def new_sheet_grid(self):
+        if len(self._made) != 1:
+            return None, f"新しいシートが {len(self._made)} 枚（1 枚のはず）"
+        name, grid = next(iter(self._made.items()))
+        return grid, name
+
+    def charts(self):
+        return self._made
+
+
+_BEFORE = [["部門", "担当", "金額", "月"], ["営業", "佐藤", 300, 4]]
+
+
+def test_aggregate_check_accepts_only_the_exact_summary():
+    chk = _bench().new_sheet_is_exactly(_AGG)
+    assert chk(_BEFORE, _BEFORE, _FakeBook({"集計": _AGG}))[0]
+
+
+@pytest.mark.parametrize("label, made, after", [
+    ("合計が 1 違う", {"集計": _AGG[:-1] + [["合計", 794]]}, _BEFORE),
+    ("群が 1 つ欠ける", {"集計": _AGG[:3] + _AGG[4:]}, _BEFORE),
+    ("集計せず素通し", {"集計": [["部門", "金額"], ["営業", 300]]}, _BEFORE),
+    ("新しいシートが 2 枚", {"集計": _AGG, "余計": []}, _BEFORE),
+    ("元のシートを壊した", {"集計": _AGG}, [["x"]]),
+])
+def test_aggregate_check_rejects_broken_output(label, made, after):
+    assert not _bench().new_sheet_is_exactly(_AGG)(
+        _BEFORE, after, _FakeBook(made))[0], label
+
+
+_REPORT = {"あかね商事": [["請求書", None], ["あかね商事", "様"]]}
+
+
+def test_report_check_wants_the_ledger_sheet_too():
+    """★ 帳票は N 枚に加えて『検分』（何行から何枚・印を何個埋めたかの台帳）を作る。"""
+    chk = _bench().report_sheets_are(_REPORT)
+    assert chk(_BEFORE, _BEFORE,
+               _FakeBook({**_REPORT, "検分": []}))[0]
+    assert not chk(_BEFORE, _BEFORE, _FakeBook(dict(_REPORT)))[0], "検分が無ければ落とす"
+    assert not chk(_BEFORE, _BEFORE, _FakeBook(
+        {"あかね商事": [["請求書", None], ["別会社", "様"]], "検分": []}))[0], "中身が違えば落とす"
+    assert not chk(_BEFORE, _BEFORE, _FakeBook(
+        {**_REPORT, "検分": [], "謎": []}))[0], "余計なシートができたら落とす"
+
+
+_L = [["コード", "数量", "商品名"], ["A-1", 3, None], ["B-2", 7, None], ["A-1", 2, None]]
+_A = [["コード", "数量", "商品名"], ["A-1", 3, "ボルト"], ["B-2", 7, "ナット"],
+      ["A-1", 2, "ボルト"]]
+
+
+def test_lookup_check_needs_every_row_not_just_the_first():
+    """★ A-1 が 2 回出る検体なので「1 個目だけ写した」では通らない。"""
+    chk = _bench().column_became(3, ["ボルト", "ナット", "ボルト"])
+    assert chk(_L, _A)[0]
+    assert not chk(_L, [_A[0], _A[1], _L[2], _L[3]])[0], "途中までなら落とす"
+    assert not chk(_L, [_A[0], _A[1], _A[2], ["A-1", 2, "ナット"]])[0], "取り違えたら落とす"
+    assert not chk(_L, [_A[0], ["A-1", 99, "ボルト"], _A[2], _A[3]])[0], "他の列を壊したら落とす"
+
+
+def test_chart_check_wants_a_chart_and_an_untouched_grid():
+    chk = _bench().chart_added()
+    assert chk(_BEFORE, _BEFORE, _FakeBook(["xl/charts/chart1.xml"]))[0]
+    assert not chk(_BEFORE, _BEFORE, _FakeBook([]))[0], "グラフが無ければ落とす"
+    assert not chk(_BEFORE, [["x"]], _FakeBook(["xl/charts/chart1.xml"]))[0], \
+        "値を壊したら落とす"
