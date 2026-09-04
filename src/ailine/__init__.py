@@ -3434,6 +3434,52 @@ def _task_names_single_real_column(task: str, headers: list) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
+def _verify_sort(resolved: dict, inferred: set, first_sheet: str, book_meta: dict,
+                  resolve_in) -> tuple | None:
+    """SORT の引数を確かめる（★ verify_dsl_args から切り出した・挙動は 1 ビットも変えていない）。
+
+    ★ 切り出しの形（2026-09-04）: 元は `if op == "SORT":` の分岐だった。分岐は
+      **早期 return するか、何も返さずチェーンを抜ける**の 2 通りなので、ここでは
+      **返すべき tuple か None（＝続行）** を返す。呼び出し側が None を見て続ける。
+    ★ `resolved` は辞書、`inferred` は set なので**参照が渡り、副作用はそのまま伝わる**。
+      `resolve_in` は verify_dsl_args の内部関数（クロージャで resolved を書き換える）。
+
+    ★ 挙動不変の確かめ方: bench/verify_golden.json（641 件の入出力）と突き合わせて
+      **1 件でも動いたら赤**。SORT はそのうち 149 件を占めるので、壊せば必ず鳴る。
+    """
+    if (err := resolve_in("col", first_sheet)):
+        return False, resolved, inferred, err
+    if resolved.get("order") not in ("asc", "desc"):
+        return False, resolved, inferred, f"順序『{resolved.get('order')}』は asc/desc のどちらでもありません"
+    # ★★ 2026-08-29（Namakoo が実測）: 合計行まで並べ替えの範囲に入れていたので、
+    #   降順にすると合計（一番大きい）が**先頭へ飛び**、その式が
+    #   `=SUM(#REF!:INDEX(E:E,ROW()-1))` に壊れた。番人は止めたが、人は並べ替えられない。
+    #   ★ 合計行は「データ行ではない」── 並べ替えの対象から外し、最下行に残す。
+    #     判定は既存の凍結規則を借りる（total_rows_in → row_has_total_word）。
+    #   ★ 見つけたら**必ず画面に出す**（黙って行を外さない）。
+    _s_sheet = resolved.get("_target_sheet") or first_sheet
+    _s_hr = int((book_meta.get("header_rows") or {}).get(_s_sheet, 1) or 1)
+    _s_tot = total_rows_in(book_meta, _s_sheet, _s_hr)
+    if _s_tot:
+        _s_end = min(_s_tot) - 1
+        if _s_end >= _s_hr + 1:
+            resolved["_sort_end_row"] = _s_end
+            # ★ 開示は**解釈行**に出す（警告ではない）。SET_WHERE が合計行を外す時と
+            #   同じ口を使う ── 警告にすると決裁③で ✓ が △ に落ち、合計行のある表を
+            #   並べ替えるたびに「確かめきれていない」と言うことになる。
+            #   ★ 宣言どおりに動いて検算も通っているのだから、それは ✓ でよい。
+            resolved["_skip_rows"] = list(_s_tot)
+            resolved["_skip_label"] = ("合計行 " + "、".join(
+                f"{r}行目" for r in _s_tot) + "（データ行でないため並べ替えません）")
+    # ★ 並べ替えで「指す先の中身が変わる式」を名指しする（★ 付き＝決裁③で ✓→△）。
+    #   ここは疑いなので警告でよい ── 合計行の除外（開示）とは性質が違う。
+    _s_last = resolved.get("_sort_end_row") or 10 ** 7
+    if (_dw := reference_drift_warning(book_meta, _s_sheet,
+                                        row_lo=_s_hr + 1, row_hi=_s_last)):
+        resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
+    return None
+
+
 def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab: dict | None = None,
                      target_sheet: str | None = None) -> tuple:
     """② 検証。(ok, resolved_args, inferred_keys, error_message)。
@@ -3498,36 +3544,9 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         return None
 
     if op == "SORT":
-        if (err := resolve_in("col", first_sheet)):
-            return False, resolved, inferred, err
-        if resolved.get("order") not in ("asc", "desc"):
-            return False, resolved, inferred, f"順序『{resolved.get('order')}』は asc/desc のどちらでもありません"
-        # ★★ 2026-08-29（Namakoo が実測）: 合計行まで並べ替えの範囲に入れていたので、
-        #   降順にすると合計（一番大きい）が**先頭へ飛び**、その式が
-        #   `=SUM(#REF!:INDEX(E:E,ROW()-1))` に壊れた。番人は止めたが、人は並べ替えられない。
-        #   ★ 合計行は「データ行ではない」── 並べ替えの対象から外し、最下行に残す。
-        #     判定は既存の凍結規則を借りる（total_rows_in → row_has_total_word）。
-        #   ★ 見つけたら**必ず画面に出す**（黙って行を外さない）。
-        _s_sheet = resolved.get("_target_sheet") or first_sheet
-        _s_hr = int((book_meta.get("header_rows") or {}).get(_s_sheet, 1) or 1)
-        _s_tot = total_rows_in(book_meta, _s_sheet, _s_hr)
-        if _s_tot:
-            _s_end = min(_s_tot) - 1
-            if _s_end >= _s_hr + 1:
-                resolved["_sort_end_row"] = _s_end
-                # ★ 開示は**解釈行**に出す（警告ではない）。SET_WHERE が合計行を外す時と
-                #   同じ口を使う ── 警告にすると決裁③で ✓ が △ に落ち、合計行のある表を
-                #   並べ替えるたびに「確かめきれていない」と言うことになる。
-                #   ★ 宣言どおりに動いて検算も通っているのだから、それは ✓ でよい。
-                resolved["_skip_rows"] = list(_s_tot)
-                resolved["_skip_label"] = ("合計行 " + "、".join(
-                    f"{r}行目" for r in _s_tot) + "（データ行でないため並べ替えません）")
-        # ★ 並べ替えで「指す先の中身が変わる式」を名指しする（★ 付き＝決裁③で ✓→△）。
-        #   ここは疑いなので警告でよい ── 合計行の除外（開示）とは性質が違う。
-        _s_last = resolved.get("_sort_end_row") or 10 ** 7
-        if (_dw := reference_drift_warning(book_meta, _s_sheet,
-                                            row_lo=_s_hr + 1, row_hi=_s_last)):
-            resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
+        r = _verify_sort(resolved, inferred, first_sheet, book_meta, resolve_in)
+        if r is not None:
+            return r
 
     elif op == "COMPUTE_COLUMN":
         operands = resolved.get("operands")

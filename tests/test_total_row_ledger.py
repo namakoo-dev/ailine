@@ -62,27 +62,59 @@ def _verify_source() -> str:
     return src[i:src.index(chr(10) + "def ", i + 10)]
 
 
+def _branch_helpers() -> dict:
+    """op 分岐が呼んでいる切り出し先（`_verify_<何か>`）→ そのソース。
+
+    ★ なぜ要るか（2026-09-04）: verify_dsl_args から op 分岐を関数へ切り出し始めた。
+      **切り出した先まで見ないと、規則を通っているのに『通らなくなった』と誤判定する**
+      （SORT を切り出した直後、実際にそう鳴った）。今日ずっと直してきた
+      「番人の視野が古い」形と同じなので、ここも**呼び先を 1 段辿る**ようにする。
+    """
+    import inspect
+    out = {}
+    for name in dir(ailine):
+        if not name.startswith('_verify_'):
+            continue
+        fn = getattr(ailine, name)
+        if callable(fn):
+            try:
+                out[name] = inspect.getsource(fn)
+            except (OSError, TypeError):
+                pass
+    return out
+
+
 def _ops_consulting_the_rule() -> set:
-    """`verify_dsl_args` の中で、合計行の規則を通っている op の顔ぶれ。
+    """合計行の規則を通っている op の顔ぶれ（★ 切り出し先も含めて見る）。
 
     ★ 窓は構造で切る ── op 分岐の開始位置から、次の分岐の手前まで。
+    ★ 分岐が `_verify_<op>(...)` を呼んでいれば、その関数の中も見る。
     """
     import re
+    helpers = _branch_helpers()
     lines = _verify_source().splitlines()
     marks = [(i, m.group(1)) for i, ln in enumerate(lines)
               if (m := re.search(r'(?:if|elif) op (?:==|in) \(?"([A-Z_]+)"', ln))]
     out = set()
-    for i, ln in enumerate(lines):
-        if "total_rows_in(" not in ln:
-            continue
+
+    def _op_at(i):
         cur = None
         for j, o in marks:
             if j <= i:
                 cur = o
-        if cur:
-            out.add(cur)
-    return out
+        return cur
 
+    for i, ln in enumerate(lines):
+        if 'total_rows_in(' in ln:
+            if (cur := _op_at(i)):
+                out.add(cur)
+            continue
+        # ★ 切り出し先を呼んでいる行 ── その関数の中も見る
+        for hname, hsrc in helpers.items():
+            if hname + '(' in ln and 'total_rows_in(' in hsrc:
+                if (cur := _op_at(i)):
+                    out.add(cur)
+    return out
 
 def test_the_ops_that_consult_the_rule_have_not_shrunk():
     """① 合計行を意識している op が減ったら退行。"""

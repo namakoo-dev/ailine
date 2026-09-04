@@ -24,7 +24,7 @@
 |---|---|
 | repo 全体 | 2026-08-10 起点・200 commit 超 |
 | 課題期間にやったこと | ① 外部の目による盲検レビュー 5 面 → 出た致命 10 件を全件処置 ② 表の基本操作（行の追加・削除／列の削除／1 セル書換） ③ 評価者が触れる GUI ④ 自分で GUI を触って出た欠陥 13 件の処置（8/31） |
-| 課題期間にやらなかったこと | 新機能の拡張、単一ファイル（<!-- MAIN_FILE_LINES -->15085<!-- /MAIN_FILE_LINES --> 行）の分割（理由は「4. 判断・制約・学び」） |
+| 課題期間にやらなかったこと | 新機能の拡張、単一ファイル（<!-- MAIN_FILE_LINES -->15104<!-- /MAIN_FILE_LINES --> 行）の分割（理由は「4. 判断・制約・学び」） |
 
 土台が既存であることを踏まえて読んでいただくために、何を今週やったかは
 `git log --since=2026-08-26 --oneline` で追える形にしてあります。
@@ -515,8 +515,8 @@ git clone https://github.com/namakoo-dev/basrun ../basrun
 CLI だけ使う場合は、タグを固定して入れることもできます（GUI とデモ検体は付きません）:
 
 ```bash
-uv tool install git+https://github.com/namakoo-dev/ailine@v0.2.0
-#   uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.2.0
+uv tool install git+https://github.com/namakoo-dev/ailine@v0.2.1
+#   uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.2.1
 ```
 
 ### 環境変数
