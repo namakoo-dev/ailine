@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.2.2](https://github.com/namakoo-dev/ailine/compare/v0.2.1...v0.2.2) - 2026-09-04
+
 ## [v0.2.1](https://github.com/namakoo-dev/ailine/compare/v0.2.0...v0.2.1) - 2026-09-03
 
 表計算の**基本操作を出し切り**、そのうえで**単一ファイルの分割**に着手した版。
