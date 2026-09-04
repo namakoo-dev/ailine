@@ -31,6 +31,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import inspect
 import openpyxl
 
 HERE = Path(__file__).resolve().parent
@@ -198,6 +199,94 @@ def computed_column(name, at_index=None):
     return check
 
 
+
+class _Books:
+    """検算に渡す「操作の前と後のブック」。★ 値の格子では見えないものを読むための口。
+
+    ★ なぜ要るか（2026-09-04）: 太字・けい線・数値書式・セル結合・列幅は
+      **値の格子に 1 文字も出ない**。だから「書式を付けたつもりが値を壊した」を
+      効果の側から見られなかった（事後条件の台帳でも DRAW_BORDERS / NUMBER_FORMAT /
+      MERGE が『値の不変を見ていない』として在庫に載っている）。
+    """
+
+    def __init__(self, src, out, sheet):
+        self.src, self.out, self.sheet = src, out, sheet
+
+    def cells(self, which):
+        """(前 or 後) のシートを開いて、セルの二次元配列を返す。"""
+        wb = openpyxl.load_workbook(self.src if which == 'before' else self.out)
+        ws = wb[self.sheet]
+        return ws, wb
+
+
+def _fmt_signature(ws):
+    """そのシートの**書式だけ**を拾う（値は見ない）。"""
+    out = {}
+    for r in range(1, (ws.max_row or 0) + 1):
+        for c in range(1, (ws.max_column or 0) + 1):
+            cell = ws.cell(r, c)
+            f = cell.font
+            b = cell.border
+            out[(r, c)] = (
+                bool(f and f.bold),
+                (cell.alignment.horizontal if cell.alignment else None),
+                cell.number_format,
+                (str(cell.fill.start_color.rgb) if cell.fill and
+                 cell.fill.patternType else None),
+                (b.left.style, b.right.style, b.top.style, b.bottom.style) if b else None,
+            )
+    return out
+
+
+def format_applied(kind: str, at=None):
+    """★ 書式 op の検算 ── 「値が 1 つも変わらず」かつ「書式が実際に付いた」。
+
+    kind: bold / align / numfmt / fill / border / merge / width
+    at:   (行, 列) を指定すると**そのセルに**付いたことまで見る（None なら『どこかに』）
+
+    ★ 2 つを対で見るのが肝 ── 値の不変だけだと「何もしなかった」が通り、
+      書式が付いたことだけだと「ついでに値を壊した」が通る。
+    """
+    idx = {'bold': 0, 'align': 1, 'numfmt': 2, 'fill': 3, 'border': 4}
+
+    def check(before, after, books):
+        # ★ セル結合だけは値が変わる ── Excel の仕様で**左上以外の値は破棄**される
+        #   （2026-09-04 に実測: A1:B1 を結合すると B1 の『棚』が消える）。
+        #   ★ 製品はこれを検知して ✓ でなく △ に落とし、走査できない旨を開示している。
+        #     だから「値の不変」を求めるのは**検体の側の誤り**だった。
+        #   ★ ただし『何が消えたか』は言っていない ── 事後条件の台帳が持つ
+        #     「MERGE: 結合で消える値を見ていない」は別の課題として生きている。
+        if kind != 'merge' and before != after:
+            diff = [(r, c) for r in range(min(len(before), len(after)))
+                    for c in range(min(len(before[r]), len(after[r])))
+                    if before[r][c] != after[r][c]]
+            return False, f'値が変わった {diff[:3]}（書式だけを変えるはず）'
+        ws_b, wb_b = books.cells('before')
+        ws_a, wb_a = books.cells('after')
+        try:
+            if kind == 'merge':
+                got = {str(m) for m in ws_a.merged_cells.ranges}
+                had = {str(m) for m in ws_b.merged_cells.ranges}
+                if not (got - had):
+                    return False, 'セルが結合されていない'
+                return True, ''
+            if kind == 'width':
+                wa = {k: d.width for k, d in ws_a.column_dimensions.items() if d.width}
+                wb_ = {k: d.width for k, d in ws_b.column_dimensions.items() if d.width}
+                if wa == wb_:
+                    return False, '列幅が 1 つも変わっていない'
+                return True, ''
+            i = idx[kind]
+            sb, sa = _fmt_signature(ws_b), _fmt_signature(ws_a)
+            changed = [k for k in sa if sb.get(k, (None,) * 5)[i] != sa[k][i]]
+            if not changed:
+                return False, f'{kind} が 1 セルも変わっていない'
+            if at is not None and at not in changed:
+                return False, f'{kind} が {at} に付いていない（付いたのは {changed[:3]}）'
+            return True, ''
+        finally:
+            wb_b.close(); wb_a.close()
+    return check
 def _both(*checks):
     """複数の期待を**すべて**満たすこと（片方だけ見て通すと、見た目だけ正しい回を拾う）。"""
     def check(before, after):
@@ -382,8 +471,8 @@ def _cases_for(key: str):
     #   4行目と5行目は両方ともヤマノ食品。取引先で指定は出来ない」
     #   ★ 同じ値が 2 行あれば中身では指せない ── **番号でしか言えない場面がある**。
     #   実測で、番号で言うと 4 行目に空行が挿さっていた（下ではなく上・値も入らない）。
-    for task, at in ((f"3行目の下に新品を追加して", 4), (f"3行目の上に新品を入れて", 3),
-                      (f"3行目と4行目の間に新品を作って", 4)):
+    for task, at in (("3行目の下に新品を追加して", 4), ("3行目の上に新品を入れて", 3),
+                      ("3行目と4行目の間に新品を作って", 4)):
         out.append(("row_add", task, row_added_at(at, "新品")))
 
     # ③ 行を消す
@@ -433,6 +522,23 @@ def _cases_for(key: str):
         out.append(("compute", "数量と単価をかけた列を作って", computed_column(None)))
         out.append(("compute", "単価の右に、数量と単価をかけた列を作って",
                      computed_column(None, 4)))
+    # ⑨ 書式 ── ★ 値の格子には出ない op（2026-09-04 に足した分母）。
+    #   ★ ここが無防備だった理由: 太字やけい線は**値を壊しても格子に差が出ない**ので、
+    #     効果の検体では 1 件も測れていなかった。事後条件の台帳でも DRAW_BORDERS /
+    #     NUMBER_FORMAT / MERGE が「値の不変を見ていない」として在庫に載っている。
+    #   ★ 検算は必ず 2 つを対で見る ── 「値が 1 つも変わらない」かつ「書式が実際に付いた」。
+    #     片方だけだと『何もしなかった』か『ついでに値を壊した』が通る。
+    out.append(("fmt_bold", "見出しを太字にして", format_applied("bold")))
+    out.append(("fmt_bold", "1行目を太字にして", format_applied("bold")))
+    out.append(("fmt_align", f"{c2}の列を中央揃えにして", format_applied("align")))
+    out.append(("fmt_border", "表にけい線を引いて", format_applied("border")))
+    out.append(("fmt_fill", "見出しに背景色を付けて", format_applied("fill")))
+    out.append(("fmt_width", "列幅を自動調整して", format_applied("width")))
+    # ★ 数値書式は「数値の列がある表」でだけ意味を持つ
+    if key in ("見積", "請求", "在庫"):
+        out.append(("fmt_numfmt", f"{c3}に桁区切りを付けて", format_applied("numfmt")))
+    # ★ セル結合は「1 行目を横につなぐ」が最も素直な依頼
+    out.append(("fmt_merge", "1行目のA列とB列を結合して", format_applied("merge")))
     return out
 
 
@@ -461,7 +567,14 @@ def run_one(table_key: str, task: str, check, workdir: Path, timeout: float):
         return "failed", _first_line(stdout, "×") or f"exit {p.returncode}"
     if not out.exists():
         return "failed", "出力が無い"
-    ok, why = check(before, _grid(out, sheet))
+    # ★ 2026-09-04: 書式の op（太字・けい線・数値書式…）は**値の格子に出ない**ので、
+    #   検算に「ファイルを読む口」を渡せるようにした。★ 既存の 2 引数の検算は無傷 ──
+    #   3 つ目を受け取る検算にだけ渡す（形を変えると 160 件を全部書き直すことになる）。
+    after = _grid(out, sheet)
+    if len(inspect.signature(check).parameters) >= 3:
+        ok, why = check(before, after, _Books(src, out, sheet))
+    else:
+        ok, why = check(before, after)
     return ("pass", "") if ok else ("failed", why)
 
 
