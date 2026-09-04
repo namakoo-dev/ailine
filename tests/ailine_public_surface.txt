@@ -390,7 +390,7 @@ def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers,
 def _verify_set_column_value(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers)
 def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op)
 def _verify_sort(resolved: 'dict', inferred: 'set', first_sheet: 'str', book_meta: 'dict', resolve_in) -> 'tuple | None'
-def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in)
+def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in, task)
 def _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, headers)
 def _vocab_miss_reason(step: 'dict') -> 'str'
 def _why_output_is_unusable(path: 'Path') -> 'str | None'

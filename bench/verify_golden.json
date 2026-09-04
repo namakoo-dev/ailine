@@ -3532,6 +3532,9 @@
      ],
      "_parts": 2,
      "_sheet_source": "default",
+     "_sources": {
+      "sep": "依頼文の名指し"
+     },
      "_target_sheet": "一覧",
      "col": "URL",
      "sep": "\n"
@@ -21711,6 +21714,9 @@
       "URL_2"
      ],
      "_parts": 2,
+     "_sources": {
+      "sep": "依頼文の名指し"
+     },
      "_target_sheet": "一覧",
      "col": "URL",
      "sep": "\n"
@@ -28692,6 +28698,9 @@
      ],
      "_parts": 2,
      "_sheet_source": "default",
+     "_sources": {
+      "sep": "依頼文の名指し"
+     },
      "_target_sheet": "一覧",
      "col": "URL",
      "sep": "\n"

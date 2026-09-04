@@ -5168,7 +5168,7 @@ def _verify_dedup(resolved, inferred, first_sheet, headers):
     return None
 
 
-def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in):
+def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in, task):
     """SPLIT_CELL の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
     ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
@@ -5178,7 +5178,29 @@ def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in):
     """
     if (err := resolve_in("col", first_sheet)):
         return False, resolved, inferred, err
-    sep = split_cell.normalize_separator(resolved.get("sep"))
+    # ★★ 2026-09-04: 区切りは**依頼文から機械が取る**（A' 原則 ── SET_COLUMN_VALUE の
+    #   value と同じ作法）。実測で「読点で分けて」に対し模型が sep="," を返し、
+    #   「カンマが見つからない」で止まっていた（断り方は正しいが依頼は読めている）。
+    #   ★ 引用の中身は**それが区切りとして意味を持つ時だけ**採る（「『済』の行を…」の
+    #     ような、区切りと無関係な引用に引きずられないため）。
+    llm_sep_raw = resolved.get("sep")
+    _quoted = extract_quoted_literal(task)
+    text_sep = (split_cell.SEPARATOR_ALIASES.get(_quoted)
+                if _quoted in split_cell.SEPARATOR_ALIASES else None)
+    _basis = f"依頼文の引用: 「{_quoted}」" if text_sep else None
+    if text_sep is None:
+        text_sep = split_cell.separator_named_in(task)
+        _basis = "依頼文の名指し" if text_sep else None
+    sep = text_sep or split_cell.normalize_separator(llm_sep_raw)
+    if text_sep is not None:
+        resolved["_sources"] = {**resolved.get("_sources", {}), "sep": _basis}
+        _llm_norm = split_cell.normalize_separator(llm_sep_raw)
+        if _llm_norm is not None and _llm_norm != text_sep:
+            _a = split_cell.describe_separator(_llm_norm)
+            _b = split_cell.describe_separator(text_sep)
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"LLM が返した区切り('{_a}')と依頼文('{_b}')が食い違うため"
+                f"依頼文側('{_b}')を採用しました"]
     if not sep:
         return False, resolved, inferred, (
             "区切り(sep)が読み取れません（改行/カンマ/、/スペース などで指定してください）"
@@ -5497,7 +5519,7 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return r
 
     elif op == "SPLIT_CELL":
-        r = _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in)
+        r = _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in, task)
         if r is not None:
             return r
 

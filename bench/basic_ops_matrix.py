@@ -86,6 +86,30 @@ TABLES = {
         "rows": [["カレー", "牛肉", 4, ""], ["味噌汁", "豆腐", 2, ""],
                   ["サラダ", "レタス", 3, ""]],
     },
+    # ★★ 2026-09-04: **重複除去（DEDUP）とセル分割（SPLIT_CELL）を 1 件も測れていなかった**。
+    #   理由はまた表の側にあった ── 既存の 5 表には**重複行が 1 つも無く、区切りの
+    #   入ったセルも無い**ので、そもそも頼めなかった。
+    #   ★ 2026-09-02 に計算列で踏んだのと同じ形（表が痩せていて op が測れない）。
+    #   ★ この 2 表は専用の op だけを回す（汎用 6 op は回さない）── 「請求」と同じ扱い。
+    "受注": {
+        "sheet": "受注",
+        "headers": ["取引先", "品名", "数量", "担当"],
+        # ★ 2 行目と 4 行目が完全な重複（DEDUP が落とすべき行）。
+        #   数字は偶然の和にならないように選ぶ（名簿で踏んだ轍 ── 101+202=303 の件）。
+        "rows": [["あかね商事", "机", 7, "佐藤"],
+                 ["うえだ物産", "椅子", 4, "鈴木"],
+                 ["あかね商事", "棚", 9, "佐藤"],
+                 ["うえだ物産", "椅子", 4, "鈴木"]],
+    },
+    "連絡": {
+        "sheet": "連絡",
+        "headers": ["氏名", "連絡先", "部署", "備考"],
+        # ★ 連絡先に**読点で 2 つ**入っている（SPLIT_CELL が右へ割るべきセル）。
+        #   ★ 改行ではなく読点にした ── 区切り文字を依頼文で言えるようにするため。
+        "rows": [["川口", "03-1111-2222、090-3333-4444", "営業", ""],
+                 ["森田", "03-5555-6666", "経理", ""],
+                 ["大西", "06-7777-8888、080-9999-0000", "総務", ""]],
+    },
 }
 
 
@@ -211,6 +235,23 @@ class _Books:
 
     def __init__(self, src, out, sheet):
         self.src, self.out, self.sheet = src, out, sheet
+
+    def new_sheet_grid(self):
+        """★ 操作が**新しく作ったシート**の格子を返す（無い/2 枚以上なら None と理由）。
+
+        ★ なぜ要るか（2026-09-04）: 重複除去・セル分割・抽出などは
+          **元のシートを 1 文字も変えず、結果を新しいシートに書く**のが契約。
+          元シートだけを見る検算は、正しく動いていても「何も起きていない」と読む
+          （実測: DEDUP 4 件が全部 × になり、製品は正しかった）。
+        """
+        was = set(openpyxl.load_workbook(self.src).sheetnames)
+        wb = openpyxl.load_workbook(self.out)
+        made = [n for n in wb.sheetnames if n not in was]
+        if len(made) != 1:
+            return None, f'新しいシートが {len(made)} 枚（1 枚のはず）: {made}'
+        ws = wb[made[0]]
+        return [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+                for r in range(1, ws.max_row + 1)], made[0]
 
     def cells(self, which):
         """(前 or 後) のシートを開いて、セルの二次元配列を返す。"""
@@ -414,6 +455,169 @@ def rows_sorted_by(col_index: int, desc: bool):
     return check
 
 
+def total_row_appended(col_index: int):
+    """★ 最下行に合計が足され、**元の行は 1 セルも変わっていない**こと。
+
+    ★ 合計の中身まで見る ── 「合計という行ができた」だけだと、
+      空でもゼロでも通ってしまう。
+    ★ 2026-09-04 の実測: 製品は数値ではなく **=SUM(...) の式**を書く（合計が
+      生き続けるのが正しい）。だから「数値でない＝失敗」と書いた最初の検算が
+      間違いだった。式の回は**その式が合計の範囲を指しているか**を見る。
+    """
+    def check(before, after):
+        if len(after) != len(before) + 1:
+            return False, f'行数が {len(before)}→{len(after)}（1 行増えるはず）'
+        for i, (b, a) in enumerate(zip(before, after)):
+            if b != a:
+                return False, f'{i+1}行目が変わった（合計行を足すだけのはず）'
+        nums = [r[col_index - 1] for r in before[1:]
+                if isinstance(r[col_index - 1], (int, float))]
+        got = after[-1][col_index - 1]
+        if isinstance(got, str) and got.startswith('='):
+            letter = chr(ord('A') + col_index - 1)
+            if 'SUM(' not in got.upper():
+                return False, f'合計の式が SUM でない: {got}'
+            if letter not in got.upper():
+                return False, f'合計の式が {letter} 列を指していない: {got}'
+            return True, ''
+        if not isinstance(got, (int, float)):
+            return False, f'合計が数値でも式でもない: {got!r}'
+        if nums and abs(float(got) - sum(nums)) > 1e-6:
+            return False, f'合計が {got}（{sum(nums)} のはず）'
+        return True, ''
+    return check
+
+
+def column_all_became(col_index: int, value):
+    """★ その列のデータ行が全部 value になり、**他の列は 1 セルも変わっていない**こと。
+
+    ★ 事後条件の台帳が SET_COLUMN_VALUE を「他の列が無傷であることを見ていない」
+      として在庫に持っている ── 効果の側からも同じ所を見る。
+    """
+    def check(before, after):
+        if len(after) != len(before):
+            return False, f'行数が変わった {len(before)}→{len(after)}'
+        for r in range(1, len(after)):
+            for c in range(len(after[r])):
+                if c == col_index - 1:
+                    if str(after[r][c]) != str(value):
+                        return False, f'{r+1}行目が {after[r][c]!r}（{value!r} のはず）'
+                elif before[r][c] != after[r][c]:
+                    return False, f'他の列が変わった（{r+1}行{c+1}列）'
+        return True, ''
+    return check
+
+
+def rows_matching_changed(cond_col: int, threshold, mark_col: int, mark):
+    """★ 条件に合う行**だけ**が変わったこと。
+
+    ★ ここが SET_WHERE のいちばん静かな壊れ方 ── 「条件に合う行に印」と頼んで
+      **列全体が書き換わっても、印は確かに付いている**ので片側だけ見ると ✓ が出る。
+      **合う行に印がある**と**合わない行が 1 セルも変わっていない**を、対で見る。
+    """
+    def check(before, after):
+        if len(after) != len(before):
+            return False, f'行数が変わった {len(before)}→{len(after)}'
+        hit = 0
+        for r in range(1, len(before)):
+            v = before[r][cond_col - 1]
+            ok = isinstance(v, (int, float)) and v >= threshold
+            got = after[r][mark_col - 1]
+            if ok:
+                if str(got).strip() != str(mark):
+                    return False, f'{r+1}行目（{v}）に印が無い: {got!r}'
+                hit += 1
+            elif before[r] != after[r]:
+                return False, f'条件に合わない {r+1}行目（{v}）が変わった'
+        if hit == 0:
+            return False, '条件に合う行が 1 つも無い（★ 検体の側の誤り）'
+        return True, ''
+    return check
+
+
+def rows_deduped(key_col: int):
+    """★ 重複が落ちた表が**新しいシート**にでき、**元のシートは無変更**であること。
+
+    ★ 3 引数の検算（新しいシートを読む口が要る）。元シートを見るだけでは
+      「何も起きていない」と「正しく別シートに作った」が見分けられない。
+    """
+    def check(before, after, books):
+        if before != after:
+            return False, '元のシートが変わった（新しいシートを作るのが契約）'
+        got, why = books.new_sheet_grid()
+        if got is None:
+            return False, why
+        if len(got) >= len(before):
+            return False, f'行数が減っていない {len(before)}→{len(got)}（{why}）'
+        keys = [r[key_col - 1] for r in got[1:]]
+        if len(keys) != len(set(keys)):
+            return False, f'残った行にまだ重複がある: {keys}'
+        kept = {tuple(r) for r in got[1:]}
+        orig = {tuple(r) for r in before[1:]}
+        if not kept <= orig:
+            return False, f'元に無い行が現れた（消すだけのはず）: {kept - orig}'
+        if got[0] != before[0]:
+            return False, f'見出しが変わった {before[0]} → {got[0]}'
+        return True, ''
+    return check
+
+def cell_split_into(row: int, col_index: int, sep: str):
+    """★ 1 セルに詰まった値が、**同じシートの右の列に**別々に分かれたこと。
+
+    ★ 割った先の**列番号を決め打ちしない** ── SPLIT_CELL は「元の列を残して
+      右に N 本作る」契約で、何本になるかは実データが決める。位置を書くと
+      検算の側が先に嘘になる。見るのは「各片が単独のセルとして在ること」と
+      「元の列が残っていること」。
+    ★ 2026-09-04 の実測で 1 度間違えた: DEDUP が新シートを作るので SPLIT_CELL も
+      そうだと決めつけ、正しい出力を × と読んだ。**同じ群に見えても出力先は違う。**
+    """
+    def check(before, after):
+        if len(after) != len(before):
+            return False, f'行数が変わった {len(before)}→{len(after)}'
+        whole = str(before[row - 1][col_index - 1])
+        parts = [x.strip() for x in whole.split(sep) if x.strip()]
+        if len(parts) < 2:
+            return False, f'検体の側の誤り: {whole!r} は割れない'
+        cells = [str(x).strip() for x in after[row - 1]]
+        for part in parts:
+            if part not in cells:
+                return False, f'{part!r} が単独のセルになっていない: {cells}'
+        if str(after[row - 1][col_index - 1]).strip() != whole.strip():
+            return False, ('元の列が残っていない（SPLIT_CELL の契約）: '
+                           f'{after[row - 1][col_index - 1]!r}')
+        if len(after[0]) <= len(before[0]):
+            return False, f'列が増えていない {len(before[0])}→{len(after[0])}'
+        return True, ''
+    return check
+
+def blank_rows_inserted(at: int, count: int = 1):
+    """★ 指定の位置に空行が挿さり、**元の行は 1 つも消えず値も変わっていない**こと。
+
+    ★ 「行が増えた」だけでは通ってしまう ── 挿さった行が**空である**ことと、
+      元の行が順序を保ったまま全部残っていることを、両方見る。
+    ★ 2026-09-04 の実測で自分の穴を踏んだ: 空セルは None で来るのに
+      `str(x).strip()` で見ていたので `"None"` が真になり、空行を「空でない」と
+      読んでいた。変異試験で `""` しか試しておらず、**None を試していなかった**。
+    """
+    def _empty(x):
+        return x is None or str(x).strip() == ''
+
+    def check(before, after):
+        if len(after) != len(before) + count:
+            return False, f'行数が {len(before)}→{len(after)}（{count} 行増えるはず）'
+        for i in range(count):
+            got = after[at - 1 + i]
+            if not all(_empty(x) for x in got):
+                return False, f'{at + i}行目が空でない: {got}'
+        rest = after[:at - 1] + after[at - 1 + count:]
+        if rest != before:
+            for i, (b, a) in enumerate(zip(before, rest)):
+                if b != a:
+                    return False, f'元の {i+1}行目が変わった {b} → {a}'
+            return False, '元の行が保たれていない'
+        return True, ''
+    return check
+
 # --- 検体（基本操作 × 言い回し）---------------------------------------------------------
 #
 # ★ 言い回しは「思いつく限り」ではなく、**人が実際に書きそうな形**を並べる。
@@ -422,6 +626,28 @@ def rows_sorted_by(col_index: int, desc: bool):
 def _cases_for(key: str):
     t = TABLES[key]
     h = t["headers"]
+    out = []
+    # ★★ 2026-09-04: 「受注」「連絡」は**専用の 1 op だけを測る表**。汎用の 6 op は
+    #   回さない（請求と同じ扱い）。★ ここを分解より前に置くのは、受注が 4 行あって
+    #   下の `r1, r2, r3 = ...` が数の不一致で落ちるため。
+    if key == "受注":
+        # ⑩ 重複除去 ── キー列を**名指しした**依頼だけを測る（名指しが無い依頼は
+        #   CLARIFY が正しい挙動で、それは効果の格子では測れない）。
+        for task in ("品名が同じ行を重複として除いて",
+                     "品名が重複している行を消して",
+                     "品名が同じなら重複とみなして削除して"):
+            out.append(("dedup", task, rows_deduped(2)))
+        out.append(("dedup", "取引先が同じ行を重複として除いて", rows_deduped(1)))
+        return out
+
+    if key == "連絡":
+        # ⑪ セル分割 ── 区切り文字を依頼文で言う。★ 元の列は残るのが契約。
+        for task in ("連絡先を読点で右の列に分けて",
+                     "連絡先を「、」で区切って別の列に分けて",
+                     "連絡先の読点で区切られた値を右の列に割って"):
+            out.append(("split", task, cell_split_into(2, 2, "、")))
+        return out
+
     r1, r2, r3 = (row[0] for row in t["rows"])
     c1 = h[0]           # 1 列目の見出し
     c2 = h[1]           # 2 列目
@@ -522,6 +748,30 @@ def _cases_for(key: str):
         out.append(("compute", "数量と単価をかけた列を作って", computed_column(None)))
         out.append(("compute", "単価の右に、数量と単価をかけた列を作って",
                      computed_column(None, 4)))
+    # ⑫ 行/列を動かす 4 op ── ★ 2026-09-04 に足した分母（段2）。
+    #   ★ ここまでは「1 セル/1 行/1 列」を動かす op しか測っていなかった。
+    #     この 4 つは**表の全行に一度に触る** op で、静かな壊れ方の形が違う ──
+    #     「頼んだ範囲を超えて書き換える」。だから検算は必ず**触れていない側**を見る。
+    #   合計行 ── 数値の 3 列目を合計する。名簿の内線は合計に意味が無いので外す。
+    if key in ("在庫", "見積", "献立"):
+        out.append(("total", f"{c3}の合計を一番下に追加して", total_row_appended(3)))
+        out.append(("total", f"{c3}の合計を最後に", total_row_appended(3)))
+    # 列を一律の値で埋める ── ★ 検算は「他の列が 1 セルも変わっていない」を見る
+    #   （事後条件の台帳が同じ所を在庫に載せている）。
+    c4 = h[3]
+    out.append(("col_set", f"{c4}の列を全部「確認済」に書き換えて",
+                column_all_became(4, "確認済")))
+    out.append(("col_set", f"{c4}を全部確認済にして", column_all_became(4, "確認済")))
+    # 条件つき書換 ── ★ 在庫でだけ測る（120/80/300 で 100 を境に 2 対 1 に割れる）。
+    #   ★ 2 対 1 に割れない表で測ると「全部書き換えても通る」検算になる。
+    if key == "在庫":
+        for task in ("数量が100以上の行の備考に「○」を付けて",
+                     "数量が100以上の行だけ備考を「○」にして"):
+            out.append(("cond_set", task, rows_matching_changed(3, 100, 4, "○")))
+    # 空行を挿す ── ★ 「行が増えた」だけでは通る。挿さった行が空であることを見る。
+    out.append(("row_blank", "3行目の前に1行挿入して", blank_rows_inserted(3)))
+    out.append(("row_blank", "2行目と3行目の間に空行を1行入れて", blank_rows_inserted(3)))
+
     # ⑨ 書式 ── ★ 値の格子には出ない op（2026-09-04 に足した分母）。
     #   ★ ここが無防備だった理由: 太字やけい線は**値を壊しても格子に差が出ない**ので、
     #     効果の検体では 1 件も測れていなかった。事後条件の台帳でも DRAW_BORDERS /

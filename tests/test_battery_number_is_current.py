@@ -55,6 +55,33 @@ def test_the_record_names_how_it_was_measured():
     assert rec["runs"] >= 2, "1 回の測定を記録にしない（LLM は揺れる）"
 
 
+
+def test_the_documents_do_not_drift_around_the_ratio():
+    """★ 比だけでなく**件数と断りの数**も印で縛る（2026-09-04）。
+
+    ★ なぜ足したか: MATRIX の印は**比の文字列しか守っていなかった**。
+      190 → 221 に増やした回、印の中は番人が直させたのに、その**周りの地の文**が
+      4 箇所ずれていた ── README の「断り 3」、手順書の「下の 190 件」「残りの 1 件」、
+      そして**想定問答の「93 件中 92 件（98.9%）」**（93 件時代のまま）。
+      ★ 想定問答は当日そのまま読み上げる紙で、いちばんずれてはいけない所だった。
+      「在っても、その事故の形では鳴らない」の実例なので、鳴る形にする。
+    """
+    m = _matrix()
+    assert_all_agree("MATRIX_CASES", str(m["cases"]), at_least=4)
+    assert_all_agree("MATRIX_REFUSED", str(m["refused"]), at_least=3)
+
+
+def test_the_interview_script_is_bound_to_the_record_too():
+    """★ 想定問答にも MATRIX の印が在ること（3 文書の中に居ることを名指しで確かめる）。
+
+    ★ at_least だけだと「どこか 3 つ」で通ってしまい、**読み上げる紙が抜けても**
+      鳴らない。抜けてはいけない紙は名指しで要求する。
+    """
+    from _doc_numbers import marked
+    files = {str(p) for p, _ in marked("MATRIX")}
+    assert any("想定問答" in f for f in files), (
+        "demo/想定問答.md に MATRIX の印が無い ── 当日読み上げる紙が縛られていない")
+
 @pytest.mark.local
 def test_the_record_still_matches_the_machine():
     """② 記録 vs 実測。実物の ollama が要るので実機側。
