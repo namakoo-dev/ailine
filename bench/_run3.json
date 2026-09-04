@@ -1,0 +1,1631 @@
+{
+  "tally": {
+    "pass": 220,
+    "refused": 8,
+    "failed": 2
+  },
+  "gap": {
+    "pass": 0,
+    "refused": 0,
+    "failed": 1
+  },
+  "results": [
+    {
+      "table": "受注",
+      "op": "dedup",
+      "task": "品名が同じ行を重複として除いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "受注",
+      "op": "dedup",
+      "task": "品名が重複している行を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "受注",
+      "op": "dedup",
+      "task": "品名が同じなら重複とみなして削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "受注",
+      "op": "dedup",
+      "task": "取引先が同じ行を重複として除いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cell",
+      "task": "鈴木の所属を「東棟」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cell",
+      "task": "鈴木の所属に東棟と入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cell",
+      "task": "鈴木の所属を東棟に変えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cell",
+      "task": "3行目の所属を「東棟」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cell",
+      "task": "鈴木の右に東棟",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cell",
+      "task": "鈴木の隣に東棟",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cell",
+      "task": "高橋の内線を「999」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cell",
+      "task": "4行目の内線を999にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "山田と鈴木の間に新品を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "山田と鈴木の間に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "山田と鈴木の間に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "山田の下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "高橋の下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "鈴木の上に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "3行目の下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "3行目の上に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_add",
+      "task": "3行目と4行目の間に新品を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_del",
+      "task": "鈴木の行を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_del",
+      "task": "鈴木を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_del",
+      "task": "鈴木の行を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_del",
+      "task": "鈴木の行を除いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_del",
+      "task": "3行目を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "col_add",
+      "task": "所属の右に区分という列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "col_add",
+      "task": "所属の右に区分の列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "col_add",
+      "task": "氏名と所属の間に区分の列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "col_add",
+      "task": "区分という列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "col_del",
+      "task": "所属の列を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "col_del",
+      "task": "所属列を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "sort",
+      "task": "内線で降順に並べ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "sort",
+      "task": "内線の大きい順にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "sort",
+      "task": "内線の少ない順に並べて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "swap",
+      "task": "山田と高橋の行を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "swap",
+      "task": "山田の行と高橋の行を交換して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "swap",
+      "task": "山田と高橋の順番を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "swap",
+      "task": "2行目と4行目を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "swap",
+      "task": "所属と内線の列を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "swap",
+      "task": "山田の内線と高橋の内線を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "col_set",
+      "task": "メモの列を全部「確認済」に書き換えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "col_set",
+      "task": "メモを全部確認済にして",
+      "verdict": "refused",
+      "why": "？ できませんでした"
+    },
+    {
+      "table": "名簿",
+      "op": "row_blank",
+      "task": "3行目の前に1行挿入して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "row_blank",
+      "task": "2行目と3行目の間に空行を1行入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cond_str",
+      "task": "所属が営業と等しい行のメモに「○」を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cond_str",
+      "task": "所属に営業を含む行のメモに「○」を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cond_str",
+      "task": "内線が200以上の行のメモに「○」を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cond_str",
+      "task": "内線が202と等しい行のメモに「○」を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "neg_pick",
+      "task": "所属が営業以外の行を抜き出して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "neg_pick",
+      "task": "所属が営業の行を抜き出して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cond_or",
+      "task": "所属が営業または経理の行を抜き出して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "cond_bare",
+      "task": "所属が営業の行のメモに「○」を付けて",
+      "verdict": "failed",
+      "why": "行数が変わった 4→5"
+    },
+    {
+      "table": "名簿",
+      "op": "cond_bare",
+      "task": "所属が営業以外の行のメモに「○」を付けて",
+      "verdict": "failed",
+      "why": "行数が変わった 4→5"
+    },
+    {
+      "table": "名簿",
+      "op": "gap_multi",
+      "task": "所属が営業かつ内線が200以上の行を抜き出して",
+      "verdict": "failed",
+      "why": "★ 断るはずが通った（複数条件(AND)は語彙に無いので断るはず）"
+    },
+    {
+      "table": "名簿",
+      "op": "fmt_bold",
+      "task": "見出しを太字にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "fmt_bold",
+      "task": "1行目を太字にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "fmt_align",
+      "task": "所属の列を中央揃えにして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "fmt_border",
+      "task": "表にけい線を引いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "fmt_fill",
+      "task": "見出しに背景色を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "fmt_width",
+      "task": "列幅を自動調整して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "名簿",
+      "op": "fmt_merge",
+      "task": "1行目のA列とB列を結合して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cell",
+      "task": "ナットの棚を「東棟」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cell",
+      "task": "ナットの棚に東棟と入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cell",
+      "task": "ナットの棚を東棟に変えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cell",
+      "task": "3行目の棚を「東棟」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cell",
+      "task": "ナットの右に東棟",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cell",
+      "task": "ナットの隣に東棟",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cell",
+      "task": "ワッシャーの数量を「999」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cell",
+      "task": "4行目の数量を999にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "ボルトとナットの間に新品を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "ボルトとナットの間に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "ボルトとナットの間に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "ボルトの下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "ワッシャーの下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "ナットの上に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "3行目の下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "3行目の上に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_add",
+      "task": "3行目と4行目の間に新品を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_del",
+      "task": "ナットの行を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_del",
+      "task": "ナットを削除して",
+      "verdict": "refused",
+      "why": "？ できませんでした"
+    },
+    {
+      "table": "在庫",
+      "op": "row_del",
+      "task": "ナットの行を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_del",
+      "task": "ナットの行を除いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_del",
+      "task": "3行目を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "col_add",
+      "task": "棚の右に区分という列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "col_add",
+      "task": "棚の右に区分の列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "col_add",
+      "task": "品名と棚の間に区分の列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "col_add",
+      "task": "区分という列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "col_del",
+      "task": "棚の列を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "col_del",
+      "task": "棚列を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "sort",
+      "task": "数量で降順に並べ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "sort",
+      "task": "数量の大きい順にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "sort",
+      "task": "数量の少ない順に並べて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "swap",
+      "task": "ボルトとワッシャーの行を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "swap",
+      "task": "ボルトの行とワッシャーの行を交換して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "swap",
+      "task": "ボルトとワッシャーの順番を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "swap",
+      "task": "2行目と4行目を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "swap",
+      "task": "棚と数量の列を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "swap",
+      "task": "ボルトの数量とワッシャーの数量を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "total",
+      "task": "数量の合計を一番下に追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "total",
+      "task": "数量の合計を最後に",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "col_set",
+      "task": "備考の列を全部「確認済」に書き換えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "col_set",
+      "task": "備考を全部確認済にして",
+      "verdict": "refused",
+      "why": "？ できませんでした"
+    },
+    {
+      "table": "在庫",
+      "op": "cond_set",
+      "task": "数量が100以上の行の備考に「○」を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "cond_set",
+      "task": "数量が100以上の行だけ備考を「○」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_blank",
+      "task": "3行目の前に1行挿入して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "row_blank",
+      "task": "2行目と3行目の間に空行を1行入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "fmt_bold",
+      "task": "見出しを太字にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "fmt_bold",
+      "task": "1行目を太字にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "fmt_align",
+      "task": "棚の列を中央揃えにして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "fmt_border",
+      "task": "表にけい線を引いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "fmt_fill",
+      "task": "見出しに背景色を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "fmt_width",
+      "task": "列幅を自動調整して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "fmt_numfmt",
+      "task": "数量に桁区切りを付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "在庫",
+      "op": "fmt_merge",
+      "task": "1行目のA列とB列を結合して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "cell",
+      "task": "味噌汁の主材料を「東棟」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "cell",
+      "task": "味噌汁の主材料に東棟と入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "cell",
+      "task": "味噌汁の主材料を東棟に変えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "cell",
+      "task": "3行目の主材料を「東棟」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "cell",
+      "task": "味噌汁の右に東棟",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "cell",
+      "task": "味噌汁の隣に東棟",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "cell",
+      "task": "サラダの分量を「999」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "cell",
+      "task": "4行目の分量を999にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "カレーと味噌汁の間に新品を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "カレーと味噌汁の間に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "カレーと味噌汁の間に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "カレーの下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "サラダの下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "味噌汁の上に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "3行目の下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "3行目の上に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_add",
+      "task": "3行目と4行目の間に新品を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_del",
+      "task": "味噌汁の行を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_del",
+      "task": "味噌汁を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_del",
+      "task": "味噌汁の行を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_del",
+      "task": "味噌汁の行を除いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_del",
+      "task": "3行目を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "col_add",
+      "task": "主材料の右に区分という列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "col_add",
+      "task": "主材料の右に区分の列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "col_add",
+      "task": "料理と主材料の間に区分の列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "col_add",
+      "task": "区分という列を追加して",
+      "verdict": "refused",
+      "why": "？ できませんでした"
+    },
+    {
+      "table": "献立",
+      "op": "col_del",
+      "task": "主材料の列を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "col_del",
+      "task": "主材料列を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "sort",
+      "task": "分量で降順に並べ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "sort",
+      "task": "分量の大きい順にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "sort",
+      "task": "分量の少ない順に並べて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "swap",
+      "task": "カレーとサラダの行を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "swap",
+      "task": "カレーの行とサラダの行を交換して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "swap",
+      "task": "カレーとサラダの順番を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "swap",
+      "task": "2行目と4行目を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "swap",
+      "task": "主材料と分量の列を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "swap",
+      "task": "カレーの分量とサラダの分量を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "total",
+      "task": "分量の合計を一番下に追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "total",
+      "task": "分量の合計を最後に",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "col_set",
+      "task": "備考の列を全部「確認済」に書き換えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "col_set",
+      "task": "備考を全部確認済にして",
+      "verdict": "refused",
+      "why": "？ できませんでした"
+    },
+    {
+      "table": "献立",
+      "op": "row_blank",
+      "task": "3行目の前に1行挿入して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "row_blank",
+      "task": "2行目と3行目の間に空行を1行入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "fmt_bold",
+      "task": "見出しを太字にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "fmt_bold",
+      "task": "1行目を太字にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "fmt_align",
+      "task": "主材料の列を中央揃えにして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "fmt_border",
+      "task": "表にけい線を引いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "fmt_fill",
+      "task": "見出しに背景色を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "fmt_width",
+      "task": "列幅を自動調整して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "献立",
+      "op": "fmt_merge",
+      "task": "1行目のA列とB列を結合して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "cell",
+      "task": "椅子の数量を「東棟」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "cell",
+      "task": "椅子の数量に東棟と入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "cell",
+      "task": "椅子の数量を東棟に変えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "cell",
+      "task": "3行目の数量を「東棟」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "cell",
+      "task": "椅子の右に東棟",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "cell",
+      "task": "椅子の隣に東棟",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "cell",
+      "task": "棚の単価を「999」にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "cell",
+      "task": "4行目の単価を999にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "机と椅子の間に新品を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "机と椅子の間に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "机と椅子の間に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "机の下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "棚の下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "椅子の上に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "3行目の下に新品を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "3行目の上に新品を入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_add",
+      "task": "3行目と4行目の間に新品を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_del",
+      "task": "椅子の行を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_del",
+      "task": "椅子を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_del",
+      "task": "椅子の行を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_del",
+      "task": "椅子の行を除いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_del",
+      "task": "3行目を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "col_add",
+      "task": "数量の右に区分という列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "col_add",
+      "task": "数量の右に区分の列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "col_add",
+      "task": "品名と数量の間に区分の列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "col_add",
+      "task": "区分という列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "col_del",
+      "task": "数量の列を削除して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "col_del",
+      "task": "数量列を消して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "sort",
+      "task": "単価で降順に並べ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "sort",
+      "task": "単価の大きい順にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "sort",
+      "task": "単価の少ない順に並べて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "swap",
+      "task": "机と棚の行を入れ替えて",
+      "verdict": "refused",
+      "why": "？ この依頼（行の入れ替え）は、頼める操作の一覧に照合できませんでした。要望として記録します。"
+    },
+    {
+      "table": "見積",
+      "op": "swap",
+      "task": "机の行と棚の行を交換して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "swap",
+      "task": "机と棚の順番を入れ替えて",
+      "verdict": "refused",
+      "why": "？ 「机と棚の順番を入れ替える」とは具体的に何をしますか（例: 行の順番を入れ替える／列の順番を入れ替える）"
+    },
+    {
+      "table": "見積",
+      "op": "swap",
+      "task": "2行目と4行目を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "swap",
+      "task": "数量と単価の列を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "swap",
+      "task": "机の単価と棚の単価を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "compute",
+      "task": "数量と単価をかけた金額の列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "compute",
+      "task": "数量に単価をかけた小計の列を追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "compute",
+      "task": "単価の右に、数量と単価をかけた金額の列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "compute",
+      "task": "数量と単価の間に、数量と単価をかけた金額の列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "compute",
+      "task": "数量と単価をかけた列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "compute",
+      "task": "単価の右に、数量と単価をかけた列を作って",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "total",
+      "task": "単価の合計を一番下に追加して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "total",
+      "task": "単価の合計を最後に",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "col_set",
+      "task": "メモの列を全部「確認済」に書き換えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "col_set",
+      "task": "メモを全部確認済にして",
+      "verdict": "refused",
+      "why": "？ できませんでした"
+    },
+    {
+      "table": "見積",
+      "op": "row_blank",
+      "task": "3行目の前に1行挿入して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "row_blank",
+      "task": "2行目と3行目の間に空行を1行入れて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "fmt_bold",
+      "task": "見出しを太字にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "fmt_bold",
+      "task": "1行目を太字にして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "fmt_align",
+      "task": "数量の列を中央揃えにして",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "fmt_border",
+      "task": "表にけい線を引いて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "fmt_fill",
+      "task": "見出しに背景色を付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "fmt_width",
+      "task": "列幅を自動調整して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "fmt_numfmt",
+      "task": "単価に桁区切りを付けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "見積",
+      "op": "fmt_merge",
+      "task": "1行目のA列とB列を結合して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "請求",
+      "op": "swap",
+      "task": "あかね商事とうえだ物産の行を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "請求",
+      "op": "swap",
+      "task": "あかね商事の行とうえだ物産の行を交換して",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "請求",
+      "op": "swap",
+      "task": "2行目と4行目を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "請求",
+      "op": "swap",
+      "task": "件数と単価の列を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "請求",
+      "op": "swap",
+      "task": "あかね商事の単価とうえだ物産の単価を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "請求",
+      "op": "swap",
+      "task": "あかね商事とうえだ物産の単価を入れ替えて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "連絡",
+      "op": "split",
+      "task": "連絡先を読点で右の列に分けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "連絡",
+      "op": "split",
+      "task": "連絡先を「、」で区切って別の列に分けて",
+      "verdict": "pass",
+      "why": ""
+    },
+    {
+      "table": "連絡",
+      "op": "split",
+      "task": "連絡先の読点で区切られた値を右の列に割って",
+      "verdict": "pass",
+      "why": ""
+    }
+  ]
+}
