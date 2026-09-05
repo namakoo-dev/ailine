@@ -153,7 +153,6 @@ from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run �
 from ailine_core import csv_export   # ★ CSV_EXPORT: `ailine export-csv`（検疫の逆方向）の本体
 from ailine_core import date_compare   # ★ EXTRACT の日付範囲比較（台帳 DATE_RANGE_AGG の正体）
 from ailine_core import split_cell   # ★ SPLIT_CELL: 1セルの複数値を右の列へ割る（台帳2件）
-from ailine_core.projection import render_projection_notice, projection_for  # ★ 投影法: 何を保存しないかを宣言する
 from ailine_core import pdf_export   # ★ PRINT/EXPORT_DOC: `ailine export-pdf`（台帳4件）
 from ailine_core.date_compare import (   # noqa: F401  ← 試験と呼び出し側が ailine. で引く
     parse_date_literal, date_to_serial, classify_date_column,
