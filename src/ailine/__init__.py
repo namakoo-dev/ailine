@@ -6670,6 +6670,28 @@ def detect_first_column_gap(ws, header_row: int = 1, look_ahead: int = 200) -> s
 #   ここは「どのセルか」を人が読める文にするだけにする。
 
 
+def _mark_coverage_incomplete(args: dict, why: str) -> None:
+    """★ 「操作した範囲を全部見たとは言えない」を機械の値として残す（2026-09-05）。
+
+    ★★ なぜ要るか（実測）: 明細の途中に空行がある表で「単価の大きい順に並べ替えて」と
+      頼むと、**1 行も動いていないのに △「宣言どおりの変化を確認しました」**が出た。
+      走査が空行で止まり、機械が見た表は先頭 2 行だけ ── その 2 行は元から降順なので
+      事後条件が通ってしまう。**分母が縮んだから通った。**
+
+    ★ これまでの判断（note_unverified の docstring）はこうだった:
+        「8 行を本当に検証したことは事実なので、⚠ へは落とさない」
+      理屈は通っている。だが画面に出るのは「**宣言どおり**」── 8 行についてではなく
+      **操作全体**についての主張だ。主張の範囲と、確かめた範囲が食い違っている。
+
+    ★ 落とすのは「表の終わりが分からなかった」場合だけ ── 数値でない行を並べ替えの
+      検算から外した等（範囲は分かっている）は今までどおり ⚠ + △ のまま。
+    ★ 既存の分母（A1 始まり・連続の表）では 1 件も発火しないことを実測してから入れた。
+    """
+    if not isinstance(args, dict):
+        return
+    args.setdefault("_coverage_incomplete", []).append(why)
+
+
 def note_extent_gap(out_book: Path, resolved_args: dict, header_row: int = 1) -> None:
     """走査で見た範囲と、**物理の使用範囲**の食い違いを ⚠ に変える ── op に依らず 1 箇所で。
 
@@ -6707,6 +6729,11 @@ def note_extent_gap(out_book: Path, resolved_args: dict, header_row: int = 1) ->
             _why += ("（心当たり: 合計行の見出しが 1 列目に在ると、"
                       "列の入れ替えで一緒に動きます）")
         note_unverified(resolved_args, gap["rows_missing"], _why)
+        # ★★ 2026-09-05: 旗を**機械の値として**立てる（表示文から読み取らせない）。
+        #   走査が途中で止まったということは、**表がどこで終わるかを機械が知らない**。
+        #   知らないなら「操作した範囲を全部確かめた」とは言えない ── この旗を
+        #   _finish_apply が 1 箇所で読み、✓/△ を名乗らせない。
+        _mark_coverage_incomplete(resolved_args, _why)
     if gap["cols_missing"]:
         # ★ 2026-08-27 に文言を正した: 「見出しの無い列が N 列」は不正確だった。
         #   走査は見出し行を左から見て**最初の空で止まる**ので、空きの右にある列は
@@ -6714,6 +6741,8 @@ def note_extent_gap(out_book: Path, resolved_args: dict, header_row: int = 1) ->
         note_unverified(resolved_args, gap["rows_physical"],
                         f"見出し行に空きがあるため、その右の {gap['cols_missing']} 列は"
                         "走査できておらず、何も確かめていない")
+        _mark_coverage_incomplete(
+            resolved_args, f"見出し行に空きがあり、その右の {gap['cols_missing']} 列を見ていない")
 
 
 
@@ -10597,7 +10626,8 @@ def _finish_failed_apply(a: argparse.Namespace, book: Path, result: dict) -> int
 
 def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Path,
                    result: dict, machine_verified: bool, scope: str = "",
-                   scope_note: str = "", warning_count: int = 0) -> bool:
+                   scope_note: str = "", warning_count: int = 0,
+                   coverage_incomplete: list | None = None) -> bool:
     """--copy（a.inplace が False）なら .out のまま（原本は無変更）。既定(a.inplace)なら
        backup+原子的置換(atomic_replace_inplace)で原本へ反映する。そのうえで**最終ファイルを
        読み戻し**、machine_verified=True なら ✓（★ 決裁③: warning_count>0 なら△に降格）の
@@ -10612,6 +10642,15 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
        （★ 付きだけ数える）は claim.py 側に1箇所で持つ）。1件でもあれば ✓ を出さず△にする
        （machine_verified=False の ⚠ 経路には影響しない ── そちらは元から ✓ を名乗らない）。
        戻り値: 置換が成功した(または --copy で置換不要だった)か。"""
+    # ★★ 2026-09-05: 走査が表の終わりに届かなかった run は ✓ も △ も名乗らない。
+    #   ★ 呼び出し側 4 箇所に配らない ── そこは既に同じ式を 4 回書き写しており
+    #     （machine_verified=(status != "warn" and ...)）片配線の典型だった。
+    #     判断はこの 1 箇所に置き、呼び出し側は材料を渡すだけにする。
+    if coverage_incomplete:
+        for _why in dict.fromkeys(coverage_incomplete):
+            print(f"⚠ 表の終わりまで走査できませんでした（{_why}）── "
+                  "操作した範囲を全部確かめたとは言えないため、機械保証は出しません")
+        machine_verified = False
     # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。
     #   --copy でも --inplace でも成果物は out_book なので、1 本の測定で両経路を覆う。
     _output_fidelity = check_round_trip_fidelity(book, out_book)
@@ -12161,10 +12200,14 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     #   呼び出し元 4 箇所が**全部戻り値を捨てていた**。バックアップに失敗して原本反映を
     #   中止しても exit 0 ── スクリプトから回す利用者は「反映されなかった」を検出できない。
     #   ★ 表示は正直だった（「原本は無変更」と言っていた）。嘘だったのは**終了コード**。
+    # ★ 2026-09-05: 走査が表の終わりに届かなかったか（機械の値・表示文から読まない）。
+    #   判断は _finish_apply が 1 箇所で行う ── ここは材料を渡すだけ。
+    _coverage_sink = list((resolved or {}).get("_coverage_incomplete") or [])
     _applied = _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
-                   warning_count=warning_count)
+                   warning_count=warning_count,
+                   coverage_incomplete=_coverage_sink)
     if not _applied:
         return _finish_failed_apply(a, book, result)
 
@@ -12329,10 +12372,14 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
     #   呼び出し元 4 箇所が**全部戻り値を捨てていた**。バックアップに失敗して原本反映を
     #   中止しても exit 0 ── スクリプトから回す利用者は「反映されなかった」を検出できない。
     #   ★ 表示は正直だった（「原本は無変更」と言っていた）。嘘だったのは**終了コード**。
+    # ★ 2026-09-05: 走査が表の終わりに届かなかったか（機械の値・表示文から読まない）。
+    #   判断は _finish_apply が 1 箇所で行う ── ここは材料を渡すだけ。
+    _coverage_sink = list((resolved or {}).get("_coverage_incomplete") or [])
     _applied = _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
-                   warning_count=warning_count)
+                   warning_count=warning_count,
+                   coverage_incomplete=_coverage_sink)
     if not _applied:
         return _finish_failed_apply(a, book, result)
 
@@ -12493,10 +12540,14 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
     #   呼び出し元 4 箇所が**全部戻り値を捨てていた**。バックアップに失敗して原本反映を
     #   中止しても exit 0 ── スクリプトから回す利用者は「反映されなかった」を検出できない。
     #   ★ 表示は正直だった（「原本は無変更」と言っていた）。嘘だったのは**終了コード**。
+    # ★ 2026-09-05: 走査が表の終わりに届かなかったか（機械の値・表示文から読まない）。
+    #   判断は _finish_apply が 1 箇所で行う ── ここは材料を渡すだけ。
+    _coverage_sink = list((resolved or {}).get("_coverage_incomplete") or [])
     _applied = _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
-                   warning_count=warning_count)
+                   warning_count=warning_count,
+                   coverage_incomplete=_coverage_sink)
     if not _applied:
         return _finish_failed_apply(a, book, result)
 
@@ -13456,11 +13507,15 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     #   呼び出し元 4 箇所が**全部戻り値を捨てていた**。バックアップに失敗して原本反映を
     #   中止しても exit 0 ── スクリプトから回す利用者は「反映されなかった」を検出できない。
     #   ★ 表示は正直だった（「原本は無変更」と言っていた）。嘘だったのは**終了コード**。
+    # ★ 2026-09-05: 複合計画は**全段ぶん**集める（1 段でも届いていなければ名乗らない）。
+    _coverage_sink = [w for _st in (plan or [])
+                      for w in ((_st or {}).get("_resolved") or {}).get("_coverage_incomplete") or []]
     _applied = _finish_apply(a, book, out_book, workdir, result,
                    machine_verified=(verdict == "ok" and not subject_sink["warnings"]),
                    scope="; ".join(label for _idx, label, _st, _det in items),
                    scope_note="\n".join(render_scope_notes(subject_sink["unspoken"])),
-                   warning_count=warning_count)
+                   warning_count=warning_count,
+                   coverage_incomplete=_coverage_sink)
     if not _applied:
         return _finish_failed_apply(a, book, result)
 

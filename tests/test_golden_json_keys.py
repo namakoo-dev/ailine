@@ -91,6 +91,18 @@ def _fake_basrun_apply_noop(out_book, code, workdir, helper_files=(), timeout=No
     return True, None, "ok"
 
 
+def _fake_basrun_apply_clean(out_book, code, workdir, helper_files=(), timeout=None):
+    """★ 2026-09-05: **表の外に何も書かない**適用。
+
+    ★ なぜ足したか: dsl_full は「使用範囲外に 1 セル書く」ことで advisory を立てて
+      いたが、2026-09-05 に「走査が表の終わりに届かなかった run は ✓/△ を名乗らない」
+      を入れたため、この検体は claims が空になり **claim が出る形を 1 つも測らなく
+      なった**。凍結の目的（claims の型を固定する）が静かに落ちるので、
+      **外に書かない**検体を別に足して、そちらで型を守る。
+    """
+    return True, None, "ok"
+
+
 def _fake_basrun_apply_touches_cell(out_book, code, workdir, helper_files=(), timeout=None):
     """FREEFORM 用: no-op ガードに引っかからないよう、実際に1セル書き換える。"""
     wb = openpyxl.load_workbook(out_book)
@@ -101,7 +113,7 @@ def _fake_basrun_apply_touches_cell(out_book, code, workdir, helper_files=(), ti
 
 def _run_and_capture(tmp_path, monkeypatch, capsys, translate_result, dry, *,
                       freeform=False, presorted_and_bold=False, plan=False,
-                      vocab_miss=False, allow_freeform=False):
+                      vocab_miss=False, allow_freeform=False, clean_apply=False):
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr(ailine, "normalize_book", lambda book, workdir, timeout=None: book)
     monkeypatch.setattr(ailine, "translate_task",
@@ -126,7 +138,8 @@ def _run_and_capture(tmp_path, monkeypatch, capsys, translate_result, dry, *,
     if not dry and not vocab_miss:
         monkeypatch.setattr(
             ailine, "basrun_apply",
-            _fake_basrun_apply_touches_cell if freeform else _fake_basrun_apply_noop)
+            _fake_basrun_apply_touches_cell if freeform
+            else (_fake_basrun_apply_clean if clean_apply else _fake_basrun_apply_noop))
 
     argv = _base_argv(book, dry, allow_freeform=allow_freeform)
     rc = ailine.main(argv)
@@ -141,6 +154,10 @@ _BOLD_STEP = {"op": "BOLD", "args": {"target": "row:1"}}
 CASES = {
     "dsl_dry": dict(translate_result=_SORT_STEP, dry=True),
     "dsl_full": dict(translate_result=_SORT_STEP, dry=False, presorted_and_bold=False),
+    # ★ 2026-09-05: 表の外に何も書かない回 ── ここで claims の型を凍結する
+    #   （dsl_full は幽霊セルを書くので、走査が届かず claims が空になる）。
+    "dsl_full_clean": dict(translate_result=_SORT_STEP, dry=False,
+                            presorted_and_bold=False, clean_apply=True),
     "plan_dry": dict(translate_result={"plan": [_SORT_STEP, _BOLD_STEP]}, dry=True),
     "plan_full": dict(translate_result={"plan": [_SORT_STEP, _BOLD_STEP]}, dry=False,
                        presorted_and_bold=True, plan=True),
@@ -181,3 +198,30 @@ def test_advisories_shape_inconsistency_is_visible_in_golden():
             f"可能性 — 直したなら意図的な commit として扱うこと）: {sig}")
     assert plan_adv is None or "dict" in plan_adv or plan_adv == "list[]", (
         f"plan の advisories が list[str] 形に変わった: {plan_adv}")
+
+
+def test_a_verified_run_still_records_what_it_compared():
+    """★ claim が出る形を、必ず 1 件は凍結し続けること（2026-09-05）。
+
+    ★★ なぜ要るか: 「走査が表の終わりに届かなかった run は ✓/△ を名乗らない」を
+      入れた日、dsl_full（使用範囲外に 1 セル書く検体）の claims が空になった。
+      直し自体は意図どおりだが、**そのままだと claims の型を測る検体が 0 件**になり、
+      凍結の目的が静かに落ちる ── 「出ないことは信号でない」の家系。
+    ★ だから外に何も書かない検体（dsl_full_clean）で型を守る。
+    """
+    clean = json.loads((F7_DIR / "dsl_full_clean.json").read_text(encoding="utf-8"))
+    sig = clean["key_type_signature"].get("claims")
+    assert sig and "dict" in sig and "observed_on" in sig, (
+        f"claim が出る形を測れていない: {sig}")
+
+
+def test_the_ghost_cell_case_no_longer_claims_success():
+    """★ 表の外に書き込みが在る run は、機械保証を出さないこと。
+
+    ★ 2026-09-05 の判断（Namakoo）: 「見ていない所が在るなら保証しない」で一貫させる。
+      幽霊セルは試験のための仕掛けだが、実表で使用範囲外にセルが在るなら、それこそ
+      **何が書かれたか見ていない**ので ✓ を出す理由が無い。
+    """
+    full = json.loads((F7_DIR / "dsl_full.json").read_text(encoding="utf-8"))
+    assert full["key_type_signature"].get("claims") == "list[]",         "幽霊セルの回で claim を出している（走査は届いていない）"
+
