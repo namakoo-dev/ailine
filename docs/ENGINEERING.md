@@ -533,7 +533,7 @@ CI から区別できなかった（外部 repo の取り込み調査が実測�
 
 ## 必要なもの
 
-- Python 3.10+ と `openpyxl`
+- Python 3.12+ と `openpyxl`
 - [ollama](https://ollama.com/) ＋ コード生成モデル（既定 `qwen2.5-coder:7b`）
 - LibreOffice ＋ [basrun](https://github.com/namakoo-dev/basrun)（環境変数 `BASRUN` で場所を指定可）
 - テストだけ回すなら上記は不要。`pip install -r requirements-dev.txt`（`openpyxl`/`pytest` を

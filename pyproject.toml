@@ -9,7 +9,7 @@ name = "ailine"
 version = "0.2.2"
 description = "自然言語のタスクを、ローカル LLM が LibreOffice Basic に書き起こし、basrun で文書に適用し、効果を読み戻して検証する"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 dependencies = ["openpyxl>=3.1"]
 

@@ -1,11 +1,11 @@
 usage: ailine [-h]
-              {run,stop,doctor,ops,csv,export-csv,demo,export-pdf,scan,stack,verify,history,restore,undo,redo,vocab,alias}
+              {run,stop,doctor,ops,csv,export-csv,demo,export-pdf,scan,stack,verify,history,restore,undo,redo,vocab,alias,attr}
               ...
 
 自然言語 → LibreOffice Basic → 適用 → 検証
 
 positional arguments:
-  {run,stop,doctor,ops,csv,export-csv,demo,export-pdf,scan,stack,verify,history,restore,undo,redo,vocab,alias}
+  {run,stop,doctor,ops,csv,export-csv,demo,export-pdf,scan,stack,verify,history,restore,undo,redo,vocab,alias,attr}
     run                 タスクを生成・適用・検証する
     stop                起動した LibreOffice を落とす
     doctor              セットアップを診断する
@@ -23,6 +23,7 @@ positional arguments:
     redo                直前の undo をやり直す（あと何回やり直せるかを表示）
     vocab               用語集（税率等の取り決め値）を編集・表示する
     alias               別名（言い回し → 操作名）を編集・表示する
+    attr                覚えている属性（語 → 実表の何か）を表示・削除する
 
 options:
   -h, --help            show this help message and exit

@@ -24,7 +24,7 @@
 |---|---|
 | repo 全体 | 2026-08-10 起点・200 commit 超 |
 | 課題期間にやったこと | ① 外部の目による盲検レビュー 5 面 → 出た致命 10 件を全件処置 ② 表の基本操作（行の追加・削除／列の削除／1 セル書換） ③ 評価者が触れる GUI ④ 自分で GUI を触って出た欠陥 13 件の処置（8/31） |
-| 課題期間にやらなかったこと | 新機能の拡張。単一ファイル（<!-- MAIN_FILE_LINES -->15920<!-- /MAIN_FILE_LINES --> 行）の分割は**着手済み** ── 44% を `ailine_core/` へ出し、判定の段は op ごとに割り終えました（理由と残りは「4. 判断・制約・学び」） |
+| 課題期間にやらなかったこと | 新機能の拡張。単一ファイル（<!-- MAIN_FILE_LINES -->16210<!-- /MAIN_FILE_LINES --> 行）の分割は**着手済み** ── 44% を `ailine_core/` へ出し、判定の段は op ごとに割り終えました（理由と残りは「4. 判断・制約・学び」） |
 
 土台が既存であることを踏まえて読んでいただくために、何を今週やったかは
 `git log --since=2026-08-26 --oneline` で追える形にしてあります。
@@ -220,7 +220,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->3307<!-- /TOTAL_TESTS --> 本のうち、実機が要る 28 本を除いた範囲）。
+期待: 全件緑（<!-- TOTAL_TESTS -->3392<!-- /TOTAL_TESTS --> 本のうち、実機が要る 28 本を除いた範囲）。
 ★ この 2 つの数は `tests/test_local_test_count.py` が実測と突き合わせています ──
 文書の数字を、人の記憶で守らないためです。
 
@@ -282,7 +282,7 @@ flowchart TD
 
 | | |
 |---|---|
-| 実行時の依存 | `openpyxl` のみ（Python 3.10+） |
+| 実行時の依存 | `openpyxl` のみ（Python 3.12+） |
 | 外部プロセス | LibreOffice（headless）、[basrun](https://github.com/namakoo-dev/basrun)（自作・MIT・別 repo）、ollama |
 | GUI | **Python 標準ライブラリのみ**（`http.server` + 単一 HTML）。フレームワークなし |
 | テスト | pytest |
@@ -494,7 +494,7 @@ PoC です。業務での本番利用はできません。
 | | |
 |---|---|
 | OS | **Windows**（パス表現と LibreOffice の起動が Windows 前提。他 OS は未検証） |
-| Python | 3.10 以上 |
+| Python | 3.12 以上 |
 | LibreOffice | Calc が動くもの |
 | [ollama](https://ollama.com/) | ＋ `qwen2.5-coder:7b`（`ollama pull qwen2.5-coder:7b`） |
 

@@ -171,6 +171,7 @@ from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領�
 )
 from ailine_core.sum_identity import rows_matching_sum_above   # noqa: F401 ── 再輸出   # ★ 算術恒等の検算（二重計上）
 from ailine_core import row_identity   # ★ 行内の等式（金額＝件数×単価）が操作で崩れたら言う
+from ailine_core import attributes   # ★ 語 → 実表の何か（2026-09-05）
 from ailine_core.target_sheet import (
     drop_names_covered_by_longer, sheets_named_explicitly,   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     sheet_named_but_missing, render_missing_sheet_refusal,   # ★ 無いシート名を機械が名指しする（2026-09-05）
@@ -277,6 +278,7 @@ DEFAULT_VOCAB_MAX_TERM_LEN = 40     # 語（キー）の最大長
 #   （load_vocab は float 以外を黙って捨てる設計のため、op 名の文字列は同居できない
 #   ── これは vocab 側の設計を歪めない正しい判断・REVIEW-20260822-w10-architect.md 3-2）。
 ALIASES_FILE = HISTORY_DIR / "aliases.json"
+ATTRIBUTES_FILE = HISTORY_DIR / "attributes.json"   # ★ 語 → 実表の何か（2026-09-05）
 
 # ★ 誤分類の実例台帳センサ: vocab_miss と同じ需要センサ方式（記録するだけ・分析/提案/表示は
 #   作らない）。破壊の関所で N・undo の2点だけを容疑として拾う（成功 run は何も書かない）。
@@ -2005,6 +2007,227 @@ def lookup_alias(task: str, path: Path | None = None) -> str | None:
             if best_phrase is None or len(phrase) > len(best_phrase):
                 best_phrase = phrase
     return aliases[best_phrase] if best_phrase else None
+
+
+# ---------------------------------------------------------------------------
+# ★ 属性の登録（2026-09-05・Namakoo の設計）: 語彙外で断るとき、疑わしい語が
+#   **実表の何を指しているか**を聞いて覚える。判定の材料は ailine_core/attributes.py。
+#
+#   ★ 「無関係な属性は表示させない」（Namakoo）への答えは**選択肢を実表から作る**こと。
+#   ★ 覚えるのは**解釈**だけ ── 使う時は必ず実表で検算する（entry_still_holds）。
+#     登録は検証の免除ではない（決裁 論点 E）。
+#   ★ 鍵はパスと列名の署名の両方（決裁 論点 B）── どちらか合えば引く。外れても害は無い
+#     （検算で落ちて聞き直すだけ＝「何回聞かれるか」の問題）。
+#   ★ 機械が書く層には取り消しが要る（別名ストアで決めた規律をそのまま継ぐ）。
+# ---------------------------------------------------------------------------
+
+def load_attribute_entries(path: Path | None = None) -> list:
+    """~/.ailine/attributes.json を読む。無い/壊れている/形が違うなら空（★ 落ちない）。"""
+    p = path or ATTRIBUTES_FILE
+    if not p.is_file():
+        return []
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return attributes.parse_attributes_json(
+        raw, max_entries=DEFAULT_VOCAB_MAX_ENTRIES, max_term_len=DEFAULT_VOCAB_MAX_TERM_LEN)
+
+
+def save_attribute_entries(entries: list, path: Path | None = None) -> None:
+    p = path or ATTRIBUTES_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(attributes.build_attributes_payload(entries),
+                            ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def attr_add(word: str, cand, book_key: dict, path: Path | None = None) -> tuple:
+    """(ok, message)。検疫は語彙と同じ（_sanitize_vocab_term）＋属性が名簿に在ること。"""
+    clean = _sanitize_vocab_term(word)
+    if clean is None:
+        return False, f"語『{word}』は登録できません（空/制御文字/{DEFAULT_VOCAB_MAX_TERM_LEN}文字超）"
+    kind = getattr(cand, "kind", None)
+    if kind not in attributes.KINDS:
+        # ★ f 文字列の中に同じ引用符を入れない（3.12 以降しか通らない・この repo は 3.10+）
+        return False, "属性『" + str(kind) + "』は登録できません"
+    entries = load_attribute_entries(path)
+    if len(entries) >= DEFAULT_VOCAB_MAX_ENTRIES:
+        return False, f"属性ストアが上限（{DEFAULT_VOCAB_MAX_ENTRIES}件）に達しています"
+    entries = [e for e in entries
+               if not (e.get("word") == clean and attributes.key_matches(e.get("book"), book_key))]
+    entries.append({"word": clean, "kind": cand.kind, "label": cand.label,
+                    "sheet": cand.sheet or "", "book": dict(book_key)})
+    save_attribute_entries(entries, path)
+    return True, f"登録: {clean} → {cand.describe()}"
+
+
+def attr_remove(word: str, path: Path | None = None) -> tuple:
+    """(ok, message)。その語の登録を（ブックを問わず）すべて消す。"""
+    entries = load_attribute_entries(path)
+    kept = [e for e in entries if e.get("word") != word]
+    if len(kept) == len(entries):
+        return False, f"語『{word}』は登録されていません"
+    save_attribute_entries(kept, path)
+    return True, f"削除: {word}"
+
+
+def attr_undo(path: Path | None = None) -> tuple:
+    """(ok, message)。直近の登録（末尾）だけを取り消す。"""
+    entries = load_attribute_entries(path)
+    if not entries:
+        return False, "取り消せる登録がありません"
+    last = entries.pop()
+    save_attribute_entries(entries, path)
+    return True, f"取り消し: {last.get('word')} → {last.get('label')}"
+
+
+def lookup_attribute(word: str, book_key: dict, path: Path | None = None) -> dict | None:
+    """この語について、このブックで覚えた読み方（無ければ None）。★ 検算はしていない。"""
+    return attributes.find_attribute(load_attribute_entries(path), word, book_key)
+
+
+def suspicious_words(task: str) -> list:
+    """依頼文のうち、**道具のどの操作の語彙でも消費されなかった**内容語を返す。
+       ★ 新しい抽出器は作らない ── 「反映されません」の行を出している残差検出をそのまま使う
+         （2 つ持つと片方だけ直る＝この repo で何度も起きた形）。"""
+    pool = [p for _op in OP_META for p in _op_match_pool(_op) if p]
+    return suggest_residue.find_unconsumed_words(task or "", {}, pool)
+
+
+def _ask_about_a_suspicious_word(a: argparse.Namespace, source_book: Path,
+                                  book_meta: dict, *, input_fn=None,
+                                  attr_path: Path | None = None) -> bool:
+    """疑わしい語を **1 つだけ**選んで「それは何か」を聞き、答えを覚える（2026-09-05）。
+
+    戻り値: 何か画面に出したら True（断りの前置きとして出る）。
+
+    ★ Namakoo 決裁:
+      D 一度に 1 語だけ（候補が 2 つ以上ある語のうち最初の 1 語）
+      A 候補が 1 つなら**聞かない**。そう読んだことだけ言い、**覚えない**
+        （憲法「参照のズレは既定では直さない」との折り合い ── 推測を黙って永続化しない）
+      B 鍵はパスと列名の署名の両方
+    ★ 候補が 0 の語には**何も言わない** ── 「シート」「追加」のような構造語にまで
+      「見当たりません」と言うと、でたらめの側に倒れる（3 条件）。
+      名指しされた列が無い場合の断りは別の単位（シート名の判定と同型）。
+    ★ 登録の時に実表で検算し直すのは**恒真**（選択肢を実表から作っているため）。
+      検算が意味を持つのは**使う時** ── apply_known_attributes が entry_still_holds で見る。
+    """
+    if getattr(a, "json", False):
+        return False   # ★ 機械が読む出力にプロンプトを混ぜない
+    try:
+        sheets, headers, samples, lacks = _attribute_material(source_book, book_meta)
+    except Exception:
+        return False
+    if not sheets:
+        return False
+    single = None
+    for word in suspicious_words(a.task):
+        cands = attributes.candidates_for(word, sheets=sheets, headers=headers,
+                                          samples=samples, lacks=lacks)
+        if len(cands) >= 2:
+            return _ask_which_reading(a, source_book, book_meta, word,
+                                      cands[:attributes.MAX_CANDIDATES],
+                                      input_fn=input_fn, attr_path=attr_path)
+        # ★ 候補 1 つで「そう読みました」と言えるのは**ぴったり一致**のときだけ。
+        #   実測で誤読が出た: 「単価の平均値を…」で『単価』を列『平均単価』と断定していた
+        #   ── 部分一致は弱い証拠で、断定すると「でたらめを言わない」に反する（3 条件）。
+        #   ★ 弱い証拠しか無い語には**何も言わない**（黙る方が親切より正しい）。
+        if len(cands) == 1 and cands[0].exact and single is None:
+            single = (word, cands[0])
+    if single:
+        print(attributes.render_understood(single[0], single[1]))
+        return True
+    return False
+
+
+def _ask_which_reading(a: argparse.Namespace, source_book: Path, book_meta: dict,
+                        word: str, cands: list, *, input_fn=None,
+                        attr_path: Path | None = None) -> bool:
+    """候補が 2 つ以上の語について、番号で選ばせて覚える。
+       ★ input_fn は試験が答えを注入するための口（ask_choice の作法をそのまま継ぐ ──
+         注入できないと『聞く側』が番人から見えない＝実質守られない）。"""
+    interactive = bool(input_fn) or is_interactive(
+        stdin_isatty=_stdin_isatty(), json_mode=getattr(a, "json", False),
+        dry=getattr(a, "dry", False))
+    lines = attributes.render_question(word, cands)
+    if not interactive:
+        # ★ 聞けない場面（パイプ/CI/--dry）では**聞かずに事実だけ**見せる。
+        #   ask_choice の「既定で続行」は、ここでは嘘になる（続行しないので）。
+        for ln in lines:
+            print(ln)
+        for i, c in enumerate(cands, 1):
+            print(f"  {i}) {c.describe()}")
+        print("  （対話できる画面で実行すると、どれか選んで覚えさせられます）")
+        return True
+    choices = [Choice(str(i), c.describe()) for i, c in enumerate(cands, 1)]
+    got = ask_choice(lines, choices, interactive=True, input_fn=input_fn)
+    if not got.key:
+        return True   # ★ 答えが得られなくても、選択肢は既に画面に出ている
+    picked = cands[int(got.key) - 1]
+    ok, msg = attr_add(word, picked, _book_key_now(source_book, book_meta), attr_path)
+    print(f"  {msg}" if ok else f"  {msg}（覚えられませんでした）")
+    if ok and picked.kind == attributes.KIND_COLUMN:
+        print(f"  もう一度同じ依頼を打つと、『{word}』を『{picked.label}』の列として扱います")
+    elif ok:
+        print("  （いまは断りの説明にだけ使います ── 実行には反映しません）")
+    print("  （attr undo で取り消せます）")
+    return True
+
+
+def _attribute_material(source_book: Path, book_meta: dict) -> tuple:
+    """候補を作るための材料を実表から集める（sheets, headers, samples, lacks）。
+       ★ 値は先頭 200 行だけ（決裁 論点 C）── 断りの経路で毎回走るので全セルは読まない。"""
+    sheets = list(book_meta.get("sheets") or [])
+    headers = dict(book_meta.get("headers") or {})
+    try:
+        samples = attributes.sample_columns(source_book, headers, book_meta.get("header_rows"))
+    except Exception:
+        samples = {}
+    lacks = {}
+    for _ax in AXES.values():
+        lacks.update(getattr(_ax, "lacks", {}) or {})
+    return sheets, headers, samples, lacks
+
+
+def _book_key_now(source_book: Path, book_meta: dict) -> dict:
+    return attributes.book_key(source_book, book_meta.get("sheets") or [],
+                                book_meta.get("headers") or {})
+
+
+def apply_known_attributes(task: str, source_book: Path, book_meta: dict,
+                           path: Path | None = None) -> tuple:
+    """覚えた読み方を依頼文に反映する。戻り値 (新しい依頼文, 開示する行)。
+
+    ★ 効かせるのは **kind=column の言い換えだけ**（2026-09-05 の初版）。
+      シート/値/まだ無い操作は覚えるが、いまは断りの説明にしか使わない ──
+      対象シートの決定は resolve_target_sheet 1 箇所の仕事で、ここから触らない。
+    ★ 使う前に**今の実表で検算する**（entry_still_holds）── 古い登録は黙って捨てる。
+    ★ 言い換えたことは必ず開示する（憲法「補正するなら確認を取ってから」の折り合い:
+      確認は登録の時に取ってある・使う時は黙らない）。
+    """
+    entries = load_attribute_entries(path)
+    if not entries or not task:
+        return task, []
+    now = _book_key_now(source_book, book_meta)
+    mine = [e for e in entries if attributes.key_matches(e.get("book"), now)]
+    if not mine:
+        return task, []
+    sheets, headers, samples, lacks = _attribute_material(source_book, book_meta)
+    out, notes = task, []
+    for e in mine:
+        if e.get("kind") != attributes.KIND_COLUMN:
+            continue
+        word, label = e.get("word") or "", e.get("label") or ""
+        if not word or not label or word == label or label in out:
+            continue   # ★ 実体が既に依頼文に在るなら触らない（「平均単価の平均」で暴れない）
+        if not alias_store.phrase_is_standalone_in_task(word, out):
+            continue   # ★ 断片ガード（別名ストアと同じ判定を使う）
+        if not attributes.entry_still_holds(e, sheets=sheets, headers=headers,
+                                            samples=samples, lacks=lacks):
+            continue   # ★ 今の実表で成り立たない登録は使わない
+        out = out.replace(word, label)
+        notes.append(f"（『{word}』は登録どおり『{label}』の列として読みました）")
+    return out, notes
 
 
 # --- ★ A': APPEND_TOTAL の倍率(factor)を LLM から切り離し、機械が確定する ------------
@@ -10716,6 +10939,39 @@ def cmd_alias(a: argparse.Namespace) -> int:
     return 0
 
 
+def render_attribute_listing(entries: list, path: Path) -> list:
+    """`ailine attr list` の表示（★ 別名の一覧と同じ流儀 ── 置き場所を必ず言う）。"""
+    if not entries:
+        return [f"登録された属性はありません（{path}）"]
+    out = [f"覚えている属性 {len(entries)} 件（{path}）"]
+    for e in entries:
+        book = (e.get("book") or {}).get("path") or "(パス不明)"
+        cand = attributes.Candidate(e.get("kind", ""), e.get("label", ""),
+                                    sheet=e.get("sheet", ""))
+        out.append(f"  {e.get('word')} → {cand.describe()}   [{Path(book).name}]")
+    return out
+
+
+def cmd_attr(a: argparse.Namespace) -> int:
+    """`ailine attr list` / `attr remove <語>` / `attr undo`。
+
+    ★ add は**置かない** ── 属性は「実表に証拠がある読み方」から選ぶもので、人が
+      自由に打ち込めると証拠のない読み方が入る（無関係な属性を出さない、の裏返し）。
+      登録は断りの場面で選択肢から選ぶ経路だけ（cmd_refuse_vocab_miss）。
+    """
+    if a.attr_cmd == "remove":
+        ok, msg = attr_remove(a.word)
+        print(render_vocab_add_result(ok, msg))
+        return 0 if ok else 1
+    if a.attr_cmd == "undo":
+        ok, msg = attr_undo()
+        print(render_vocab_add_result(ok, msg))
+        return 0 if ok else 1
+    for ln in render_attribute_listing(load_attribute_entries(), ATTRIBUTES_FILE):
+        print(ln)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # run コマンド本体
 # ---------------------------------------------------------------------------
@@ -11315,6 +11571,17 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     book_meta["_sheet_source"] = getattr(a, "_sheet_source", None)
     translation = getattr(a, "_reuse_translation", None)
     a._reuse_translation = None
+    # ★★ 2026-09-05（属性の登録）: 前に人が「この語はこの列のこと」と教えてくれていたら、
+    #   翻訳に渡す前に**その実体へ言い換える**。★ 使う前に今の実表で検算し、成り立たない
+    #   登録は黙って捨てる（登録は解釈の保存であって検証の免除ではない・決裁 論点 E）。
+    #   ★ 翻訳を使い回す回（3択のプレビュー後）と --op で人が固定した回は触らない ──
+    #     依頼文だけ書き換えると、既に作った翻訳や人の指定と食い違う。
+    if translation is None and not getattr(a, "op", None):
+        _rewritten, _attr_notes = apply_known_attributes(a.task, source_book, book_meta)
+        if _rewritten != a.task:
+            for _ln in _attr_notes:
+                print(_ln)
+            a.task = _rewritten
     # ★★ 2026-08-28（表記ゆれの treadmill を降りるための入口）: --op で操作を**人が固定**
     #   できるようにした。一段目（言い回しから op を当てる段）を飛ばして、第二段に args
     #   だけを埋め直させる ── 既に在る器官（translate_task_fixed_op）へ配線するだけ。
@@ -13021,6 +13288,20 @@ def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None =
                                    "postcondition": None, "changes": [], "out": str(book)},
                         failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/axis_lacks")
             return 3
+    # ★★ 2026-09-05（属性の登録・Namakoo の設計）: 断る前に、**疑わしい語が実表の何を
+    #   指しているか**を聞く。選択肢は実表から作るので、無関係な属性は載らない。
+    #   ★ 一度に 1 語だけ（決裁 D）・候補 1 つなら聞かず覚えず読み方だけ言う（決裁 A）。
+    #   ★ 翻訳がそもそも壊れている回（translate_error）は語の問題ではないので聞かない。
+    if reason != "translate_error":
+        try:
+            _bm_attr = build_book_meta(book)
+        except Exception:
+            _bm_attr = {}
+        if _bm_attr:
+            try:
+                _ask_about_a_suspicious_word(a, book, _bm_attr)
+            except Exception:
+                pass   # ★ 断りの経路を、聞く仕掛けの失敗で落とさない
     for ln in render_vocab_miss_refusal(about, sunset_notice=bool(getattr(a, "allow_freeform", False)),
                                          translate_error=(reason == "translate_error")):
         print(ln)
@@ -15892,6 +16173,15 @@ def build_parser() -> argparse.ArgumentParser:
     alr.add_argument("phrase", help="削除する言い回し")
     alsub.add_parser("undo", help="直近の登録を取り消す")
     al.set_defaults(func=cmd_alias)
+
+    # ★ 属性（語 → 実表の何か）。add が無いのは意図（cmd_attr の docstring 参照）。
+    at = sub.add_parser("attr", help="覚えている属性（語 → 実表の何か）を表示・削除する")
+    atsub = at.add_subparsers(dest="attr_cmd", required=True)
+    atsub.add_parser("list", help="覚えている属性を一覧表示する")
+    atr = atsub.add_parser("remove", help="語の登録を削除する")
+    atr.add_argument("word", help="削除する語")
+    atsub.add_parser("undo", help="直近の登録を取り消す")
+    at.set_defaults(func=cmd_attr)
     return ap
 
 
