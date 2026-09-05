@@ -172,6 +172,7 @@ from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領�
 from ailine_core.sum_identity import rows_matching_sum_above   # noqa: F401 ── 再輸出   # ★ 算術恒等の検算（二重計上）
 from ailine_core import row_identity   # ★ 行内の等式（金額＝件数×単価）が操作で崩れたら言う
 from ailine_core import attributes   # ★ 語 → 実表の何か（2026-09-05）
+from ailine_core import local_only   # ★「外に出ない」を機械にする（2026-09-05）
 from ailine_core.target_sheet import (
     drop_names_covered_by_longer, sheets_named_explicitly,   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     sheet_named_but_missing, render_missing_sheet_refusal,   # ★ 無いシート名を機械が名指しする（2026-09-05）
@@ -232,6 +233,29 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_REFS = HERE / "refs"
 DEFAULT_HELPERS = HERE / "helpers"
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+#: 人が明示的に外部の ollama を許した回だけ True（main が旗から立てる）
+ALLOW_REMOTE_MODEL = False
+
+
+def ollama_url(path: str) -> str:
+    """ollama の URL を作る**唯一の入口**。手元以外を向いていたら、ここで止める。
+
+    ★★ なぜ 1 本に畳むか（2026-09-05・盲検の査定が指摘）: この道具は README で
+      「外に 1 バイトも出ない」と 3 箇所で言い切っているのに、`OLLAMA_HOST` を
+      外部 URL に向ければ依頼文・見出し・セルの中身がそこへ POST されていた。
+      拒む assert も試験も無く、**この repo で唯一「宣言だけで機械が守っていない」契約**
+      だった ── 想定ユーザ（社外にデータを出せない人）が唯一気にする一点で。
+    ★ 叩く場所は 4 箇所ある（chat 2・doctor 2）。各所に門を置くと必ず片方が漏れる
+      （この repo の系譜「二重化した経路は片配線が既定で起きる」）ので、
+      **URL を作れるのはここだけ**にして、呼び出し側に判断を持たせない。
+      ★ `OLLAMA` を直接使った新しい呼び出しが増えていないかは番人が見る。
+    ★ 決裁（Namakoo）: 既定で拒み、旗で明示許可 ── 社内 ollama の使い手を締め出さない。
+    """
+    if not local_only.host_is_local(OLLAMA) and not ALLOW_REMOTE_MODEL:
+        exit_environment(chr(10).join(local_only.render_remote_refusal(OLLAMA)))
+    return f"{OLLAMA}{path}"
+
+
 DEFAULT_MODEL = os.environ.get("AILINE_MODEL", "qwen2.5-coder:7b")
 DEFAULT_APPLY_TIMEOUT = 180.0  # M1: 暴走マクロで無限ハングしないよう既定 ON（--timeout 0 で無効化）
 
@@ -365,7 +389,7 @@ def ollama_generate(model: str, messages: list, temperature: float = 0.2) -> str
         "model": model, "messages": messages, "stream": False,
         "options": {"temperature": temperature, "num_predict": 1600, "num_ctx": 8192},
     }).encode()
-    req = urllib.request.Request(f"{OLLAMA}/api/chat", data=body,
+    req = urllib.request.Request(ollama_url("/api/chat"), data=body,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
@@ -2048,7 +2072,7 @@ def attr_add(word: str, cand, book_key: dict, path: Path | None = None) -> tuple
         return False, f"語『{word}』は登録できません（空/制御文字/{DEFAULT_VOCAB_MAX_TERM_LEN}文字超）"
     kind = getattr(cand, "kind", None)
     if kind not in attributes.KINDS:
-        # ★ f 文字列の中に同じ引用符を入れない（3.12 以降しか通らない・この repo は 3.10+）
+        # ★ f 文字列の中に同じ引用符を入れない（読みやすさのため・下限は MIN_PYTHON）
         return False, "属性『" + str(kind) + "』は登録できません"
     entries = load_attribute_entries(path)
     if len(entries) >= DEFAULT_VOCAB_MAX_ENTRIES:
@@ -3463,7 +3487,7 @@ def ollama_generate_json(model: str, messages: list, temperature: float = 0.1,
     }
     if "qwen3" in model:
         body["think"] = False
-    req = urllib.request.Request(f"{OLLAMA}/api/chat", data=json.dumps(body).encode(),
+    req = urllib.request.Request(ollama_url("/api/chat"), data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=300) as r:
         d = json.load(r)
@@ -10550,9 +10574,14 @@ def _load_module_from_path(path: Path, name: str):
     return mod
 
 
+#: 動く下限（★ pyproject の requires-python と揃える ── 番人が突き合わせる）
+MIN_PYTHON = (3, 12)
+
+
 def _check_python_version() -> tuple:
-    ok = sys.version_info >= (3, 10)
-    detail = "" if ok else f"現在 {sys.version.split()[0]}。3.10 以上へ更新して"
+    ok = sys.version_info >= MIN_PYTHON
+    want = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
+    detail = "" if ok else f"現在 {sys.version.split()[0]}。{want} 以上へ更新して"
     return ok, detail
 
 
@@ -10566,7 +10595,7 @@ def _check_openpyxl() -> tuple:
 
 def _check_ollama_reachable(timeout: float = 3.0) -> tuple:
     try:
-        with urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=timeout) as r:
+        with urllib.request.urlopen(ollama_url("/api/tags"), timeout=timeout) as r:
             json.load(r)
         return True, ""
     except Exception as e:
@@ -10575,7 +10604,7 @@ def _check_ollama_reachable(timeout: float = 3.0) -> tuple:
 
 def _check_model_available(model: str, timeout: float = 3.0) -> tuple:
     try:
-        with urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=timeout) as r:
+        with urllib.request.urlopen(ollama_url("/api/tags"), timeout=timeout) as r:
             d = json.load(r)
     except Exception:
         return False, "ollama に繋がらないため確認できない（先に ollama 到達を直して）"
@@ -10619,7 +10648,7 @@ def doctor_checks(model: str = DEFAULT_MODEL) -> list:
     """(項目名, ok, 詳細/直し方) のリスト。判定ロジックだけを持ち、副作用(print)は
        cmd_doctor 側に置く（テストしやすくするため分離）。"""
     return [
-        ("python 3.10+", *_check_python_version()),
+        (f"python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+", *_check_python_version()),
         ("openpyxl", *_check_openpyxl()),
         (f"ollama 到達 ({OLLAMA})", *_check_ollama_reachable()),
         (f"モデル '{model}'", *_check_model_available(model)),
@@ -10637,7 +10666,7 @@ def doctor_checks(model: str = DEFAULT_MODEL) -> list:
 #   prefix 一致（name には URL/モデル名など動的な値が混ざるため完全一致にしない）。
 #   ★ ダミー名（テストの "a"/"b" 等）はどれにも一致しないため従来どおり内部名のみ表示する。
 _DOCTOR_BUSINESS_NOTES = (
-    ("python 3.10+", "実行に必要なプログラム言語が使えます"),
+    (f"python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+", "実行に必要なプログラム言語が使えます"),
     ("openpyxl", "Excel ファイルを読み書きする部品が使えます"),
     ("ollama 到達", "AI エンジン (ollama) に接続できています"),
     ("モデル", "使う AI モデルの準備ができています"),
@@ -16023,6 +16052,14 @@ def cmd_verify(a: argparse.Namespace) -> int:
     return 1   # ★ f6_exit_codes.md: 2 は argparse 予約・ailine 自身は使わない（汎用失敗の1を使う）
 
 
+def _add_allow_remote(p: argparse.ArgumentParser) -> None:
+    """★ 旗の定義はここ 1 箇所（ollama を叩く子コマンドが同じものを足す）。
+       字面は local_only.ALLOW_FLAG が持つ ── 画面の断りと綴りがずれないため。"""
+    p.add_argument(local_only.ALLOW_FLAG, action="store_true",
+                   help="手元以外の ollama への送信を承知のうえで許す"
+                        "（既定は拒む ── 依頼文と表の中身がその宛先へ出ます）")
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ailine", description="自然言語 → LibreOffice Basic → 適用 → 検証")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -16078,7 +16115,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("stop", help="起動した LibreOffice を落とす")
     s.set_defaults(func=cmd_stop)
 
+    _add_allow_remote(r)
+
     d = sub.add_parser("doctor", help="セットアップを診断する")
+    _add_allow_remote(d)
     d.add_argument("--model", default=DEFAULT_MODEL, help=f"確認するモデル (既定 {DEFAULT_MODEL})")
     d.set_defaults(func=cmd_doctor)
 
@@ -16196,6 +16236,12 @@ def main(argv=None) -> int:
         except Exception:
             pass
     a = build_parser().parse_args(argv)
+    # ★★ 2026-09-05: 外部の ollama は**既定で拒む**（盲検の査定・Namakoo 決裁）。
+    #   許した回は黙らない ── 何がどこへ出るかを 1 行で開示してから走る。
+    global ALLOW_REMOTE_MODEL
+    ALLOW_REMOTE_MODEL = bool(getattr(a, "allow_remote_model", False))
+    if ALLOW_REMOTE_MODEL and not local_only.host_is_local(OLLAMA):
+        print(local_only.render_remote_notice(OLLAMA))
     return a.func(a)
 
 

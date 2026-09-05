@@ -66,6 +66,17 @@ COVERED = {
                      "test_the_reread_actually_fires_without_the_llm",
     "『〜以外』の抽出": "tests/test_except_extraction.py::"
                          "test_the_reread_fires_through_the_real_path",
+    # --- 第 2 波（2026-09-05・盲検の査定が 681 行を指摘したので、畳む前に分母を減らす）---
+    "数値書式": "tests/test_reread_specimens_wave2.py::"
+                 "test_the_number_format_reread_fires_without_the_llm",
+    "列抽出": "tests/test_reread_specimens_wave2.py::"
+               "test_the_column_extraction_reread_fires_without_the_llm",
+    "列追加": "tests/test_reread_specimens_wave2.py::"
+               "test_the_add_column_reread_uses_the_second_pass",
+    "置き換え": "tests/test_reread_specimens_wave2.py::"
+                 "test_the_replace_reread_does_not_overwrite_the_whole_column",
+    "条件つき書換": "tests/test_reread_specimens_wave2.py::"
+                     "test_the_conditional_write_reread_fires_on_the_split_plan",
 }
 
 
@@ -99,11 +110,11 @@ def test_the_covered_specimens_exist():
 
 
 def test_the_backlog_is_visible():
-    """★ 分母を出す ── 15 塊のうち 3 塊しか配線を通す検体が無い。
+    """★ 分母を出す ── 15 塊のうち、配線を通す検体を持つのは 8 塊（第 2 波で 3 → 8）。
 
     ★ これは「12 塊が壊れている」という意味ではない。**測っていない**という意味。
       減らしていくための数として置く（増えたら赤くする）。
     """
     n = len(_blocks())
     assert len(COVERED) <= n
-    assert len(COVERED) >= 3, f"配線を通す検体が減っている（{len(COVERED)} 件）"
+    assert len(COVERED) >= 8, f"配線を通す検体が減っている（{len(COVERED)} 件）"

@@ -401,10 +401,12 @@ def test_check_python_version_ok_on_current_interpreter():
     assert detail == ""
 
 def test_check_python_version_fails_on_old(monkeypatch):
-    monkeypatch.setattr(ailine.sys, "version_info", (3, 9, 0))
+    # ★ 下限は ailine.MIN_PYTHON が持つ（手書きすると上げた日に片方だけ古くなる）。
+    too_old = (ailine.MIN_PYTHON[0], ailine.MIN_PYTHON[1] - 1, 0)
+    monkeypatch.setattr(ailine.sys, "version_info", too_old)
     ok, detail = ailine._check_python_version()
     assert ok is False
-    assert "3.10" in detail
+    assert f"{ailine.MIN_PYTHON[0]}.{ailine.MIN_PYTHON[1]}" in detail
 
 def test_check_openpyxl_ok():
     ok, detail = ailine._check_openpyxl()
@@ -538,7 +540,8 @@ def test_doctor_checks_includes_default_behavior_notice():
 
 def test_doctor_business_notes_cover_all_seven_real_check_names():
     names = [
-        "python 3.10+", "openpyxl", f"ollama 到達 ({ailine.OLLAMA})",
+        f"python {ailine.MIN_PYTHON[0]}.{ailine.MIN_PYTHON[1]}+",   # ★ 名前は定数から引く（手書きすると下限を上げた日に片方だけ古くなる・2026-09-05 に実際なった）
+        "openpyxl", f"ollama 到達 ({ailine.OLLAMA})",
         f"モデル '{ailine.DEFAULT_MODEL}'", "LibreOffice", "basrun.py", "demo/",
     ]
     for name in names:

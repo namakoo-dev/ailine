@@ -29,6 +29,31 @@ def test_every_dsl_op_appears_in_the_listing():
     assert not missing, f"一覧に出ない操作がある: {missing}（OP_META への追記漏れ）"
 
 
+def test_the_readme_table_matches_the_register():
+    """★ README の手書きの表が、登録簿とずれていないこと（2026-09-05・盲検の査定）。
+
+    査定の指摘: README は「この表は登録簿から**自動生成される**ので、文書とずれません」
+    と書いていたが、実際は手書きの Markdown で、突き合わせる機械も無かった。
+    中身はたまたま合っていたので**間違っていたのは数字でなく「ずれない理由」**。
+    ★ 次に op を足したとき静かに腐る形だったので、README の文言を実体に寄せ
+      （「食い違ったらここが赤くなる」）、その約束をここで機械にする。
+    """
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    table = [ln for ln in text.splitlines() if ln.startswith("| ") and " | " in ln]
+    listed = set()
+    for ln in table:
+        for cell in ln.split("|"):
+            for word in cell.replace("/", " ").split():
+                if word in ailine.OP_SCHEMA:
+                    listed.add(word)
+    missing = sorted(set(ailine.OP_SCHEMA) - listed)
+    assert not missing, (
+        f"README の表に無い操作がある: {missing} ── "
+        "README は「食い違ったらここが赤くなる」と書いているので、表に足すこと")
+    unknown = sorted(listed - set(ailine.OP_SCHEMA))
+    assert not unknown, f"README の表に、登録簿に無い操作が載っている: {unknown}"
+
+
 def test_listing_declares_what_it_cannot_do():
     """★ 「できない」と明言する行があること。査定 A は語彙外の依頼を 4 回言い直して
     4 回とも質問返しになり、未対応だと分からないまま詰んだ。"""

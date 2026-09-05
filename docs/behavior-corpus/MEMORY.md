@@ -31,8 +31,11 @@ basrun-ts / ailine-ts の移行実験では完成後に遡って掘った（考�
 - [formula-readback-duality](nodes/formula-readback-duality.md) — 式で書いた列を読み戻す二重性（openpyxl 式ビュー/値ビュー・行独立は部分採点、全行またぎは打ち切り）
 - [freeform-gate-helper-sweep](nodes/freeform-gate-helper-sweep.md) — 自由生成の関所とヘルパ総なめの機械検出（閾値はプロンプトでなく Call 数の決定論検出）
 - [lo-basic-native-formatting-quirks](nodes/lo-basic-native-formatting-quirks.md) — 太字は CharWeightAsian でしか効かない・PivotSum の再描画癖と SummaryTable の使い分け
+- [arithmetic-identity-check](nodes/arithmetic-identity-check.md) — 算術恒等の検算（二重計上を数えない・並べ替えで沈んだ合計行に `✓` を出さない）
 
-保留: 無し（進捗表示/差分表示の人間化は GUI 非導入方針の確定によりノード化済み — progress-and-diff-humanization 参照）
+保留: 無し（進捗表示/差分表示の人間化はノード化済み — progress-and-diff-humanization 参照。
+★ 同ノードの「GUI は当面作らない」は **2026-08-26 に覆っています**（GUI を作った）。
+  方針が変わった日に、それを根拠にしていた文書を直していなかった ── 2026-09-05 の盲検の査定で発覚）
 
-ノード化待ち: 無し（2026-08-17 時点で上記の索引に全て収載済み）
+ノード化待ち: 無し（最終確認 2026-09-05。★ この行の日付が古いままだと「止まっている」ことを自白する ── ノードを足した日に一緒に直す）
 ★ 件数は書かない: 旧文は「上記 9 ノード」と書いていたが、索引が伸びても追随せず実数と食い違っていた（実測: 索引 16 件に対し 9 のまま）。数はファイルを数えれば分かるので、手書きの数を持たないことにする。

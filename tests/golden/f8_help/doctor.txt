@@ -1,5 +1,6 @@
-usage: ailine doctor [-h] [--model MODEL]
+usage: ailine doctor [-h] [--allow-remote-model] [--model MODEL]
 
 options:
-  -h, --help     show this help message and exit
-  --model MODEL  確認するモデル (既定 qwen2.5-coder:7b)
+  -h, --help            show this help message and exit
+  --allow-remote-model  手元以外の ollama への送信を承知のうえで許す（既定は拒む ── 依頼文と表の中身がその宛先へ出ます）
+  --model MODEL         確認するモデル (既定 qwen2.5-coder:7b)

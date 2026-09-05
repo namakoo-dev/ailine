@@ -4,6 +4,7 @@ usage: ailine run [-h] [--model MODEL] [--refs REFS] [--helpers HELPERS]
                   [--keep-backups KEEP_BACKUPS] [--values]
                   [--header-row HEADER_ROW] [--sheet SHEET] [--accept-loss]
                   [--copy] [--overwrite] [--allow-freeform]
+                  [--allow-remote-model]
                   book task [task ...]
 
 positional arguments:
@@ -37,3 +38,4 @@ options:
   --overwrite           破壊の関所（既存データを持つ列への上書き確認）を承知の上で続行する（ailine undo で戻せる）
   --allow-freeform      （廃止・後方互換のため受理のみ）自由生成は提供していません。指定しても語彙外の断り +
                         廃止告知が出るだけです（機械検証できない操作は行わない方針）
+  --allow-remote-model  手元以外の ollama への送信を承知のうえで許す（既定は拒む ── 依頼文と表の中身がその宛先へ出ます）

@@ -22,6 +22,9 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
+#: doctor が出す python の検査名（★ 定数から作る ── 手書きは下限を上げた日に腐る）
+_PY_CHECK = f"python {ailine.MIN_PYTHON[0]}.{ailine.MIN_PYTHON[1]}+"
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
 
@@ -50,7 +53,7 @@ def test_demo_shows_the_next_command_to_type(tmp_path, monkeypatch, capsys):
       ── 検体が俺の環境に依存していた。**居ない側を既定にする**（明示的に揃った状態を作る）。
     """
     monkeypatch.setattr(ailine, "doctor_checks",
-                         lambda model="qwen2.5-coder:7b": [["python 3.10+", True, ""]])
+                         lambda model="qwen2.5-coder:7b": [[_PY_CHECK, True, ""]])
     _isolate(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     rc, out = _run_main(["demo"], capsys)
@@ -91,7 +94,7 @@ def test_demo_names_what_is_missing_instead_of_suggesting_a_failing_command(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(ailine, "doctor_checks",
                          lambda model="qwen2.5-coder:7b": [
-                             ["python 3.10+", True, ""],
+                             [_PY_CHECK, True, ""],
                              ["LibreOffice", True, "C:/LO"],
                              ["basrun.py", False, "環境変数 BASRUN に…"],
                          ])
@@ -109,6 +112,6 @@ def test_demo_suggests_the_run_when_everything_is_ready(tmp_path, monkeypatch, c
     _isolate(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(ailine, "doctor_checks",
-                         lambda model="qwen2.5-coder:7b": [["python 3.10+", True, ""]])
+                         lambda model="qwen2.5-coder:7b": [[_PY_CHECK, True, ""]])
     rc, out = _run_main(["demo"], capsys)
     assert rc == 0 and "次にこれを打って" in out, out

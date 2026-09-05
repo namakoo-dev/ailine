@@ -1,4 +1,5 @@
 value ALIASES_FILE
+value ALLOW_REMOTE_MODEL
 value ATTRIBUTES_FILE
 value AXES
 value BACKUP_DIR
@@ -33,6 +34,7 @@ value KEEP_FOR_COLUMN_REQUEST
 value MACHINE_DERIVED_ARGS
 value MAX_COLS
 value MAX_ROWS
+value MIN_PYTHON
 value MISCLASS_FILE
 value NEW_COLUMN_ORIGIN
 value NOOP_MACRO
@@ -161,6 +163,7 @@ value _VOCAB_MISS_KIND_PREFIX
 value _VOCAB_MISS_REASONS
 value _ZENKAKU_DIGITS
 value _ZERO_TARGET_REASON
+def _add_allow_remote(p: 'argparse.ArgumentParser') -> 'None'
 def _announce_format_map_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
 def _announce_lookup_fill_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
 def _announce_report_per_row_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
@@ -606,6 +609,7 @@ def numeric_cells_became_strings(path, cell_refs, sheet_name: 'str | None' = Non
 def observe_book_state(path: 'Path') -> 'tuple'
 def ollama_generate(*a, **k)
 def ollama_generate_json(*a, **k)
+def ollama_url(path: 'str') -> 'str'
 def only_this_column_changed(path: 'Path', source_book, sheet, col_index: 'int', header_row: 'int' = 1, inserted_at: 'int | None' = None) -> 'str | None'
 def op_that_worked_before(task: 'str', entries) -> 'tuple'
 def out_book_path(book: 'Path') -> 'Path'

@@ -54,15 +54,31 @@ def test_every_cited_evidence_file_exists():
 
 
 def test_inputs_and_logs_stay_paired():
-    """② 入力ブックとログが対で残っていること。
+    """② ログが在る所には、入力ブックも残っていること。
 
     ★ 片方だけ残すと再現できない ── ログだけでは何を入れたか分からず、
       ブックだけでは何が起きたか分からない。
+
+    ★★ この試験は**落ちない試験だった**（2026-09-05・盲検の査定が指摘）:
+      `logs` と `books` を作って**一度も比べていなかった**。ブックを全部消しても緑。
+      docstring が「対で残っていること」と宣言した検査が、body に存在しなかった。
+
+    ★ 直すときに分かったこと: **名前で 1 対 1 に対応させる規則は、このデータに無い**
+      （ログ `e2e1_log.txt` に対して入力は `sample_e2e.xlsx`）。
+      `logs == books` と書けば「守っているように見えて常に赤」になるだけで、
+      それは検査ではなく飾りだ。★ 実際に真で、かつ**消したら赤くなる**規則を選ぶ:
+      **ログを置いたディレクトリには、必ずブックが同居していること**。
+      （逆向きは成り立たない ── `.ailine_*` は道具の作業場で、証跡ではない）
     """
-    logs = {p.stem.replace("_log", "") for p in E2E.rglob("*_log.txt")}
-    books = {p.stem for p in E2E.rglob("*.xlsx")}
+    logs = sorted(E2E.rglob("*_log.txt"))
+    books = sorted(E2E.rglob("*.xlsx"))
     assert logs, "ログが 1 つも無い（★ 検出が壊れている疑い）"
     assert books, "入力ブックが 1 つも無い（★ 同上）"
+    orphaned = sorted(str(d.relative_to(E2E)) for d in {p.parent for p in logs}
+                      if not any(d.glob("*.xlsx")))
+    assert not orphaned, (
+        f"ログだけが残ってブックが消えたディレクトリ: {orphaned} ── "
+        "何を入れたら その出力になったのかが再現できない")
 
 
 def test_the_evidence_is_explained():
