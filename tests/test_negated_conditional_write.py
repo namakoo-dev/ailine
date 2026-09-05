@@ -153,4 +153,18 @@ def test_the_negation_writes_to_the_right_rows_on_the_real_machine(book, tmp_pat
     wb.close()
     # 田中(営業)・佐藤(営業) は空のまま、鈴木(経理)・山田(総務) に ○
     assert got_col == [None, "○", None, "○"], got_col
-    assert "✓" in got.stdout, got.stdout[-400:]
+    # ★★ 2026-09-06（pre-push が捕まえた・書いたその日に脆さが出た）:
+    #   ここは最初 `"✓" in stdout` と書いていたが、**LLM の出目で ✓ か △ かが変わる**:
+    #     一段目が `neq`（語彙に無い）を返す回 → 食い違いを言わない → ✓
+    #     一段目が `eq`（正しい語彙で逆の意味）→ ⚠ を出して採用を開示 → △
+    #   どちらも**正しい挙動**で、✓/△ は契約ではない。守りたい不変は 2 つだけ:
+    #     ① 正しい行に書いた（上の assert）② 確かめた以上を主張しない
+    #   ★ 効果の行列は `abs(実測 - 記録) <= 1` で揺れを許していたのに、
+    #     この検体にはその作法が入っていなかった（実機の検体は揺れに強い形で書く）。
+    #   ★ 判定の印は**行頭**で見る ── 最初 `"×" not in stdout` と書いたら
+    #     「5行×3列」の掛け算記号に当たった（字面で守ると意味の違う物に当たる ──
+    #     同じ日に `"return 3"` で 3 本落としたのと同じ形）。
+    verdicts = [ln[0] for ln in got.stdout.splitlines() if ln[:1] in ("✓", "△", "×")]
+    assert verdicts, got.stdout[-400:]
+    assert verdicts[-1] in ("✓", "△"), (verdicts, got.stdout[-400:])
+    assert "条件に当てはまる 2 行だけ" in got.stdout, got.stdout[-400:]
