@@ -5026,6 +5026,21 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
         _cmp = _mech_cmp
     else:
         _cmp = _llm_cmp
+    # ★★ 2026-09-05: **依頼文が「以外」と言っているなら、比較は否定**（機械が勝つ）。
+    #   実測: 一段目は `neq` を返してきた（語彙に無い）。ここで先に許可リストへ当てると
+    #   「そんな比較はありません」で終わり、扱えるはずの否定が断られる。
+    #   ★ 比較は機械が勝つ、という既存の原則（上の _mech_cmp と同じ）を否定にも通す。
+    if task_says_except(task) and _cmp != "nin":
+        # ★ 警告は**本当に食い違っている時だけ**。実測で一段目は `neq` を返してきたが、
+        #   これは「語彙に無いだけで意図は合っている」── それを食い違いとして ⚠ を出すと
+        #   否定の依頼が毎回 △ に落ちる（実測でそうなった）。嘘に近い警告は出さない。
+        #   ★ 一方 `eq` のような**正しい語彙で逆の意味**を返した回は、2026-09-04 の
+        #     事故そのものなので必ず言う。
+        if _cmp in _EXTRACT_CMPS:
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"LLM が返した比較({_cmp})は否定ではないため、"
+                "依頼文の「以外」を採用しました(nin)"]
+        _cmp = "nin"
     if _cmp not in _EXTRACT_CMPS:
         return False, resolved, inferred, (
             f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません")
@@ -5044,6 +5059,32 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
     #     抽出で使っているのと同じ task_names_real_values）。
     #   ★ 置き場所に注意: **数字が 1 つ在る回は今までどおり**の道を通す。
     #     この枝は「今まで断っていた所」にだけ増える ── 既存の成功は 1 件も変わらない。
+    # ★★ 2026-09-05（否定の対応）: 「〜以外」は**値の一覧の否定**（cmp=nin）。
+    #   兄弟の EXTRACT が既にこの形で解いている（resolve_named_extraction）ので、
+    #   同じ器官（task_names_real_values）で同じ形に解く ── 別の勘定を作らない。
+    if task_says_except(task):
+        _neg_vals = list(task_names_real_values(
+            task, book_meta, first_sheet, resolved["cond_col"], _hr_here) or [])
+        if not _neg_vals:
+            # ★ 決まらないなら**断る**。ここで eq に落ちると、依頼と逆のことをして
+            #   ✓ が出る（2026-09-04 に実測した静かな嘘そのもの）。
+            return False, resolved, inferred, (
+                f"『{resolved['cond_col']}』のどの値の「以外」なのかを"
+                "依頼文から決められません（列に在る値を名指ししてください）")
+        _cmp = "nin"
+        resolved["cmp"] = "nin"
+        resolved["cond_value"] = _neg_vals
+        resolved["_sources"] = {**resolved.get("_sources", {}),
+                                "cond_value": "依頼文が名指しした値の「以外」"}
+        resolved["_cond_label"] = (f"『{resolved['cond_col']}』が"
+                                    f"『{'、'.join(_neg_vals)}』以外の行")
+    # ★★ ここに「依頼が否定なのに宣言が eq なら断る」という検査を一度置いたが、
+    #   **変異試験で外しても全部緑だった** ── 上の「機械が勝つ」（依頼文が「以外」なら
+    #   比較は必ず nin）を先に通すので、ここへ来る時には既に nin で、**永久に鳴らない**。
+    #   ★ 在っても鳴らない検査は、読む人に「守られている」と思わせる分だけ悪い。消した。
+    #   ★ 守りたい不変（逆のことをして ✓ を出さない）は、
+    #     ① 機械が勝つ（この上）② 事後条件が Python の別実装で数える
+    #     の 2 つが受け持ち、変異試験でどちらを殺しても赤くなることを確かめてある。
     _named_cond = []
     if _cmp in ("eq", "contains") and len(set(_nums)) != 1:
         try:
@@ -5063,6 +5104,10 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
                 + (f"（『{resolved["cond_col"]}』に当てはまる値が "
                    f"{len(_named_cond)} 個ありました）" if _named_cond else ""))
         resolved["cond_value"] = str(_thr)
+    elif _cmp == "nin":
+        # ★ 否定は上で解決済み（実表から一覧を取り、決まらなければ既に断っている）。
+        #   ここへ来た時点で cond_value は入っている ── 数値の枝に落とさない。
+        pass
     elif _cmp == "eq" and len(set(_nums)) != 1 and len(_named_cond) == 1:
         # ★ 文字列の等値。**1 個に決まった時だけ**採る（0 個/複数なら決めない＝断る側へ）。
         resolved["cond_value"] = str(_named_cond[0])
@@ -5093,9 +5138,14 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
     #     なく値そのもの**で決まる」と書いてある ── 同じ判断が 2 箇所にあって
     #     片方しか直っていなかった（片配線）。判定を .bas 側と同じ形に揃える。
     _cv = resolved["cond_value"]
-    _shown = (str(int(_cv)) if (_is_number(_cv) and not isinstance(_cv, bool)
-                                and float(_cv).is_integer())
-              else (_fmt_cell_value(_cv) if _is_number(_cv) else _cv))
+    # ★ 2026-09-05: in/nin は**値の一覧** ── そのまま出すと画面に ['営業'] と
+    #   Python のリストが出る（実測）。人が読む文字は人の書き方で出す。
+    if isinstance(_cv, (list, tuple, set)):
+        _shown = "『" + "』『".join(str(v) for v in _cv) + "』"
+    else:
+        _shown = (str(int(_cv)) if (_is_number(_cv) and not isinstance(_cv, bool)
+                                    and float(_cv).is_integer())
+                  else (_fmt_cell_value(_cv) if _is_number(_cv) else _cv))
     resolved["_cond_label"] = f"『{resolved['cond_col']}』が {_shown} {_lab}"
     # ★ 当てはまる行を**先に数えて画面に出す**（0 行なら、走らせる前に断る ──
     #   「何も起きなかった」を後から × で知らせるのは、正しくても不親切）。
@@ -6007,7 +6057,11 @@ PLAN_CHAIN_WARNING_OPS = ("EXTRACT", "DEDUP")
 #   意味論は 3 箇所が同時に持つ: ここ / Basic の RowMatches Case 6 /
 #   Python の _extract_predicate。凍結した真理値表 tests/test_predicate_truth_table.py
 #   が 3 者の一致を縛る ── 変える時は必ず一緒に直すこと。
-_EXTRACT_CMPS = ("gte", "lte", "gt", "lt", "eq", "contains", "in")
+#: ★ 2026-09-05: "nin"（どれでもない）が名簿から漏れていた ── Basic の Case 7 も
+#:   Python の別実装も凍結した真理表も既に持っているのに、**許可リストだけ古かった**。
+#:   そのため EXTRACT は特別扱いの経路で通り、SET_WHERE は「その比較はありません」で
+#:   断られていた（兄弟間の片配線）。
+_EXTRACT_CMPS = ("gte", "lte", "gt", "lt", "eq", "contains", "in", "nin")
 _EXTRACT_CMP_LABELS = {"gte": "以上", "lte": "以下", "gt": "超", "lt": "未満",
                         "eq": "等しい", "contains": "を含む", "in": "のどれか",
                         "nin": "のどれでもない"}
@@ -6648,9 +6702,16 @@ def codegen_dsl(op: str, resolved_args: dict, book_meta: dict, use_formula: bool
         # ★ 2026-08-27（実測・生 traceback を出した）: 閾値が数値かどうかは **cmp ではなく
         #   値そのもの**で決まる。eq は「金額が 100 と等しい」にも「チェックが『◎』と
         #   等しい」にも使う ── cmp で分けると、置き換えの『◎』を float() に渡して落ちる。
-        _num = _is_number(thr) and not isinstance(thr, bool)
-        thr_lit = (repr(float(thr)) if _num
-                    else '"%s"' % str(thr).replace(chr(34), chr(34) * 2))
+        # ★ 2026-09-05: nin/in は**値の一覧**。EXTRACT と同じ Chr(2) 区切りで渡す
+        #   （Basic の RowMatches Case 6/7 が区切りごとの丸ごと一致で見る）。
+        if isinstance(thr, (list, tuple, set)):
+            _joined = chr(2).join(str(v) for v in thr)
+            thr_lit = ('"' + _joined.replace(chr(34), chr(34) * 2)
+                              .replace(chr(2), '" & Chr(2) & "') + '"')
+        else:
+            _num = _is_number(thr) and not isinstance(thr, bool)
+            thr_lit = (repr(float(thr)) if _num
+                        else '"%s"' % str(thr).replace(chr(34), chr(34) * 2))
         val = str(resolved_args["value"]).replace(chr(34), chr(34) * 2)
         # ★ 外す行は**構造の事実**なので Python が渡す（条件の判定は Basic が自分で行う ──
         #   そこを渡すと事後条件が独立した検算でなくなる）。
@@ -8767,10 +8828,13 @@ def task_asks_for_a_conditional_write(task: str, book_meta: dict | None = None,
     #   ★ 段2.5（同日午前）で「静かに反転する」と予言していた形が、門を広げたことで
     #     **実際に起きた**。前は行追加に化けて ⚠ で終わっていた ──
     #     **うるさい失敗から静かな嘘へ悪化した。**
-    #   ★ だから否定が在る回はこの門を開けない。扱えないものを通すより断る
-    #     （抽出側には nin が在るので「〜以外を抜き出して」は今までどおり動く）。
-    if task_says_except(task):
-        return False
+    #   ★★ 2026-09-05（同日夜・扱えるようにした）: 比較語彙に nin を足し、
+    #     ・条件値は実表から一覧で取る（決まらなければ**断る**）
+    #     ・依頼が「以外」なのに宣言が nin でない回は**実行しない**（三項の欠けた項）
+    #     ・事後条件は Python の別実装 `_extract_predicate` が見る（本体は Basic）
+    #     を揃えたので、この門はもう閉じない。★ 逆のことをして ✓ を出す道は、
+    #     「依頼 vs 宣言」の検査（verify_dsl_args）で塞いである。
+    #   ★ 「味噌汁以外を抜き出して」（抽出）は引用が無いので、この門の手前で外れる。
     if extract_cmp_from_task(task):
         return True
     if book_meta is None:
@@ -11005,6 +11069,25 @@ def cmd_attr(a: argparse.Namespace) -> int:
 # run コマンド本体
 # ---------------------------------------------------------------------------
 
+def _record_history(a: argparse.Namespace, book: Path, result: dict, failure_kind: str,
+                     error_detail: str | None = None) -> None:
+    """履歴に 1 行残す（★ 印字は一切しない ── --json の出力を変えないため）。
+
+    ★★ なぜ関数にしたか（2026-09-05）: CLARIFY は `_finish_run` を通らず return 3 して
+      いたので**台帳に一行も無かった**。語彙外 234 件は見えているのに、聞き返しは
+      0 件 ── どちらが多いかを知らないまま「この機能は N% に効く」と言うことになる。
+      ★ 記録する処理を 2 箇所に書くと片方だけ直る（この repo の系譜）。1 本に畳んで
+        呼び出し側に持たせない。
+    """
+    try:
+        detail = error_detail if error_detail is not None else (
+            result.get("last_error_full") if failure_kind == "runtime_error" else None)
+        append_history(build_history_entry(result, book, a.task, a.model, failure_kind,
+                                            error_detail=detail))
+    except Exception as e:
+        print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
+
+
 def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: str,
                  error_detail: str | None = None) -> None:
     """--json 出力・成功時の注意書き・履歴の記録。cmd_refuse_vocab_miss / cmd_run_dsl /
@@ -11035,13 +11118,7 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
         msg = success_message(result)
         if msg:
             print("\n" + msg)
-    try:
-        detail = error_detail if error_detail is not None else (
-            result.get("last_error_full") if failure_kind == "runtime_error" else None)
-        append_history(build_history_entry(result, book, a.task, a.model, failure_kind,
-                                            error_detail=detail))
-    except Exception as e:
-        print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
+    _record_history(a, book, result, failure_kind, error_detail)
 
 
 # ★ C9: ✓ の唯一の根拠。適用が全部終わった「最終ファイル」を openpyxl で開き直し、
@@ -12220,6 +12297,14 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             #   聞き返しは「言い方が悪い」場合と「そもそも対応していない」場合を
             #   区別できない ── 区別する手段を毎回そえる。
             print("  （頼める操作の一覧: ailine ops）")
+            # ★★ 2026-09-05: ここは**行き止まり**なのに台帳に残っていなかった。
+            #   語彙外（234 件）とどちらが多いのかが分からず、「属性の問いは 1% に効く」
+            #   のような数字を、見えていない分母の上で言うことになっていた。
+            #   ★ 印字はしない（--json の出力を変えない）── 履歴に 1 行だけ足す。
+            _record_history(a, book, {"ok": False, "attempts": 0, "task": a.task,
+                                       "model": a.model, "path": "clarify", "command": None,
+                                       "postcondition": None, "changes": [], "out": str(book)},
+                            "clarify")
             return 3
         # ★ 帳票段: REPORT_PER_ROW は「データ行 N＝出力 N 枚」という op の形が
         #   cmd_run_dsl/dsl_step.py の共有エンジン（1シートへの書き込み前提）と構造的に

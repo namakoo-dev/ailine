@@ -128,39 +128,42 @@ def test_a_plain_condition_reaches_conditional_write(tmp_path):
     assert ws2.cell(3, 4).value is None and ws2.cell(4, 4).value is None, "他の行にも付いた"
 
 
-# --- ★★ 否定は門を開けない（広げた直後に踏んだ穴）----------------------------
+# --- ★★ 否定（★ 一度は門を閉じ、同じ日の夜に扱えるようにした）-----------------
 
 @pytest.mark.parametrize("task", [
     "所属が営業以外の行のメモに「○」を付けて",
     "営業を除いた行のメモに「○」を付けて",
     "営業を抜いた行のメモに「○」を付けて",
 ])
-def test_a_negated_condition_keeps_the_gate_shut(roster, task):
-    """★★ 門を広げた直後に実測で踏んだ ── **静かな嘘**が生まれた。
+def test_a_negated_condition_now_passes_the_gate(roster, task):
+    """★★ 経緯（同じ日に 2 回動いた・どちらも意図した変更）:
 
-        「所属が営業**以外**の行のメモに『○』を付けて」
-          → **営業の行に ○ が付き、しかも ✓ が出た**（ちょうど逆）
+    ① 2026-09-04 午後: 門を広げた直後に**静かな嘘**が出た ──
+       「所属が営業**以外**の行のメモに『○』」で **営業の行に ○ が付き ✓ が出た**。
+       比較語彙に否定が無いので模型は `eq` に潰れ、事後条件も**同じ述語**で数えたので
+       逆でも通った（恒真）。★ その日は「否定が在る回は門を開けない」で閉じた。
+    ② 2026-09-05 夜: 扱えるようにしたので開けた。
+       この試験は当時こう書いてあった ──
+         「この試験は『否定が直った』ら赤くなる。その時は nin を語彙に足してから
+           この縛りを外すこと（直したなら**意図的な commit として扱う**）」
+       そのとおりに赤くなったので、指示どおり外して**逆向きの契約**に置き換える。
 
-    ★ 条件つき書換の比較語彙に否定（nin）が無いので、模型は eq に潰す。
-      事後条件は**同じ述語で数える**ため、逆でも通る（恒真）。
-    ★ 段2.5（同日午前）で「静かに反転する」と予言していた形が、門を広げたことで
-      **実際に起きた**。前は行追加に化けて ⚠ で終わっていた ──
-      **うるさい失敗から静かな嘘へ悪化した。**
-    ★ 扱えないものを通すより断る。否定が在る回はこの門を開けない。
-    ★ この試験は「否定が直った」ら赤くなる ── その時は nin を語彙に足してから
-      この縛りを外すこと（直したなら意図的な commit として扱う）。
+    ★ いま逆のことをして ✓ が出ないことは、2 段が守っている（どちらも変異試験で赤）:
+        ① 依頼文が「以外」なら比較は**機械が**否定に決める（LLM の語に従わない）
+        ② 事後条件は Basic とは**別実装**の Python が数える
+      ── Basic だけを『等しい』に差し替えると `×` が出ることを実機で確かめてある
+         （tests/test_negated_conditional_write.py）。
     """
-    assert not ailine.task_asks_for_a_conditional_write(task, roster, "名簿"), task
+    assert ailine.task_asks_for_a_conditional_write(task, roster, "名簿"), task
 
 
-def test_extraction_with_a_negation_is_untouched():
-    """★ 抽出側には nin が在るので「〜以外を抜き出して」は今までどおり動くこと。
+def test_extraction_with_a_negation_is_untouched(roster):
+    """★ 「〜以外を**抜き出して**」（抽出）が、条件つき書換に奪われないこと。
 
-    ★ 門を閉じたのは**条件つき書換**だけ ── 抽出まで巻き込んでいないことを縛る。
+    ★ 門を開けた側の誤爆をここで縛る ── 抽出は書き込む値の引用を持たないので、
+      この門の手前（extract_quoted_literal）で外れるのが正しい。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src[src.index("def task_asks_for_a_conditional_write"):
-               src.index("\ndef ", src.index("def task_asks_for_a_conditional_write") + 10)]
-    assert "task_says_except" in body
-    # ★ 抽出の読み直しは別の門（except_extraction_reading）で、そちらは触っていない
-    assert "except_extraction_reading" in src
+    for task in ("営業以外を抜き出して", "営業以外の行だけ別シートに"):
+        assert not ailine.task_asks_for_a_conditional_write(task, roster, "名簿"), task
+    # ★ 抽出の読み直しは別の器官（except_extraction_reading）── そちらは触っていない
+    assert "except_extraction_reading" in Path(ailine.__file__).read_text(encoding="utf-8")
