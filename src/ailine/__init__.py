@@ -153,6 +153,7 @@ from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run �
 from ailine_core import csv_export   # ★ CSV_EXPORT: `ailine export-csv`（検疫の逆方向）の本体
 from ailine_core import date_compare   # ★ EXTRACT の日付範囲比較（台帳 DATE_RANGE_AGG の正体）
 from ailine_core import split_cell   # ★ SPLIT_CELL: 1セルの複数値を右の列へ割る（台帳2件）
+from ailine_core.examples import render_example_line, replace_examples_in_question  # ★ 導線に出す例は実測で通るものだけ
 from ailine_core import pdf_export   # ★ PRINT/EXPORT_DOC: `ailine export-pdf`（台帳4件）
 from ailine_core.date_compare import (   # noqa: F401  ← 試験と呼び出し側が ailine. で引く
     parse_date_literal, date_to_serial, classify_date_column,
@@ -7467,10 +7468,20 @@ def render_refusal(op: str, resolved_or_args, reason: str) -> list:
         head = f"  依頼を『{label}』と読みました"
         lines.append(f"{head}（{shown}）" if shown else head)
     lines.append(f"  止めた理由: {reason}")
+    # ★★ 2026-09-05: **そのまま打てば通る例**を出す（ailine_core/examples.py）。
+    #   ★ 実測した事故: 「整えて」への例に「太字にする」が入っていたが、そのまま打つと
+    #     「対象『all』は 太字 では未対応です」で断られた ── **道具が自分の示した例を**
+    #     **自分で断っていた**。導線が嘘なら、導線が無いより悪い。
+    #   ★ 語彙表の synonyms も、そのままでは通らないことがある（実測 10 件中 4 件）──
+    #     分かれ目は「対象が要る op かどうか」。synonyms は**呼び名**であって依頼文でない。
+    #   ★ だから例は専用の表に持ち、**実機の番人が毎回通ることを確かめる**。
+    _ex = render_example_line(op, label)
+    if _ex:
+        lines.append(_ex)
     phrases = (OP_META.get(op) or {}).get("match_phrases") or []
     if label and phrases:
-        # ★ match_phrases は語の断片のこともある（「演算」「掛け算」）。
-        #   「こう言えば通る」と書くと嘘になるので、**その操作を指す言い方**として出す。
+        # ★ match_phrases は語の断片のこともある（「演算」「掛け算」）ので、
+        #   **その操作を指す言い方**として出す（「こう言えば通る」は上の例が担う）。
         lines.append(f"  『{label}』を指す言い方: "
                       + "／".join(f"「{p}」" for p in phrases[:3]))
     lines.append("  読み方そのものが違うなら、言い直してください（頼める操作の一覧: ailine ops）")
@@ -11876,6 +11887,10 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             _flush_pending_sheet_announce(a)
         if op == "CLARIFY":
             question = step.get("question") or "確認が必要です"
+            # ★★ 2026-09-05: 聞き返しの中の「（例: …）」を**実測で通る例**に差し替える。
+            #   元の例は few-shot の作文で、そのまま打つと断られることがあった
+            #   （「太字にする」→「対象『all』は 太字 では未対応です」）。
+            question = replace_examples_in_question(question)
             print(f"？ {question}")
             # ★ 行き止まりに出口を置く（盲検査定 A の実測: 語彙外の依頼を 4 回言い直して
             #   4 回とも質問返しになり「普通の購入検討者ならここで評価を終える」）。
