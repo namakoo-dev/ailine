@@ -257,6 +257,7 @@ def _maybe_suggest_or_refuse(a: 'argparse.Namespace', book: 'Path', source_book:
 def _maybe_warn_header_col_mismatch(op: 'str', resolved: 'dict', new_cols: 'list', task: 'str') -> 'str | None'
 def _maybe_warn_target_overwrite(op: 'str', resolved: 'dict', book_meta: 'dict', book_path: 'Path') -> 'str | None'
 def _maybe_warn_write_precondition(op: 'str', before: 'dict', after: 'dict', resolved: 'dict | None' = None)
+def _merged_header_value(ws, row: 'int', col: 'int')
 def _moved_rows_note(disclosures: 'list', why: 'str' = '動いた行の式の結果が変わっています ── 追加/削除した行を参照する合計式なら正当ですが、機械には区別がつきません') -> 'str'
 def _nested_total_reason(values: 'list', sheet_name: 'str', idx: 'int') -> 'str | None'
 def _new_sheets(before: 'dict', after: 'dict') -> 'list'

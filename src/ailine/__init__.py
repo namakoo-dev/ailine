@@ -481,36 +481,82 @@ def describe_book(path: Path) -> str:
     return "\n".join(lines)
 
 
+def _merged_header_value(ws, row: int, col: int):
+    """結合セルの中なら、その範囲の**左上の値**を返す（2026-09-05）。
+
+    ★ なぜ要るか（実物の請求書で実測）: 見出しの `品番・品名` は C16:E16 の結合で、
+      D16 と E16 は空。左から数えて最初の空で打ち切る規則だと、**そこで表が終わる**。
+      結合は「1 つの見出しが複数列に跨る」という**構造の事実**なので、
+      推測ではなく範囲から引ける。
+    ★ 左上が空の結合（実物の A2:A48 ＝ 左余白）は空のまま返す ── 名前が無いものに
+      名前を作らない。
+    """
+    try:
+        for rng in getattr(ws, "merged_cells", None).ranges:
+            if rng.min_row <= row <= rng.max_row and rng.min_col <= col <= rng.max_col:
+                return ws.cell(row=rng.min_row, column=rng.min_col).value
+    except Exception:
+        return None
+    return None
+
+
 def book_columns(path: Path, header_rows: dict | None = None) -> dict:
     """全シートの見出し行を {シート名: [列名,...]} で返す。
        ★ describe_book は1枚目だけの人間可読版。こちらは M2b の翻訳・検証が使う
-       機械可読の接地情報（列は最初の空欄で打ち切る＝連続した見出しだけを列とみなす）。
+       機械可読の接地情報。
        ★ W3: header_rows({シート名: 見出し行(1起点)}) を渡すと、そのシートだけは
        物理1行目でなく指定行を見出しとして読む（StructDump の見出し検出結果を反映する）。
-       未指定のシートは従来どおり1行目（後方互換・引数省略時は完全に旧挙動）。"""
+
+       ★★ 2026-09-05（実物の請求書で実測・段C）: それまでは
+       **1 列目から数え、最初の空欄で打ち切る**規則だった。帳票はこれを満たさない ──
+
+         ・表が **B 列から**始まる（左が余白）           → 0 列と読む
+         ・見出しに**結合セル**がある（C:E で 1 つの名前）→ D で打ち切る
+         ・**単位列など見出しの無い列**が途中に挟まる     → そこで打ち切る
+
+       梯子の検体で 3/9 が 0〜1 列になり、弥生の実物も「ある列: (無し)」で止まっていた。
+       ★ 直し方は 3 つ:
+         ① 結合セルは範囲の左上から名前を引く（構造の事実・推測しない）
+         ② 空欄で打ち切らず、**位置を保ったまま空名を詰めて**進む
+            （`headers.index(名前)+1 = 列番号` に依存する箇所が 46 行あるので、
+              並びをずらさない ── ここを崩すと 46 行を測らずに触ることになる）
+         ③ 表の外まで拾わないよう、**空が続いたら**そこで終える（GAP_LIMIT）
+       ★ 空名の列は「名前で指せない列」として残る ── 名前を発明しない。
+    """
     header_rows = header_rows or {}
-    wb = openpyxl.load_workbook(path, read_only=True)
+    wb = openpyxl.load_workbook(path, read_only=False)
     out = {}
     for name in wb.sheetnames:
         ws = wb[name]
         hr = header_rows.get(name, 1)
         ncol = min(ws.max_column or 0, MAX_COLS)
-        headers = []
+        # ★ 表の外の遠いセルを拾わないための線。連続でこの数だけ空なら、そこが表の右端。
+        GAP_LIMIT = 3
+        names, gap = [], 0
         for c in range(1, ncol + 1):
             v = ws.cell(row=hr, column=c).value
+            if v in (None, ""):
+                v = _merged_header_value(ws, hr, c)
             if v in (None, "") and hr > 1:
-                # ★ W3: 多段見出し対策。子見出し行(hr>1)で空欄の列は、真上の行を遡って
-                #   最初に見つかる非空値を引き継ぐ（D検体: 商品名は1行目だけにあり
-                #   2行目(子見出し)の同じ列は空。無いと打ち切り誤検知で列挙が0件になる）。
+                # ★ W3: 多段見出し対策。子見出し行で空欄の列は、真上を遡って引き継ぐ。
                 for up in range(hr - 1, 0, -1):
                     uv = ws.cell(row=up, column=c).value
+                    if uv in (None, ""):
+                        uv = _merged_header_value(ws, up, c)
                     if uv not in (None, ""):
                         v = uv
                         break
             if v in (None, ""):
-                break
-            headers.append(str(v))
-        out[name] = headers
+                gap += 1
+                if gap >= GAP_LIMIT:
+                    break
+                names.append("")          # ★ 位置を保つ（並びが列番号を意味するため）
+                continue
+            gap = 0
+            names.append(str(v))
+        while names and names[-1] == "":   # 末尾の詰め物は落とす
+            names.pop()
+        out[name] = names
     wb.close()
     return out
 
