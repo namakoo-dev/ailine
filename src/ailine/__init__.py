@@ -154,6 +154,7 @@ from ailine_core import csv_export   # ★ CSV_EXPORT: `ailine export-csv`（検
 from ailine_core import date_compare   # ★ EXTRACT の日付範囲比較（台帳 DATE_RANGE_AGG の正体）
 from ailine_core import split_cell   # ★ SPLIT_CELL: 1セルの複数値を右の列へ割る（台帳2件）
 from ailine_core.examples import render_example_line, replace_examples_in_question  # ★ 導線に出す例は実測で通るものだけ
+from ailine_core.op_axes import AXES, judge_axis, render_axis_ambiguity, render_axis_refusal  # ★ 軸の上でまだ扱えないものを宣言する
 from ailine_core import pdf_export   # ★ PRINT/EXPORT_DOC: `ailine export-pdf`（台帳4件）
 from ailine_core.date_compare import (   # noqa: F401  ← 試験と呼び出し側が ailine. で引く
     parse_date_literal, date_to_serial, classify_date_column,
@@ -12966,6 +12967,41 @@ def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None =
     step = step or {}
     about = str(step.get("about") or "").strip()
     reason = _vocab_miss_reason(step)
+    # ★★ 2026-09-05: 語彙外の断りは**必ずここを通る**ので、軸の判定もここで 1 度だけ。
+    #   実測: 「単価の平均値を…」は「照合できませんでした」で終わっており、
+    #   **なぜ扱えないか**も**どう言い直せばよいか**も言っていなかった。
+    #   ★ 軸（op_axes.py）が「まだ無い機能」を名指しできるなら、そちらを先に言う。
+    #   ★ 判定に要るのは実表の列名だけ ── 無ければ従来どおりの断りに落ちる。
+    _ax_heads = []
+    try:
+        _bm = build_book_meta(book)
+        _ax_heads = (_bm.get("headers") or {}).get(
+            getattr(a, "_target_sheet", None) or (_bm.get("sheets") or [None])[0]) or []
+    except Exception:
+        _ax_heads = []
+    for _op in AXES:
+        _v, _d = judge_axis(_op, a.task, _ax_heads)
+        if _v == "ambiguous":
+            for _ln in render_axis_ambiguity(_op, _d):
+                print(_ln)
+            print("  （頼める操作の一覧: ailine ops）")
+            _finish_run(a, book, {"ok": False, "attempts": 0, "task": a.task,
+                                   "model": a.model, "path": "vocab_miss", "command": None,
+                                   "postcondition": None, "changes": [], "out": str(book)},
+                        failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/axis_ambiguous")
+            return 3
+        if _v == "lacks":
+            for _ln in render_axis_refusal(_op, _d):
+                print(_ln)
+            _ex = render_example_line(_op, OP_LABELS.get(_op))
+            if _ex:
+                print(_ex)
+            print("  （頼める操作の一覧: ailine ops）")
+            _finish_run(a, book, {"ok": False, "attempts": 0, "task": a.task,
+                                   "model": a.model, "path": "vocab_miss", "command": None,
+                                   "postcondition": None, "changes": [], "out": str(book)},
+                        failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/axis_lacks")
+            return 3
     for ln in render_vocab_miss_refusal(about, sunset_notice=bool(getattr(a, "allow_freeform", False)),
                                          translate_error=(reason == "translate_error")):
         print(ln)
@@ -13046,9 +13082,56 @@ def _maybe_suggest_or_refuse(a: argparse.Namespace, book: Path, source_book: Pat
             task, read_history(max_n=HISTORY_RECALL_MAX))
         if remembered_op:
             candidates = [remembered_op]
+    # ★★ 2026-09-05: 候補が 1 つも出ない回にも軸を見る。
+    #   実測: 「平均単価の平均を出して」は ambiguous と判定できるのに、判定器が候補を
+    #   返さないため**ここに届く前に「照合できませんでした」で断って**いた。
+    #   結果は正しいが、言い直しの導線が無い ── 判断しかねると言えば次の一手が打てる。
+    #   ★ 軸を持つ op すべてに当てる（1 つでも lacks/ambiguous なら、そう言う）。
+    if not candidates:
+        _ax_headers0 = (book_meta.get("headers") or {}).get(
+            getattr(a, "_target_sheet", None) or (sheets[0] if sheets else None)) or []
+        for _op in AXES:
+            _v, _d = judge_axis(_op, task, _ax_headers0)
+            if _v == "ambiguous":
+                for _ln in render_axis_ambiguity(_op, _d):
+                    print(_ln)
+                print("  （頼める操作の一覧: ailine ops）")
+                return 3
+            if _v == "lacks":
+                for _ln in render_axis_refusal(_op, _d):
+                    print(_ln)
+                _ex0 = render_example_line(_op, OP_LABELS.get(_op))
+                if _ex0:
+                    print(_ex0)
+                print("  （頼める操作の一覧: ailine ops）")
+                return 3
     if not candidates:
         return cmd_refuse_vocab_miss(a, book, step)
 
+    # ★★ 2026-09-05: 提案する**前に**、その op の軸の上で扱える依頼かを機械で見る。
+    #   実測（断りの導線 15 件）: 提案の 3/9 が意図とずれていた ──
+    #   「単価の平均値を…」に「もしかして: 合計追加？」と出し、同じ画面で
+    #   「『平均値』は反映されません」と自分でずれを認めていた。
+    #   ★ 依頼の芯が「反映されません」に入るなら、それは近い操作でなく**別の操作**。
+    #   ★ 知識は語彙表に散文で在ったが（「合計(SUM)専用」）、指示は保証にならない。
+    #     機械が読む宣言（ailine_core/op_axes.py）にして、ここで確かめる。
+    _ax_headers = (book_meta.get("headers") or {}).get(
+        getattr(a, "_target_sheet", None) or (sheets[0] if sheets else None)) or []
+    for _cand in candidates:
+        _v, _d = judge_axis(_cand, task, _ax_headers)
+        if _v == "lacks":
+            for _ln in render_axis_refusal(_cand, _d):
+                print(_ln)
+            _ex = render_example_line(_cand, OP_LABELS.get(_cand))
+            if _ex:
+                print(_ex)
+            print("  （頼める操作の一覧: ailine ops）")
+            return 3
+        if _v == "ambiguous":
+            for _ln in render_axis_ambiguity(_cand, _d):
+                print(_ln)
+            print("  （頼める操作の一覧: ailine ops）")
+            return 3
     op = candidates[0]
     args, resolved, inferred = _ground_via_fixed_op(a, task, book_meta, op)
     if args is None:

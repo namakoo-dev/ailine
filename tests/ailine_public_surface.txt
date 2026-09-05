@@ -1,4 +1,5 @@
 value ALIASES_FILE
+value AXES
 value BACKUP_DIR
 value BOOKLIKE_SUFFIXES
 class BookView(path: 'Path', read_only: 'bool' = False)
@@ -561,6 +562,7 @@ def inspection_sheet_basic_call(sheet_name: 'str', header: 'list', rows: 'list',
 def is_interactive(*, stdin_isatty: 'bool', json_mode: 'bool' = False, dry: 'bool' = False) -> 'bool'
 def is_transient_lo_error(err: 'str | None') -> 'bool'
 def is_truncated_code(code: 'str') -> 'bool'
+def judge_axis(op: 'str | None', task: 'str', headers=None) -> 'tuple'
 def judge_ops_via_llm(task: 'str', about: 'str | None' = None) -> 'list'
 def keep_backups_arg(value: 'str') -> 'int'
 def likely_cause_of_no_change(book_path, sheet_name=None) -> 'list'
@@ -624,6 +626,8 @@ def render_applied_claim(claim: 'Claim', display_name: 'str') -> 'list'
 def render_applied_claim_demoted(claim: 'Claim', display_name: 'str', warning_count: 'int') -> 'list'
 def render_applied_unobservable(display_name: 'str', error: 'str') -> 'list'
 def render_applied_unverified(display_name: 'str', observed: 'str') -> 'list'
+def render_axis_ambiguity(op: 'str | None', detail) -> 'list'
+def render_axis_refusal(op: 'str | None', detail, label: 'str | None' = None) -> 'list'
 def render_backup_list(book_name: 'str', backups: 'list', shelved: 'int' = 0, shelf_dir=None, legacy: 'list | None' = None) -> 'list'
 def render_choices(choices) -> 'str'
 def render_code_block(header: 'str', code: 'str', step_prefix: 'str' = '') -> 'list'
