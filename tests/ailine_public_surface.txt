@@ -8,6 +8,7 @@ class BookView(path: 'Path', read_only: 'bool' = False)
 class BrokenBackupError(?)
 value CHOICE_PREFIX
 value CLARIFY_HEADER_ROW_QUESTION
+value CODEGEN_BY_OP
 value COLOR_MAP
 value CONTRACT
 value CSV_SUFFIX
@@ -198,6 +199,35 @@ def _cmd_run_body(a: 'argparse.Namespace') -> 'int'
 def _cmd_run_csv_prestage(a: 'argparse.Namespace') -> 'int'
 def _cmd_run_dispatch(a: 'argparse.Namespace', book: 'Path', workdir: 'Path') -> 'int'
 def _cmd_undo_body(a: 'argparse.Namespace', book: 'Path') -> 'int'
+def _codegen_add_column(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_add_row(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_aggregate(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_append_total(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_autofit(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_bold(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_center_align(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_chart(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_compute_column(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_dedup(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_delete_column(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_delete_rows(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_draw_borders(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_extract(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_extract_columns(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_fill_color(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_format_map(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_insert_rows(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_lookup_fill(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_merge(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_number_format(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_pivot(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_report_per_row(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_set_cell_value(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_set_column_value(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_set_where(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_sort(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_split_cell(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_swap(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
 def _col_index_by_header(ws, name: 'str', header_row: 'int' = 1)
 def _column_block_values(bv, ws, idx: 'int', header_row: 'int', sheet: 'str | None') -> 'list'
 def _column_existing_value_count(book_path: 'Path', sheet_name: 'str', col_name: 'str', header_row: 'int' = 1) -> 'int'

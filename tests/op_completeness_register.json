@@ -10,17 +10,18 @@
     ]
   },
   "registered_op_tables": [
+    "src/ailine/__init__.py:CODEGEN_BY_OP",
     "src/ailine/__init__.py:OP_META",
-    "src/ailine/__init__.py:OP_WRITE_TARGET",
     "src/ailine/__init__.py:OP_SUBJECT_SLOTS",
-    "src/ailine/__init__.py:_CONFIRM_FIELDS",
+    "src/ailine/__init__.py:OP_WRITE_TARGET",
     "src/ailine/__init__.py:POSTCONDITIONS",
     "src/ailine/__init__.py:_COLUMN_ARG_KEYS",
-    "src/ailine_core/target_sheet.py:_OP_VERBS",
+    "src/ailine/__init__.py:_CONFIRM_FIELDS",
     "src/ailine/__init__.py:_OP_SCHEMA_NOTES",
-    "src/ailine_core/projection.py:PROJECTIONS",
     "src/ailine_core/examples.py:EXAMPLE_TASKS",
-    "src/ailine_core/op_axes.py:AXES"
+    "src/ailine_core/op_axes.py:AXES",
+    "src/ailine_core/projection.py:PROJECTIONS",
+    "src/ailine_core/target_sheet.py:_OP_VERBS"
   ],
   "exemptions": [
     {
