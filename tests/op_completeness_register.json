@@ -17,7 +17,8 @@
     "src/ailine/__init__.py:POSTCONDITIONS",
     "src/ailine/__init__.py:_COLUMN_ARG_KEYS",
     "src/ailine_core/target_sheet.py:_OP_VERBS",
-    "src/ailine/__init__.py:_OP_SCHEMA_NOTES"
+    "src/ailine/__init__.py:_OP_SCHEMA_NOTES",
+    "src/ailine_core/projection.py:PROJECTIONS"
   ],
   "exemptions": [
     {

@@ -32,6 +32,34 @@ from ailine_core.table_scan import _cell_ref, _col_index_by_header, _scan_last_c
 
 from ailine_core.postconditions._shared import PIVOT_CAVEAT, _ZERO_TARGET_REASON, _cells_for_shift, _extract_predicate, _row_as_shown, compare_moved_rows, note_stringy_numbers
 
+def source_value_as_projected(bv, src, row: int, col: int):
+    """写す側が**実際に写す値**を返す（2026-09-05・投影法の第一歩）。
+
+    ★★ 実測した事故: 式のある表に様式写像を掛けると **必ず × になる**。
+      元の `金額` が `=B2*C2`、出力は `36000` ── 事後条件は式ビューから読んだ
+      `'=B2*C2'` と比べて「不一致」と判定していた。**正当な変換を事故として扱っていた。**
+
+    ★ 根は BookView が作られた理由そのもの ── 「事後条件が operand を式ビューから
+      読む」は 5 件の欠陥の共通の根で、二重性を 1 箇所に閉じ込めたはずだった。
+      帳票（check_report_per_group）と様式写像（check_format_map）が **6・7 件目**。
+
+    ★★ 投影法として言い直すと: **この写像は「式」を保存せず「値」を保存する。**
+      地図が面積か角度かを選ぶのと同じで、両方は保存できない
+      （写した先には元の列が無いので、式は参照先を失う）。
+      だから比べる相手は**式の文字列ではなく計算後の値**であり、
+      そのことを op の宣言として持つ（下の PRESERVES）。
+
+    ★ 呼び出し側 2 箇所に書き写さない ── ここ 1 本を通す。
+    """
+    formula = bv.cell_formula(row, col)
+    if formula is None:
+        return src.cell(row=row, column=col).value
+    cached = bv.cell_value(row, col)
+    # ★ キャッシュ値が無い（一度も計算されていない式）なら、式のまま返す ──
+    #   「値が無い」と「式はあるがキャッシュ値が無い」を混ぜない（BookView の契約）。
+    return cached if cached is not None else src.cell(row=row, column=col).value
+
+
 def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bool = False) -> tuple:
     """★ W3: header_row は集計元(対象シート。★ 挙動変更#2 より前は常に1枚目だった)の
        見出し行。出力の「集計」シートは SummaryTable ヘルパが毎回新規作成し常に物理1行目が
@@ -467,7 +495,7 @@ def check_report_per_group(path: Path, args: dict, header_row: int = 1,
                         src_row = g["rows"][k]
                     else:
                         src_row = g["rows"][0]
-                    want_v = src.cell(row=src_row, column=ph["col_idx"]).value
+                    want_v = source_value_as_projected(bv, src, src_row, ph["col_idx"])
                     if ph["kind"] == "value":
                         for r in g["rows"]:
                             if src.cell(row=r, column=ph["col_idx"]).value != want_v:
@@ -587,7 +615,7 @@ def check_format_map(path: Path, args: dict, header_row: int = 1,
             declared[f"{get_column_letter(ph['out_col'])}1"] = text
         for out_row, src_row in enumerate(data_rows, start=2):
             for ph in placeholders:
-                src_val = src.cell(row=src_row, column=ph["col_idx"]).value
+                src_val = source_value_as_projected(bv, src, src_row, ph["col_idx"])
                 if ph["whole"]:
                     val = src_val
                 else:

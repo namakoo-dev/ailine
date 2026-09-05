@@ -36,6 +36,8 @@ docs/behavior-corpus/nodes/dsl-pipeline.md 参照）。
 """
 from __future__ import annotations
 
+from ailine_core.projection import render_projection_notice
+
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -236,6 +238,13 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
                                           target_sheet=resolved.get("_target_sheet"))
     label = line[len("解釈: "):]
     print(f"{step_prefix}{line}")
+    # ★★ 2026-09-05（投影法）: 表を別の形へ写す op は、**何を保存しないか**を
+    #   書く前に言う。地図が「メルカトルです」と明記するのと同じ ── 面積が歪むことを
+    #   認めているから書ける。
+    #   ★ ここは単発も複合計画も通る**唯一の合流点**（呼び出し側 2 箇所に配らない）。
+    #   ★ 挙動は 1 ビットも変えない ── 見せるだけ。
+    for _proj_line in render_projection_notice(op):
+        print(f"{step_prefix}{_proj_line}")
     # ★ 挙動変更#3: 衝突で既定へ後退していたら、ここ（解釈行の直後・まだ原本に触れる前）で
     #   3択を聞く。単発(step_prefix=="")だけを対象にする ── 複合計画の途中の段で対象シート
     #   を選び直すと、直前までの段を適用済みの作業コピーの上で計画をやり直すことになり、
