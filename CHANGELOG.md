@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.2.3](https://github.com/namakoo-dev/ailine/compare/v0.2.2...v0.2.3) - 2026-09-05
+
 ## [v0.2.2](https://github.com/namakoo-dev/ailine/compare/v0.2.1...v0.2.2) - 2026-09-04
 
 **測れていなかった 21 op を分母に載せ切った**版。11 commit / 17 ファイル / +3,763 行。
