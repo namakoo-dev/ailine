@@ -87,8 +87,19 @@ def test_two_placeholders_in_one_cell_are_detected(tmp_path):
 
 # --- ① 分母が縮む ★確認済み: 5 行の表が 3 行 ---
 
-def test_blank_cell_in_first_column_does_not_shrink_the_denominator_silently(tmp_path):
-    """A 列が途中で空く表 ── 数え方が縮むなら、その事実が機械で分かること。"""
+def test_blank_cell_in_first_column_no_longer_shrinks_the_denominator(tmp_path):
+    """★★ 盲検（2026-08-24）の①「5 行の表が 3 行と数えられる」── **根治した**。
+
+    ★ 当時の姿: `_scan_last_row` が A 列を上から見て最初の空で止まるため、
+      取引先の名前が 1 行空いているだけで分母が縮み、「データ N 行 → 出力 N 枚」の
+      完全会計が**恒真**になっていた。当時は数え方を変える影響が読めなかったので
+      「縮んだ事実を必ず言う」（detect_first_column_gap）に留めた。
+    ★ 2026-09-05（段B）で数え方そのものを直した ── 走査は「表の幅のどこかに値が
+      在れば行」になり、1 列目が空でも届く。**分母はもう縮まない。**
+    ★ この試験は「言うこと」から「**縮まないこと**」へ役目が変わる。
+      器官が働く形（走査が本当に止まる形）は
+      tests/test_review_wave3.py が別に証明している。
+    """
     p = tmp_path / "gap.xlsx"
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "売上"
     ws.append(["取引先", "金額"])
@@ -97,10 +108,9 @@ def test_blank_cell_in_first_column_does_not_shrink_the_denominator_silently(tmp
     wb.save(p)
     ws2 = openpyxl.load_workbook(p)["売上"]
     scanned = ailine._scan_last_row(ws2, header_row=1)
+    assert scanned == 6, f"5 行の表が {scanned - 1} 行と数えられている（分母が縮んだ）"
     assert hasattr(ailine, "detect_first_column_gap"), "分母の縮みを名指しする器が無い"
-    gap = ailine.detect_first_column_gap(ws2, header_row=1)
-    assert gap is not None, f"5 行の表が {scanned} 行と数えられているのに黙っている"
-    assert "4" in gap or "5" in gap, f"どこで止まったか/実体が何行かを言っていない: {gap}"
+    assert ailine.detect_first_column_gap(ws2, header_row=1) is None,         "届いているのに『縮んだ』と言っている（開示が古い前提のまま）"
 
 
 def test_no_gap_report_when_the_first_column_is_dense(tmp_path):

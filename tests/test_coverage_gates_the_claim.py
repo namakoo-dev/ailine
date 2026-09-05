@@ -94,3 +94,65 @@ def test_a_table_with_a_blank_row_inside_does_not_claim_success():
     assert "✓" not in p.stdout, p.stdout[-500:]
     assert "△" not in p.stdout, p.stdout[-500:]
     assert "機械保証はありません" in p.stdout, p.stdout[-500:]
+
+
+# --- 忠実度ゲートにも宣言を渡す（2026-09-05）--------------------------------
+
+def test_a_declared_removal_explains_one_lost_validation():
+    """★ 「消す」と宣言した回の 1 件減りは、誤報にしない。
+
+    ★★ 実測（弥生の請求書）: 「軽減税率の列を削除して」に対し
+      **⚠ 入力規則 1 件が失われています**が出た。だが中を見ると、消えた 1 件は
+      **まさにその軽減税率の列に付いていたドロップダウン**で、残る 2 件は列の削除に
+      追随して 1 つ左へ正しくずれていた（H→G, J→I・参照先も保たれていた）。
+    ★ 件数だけを比べ、「何を消すと宣言したか」を渡していなかった ──
+      判定に要る三項（依頼・宣言・実体）のうち**宣言が欠けて**いた。今日 3 度目の形。
+    """
+    assert ailine._removal_was_declared("DELETE_COLUMN")
+    assert ailine._removal_was_declared("DELETE_ROWS")
+    assert not ailine._removal_was_declared("SORT")
+    assert not ailine._removal_was_declared(None)
+
+
+def test_the_removal_list_comes_from_the_declaration_not_a_hand_written_list():
+    """★ op 名の if を書かない ── 宣言表から引くこと（列挙は漏れる）。"""
+    src = Path(ailine.__file__).read_text(encoding="utf-8")
+    body = src[src.index("def _removal_was_declared"):src.index("\ndef check_round_trip_fidelity")]
+    assert "OP_WRITE_TARGET" in body and "WRITE_REMOVE" in body
+    assert "DELETE_COLUMN" not in body, "op 名を手で書いている（宣言から引くこと）"
+
+
+def test_two_lost_validations_are_still_reported_even_when_removing(tmp_path):
+    """★ 宣言で説明がつくのは 1 件まで ── 2 件以上減れば、消す回でも言う。"""
+    import openpyxl
+    from openpyxl.worksheet.datavalidation import DataValidation
+    a = tmp_path / "a.xlsx"; b = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws["A1"] = "x"
+    for ref in ("B1:B5", "C1:C5", "D1:D5"):
+        dv = DataValidation(type="list", formula1='"1,2"'); ws.add_data_validation(dv)
+        dv.add(ref)
+    wb.save(a)
+    wb2 = openpyxl.Workbook(); ws2 = wb2.active; ws2["A1"] = "x"
+    dv = DataValidation(type="list", formula1='"1,2"'); ws2.add_data_validation(dv)
+    dv.add("B1:B5")
+    wb2.save(b)
+    got = ailine.check_round_trip_fidelity(a, b, op="DELETE_COLUMN")
+    assert got["lost"], "2 件減っているのに黙っている"
+
+
+def test_one_lost_validation_is_still_reported_when_nothing_was_removed(tmp_path):
+    """★ 消す宣言をしていない op では、1 件でも言う（今までどおり）。"""
+    import openpyxl
+    from openpyxl.worksheet.datavalidation import DataValidation
+    a = tmp_path / "a.xlsx"; b = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active; ws["A1"] = "x"
+    for ref in ("B1:B5", "C1:C5"):
+        dv = DataValidation(type="list", formula1='"1,2"'); ws.add_data_validation(dv)
+        dv.add(ref)
+    wb.save(a)
+    wb2 = openpyxl.Workbook(); ws2 = wb2.active; ws2["A1"] = "x"
+    dv = DataValidation(type="list", formula1='"1,2"'); ws2.add_data_validation(dv)
+    dv.add("B1:B5")
+    wb2.save(b)
+    assert ailine.check_round_trip_fidelity(a, b, op="SORT")["lost"]

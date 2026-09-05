@@ -150,8 +150,16 @@ def test_year_written_in_the_task_is_accepted(tmp_path):
 #   死んだコードを残すのは、番人が在るように見えて鳴らないのと同じなので消した。
 
 
-def test_first_column_gap_is_what_actually_guards_the_report_path(tmp_path):
-    """帳票段のデータ行収集が 1 列目の空欄で止まること、そしてその事実を器が言うこと。"""
+def test_a_row_whose_label_is_blank_is_now_reached(tmp_path):
+    """★ 2026-09-05（段B）の根治 ── 1 列目が空の行に走査が届くこと。
+
+    ★ 旧版はこう凍結していた:
+        assert scanned == 2, "前提: 1 列目の空欄で走査が止まる"
+      その「前提」こそが盲検（2026-08-24）で見つかった事故の原因で、当時は
+      **数え方を変えると全機構の前提が動く**ため「縮んだ事実を言う」に留めていた。
+    ★ 段B で数え方そのものを直したので、いまは届く ── **器官が黙るのが正しい**。
+      帳票（取引先ごとに 1 枚）で、名前が空の行が落ちなくなる。
+    """
     p = tmp_path / "gap.xlsx"
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "売上"
     ws.append(["取引先", "金額"])
@@ -159,7 +167,23 @@ def test_first_column_gap_is_what_actually_guards_the_report_path(tmp_path):
         ws.append([name, amt])
     wb.save(p)
     ws2 = openpyxl.load_workbook(p)["売上"]
-    scanned = ailine._scan_last_row(ws2, header_row=1)
-    assert scanned == 2, "前提: 1 列目の空欄で走査が止まる（ラベル空白の除外に到達しない理由）"
+    assert ailine._scan_last_row(ws2, header_row=1) == 4, "1 列目が空の行に届いていない"
+    assert ailine.detect_first_column_gap(ws2, header_row=1) is None,         "届いているのに『縮んだ』と言っている（開示が古い前提のまま）"
+
+
+def test_the_gap_organ_still_speaks_when_the_scan_really_stops(tmp_path):
+    """★ 器官を消していないこと ── 走査が**本当に**止まる形では、いまも名指しする。
+
+    空行で切れた先にデータが在る形（表の終わりと見分けられない）。
+    """
+    p = tmp_path / "gap2.xlsx"
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "売上"
+    ws.append(["取引先", "金額"])
+    ws.append(["甲", 100])
+    ws.append([None, None])
+    ws.append(["乙", 200])
+    wb.save(p)
+    ws2 = openpyxl.load_workbook(p)["売上"]
+    assert ailine._scan_last_row(ws2, header_row=1) == 2, "空行で切れていない"
     gap = ailine.detect_first_column_gap(ws2, header_row=1)
     assert gap and "4" in gap, f"分母が縮んだ事実を言っていない: {gap}"

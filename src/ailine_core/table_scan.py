@@ -59,13 +59,66 @@ def _col_index_by_header(ws, name: str, header_row: int = 1):
             return c
         c += 1
 
+def _row_has_any_value(ws, row: int, last_col: int) -> bool:
+    """その行に、表の幅の中で 1 つでも値が在るか（2026-09-05）。"""
+    for c in range(1, last_col + 1):
+        if ws.cell(row=row, column=c).value not in (None, ""):
+            return True
+    return False
+
+
 def _scan_last_row(ws, key_col: int = 1, header_row: int = 1) -> int:
-    """key_col(1起点)を上から走査した最終データ行（見出し行を除く）。データが無ければ
-       header_row。★ W3: header_row 省略時は旧挙動（見出し=1行目・データ開始=2行目）と同一。"""
+    """データの最終行（見出し行を除く）。データが無ければ header_row。
+
+    ★★ 2026-09-05（実物の請求書で実測・段B）: それまでは
+      **key_col（既定 1 列目）を上から見て、最初の空で止める**規則だった。
+      帳票はこれを満たさない ──
+
+        ・A 列が余白の請求書 → 1 行目から空なので **0 行**と読む（実測: rows_scanned=0）
+        ・日付が最初の行にしか無い明細 → 2 行目で止まる
+        ・小計や続きの行で 1 列目が空く → そこで止まる
+
+      ★ そして「別のキー列を選び直す」では解けない ── 実物では**どの 1 列を見ても
+        明細の全行を覆えない**（日付は先頭行だけ、品名は全行、数量は空の行がある）。
+
+      ★ 直し方: 「**表の幅のどこかに値が在れば行**」に変える。終わりは
+        **空行が続いたら**とする（表の下の別の表を巻き込まないため）。
+
+      ★ 呼び出し側 23 箇所には配らない ── 規則はこの 1 本の中で変える
+        （同じ判断が N 箇所にあると M 箇所だけ直る、を今日 4 回踏んでいる）。
+      ★ key_col は互換のため受け取り続けるが、**空行の判定には使わない**。
+        1 列目だけを見る呼び出しが残っていても、規則はここで統一される。
+    """
+    last_col = _scan_last_col(ws, header_row=header_row)
+    if last_col <= 0:
+        # ★ 見出しが読めない時だけ、従来どおり key_col を見る（退行させない）
+        r = header_row + 1
+        while ws.cell(row=r, column=key_col).value not in (None, ""):
+            r += 1
+        return r - 1
+    # ★★ 空行が **1 行**でも在れば、そこが表の終わり。
+    #   最初 GAP_ROWS=2 にしたら、既存の番人が捕まえた ──
+    #   「空行で区切られた 2 つの塊」を続けて読むと **4600 == 1200+3400** が当たり、
+    #   合計行の誤検出が起きる（tests/test_sum_identity.py の F9）。
+    #   ★ 空行 1 つは Excel の表では**十分に強い区切り**で、跨いで読む理由が無い。
+    #   ★ 「表の途中に空行がある」場合はそこで切れるが、それは**今までと同じ**
+    #     （旧走査も 1 列目の空で止まっていた）── 段A がそれを正直に開示する。
+    GAP_ROWS = 1
+    physical, _ = _used_extent(ws)
+    last = header_row
+    gap = 0
     r = header_row + 1
-    while ws.cell(row=r, column=key_col).value not in (None, ""):
+    while r <= physical:
+        if _row_has_any_value(ws, r, last_col):
+            last = r
+            gap = 0
+        else:
+            gap += 1
+            if gap >= GAP_ROWS:
+                break
         r += 1
-    return r - 1
+    return last
+
 
 def _used_extent(ws) -> tuple:
     """シートの**使用範囲**（行数, 列数）。中身のあるセルが 1 つも無ければ (0, 0)。
@@ -89,45 +142,117 @@ def _used_extent(ws) -> tuple:
     return last_r, last_c
 
 def _scan_last_col(ws, header_row: int = 1) -> int:
-    """見出し行(既定は物理1行目)を左から走査した最終列（1起点）。
-       ★ W3: _col_index_by_header と同じ規則で、子見出し行(header_row>1)の空欄列は
-       真上の行を遡って引き継ぐ（多段見出しの先頭列対策）。"""
+    """見出し行の最終列（1 起点）。見出しが 1 つも無ければ 0。
+
+    ★★ 2026-09-05（段B）: それまでは**左から見て最初の空で止める**規則で、
+      A 列が余白の請求書では **0 列**を返していた（表が読めない真因の片割れ）。
+      ★ book_columns（段C-1）と**同じ規則**にする ── 結合セルは範囲の左上から引き、
+        空欄では打ち切らず、空が続いたらそこが右端。
+      ★ 規則を 2 箇所に書き写さない: 名前の解決は book_columns、範囲の解決はここ、と
+        役目は違うが、**「どこまでが表か」の線は 1 つ**でなければならない。
+        だから同じ定数と同じ手順をここに置き、番人が両者の一致を縛る。
+    ★ W3: 子見出し行（header_row>1）の空欄列は真上を遡って引き継ぐ（多段見出し）。
+    """
+    GAP_COLS = 3
+
     def _effective(c: int):
         v = ws.cell(row=header_row, column=c).value
+        if v in (None, ""):
+            v = _merged_value(ws, header_row, c)
         if v in (None, "") and header_row > 1:
             for up in range(header_row - 1, 0, -1):
                 uv = ws.cell(row=up, column=c).value
+                if uv in (None, ""):
+                    uv = _merged_value(ws, up, c)
                 if uv not in (None, ""):
                     return uv
         return v
-    c = 1
-    while _effective(c) not in (None, ""):
-        c += 1
-    return c - 1
+
+    _, physical = _used_extent(ws)
+    last = 0
+    gap = 0
+    for c in range(1, physical + 1):
+        if _effective(c) not in (None, ""):
+            last = c
+            gap = 0
+        else:
+            gap += 1
+            if gap >= GAP_COLS:
+                break
+    return last
+
+
+def _merged_value(ws, row: int, col: int):
+    """結合セルの中なら範囲の左上の値（2026-09-05・book_columns と同じ規則）。"""
+    try:
+        for rng in getattr(ws, "merged_cells", None).ranges:
+            if rng.min_row <= row <= rng.max_row and rng.min_col <= col <= rng.max_col:
+                return ws.cell(row=rng.min_row, column=rng.min_col).value
+    except Exception:
+        return None
+    return None
+
+
+def _rows_beyond_the_table(ws, header_row: int, last_row: int, last_col: int) -> tuple:
+    """走査が終わった先に在る行を、「表の続きらしい」と「表の外」に分ける（2026-09-05）。
+
+    ★★ なぜ要るか（実物の請求書で実測）: 走査は 41 行目（税区分の末尾）で正しく
+      終わっているのに、物理の使用範囲は 75 行まで在る（備考・振込先・広告文）。
+      その差 34 行を「見ていない行」と数えると、**帳票では ✓ が永久に出ない**。
+      備考欄や広告文は**処理の対象ではない**ので、見落としではない。
+
+    ★ だが「表の外」と決めつけると危ない ── 表の**途中**に空行があって走査が
+      そこで止まった場合、その先はまさに見落としだ（2026-09-05 の朝に直した事故）。
+    ★ 見分け方（実測で決めた・Namakoo の判断 A′）: **表と同じ形をしているか**。
+      表の行が最大 W 列を埋めているとき、先の行が W の半分より多く埋めていれば
+      「表の続きかもしれない」とみなす。
+        実測: ⑩途中に空行 → 3/3 で止める（正しい）／実物の備考 → 1/7 で通す（正しい）／
+              下に 2 列の別表 → 2/3 で止める（**安全側に倒れる**・嘘はつかない）
+    ★ 迷ったら止める。見落としを隠すより、うるさい方がよい。
+    """
+    def fill(r: int) -> int:
+        return sum(1 for c in range(1, last_col + 1)
+                   if ws.cell(row=r, column=c).value not in (None, ""))
+
+    body = [fill(r) for r in range(header_row + 1, last_row + 1)]
+    width = max(body) if body else 0
+    physical, _ = _used_extent(ws)
+    like_table, outside = [], []
+    for r in range(last_row + 1, physical + 1):
+        n = fill(r)
+        if n == 0:
+            continue
+        (like_table if n * 2 > width else outside).append(r)
+    return like_table, outside
+
 
 def extent_gap(ws, header_row: int = 1, key_col: int = 1) -> dict:
-    """走査で得た範囲と、**物理の使用範囲**の食い違いを数える。
+    """走査で得た範囲と、**その先に在る表らしい行**の食い違いを数える。
 
     ★ 2026-08-25（塊②）: 中核 op の盲検が実測した 2 件の根。
-      行: `_scan_last_row` は key_col を上から見て**最初の空で止まる**。末尾に
-          その列が空の行があると、処理からも分母からも消える（「3行中1行が一致」の
-          真の分母は 5 だった）。★ 表の**途中**の空きは ⚠ が出るのに、
-          **末尾だけ鳴らない** ── 警告条件が「下方向に中身があるか」なので原理的に発火しない。
-      列: 並べ替えの範囲は見出し由来（`len(headers)-1`）なので、見出しの無い列は
-          範囲外に落ちる。実測では D 列だけ動かず、**全行で備考が別商品の物に付け替わった**。
+      行: `_scan_last_row` が key_col を上から見て最初の空で止まり、末尾の行が
+          処理からも分母からも消えた。
+      列: 並べ替えの範囲が見出し由来なので、見出しの無い列が範囲外に落ちた。
 
-    ★ 物理の使用範囲は「値のあるセルの最大位置」で測る（_used_extent と同じ規則。
-      openpyxl の max_row/max_column は書式だけのセルを含んで大きく出るため使わない）。
+    ★★ 2026-09-05（段B・A′）: 分母を**物理の使用範囲**から
+      「**走査の先に在る、表と同じ形の行**」に狭めた。
+      それまでは備考欄・振込先・広告文まで「見ていない行」と数えており、
+      帳票では ✓ が原理的に出なかった（実測: 実物で 34 行が誤って計上）。
+      ★ 狭めても危険は増えない ── 表と似た形の行は必ず数える（_rows_beyond_the_table）。
+      ★ 表の外に在る行は rows_outside として**別に返す**。黙らせるのではなく分けて言う。
     戻り値の rows_* / cols_* はいずれも**見出し行を除いたデータの数**。
     """
     phys_r, phys_c = _used_extent(ws)
-    rows_physical = max(0, phys_r - header_row)
     cols_physical = max(0, phys_c)
-    rows_scanned = max(0, _scan_last_row(ws, key_col=key_col, header_row=header_row) - header_row)
+    last_row = _scan_last_row(ws, key_col=key_col, header_row=header_row)
+    rows_scanned = max(0, last_row - header_row)
     cols_scanned = max(0, _scan_last_col(ws, header_row=header_row))
+    like_table, outside = _rows_beyond_the_table(ws, header_row, last_row, cols_scanned or phys_c)
     return {
-        "rows_scanned": rows_scanned, "rows_physical": rows_physical,
-        "rows_missing": max(0, rows_physical - rows_scanned),
+        "rows_scanned": rows_scanned,
+        "rows_physical": max(0, phys_r - header_row),
+        "rows_missing": len(like_table),
+        "rows_outside": len(outside),
         "cols_scanned": cols_scanned, "cols_physical": cols_physical,
         "cols_missing": max(0, cols_physical - cols_scanned),
     }

@@ -6678,31 +6678,38 @@ def duplicate_name_warning(col: str, values) -> str | None:
 
 
 def detect_first_column_gap(ws, header_row: int = 1, look_ahead: int = 200) -> str | None:
-    """A 列（1列目）を上から走査して止まった位置より**下にまだ中身がある**なら、その事実を
-       名指しする 1 文を返す（無ければ None）。
+    """1列目が途中で空いている表で、**走査がそこで止まっていたら**その事実を名指しする。
+       止まっていなければ None（＝黙る）。
 
-    ★ なぜ在るか（盲検レビュー・2026-08-24）: データ行の数え方（_scan_last_row）は
-      1 列目を上から見て最初の空セルで打ち切る。ところが**計画側も検証側も同じ関数**を
-      使うので、「データ N 行 → 出力 N 枚」の完全会計が**恒真**になっていた。
-      実測: 5 行の表が 3 行と数えられる。30 社の一覧で 12 行目の顧客名が空（結合セルの
-      2 行目・月の区切りの空行は普通の書き方）なら、10 枚しか出ないのに ✓ が出る。
-    ★ 直し方の選択: 数え方そのものを変えると、合計行の除外など既存の全機構の前提が動く。
-      ここでは**縮んだ事実を必ず言う**に留める（★ 付きなので決裁③で ✓→△ に降格する）。
-      「黙って少なく処理する」から「少なく処理したと言う」へ ── これが最小の正直さ。
+    ★ なぜ在ったか（盲検レビュー・2026-08-24）: データ行の数え方（_scan_last_row）は
+      1 列目を上から見て最初の空セルで打ち切っていた。ところが**計画側も検証側も同じ
+      関数**を使うので、「データ N 行 → 出力 N 枚」の完全会計が**恒真**になっていた。
+      実測: 5 行の表が 3 行と数えられる。30 社の一覧で 12 行目の顧客名が空なら、
+      10 枚しか出ないのに ✓ が出る。
+    ★ 当時の判断: 「数え方そのものを変えると、合計行の除外など既存の全機構の前提が動く」
+      ので、**縮んだ事実を必ず言う**に留めた（★ 付きなので ✓→△ に降格する）。
+
+    ★★ 2026-09-05（段B）で**数え方そのものを直した** ── 走査は「表の幅のどこかに値が
+      在れば行」になり、1 列目が空でも届く。だからこの器官は**多くの場合もう黙る**。
+      ★ 消さないのは、走査がまだ止まる形（空行で切れる等）が残っているため ──
+        その時だけ鳴る。**実測して黙らせる**のであって、黙るように書き換えない。
+      ★ 文面も直した: 旧版は「データ行を N 行と数えました」と**旧走査の数**を言って
+        いたので、走査を直した後は**嘘になっていた**（実測で発覚）。
+        いまは実際の走査結果から数える。
     """
-    stop = header_row
-    while ws.cell(row=stop + 1, column=1).value not in (None, ""):
-        stop += 1
-    counted = stop - header_row
+    scanned_last = _scan_last_row(ws, header_row=header_row)
+    counted = scanned_last - header_row
     last_seen = None
-    for r in range(stop + 1, stop + 1 + look_ahead):
-        if ws.cell(row=r, column=1).value not in (None, ""):
-            last_seen = r
+    for r in range(scanned_last + 1, scanned_last + 1 + look_ahead):
+        for c in range(1, (ws.max_column or 1) + 1):
+            if ws.cell(row=r, column=c).value not in (None, ""):
+                last_seen = r
+                break
     if last_seen is None:
         return None
-    return (f"★ 疑わしい: 1列目が {stop + 1} 行目で空いているため、データ行を {counted} 行と数えました"
-            f"（{last_seen} 行目にはまだ中身があります）。"
-            f"1列目に空欄がある表は、その手前までしか処理されません")
+    return (f"★ 疑わしい: 走査が {scanned_last} 行目で止まり、データ行を {counted} 行と"
+            f"数えました（{last_seen} 行目にはまだ中身があります）。"
+            f"表の途中が空いていると、その手前までしか処理されません")
 
 
 # ★ 止血1/2 共通の文言。事後条件チェッカーは検証対象0件を絶対に「合格」にしない
@@ -6780,6 +6787,12 @@ def note_extent_gap(out_book: Path, resolved_args: dict, header_row: int = 1) ->
         #   知らないなら「操作した範囲を全部確かめた」とは言えない ── この旗を
         #   _finish_apply が 1 箇所で読み、✓/△ を名乗らせない。
         _mark_coverage_incomplete(resolved_args, _why)
+    if gap.get("rows_outside"):
+        # ★★ 2026-09-05（A′）: 表の外に在る行は分母から外したが、**黙らせない**。
+        #   備考欄・振込先・広告文など「処理の対象でないもの」を、対象外だと明示する。
+        #   ★ ⚠ を付けない ── 疑わしいのではなく事実の開示なので、✓ を降ろす理由にしない。
+        note_unverified(resolved_args, 0, "")   # 形をそろえるだけ（0 件は無視される）
+        resolved_args.setdefault("_outside_rows", []).append(int(gap["rows_outside"]))
     if gap["cols_missing"]:
         # ★ 2026-08-27 に文言を正した: 「見出しの無い列が N 列」は不正確だった。
         #   走査は見出し行を左から見て**最初の空で止まる**ので、空きの右にある列は
@@ -9792,9 +9805,31 @@ def check_openpyxl_fidelity_loss(original: Path, normalized: Path) -> list:
     return out
 
 
-def check_round_trip_fidelity(original: Path, normalized: Path) -> dict:
+def _removal_was_declared(op: str | None) -> bool:
+    """この op は「消す」と宣言しているか（2026-09-05）。
+
+    ★ op 名の if を書かない ── 宣言表（OP_WRITE_TARGET）から引く。
+      消す op が増えても自動で正しい側に入る（列挙は漏れる）。
+    """
+    wt = OP_WRITE_TARGET.get(op or "")
+    return WRITE_REMOVE in (getattr(wt, "writes", None) or ())
+
+
+def check_round_trip_fidelity(original: Path, normalized: Path,
+                               op: str | None = None) -> dict:
     """往復忠実度ゲート本体。{"lost": bool, "items": [{"label":str,"count":int}, ...]}。
-       ★ history.jsonl の fidelity フィールドにそのまま記録する形（機械可読）。"""
+       ★ history.jsonl の fidelity フィールドにそのまま記録する形（機械可読）。
+
+    ★★ 2026-09-05（実物の請求書で実測）: 「軽減税率の列を削除して」に対し
+      **⚠ 入力規則 1 件が失われています**が出た。だが中を見ると、消えた 1 件は
+      **まさにその軽減税率の列に付いていたドロップダウン**で、残る 2 件は列の削除に
+      追随して 1 つ左へ正しくずれていた（H→G, J→I・参照先 $B$71:$B$75 も保たれていた）。
+      ★ **誤報**だった ── 件数だけを比べ、「何を消すと宣言したか」を渡していなかった。
+        判定に要る三項（依頼・宣言・実体）のうち**宣言が欠けて**いた。
+    ★ 消すと宣言した op では、**1 件ぶんの減りは失われたのでなく頼まれたこと**。
+      2 件以上減っていれば宣言では説明できないので、今までどおり言う。
+    ★ 消す宣言をしていない op では 1 件でも言う（今までと同じ）。
+    """
     items = []
     seen_labels = set()
     for cat, n in check_zip_fidelity_loss(original, normalized):
@@ -9807,8 +9842,13 @@ def check_round_trip_fidelity(original: Path, normalized: Path) -> dict:
         if cat in seen_labels:
             continue
         items.append({"label": cat, "count": n, "before": b, "after": a})
+    _removal = _removal_was_declared(op)
     for cat, b, a in check_openpyxl_fidelity_loss(original, normalized):
-        items.append({"label": cat, "count": b - a, "before": b, "after": a})
+        lost = b - a
+        if _removal and lost <= 1:
+            # ★ 消すと宣言した回の 1 件減りは、宣言で説明がつく（誤報にしない）。
+            continue
+        items.append({"label": cat, "count": lost, "before": b, "after": a})
     return {"lost": bool(items), "items": items}
 
 
@@ -10699,7 +10739,8 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         machine_verified = False
     # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。
     #   --copy でも --inplace でも成果物は out_book なので、1 本の測定で両経路を覆う。
-    _output_fidelity = check_round_trip_fidelity(book, out_book)
+    # ★ 2026-09-05: 宣言（何を消すと言ったか）を渡す ── 件数だけでは誤報になる。
+    _output_fidelity = check_round_trip_fidelity(book, out_book, op=result.get("op"))
     # ★★ 2026-08-25（復元の中10・盲検）: 原本に被せる**前**に「そもそも開けるか」を見る。
     #   旧版は反映の関門に「開ける xlsx か」の検査が無く、壊れた成果物（zip として
     #   読めない等）をそのまま原本へ被せてから「読み戻して確認できませんでした」と

@@ -1,9 +1,14 @@
 # 塊②（2026-08-25）── 分母を「走査」でなく「物理の使用範囲」から作る。
 #
-# ★ 中核 op の盲検が実測した 2 件（致命1・致命5）。検分者の処方をそのまま採る:
-#   「除外そのものを ⚠ に昇格させ、分母を必ず入力側（物理行数・物理列数）から作れば、
-#     致命 1・5・6 は同時に落ちる」
-#
+# ★★ 2026-09-05（段B）で**原因の側を直した**ので、検体を作り直した。
+#   それまでの検体は「末尾に **1 列目だけ空**の行がある表」だった ── 走査が A 列を
+#   上から見て最初の空で止まる規則だったので、そこで食い違いが起きた。
+#   段B で走査を「**表の幅のどこかに値が在れば行**」に変えたため、この形はもう
+#   食い違わない（scanned 4/4）。★ **それは器官が壊れたのではなく、症状が消えた**。
+#   だから検体を「今の走査でも届かない形」へ替え、器官が働くことを証明し続ける:
+#     ・空行が 3 つ以上あって、その先にデータが在る（表の終わりと見分けられない）
+#     ・見出しの右に離れて在る列
+#   ★ そして旧検体は「**今は届く**」ことを測る側に回した（根治の証拠として残す）。
 # 致命1: 見出しの無い列だけ置き去りになり、全行が入れ替わる
 #   D1 が空で D2..D5 にデータがある表を並べ替えると、範囲が見出し由来（A〜C）なので
 #   D 列だけ動かず、**全行で備考が別の商品の物に付け替わる**。
@@ -59,15 +64,25 @@ def test_extent_gap_sees_columns_beyond_the_headers(tmp_path):
     assert gap["cols_missing"] == 1, gap
 
 
-def test_extent_gap_sees_rows_below_an_empty_first_cell(tmp_path):
-    """末尾に A 列が空の行 ── A 列走査は 2 行、物理は 4 行。"""
+def test_extent_gap_sees_rows_beyond_a_run_of_blank_rows(tmp_path):
+    """★ 空行が続いた先にデータ ── 走査は「表が終わった」と読むが、物理には続きが在る。
+
+    ★ 2026-09-05（段B）で検体を替えた。旧版は「末尾に **1 列目だけ空**の行」で、
+      当時の走査（A 列を上から見て最初の空で止まる）ならそこで食い違った。
+      いまの走査は表の幅のどこかに値が在れば行と数えるので、その形はもう届く
+      （下の test_a_trailing_row_with_an_empty_first_cell_is_now_reached が証拠）。
+    ★ 器官が要らなくなったのではない ── **表の終わりと見分けられない形**では
+      いまも食い違う。証明はそちらへ移す。
+    """
     p = _book(tmp_path, [["商品", "単価"], ["a", 120], ["b", 200],
-                          [None, 1500], [None, 2000]])
+                          [None, None], [None, None], [None, None], ["c", 300]])
     wb = openpyxl.load_workbook(p)
     gap = ailine.extent_gap(wb["売上"], header_row=1)
     assert gap["rows_scanned"] == 2, gap
-    assert gap["rows_physical"] == 4, gap
-    assert gap["rows_missing"] == 2, gap
+    # ★ 2026-09-05（A′）: 分母は「表と同じ形の行」なので、
+    #   物理の使用範囲そのものではない。数でなく**見落としが在ること**を測る。
+    assert gap["rows_scanned"] == 2, gap
+    assert gap["rows_missing"] > 0, gap
 
 
 def test_extent_gap_is_silent_on_a_tidy_table(tmp_path):
@@ -116,13 +131,13 @@ def test_sort_passes_when_all_columns_moved_together(tmp_path):
 def test_trailing_rows_are_named_not_swallowed(tmp_path):
     """★ 表の途中の空きは鳴るのに、末尾だけ鳴らなかった。"""
     p = _book(tmp_path, [["商品", "単価"], ["a", 120], ["b", 200],
-                          [None, 1500], [None, 2000]])
+                          [None, None], [None, None], [None, None], ["c", 300]])
     args = {"col": "単価", "order": "desc"}
     # ★ 2026-08-25: 本番の合流点で測る。以前は check_sort を直に呼んでいたが、
     #   食い違いを数えるのは run_postcondition の入口へ畳んだ（全 op に効かせるため）。
     ailine.run_postcondition("SORT", p, args)
-    assert args.get("_unverified"), "末尾の 2 行が黙って消えた"
-    assert any("2 行" in str(u["rows"]) or u["rows"] == 2 for u in args["_unverified"]), \
+    assert args.get("_unverified"), "空行の先の行が黙って消えた"
+    assert any(u["rows"] > 0 for u in args["_unverified"]), \
         args["_unverified"]
 
 
@@ -139,11 +154,11 @@ def test_every_op_notices_the_trailing_gap(tmp_path, op):
        事後条件の**判定**は問わない ── 問うのは「見ていない行を数えたか」だけ。
     """
     p = _book(tmp_path, [["商品", "単価"], ["a", 120], ["b", 200],
-                          [None, 1500], [None, 2000]])
+                          [None, None], [None, None], [None, None], ["c", 300]])
     args = {"col": "単価", "order": "desc", "value_col": "単価"}
     ailine.run_postcondition(op, p, args, source_book=p)
-    assert args.get("_unverified"), f"{op}: 末尾の 2 行を見ていないのに黙っている"
-    assert any(u["rows"] == 2 for u in args["_unverified"]), args["_unverified"]
+    assert args.get("_unverified"), f"{op}: 空行の先の行を見ていないのに黙っている"
+    assert any(u["rows"] > 0 for u in args["_unverified"]), args["_unverified"]
 
 
 @pytest.mark.parametrize("op", sorted(ailine.POSTCONDITIONS) + ["CHART"])
@@ -153,3 +168,33 @@ def test_no_op_cries_wolf_on_a_tidy_table(tmp_path, op):
     args = {"col": "単価", "order": "desc", "value_col": "単価"}
     ailine.run_postcondition(op, p, args, source_book=p)
     assert not args.get("_unverified"), f"{op}: 食い違いが無いのに鳴った: {args['_unverified']}"
+
+def test_a_trailing_row_with_an_empty_first_cell_is_now_reached(tmp_path):
+    """★ 2026-09-05（段B）の根治の証拠 ── 旧検体が**もう食い違わない**こと。
+
+    ★ 2026-08-25 の盲検（致命5）はこの形で見つかった:
+      「_scan_last_row は A 列を上から見て最初の空で止まる。末尾に A 列が空の行が
+        あると、その行は処理されず、**分母にも数えられない**」
+    ★ 段B で走査を「表の幅のどこかに値が在れば行」に変えたので、いま A 列が空でも
+      届く。**器官が黙るのが正しい** ── 症状が消えたのであって、器官は上の検体で
+      まだ働いている。
+    """
+    p = _book(tmp_path, [["商品", "単価"], ["a", 120], ["b", 200],
+                          [None, 1500], [None, 2000]])
+    wb = openpyxl.load_workbook(p)
+    gap = ailine.extent_gap(wb["売上"], header_row=1)
+    assert gap["rows_scanned"] == 4, gap
+    assert gap["rows_missing"] == 0, "1 列目が空の末尾行に、走査が届いていない"
+
+
+def test_the_organ_still_sees_a_column_that_sits_apart(tmp_path):
+    """★ 見出しの右に離れて在る列は、いまも食い違いとして名指しされること。"""
+    p = _book(tmp_path, [["商品", "単価"], ["a", 120], ["b", 200]])
+    wb = openpyxl.load_workbook(p)
+    ws = wb["売上"]
+    ws.cell(1, 8, "離れた見出し")
+    ws.cell(2, 8, "値")
+    wb.save(p)
+    gap = ailine.extent_gap(openpyxl.load_workbook(p)["売上"], header_row=1)
+    assert gap["cols_missing"] > 0, gap
+
