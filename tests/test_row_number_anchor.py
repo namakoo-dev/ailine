@@ -34,6 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 from ailine_core import subject  # noqa: E402
+from _reread_home import exits_with_three  # noqa: E402 ── ★ 「抜ける」は字面でなく意味で見る
 from _product_source import count_in_product, product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 HEADERS = ["取引先", "項目", "件数"]
@@ -201,5 +202,8 @@ def test_the_switch_is_wired_to_refuse_when_values_cannot_be_decided():
     assert "？ 入れる値を依頼文から決められません" in seg, "値が無い回に断りが無い"
     assert "空の行が欲しいなら" in seg, "空行が欲しい人への出口が無い"
     # ★ 断りの直後に必ず抜けること（黙って先へ進まない）
+    # ★★ 2026-09-05: ここは `"return 3"` という**字面**で守っていたが、読み直しの層を
+    #   切り出して `return plan, 3` になった瞬間に外れた ── 不変（抜けること）は
+    #   保たれているのに鳴る番人は、リファクタのたびに緩められる。意味で見る。
     j = seg.index("？ 入れる値を依頼文から決められません")
-    assert "return 3" in seg[j:j + 700], seg[j:j + 700]
+    assert exits_with_three(seg[j:j + 700]), seg[j:j + 700]

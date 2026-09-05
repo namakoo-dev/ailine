@@ -32,11 +32,24 @@ import ailine  # noqa: E402
 SRC = inspect.getsource(ailine)
 
 
+#: 読み直しの層が住んでいる関数（★ 2026-09-05 に _translate_and_dispatch から切り出した。
+#: この台帳は名前で場所を知るので、移した時に**黙らず赤くなった** ── そのまま向け直す）
+HOME = "def _reread_the_plan("
+
+
 def _reread_segment() -> list:
     lines = SRC.splitlines()
-    i0 = next(i for i, l in enumerate(lines) if l.startswith("def _translate_and_dispatch("))
+    i0 = next(i for i, l in enumerate(lines) if l.startswith(HOME))
     i1 = next(i for i in range(i0 + 1, len(lines)) if lines[i].startswith("def "))
     return lines[i0:i1]
+
+
+def test_the_layer_lives_in_its_own_function():
+    """★ 層がまた本体へ溶けていないこと（溶けると、この台帳の分母が黙って 0 になる）。"""
+    assert any(l.startswith(HOME) for l in SRC.splitlines()), (
+        f"{HOME} が無い ── 読み直しの層が別の場所へ移ったなら、HOME を向け直すこと")
+    seg = _reread_segment()
+    assert len(seg) > 100, f"層が {len(seg)} 行しか無い（切り出しが壊れている疑い）"
 
 
 def _blocks() -> list:
@@ -77,7 +90,27 @@ COVERED = {
                  "test_the_replace_reread_does_not_overwrite_the_whole_column",
     "条件つき書換": "tests/test_reread_specimens_wave2.py::"
                      "test_the_conditional_write_reread_fires_on_the_split_plan",
+    # --- 第 3 波（2026-09-05・同日）── 残り 7 塊のうち 5 塊 -----------------------
+    "一括書換→1セル書換": "tests/test_reread_specimens_wave3.py::"
+                            "test_a_whole_column_write_is_narrowed_to_one_cell",
+    "書式の対象を1セルに": "tests/test_reread_specimens_wave3.py::"
+                            "test_formatting_a_named_value_stays_in_one_cell",
+    "行削除": "tests/test_reread_specimens_wave3.py::"
+               "test_the_row_removal_reread_resolves_the_row_by_name",
+    "行挿入→行追加": "tests/test_reread_specimens_wave3.py::"
+                      "test_an_empty_row_insert_becomes_a_row_with_values",
+    "列の入れ替え": "tests/test_reread_specimens_wave3.py::"
+                     "test_the_column_swap_reread_fires_without_the_llm",
 }
+
+#: ★ まだ検体の無い塊（名指しで残す ── 「残り 2」を数で書くと腐るので、**何が**残って
+#:   いるかを書く）。畳む（表に集約する）のは、ここが空になってから。
+UNCOVERED_NOTE = (
+    "① 依頼文が列まで名指しできる回の『1セル書換』（塊 1 ── 塊 2 と出口が同じで、"
+    "  どちらが拾ったかを画面から区別できない。区別できる検体の形がまだ無い）"
+    "／② 『抽出』の 2 本目（塊 5 ── 1 本目と同じ条件式を共有していて、"
+    "  片方だけを通す入力が見つかっていない）"
+)
 
 
 def test_the_number_of_reread_blocks_is_watched():
@@ -110,11 +143,15 @@ def test_the_covered_specimens_exist():
 
 
 def test_the_backlog_is_visible():
-    """★ 分母を出す ── 15 塊のうち、配線を通す検体を持つのは 8 塊（第 2 波で 3 → 8）。
+    """★ 分母を出す ── 15 塊のうち 13 塊に配線を通す検体がある（3 → 8 → 13）。
+
+    ★ 残る 2 塊は UNCOVERED_NOTE に**名指しで**書く。数だけ書くと「あと 2」が
+      独り歩きして、何が残っているか誰も言えなくなる。
 
     ★ これは「12 塊が壊れている」という意味ではない。**測っていない**という意味。
       減らしていくための数として置く（増えたら赤くする）。
     """
     n = len(_blocks())
     assert len(COVERED) <= n
-    assert len(COVERED) >= 8, f"配線を通す検体が減っている（{len(COVERED)} 件）"
+    assert len(COVERED) >= 13, f"配線を通す検体が減っている（{len(COVERED)} 件）"
+    assert UNCOVERED_NOTE.strip(), "残っている塊を名指しする文が空"

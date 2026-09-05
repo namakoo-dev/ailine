@@ -11536,147 +11536,24 @@ def _sheet_looks_like_template(source_book: Path, sheet_name: str) -> bool:
         wb.close()
 
 
-def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path,
-                             struct_dump: dict, sheets: list) -> int:
-    """対象シートが決まった後の残り（見出し行 → 翻訳 → 計画の振り分け）。
-       ★ 挙動変更#3 のために _cmd_run_dispatch から切り出した: シート名の衝突の3択で
-       「もう一方のシートを見てみる」が選ばれたとき、a._target_sheet を差し替えて
-       **翻訳からやり直す**ため（見出し行の検出も翻訳結果も対象シートに依存するので、
-       翻訳を使い回すのでは「やり直し」にならない）。
-       ★ a._reuse_translation が積まれている場合だけ翻訳を省く ── 3択の②で
-       プレビュー用に一度翻訳したものを、y の後の本番実行で使い回すため（同じ対象シート・
-       同じ依頼文に対して ollama を2回叩かない）。"""
-    target_sheet = getattr(a, "_target_sheet", None)
-    forced_header_row = getattr(a, "header_row", None)
-    if forced_header_row:
-        # ★ W8a 項目3: --header-row 指定時は検出(StructDump ヒューリスティクス)を丸ごと
-        #   スキップし、その行を対象シートの見出しとして採用する（他シートは既定1行目のまま
-        #   ＝ resolve_header_rows の既定と同じ扱い）。CLARIFY には絶対に落ちない。
-        header_rows = {s: 1 for s in sheets}
-        if target_sheet:
-            header_rows[target_sheet] = forced_header_row
-        clarify_q = None
-    else:
-        header_rows, clarify_q = resolve_header_rows(struct_dump, sheets, target_sheet=target_sheet)
-        # ★ 様式写像段/帳票段: 依頼文が雛形シートを名指しすると、op判明**前**の一般解決
-        #   (resolve_target_sheet)が「依頼文が言及した唯一のシート」＝雛形をデータシートと
-        #   誤認する（_announce_report_per_row_target_sheet/_announce_format_map_target_sheet
-        #   と同型のバグ）。雛形は小さな構造（見出し+印だけの数行）のことが多く、見出し行
-        #   検出が確信を持てず CLARIFY に落ちて翻訳（op判明）にすら届かないことがある実機の
-        #   再現形 ── DESIGN-20260824-format-map.md「template_sheet の扱いを必ず決める」。
-        #   雛形候補（{{列名}}の印を持つシート）を対象にしていて、残りのシートがちょうど
-        #   1枚なら、翻訳より前にそちらへ切り替えて検出をやり直す（誤りなら
-        #   verify_dsl_args の『雛形とデータシートが同じ』等で正直に止める・3枚以上は無理に
-        #   当てない ── announce 側の訂正と同じ保守的な線引き）。
-        if clarify_q and target_sheet and _sheet_looks_like_template(source_book, target_sheet):
-            others = [s for s in sheets if s != target_sheet]
-            if len(others) == 1:
-                a._target_sheet = others[0]
-                target_sheet = others[0]
-                header_rows, clarify_q = resolve_header_rows(struct_dump, sheets, target_sheet=target_sheet)
-        # ★ operator8 ③: resolve_header_rows が「StructDump に対象シートが無い→無言で
-        #   1行目」フォールバックを踏んだら、その無言の仮定を開示する（LO の一時不調等で
-        #   起きうる・実機の再現形）。clarify_q が立つ分岐とは互いに排他（docstring 参照）。
-        #   ★ --dry は元から struct_dump を作らない（意図的なスキップ・_cmd_run_dispatch
-        #   参照）ため対象外 ―― LO 不調と区別が付かない誤発火を避ける。
-        if (clarify_q is None and not getattr(a, "dry", False)
-                and _struct_dump_info_missing(struct_dump, sheets, target_sheet)):
-            print(f"（見出し行の自動検出が使えなかったため、"
-                  f"『{target_sheet or (sheets[0] if sheets else '')}』シートの1行目を"
-                  "見出しとみなしています。違う場合は --header-row で指定してください）")
-    if clarify_q:
-        # ★ operator8 ①: 翻訳まで届かずに止まる分岐 ―― op が分からないので LOOKUP_FILL 訂正の
-        #   出番は無い。遅延させていた推測どおりの事前行をここで出す（従来と同じタイミング差）。
-        _flush_pending_sheet_announce(a)
-        print(f"？ {clarify_q}")
-        return 3
+def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tuple:
+    """一段目の翻訳が取り違えた計画を、**実表と依頼文に聞いて読み直す**層（15 塊）。
 
-    book_meta = build_book_meta(source_book, header_rows=header_rows)
-    # ★ operator8 ③: 列解決が失敗した時の敗者復活（_header_row_hint_for_missing_col）用の
-    #   材料。実ファイルからここで一度だけ読む（各シート先頭~10行・軽量）。
-    book_meta["_row_scan"] = {s: _scan_first_rows(source_book, s) for s in sheets}
-    # ★ 対象シートの**出どころ**を運ぶ（cli=人が --sheet や画面で明示指定した）。
-    #   ここに載せれば verify_dsl_args の署名を変えずに全経路へ届く。
-    book_meta["_sheet_source"] = getattr(a, "_sheet_source", None)
-    translation = getattr(a, "_reuse_translation", None)
-    a._reuse_translation = None
-    # ★★ 2026-09-05（属性の登録）: 前に人が「この語はこの列のこと」と教えてくれていたら、
-    #   翻訳に渡す前に**その実体へ言い換える**。★ 使う前に今の実表で検算し、成り立たない
-    #   登録は黙って捨てる（登録は解釈の保存であって検証の免除ではない・決裁 論点 E）。
-    #   ★ 翻訳を使い回す回（3択のプレビュー後）と --op で人が固定した回は触らない ──
-    #     依頼文だけ書き換えると、既に作った翻訳や人の指定と食い違う。
-    if translation is None and not getattr(a, "op", None):
-        _rewritten, _attr_notes = apply_known_attributes(a.task, source_book, book_meta)
-        if _rewritten != a.task:
-            for _ln in _attr_notes:
-                print(_ln)
-            a.task = _rewritten
-    # ★★ 2026-08-28（表記ゆれの treadmill を降りるための入口）: --op で操作を**人が固定**
-    #   できるようにした。一段目（言い回しから op を当てる段）を飛ばして、第二段に args
-    #   だけを埋め直させる ── 既に在る器官（translate_task_fixed_op）へ配線するだけ。
-    #   ★ 揺れを 1 つずつ矯正しても、別の言い方でまた外れる。人が「これだ」と言える道を
-    #     常設するのが構造的な答えで、画面の「こう読みました→選び直す」もここを通る。
-    forced_op = getattr(a, "op", None)
-    if forced_op:
-        if forced_op not in OP_SCHEMA:
-            print(f"？ そんな操作はありません: 『{forced_op}』（一覧: ailine ops）")
-            return 3
-        t0 = progress_start(f"⏳ 翻訳中（操作は『{OP_LABELS[forced_op]}』に固定）…")
-        fixed = translate_task_fixed_op(a.model, forced_op, a.task, book_meta)
-        progress_end(t0)
-        if not fixed:
-            print(f"？ 『{OP_LABELS[forced_op]}』として読み取れませんでした"
-                   "（依頼文に、対象の列や値が書かれているか確かめてください）")
-            return 3
-        _fargs = dict(fixed.get("args") or {})
-        # ★ 人が固定した回でも、**依頼文から機械が読める事実**は足す（A' 原則）。
-        #   行番号は「row を名前で探す」実装では拾えないので、ここで渡す。
-        _frow = task_names_a_row_number(a.task)
-        if _frow and "row" in OP_SCHEMA[forced_op]:
-            _fargs["row_number"] = _frow
-        # ★★ 人の選択は尊重する ── 別の op へ**黙って読み直さない**。
-        #   ただし「1 行を指す依頼」を列ぜんぶ書き換える op で実行するのは、
-        #   画面に出した「こう読みました」と結果が食い違う ── 断って選び直させる。
-        if plan_writes_beyond_one_cell([{"op": forced_op}]) and task_quotes_a_value(a.task):
-            _pts = task_points_at_one_row(a.task, book_meta, target_sheet)
-            if _pts:
-                print(f"？ {_pts}が、『{OP_LABELS[forced_op]}』は"
-                       "その列のデータ行を**全部**書き換えます。"
-                       "1 か所だけ直すなら『1セル書換』を選んでください")
-                return 3
-        translation = {"plan": [{"op": forced_op, "args": _fargs}]}
-        a._forced_op = forced_op
-    elif translation is None:
-        t0 = progress_start(f"⏳ 翻訳中 ({a.model})…")
-        translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
-        progress_end(t0)
-    a._last_translation = translation
+    戻り値 (plan, rc)。rc が None なら続行、数字ならその終了コードで**止まる**
+    （1 セルに絞れなかった回・入れる値が決まらなかった回は、壊す前に断る）。
 
-    plan = translation.get("plan") if isinstance(translation, dict) else None
-    if not isinstance(plan, list) or not plan:
-        if isinstance(translation, dict) and translation.get("op"):
-            plan = [translation]
-        else:
-            plan = [{"op": "FREEFORM", "args": {}}]
-
-    # ★★ 2026-08-27（Namakoo が実測）:「みかんとぶどうの間に梨を追加して。売上は600」が
-    #   **空行 1 本の挿入**になった。位置ではなく op の取り違えで、しかも LLM は
-    #   複数段の計画（行挿入＋一括書換）を返す ── だから計画の**長さを見る前に**判じる。
-    #   ★ 黙って op を書き換えない ── 依頼文に**値の指定が在る**という証拠を確かめ、
-    #     二段目翻訳（op を固定して args だけ埋め直す・既にある機構）へ回す。
-    #     そして**根拠を必ず画面に出す**（勝手に別の操作へすり替えない）。
-    #   ★ 「言い換えてください」で終わらせない: 利用者の書き方は正しかった。
-    # ★★ 2026-08-27（Namakoo「揺れ無しで追加するにはどうしたらいい？」）:
-    #   同じ依頼文で、通る回と聞き返す回があった（7B のサンプリングの揺れ）。
-    #   ★ 聞き返しの機構は弱めない ── **機械が場所も値も解けている時だけ**読み直す。
-    #     その時に迷う理由が無い（実表を見た側が、モデルより確かなことを知っている）。
-    #   ★ 読み直したことは必ず画面に出す（黙って聞き返しを握り潰さない）。
-    # ★★ 2026-08-27（Namakoo「梨の売上にピンポイントで入れたい」）:
-    #   「梨の売上を2000にして」は SET_COLUMN_VALUE（列を丸ごと）と読まれ、
-    #   「値を『』で囲め」と断られていた。だが依頼文は**行を名指し**している。
-    #   ★ 行の名前が実表で 1 つに決まるなら、狙いは 1 セル ── 第二段で読み直す。
-    #     （OPS_DOC は 1 文字も増やさない ── 第二段は op を固定してスキーマだけ見せる）
-    # ★ 読み直しの塊はすべて**対象シート**で解く（1 枚目を仮定しない・上の _sheet_hint と同じ）。
+    ★★ なぜ切り出したか（2026-09-05・盲検の査定）: `_translate_and_dispatch` が
+      681 行あり、**その 7 割がこの層**だった。査定者の言葉:「バグを直すたびに
+      同じ関数へ if を足す形で、著者自身が『1 つの関数に畳んで呼び出し側に
+      持たせない』と書いた原則が、ここには適用されていない」。
+    ★ 先に検体を積んでから動かした ── tests/test_reread_ledger.py の分母が
+      3/15 → 13/15 になるまで待って切った（README「番人を作ってから割った」）。
+    ★ 切り出しの面は小さい: 入力 (a, book_meta, plan)・出力 (plan, rc)。
+      _sheet_h はこの層の中だけで使うので中に閉じ込めた（実測で確かめた）。
+    ★★ ここは**まだ表になっていない**。15 塊は順序に意味があり
+      （先に当たったものが残りを黙らせる）、表へ畳むのは残り 2 塊に検体が
+      付いてからにする ── 順序を保つ保証がまだ機械に無い。
+    """
     _sheet_h = (getattr(a, "_target_sheet", None)
                  or (book_meta.get("sheets") or [None])[0])
     # ★★ 2026-08-27（Namakoo「◎を入れて では動作しない」の**構造側**の真因）:
@@ -11807,7 +11684,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                  f"『{_col_hint}』列のデータ行を**全部**書き換える"
                  if _col_hint else "その列のデータ行を**全部**書き換える"),
             ]))
-            return 3
+            return plan, 3
 
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
     #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
@@ -12154,7 +12031,155 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
                 print("  （値と列を言ってください: 例「3行目の下に新品を追加して」"
                        "「みかんの下に梨を追加して。売上は600」）")
                 print("  （空の行が欲しいなら: 例「3行目の下に1行挿入して」）")
+                return plan, 3
+    return plan, None
+
+
+def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path,
+                             struct_dump: dict, sheets: list) -> int:
+    """対象シートが決まった後の残り（見出し行 → 翻訳 → 計画の振り分け）。
+       ★ 挙動変更#3 のために _cmd_run_dispatch から切り出した: シート名の衝突の3択で
+       「もう一方のシートを見てみる」が選ばれたとき、a._target_sheet を差し替えて
+       **翻訳からやり直す**ため（見出し行の検出も翻訳結果も対象シートに依存するので、
+       翻訳を使い回すのでは「やり直し」にならない）。
+       ★ a._reuse_translation が積まれている場合だけ翻訳を省く ── 3択の②で
+       プレビュー用に一度翻訳したものを、y の後の本番実行で使い回すため（同じ対象シート・
+       同じ依頼文に対して ollama を2回叩かない）。"""
+    target_sheet = getattr(a, "_target_sheet", None)
+    forced_header_row = getattr(a, "header_row", None)
+    if forced_header_row:
+        # ★ W8a 項目3: --header-row 指定時は検出(StructDump ヒューリスティクス)を丸ごと
+        #   スキップし、その行を対象シートの見出しとして採用する（他シートは既定1行目のまま
+        #   ＝ resolve_header_rows の既定と同じ扱い）。CLARIFY には絶対に落ちない。
+        header_rows = {s: 1 for s in sheets}
+        if target_sheet:
+            header_rows[target_sheet] = forced_header_row
+        clarify_q = None
+    else:
+        header_rows, clarify_q = resolve_header_rows(struct_dump, sheets, target_sheet=target_sheet)
+        # ★ 様式写像段/帳票段: 依頼文が雛形シートを名指しすると、op判明**前**の一般解決
+        #   (resolve_target_sheet)が「依頼文が言及した唯一のシート」＝雛形をデータシートと
+        #   誤認する（_announce_report_per_row_target_sheet/_announce_format_map_target_sheet
+        #   と同型のバグ）。雛形は小さな構造（見出し+印だけの数行）のことが多く、見出し行
+        #   検出が確信を持てず CLARIFY に落ちて翻訳（op判明）にすら届かないことがある実機の
+        #   再現形 ── DESIGN-20260824-format-map.md「template_sheet の扱いを必ず決める」。
+        #   雛形候補（{{列名}}の印を持つシート）を対象にしていて、残りのシートがちょうど
+        #   1枚なら、翻訳より前にそちらへ切り替えて検出をやり直す（誤りなら
+        #   verify_dsl_args の『雛形とデータシートが同じ』等で正直に止める・3枚以上は無理に
+        #   当てない ── announce 側の訂正と同じ保守的な線引き）。
+        if clarify_q and target_sheet and _sheet_looks_like_template(source_book, target_sheet):
+            others = [s for s in sheets if s != target_sheet]
+            if len(others) == 1:
+                a._target_sheet = others[0]
+                target_sheet = others[0]
+                header_rows, clarify_q = resolve_header_rows(struct_dump, sheets, target_sheet=target_sheet)
+        # ★ operator8 ③: resolve_header_rows が「StructDump に対象シートが無い→無言で
+        #   1行目」フォールバックを踏んだら、その無言の仮定を開示する（LO の一時不調等で
+        #   起きうる・実機の再現形）。clarify_q が立つ分岐とは互いに排他（docstring 参照）。
+        #   ★ --dry は元から struct_dump を作らない（意図的なスキップ・_cmd_run_dispatch
+        #   参照）ため対象外 ―― LO 不調と区別が付かない誤発火を避ける。
+        if (clarify_q is None and not getattr(a, "dry", False)
+                and _struct_dump_info_missing(struct_dump, sheets, target_sheet)):
+            print(f"（見出し行の自動検出が使えなかったため、"
+                  f"『{target_sheet or (sheets[0] if sheets else '')}』シートの1行目を"
+                  "見出しとみなしています。違う場合は --header-row で指定してください）")
+    if clarify_q:
+        # ★ operator8 ①: 翻訳まで届かずに止まる分岐 ―― op が分からないので LOOKUP_FILL 訂正の
+        #   出番は無い。遅延させていた推測どおりの事前行をここで出す（従来と同じタイミング差）。
+        _flush_pending_sheet_announce(a)
+        print(f"？ {clarify_q}")
+        return 3
+
+    book_meta = build_book_meta(source_book, header_rows=header_rows)
+    # ★ operator8 ③: 列解決が失敗した時の敗者復活（_header_row_hint_for_missing_col）用の
+    #   材料。実ファイルからここで一度だけ読む（各シート先頭~10行・軽量）。
+    book_meta["_row_scan"] = {s: _scan_first_rows(source_book, s) for s in sheets}
+    # ★ 対象シートの**出どころ**を運ぶ（cli=人が --sheet や画面で明示指定した）。
+    #   ここに載せれば verify_dsl_args の署名を変えずに全経路へ届く。
+    book_meta["_sheet_source"] = getattr(a, "_sheet_source", None)
+    translation = getattr(a, "_reuse_translation", None)
+    a._reuse_translation = None
+    # ★★ 2026-09-05（属性の登録）: 前に人が「この語はこの列のこと」と教えてくれていたら、
+    #   翻訳に渡す前に**その実体へ言い換える**。★ 使う前に今の実表で検算し、成り立たない
+    #   登録は黙って捨てる（登録は解釈の保存であって検証の免除ではない・決裁 論点 E）。
+    #   ★ 翻訳を使い回す回（3択のプレビュー後）と --op で人が固定した回は触らない ──
+    #     依頼文だけ書き換えると、既に作った翻訳や人の指定と食い違う。
+    if translation is None and not getattr(a, "op", None):
+        _rewritten, _attr_notes = apply_known_attributes(a.task, source_book, book_meta)
+        if _rewritten != a.task:
+            for _ln in _attr_notes:
+                print(_ln)
+            a.task = _rewritten
+    # ★★ 2026-08-28（表記ゆれの treadmill を降りるための入口）: --op で操作を**人が固定**
+    #   できるようにした。一段目（言い回しから op を当てる段）を飛ばして、第二段に args
+    #   だけを埋め直させる ── 既に在る器官（translate_task_fixed_op）へ配線するだけ。
+    #   ★ 揺れを 1 つずつ矯正しても、別の言い方でまた外れる。人が「これだ」と言える道を
+    #     常設するのが構造的な答えで、画面の「こう読みました→選び直す」もここを通る。
+    forced_op = getattr(a, "op", None)
+    if forced_op:
+        if forced_op not in OP_SCHEMA:
+            print(f"？ そんな操作はありません: 『{forced_op}』（一覧: ailine ops）")
+            return 3
+        t0 = progress_start(f"⏳ 翻訳中（操作は『{OP_LABELS[forced_op]}』に固定）…")
+        fixed = translate_task_fixed_op(a.model, forced_op, a.task, book_meta)
+        progress_end(t0)
+        if not fixed:
+            print(f"？ 『{OP_LABELS[forced_op]}』として読み取れませんでした"
+                   "（依頼文に、対象の列や値が書かれているか確かめてください）")
+            return 3
+        _fargs = dict(fixed.get("args") or {})
+        # ★ 人が固定した回でも、**依頼文から機械が読める事実**は足す（A' 原則）。
+        #   行番号は「row を名前で探す」実装では拾えないので、ここで渡す。
+        _frow = task_names_a_row_number(a.task)
+        if _frow and "row" in OP_SCHEMA[forced_op]:
+            _fargs["row_number"] = _frow
+        # ★★ 人の選択は尊重する ── 別の op へ**黙って読み直さない**。
+        #   ただし「1 行を指す依頼」を列ぜんぶ書き換える op で実行するのは、
+        #   画面に出した「こう読みました」と結果が食い違う ── 断って選び直させる。
+        if plan_writes_beyond_one_cell([{"op": forced_op}]) and task_quotes_a_value(a.task):
+            _pts = task_points_at_one_row(a.task, book_meta, target_sheet)
+            if _pts:
+                print(f"？ {_pts}が、『{OP_LABELS[forced_op]}』は"
+                       "その列のデータ行を**全部**書き換えます。"
+                       "1 か所だけ直すなら『1セル書換』を選んでください")
                 return 3
+        translation = {"plan": [{"op": forced_op, "args": _fargs}]}
+        a._forced_op = forced_op
+    elif translation is None:
+        t0 = progress_start(f"⏳ 翻訳中 ({a.model})…")
+        translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
+        progress_end(t0)
+    a._last_translation = translation
+
+    plan = translation.get("plan") if isinstance(translation, dict) else None
+    if not isinstance(plan, list) or not plan:
+        if isinstance(translation, dict) and translation.get("op"):
+            plan = [translation]
+        else:
+            plan = [{"op": "FREEFORM", "args": {}}]
+
+    # ★★ 2026-08-27（Namakoo が実測）:「みかんとぶどうの間に梨を追加して。売上は600」が
+    #   **空行 1 本の挿入**になった。位置ではなく op の取り違えで、しかも LLM は
+    #   複数段の計画（行挿入＋一括書換）を返す ── だから計画の**長さを見る前に**判じる。
+    #   ★ 黙って op を書き換えない ── 依頼文に**値の指定が在る**という証拠を確かめ、
+    #     二段目翻訳（op を固定して args だけ埋め直す・既にある機構）へ回す。
+    #     そして**根拠を必ず画面に出す**（勝手に別の操作へすり替えない）。
+    #   ★ 「言い換えてください」で終わらせない: 利用者の書き方は正しかった。
+    # ★★ 2026-08-27（Namakoo「揺れ無しで追加するにはどうしたらいい？」）:
+    #   同じ依頼文で、通る回と聞き返す回があった（7B のサンプリングの揺れ）。
+    #   ★ 聞き返しの機構は弱めない ── **機械が場所も値も解けている時だけ**読み直す。
+    #     その時に迷う理由が無い（実表を見た側が、モデルより確かなことを知っている）。
+    #   ★ 読み直したことは必ず画面に出す（黙って聞き返しを握り潰さない）。
+    # ★★ 2026-08-27（Namakoo「梨の売上にピンポイントで入れたい」）:
+    #   「梨の売上を2000にして」は SET_COLUMN_VALUE（列を丸ごと）と読まれ、
+    #   「値を『』で囲め」と断られていた。だが依頼文は**行を名指し**している。
+    #   ★ 行の名前が実表で 1 つに決まるなら、狙いは 1 セル ── 第二段で読み直す。
+    #     （OPS_DOC は 1 文字も増やさない ── 第二段は op を固定してスキーマだけ見せる）
+    # ★ 読み直しの塊はすべて**対象シート**で解く（1 枚目を仮定しない・上の _sheet_hint と同じ）。
+    # ★ 読み直しの層（15 塊）は _reread_the_plan が持つ。ここは結果を受けるだけ。
+    plan, _rr_rc = _reread_the_plan(a, book_meta, plan)
+    if _rr_rc is not None:
+        return _rr_rc
 
     # ★★ 2026-08-30: 中身がまったく同じ段は 1 回にまとめる（連鎖で 2 段目が 1 段目の
     #   出力を食う前に畳む ── 順番が意味を持つ）。黙って畳まず、落とした数を言う。

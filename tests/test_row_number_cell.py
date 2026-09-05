@@ -27,6 +27,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _reread_home import exits_with_three  # noqa: E402 ── ★ 「抜ける」は字面でなく意味で見る
 from _product_source import product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 ROWS = [["取引先", "件数", "担当"], ["丸和物流", 10, "田中"], ["ヤマノ食品", 20, "鈴木"],
@@ -191,5 +192,8 @@ def test_pointing_at_a_row_never_falls_back_to_the_whole_column():
     seg = window_around("if _points and not _one_cell:", after=1200)
     # ★ 2026-08-29: 行き止まりの断りから「選べる形」に変えた（文言も変わった）。
     #   守っている不変は同じ ── **列全体には落とさない**。
-    assert "列全体は勝手に書き換えません" in seg and "return 3" in seg, seg[:300]
+    # ★★ 2026-09-05: ここは `"return 3"` の**字面**で守っていたが、読み直しの層を
+    #   切り出して `return plan, 3` になった瞬間に外れた ── 不変（抜けること）は
+    #   保たれているのに鳴る番人は、リファクタのたびに緩められる。意味で見る。
+    assert "列全体は勝手に書き換えません" in seg and exits_with_three(seg), seg[:300]
     assert "render_choices(" in seg, "断りが行き止まりに戻っている（候補を出していない）"

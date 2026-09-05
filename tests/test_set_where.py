@@ -22,6 +22,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
+from _reread_home import segment as reread_segment  # noqa: E402 ── ★ 層の場所は 1 箇所が持つ
 from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 ROWS = [["商品", "売上", "原価", "チェック"],
@@ -252,8 +253,9 @@ def test_a_reread_never_overwrites_another_reread():
     """★★ 構造側の真因: 読み直しの塊が 5 つ並び、**後の塊が前の結果を上書き**していた。
        ★ 個々の条件をいくら賢くしてもこの形の事故は消えない ── 塊が増えるたびに
          「まだ上書きされない」ことを人が確かめる羽目になる。1 回に縛る。"""
-    body = product_text()[product_text().index("def _translate_and_dispatch("):]
-    body = body[:body.index("\ndef ", 10)]
+    # ★ 層の場所は tests/_reread_home.py が 1 箇所で持つ（2026-09-05 に切り出した時、
+    #   4 つの試験が同じ関数名を手書きしていて同時に落ちた ── 試験側の片配線）。
+    body = reread_segment()
     sets = body.count("_reread_done = True")
     guards = body.count("not _reread_done")
     # ★ 数を固定しない（塊は増える）。**不変**は「印を立てる塊と、印を見る塊が同数」。
