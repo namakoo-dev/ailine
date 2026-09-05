@@ -8474,9 +8474,55 @@ def task_asks_for_a_replace(task: str) -> bool:
     return extract_replace_pair(task) is not None
 
 
-def task_asks_for_a_conditional_write(task: str) -> bool:
-    return bool(task and extract_cmp_from_task(task)
-                 and extract_quoted_literal(task) is not None)
+def task_asks_for_a_conditional_write(task: str, book_meta: dict | None = None,
+                                       sheet: str | None = None,
+                                       header_row: int = 1) -> bool:
+    """依頼文が「条件に当てはまる行だけ書き換える」を求めているか。
+
+    ★★ 2026-09-05（実測・失敗 2 件の根）: それまでは **比較語**（以上・以下・
+      と等しい・を含む…）が在ることを鍵にしていた。だから
+
+          「所属が営業の行のメモに『○』を付けて」   ← 比較語が無い
+
+      は門が開かず、一段目が返した **行追加のまま**走って空行が挿さっていた
+      （exit 0・⚠ は出るが結果は間違い）。★ 誰でも書く形なのに落ちていた。
+
+    ★ 広げ方は 2026-09-05 に削除の軸でやったのと同じ ── **実表に聞く**。
+      依頼文が「実表に在る値」を名指ししていて、書き込む値が引用で囲まれていれば、
+      それは条件つき書換だ。★ 値の照合は task_names_real_values（抽出・軸判定と同じ関数）。
+
+    ★ 本物の行追加を横取りしないための線（2 つとも既存の材料で引く）:
+      ① 行追加は書き込む値を**引用符で囲まない**（「営業の行の下に新品を追加して」）
+      ② **位置の語**（の下に・の上に…）が在れば配置の依頼 ── _ANCHOR_* をそのまま使う。
+         ★ 語を新しく列挙しない（既に在る集合を使う）。
+    ★ book_meta を渡さない呼び出しは**従来どおり**（比較語だけを見る）── 既存の
+      経路を 1 ビットも変えずに、材料が在る所だけ広げる。
+    """
+    if not task or extract_quoted_literal(task) is None:
+        return False
+    # ★★ 2026-09-05（門を広げた直後に実測で踏んだ）: 「所属が営業**以外**の行のメモに
+    #   『○』を付けて」で、**営業の行に ○ が付き、しかも ✓ が出た** ── ちょうど逆。
+    #   ★ 条件つき書換の比較語彙に否定（nin）が無いので、模型は eq に潰す。
+    #     事後条件は同じ述語で数えるため、逆でも通る（恒真）。
+    #   ★ 段2.5（同日午前）で「静かに反転する」と予言していた形が、門を広げたことで
+    #     **実際に起きた**。前は行追加に化けて ⚠ で終わっていた ──
+    #     **うるさい失敗から静かな嘘へ悪化した。**
+    #   ★ だから否定が在る回はこの門を開けない。扱えないものを通すより断る
+    #     （抽出側には nin が在るので「〜以外を抜き出して」は今までどおり動く）。
+    if task_says_except(task):
+        return False
+    if extract_cmp_from_task(task):
+        return True
+    if book_meta is None:
+        return False
+    # ★ 位置の語が在れば配置の依頼（行追加）── こちらは触らない。
+    if any(w in task for w in (_ANCHOR_AFTER + _ANCHOR_BEFORE)):
+        return False
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    hits = [h for h in headers
+            if h and task_names_real_values(task, book_meta, sheet, h, header_row)]
+    # ★ ちょうど 1 列で名指しできた時だけ ── 0 個/複数なら決めない（推測しない）。
+    return len(hits) == 1
 
 
 def task_asks_to_add_a_column(task: str) -> bool:
@@ -11566,7 +11612,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     _cw_split = (len(plan) == 2
                   and str((plan[0] or {}).get("op")) == "EXTRACT"
                   and str((plan[1] or {}).get("op")) in ("SET_COLUMN_VALUE", "SET_WHERE"))
-    if (not _reread_done and task_asks_for_a_conditional_write(a.task)
+    # ★ 2026-09-05: 実表を渡す ── 比較語が無くても「実表に在る値」で門が開く。
+    if (not _reread_done and task_asks_for_a_conditional_write(
+                a.task, book_meta, _sheet_h)
             and (plan_is_all_giving_up(plan) or _cw_split
                   or (len(plan) == 1
                        and (plan[0] or {}).get("op") == "SET_COLUMN_VALUE"))):
