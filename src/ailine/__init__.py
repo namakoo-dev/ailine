@@ -7376,6 +7376,41 @@ def removal_reading(task: str, book_meta: dict, sheet: str | None, header_row: i
     return at, note
 
 
+def removal_axis_is_wrong(op: str, resolved_args: dict, book_meta: dict,
+                           sheet: str | None, header_row: int = 1) -> str | None:
+    """列を消すと言っているが、名指しの語が**列ではなく値**なら、その理由を返す。
+
+    ★★ 実測（2026-09-05・揺れの正体）: 「ナットを削除して」が **5 回に 1 回**、
+      行削除でなく**列削除**として返る。機械は「列『ナット』がこの表にありません」と
+      正しく断る（fail closed）ので壊れはしないが、誰もが最初に打つ形が
+      5 回に 1 回断られる。
+
+    ★ 構造の原因: 削除の読み直しの門は「**どの段も削除を宣言していないとき**」に開く。
+      列削除も削除を宣言しているので門が閉じ、間違った軸のまま断りになる。
+      ── **宣言による門は「消すのか」は見分けるが「行か列か」は見分けられない。**
+
+    ★ 軸は宣言でなく**実表**が決める（SWAP が既にそうしている）:
+        名指しの語が見出しに在る       → 列削除でよい
+        どこかの列の値に在る           → 行削除のはず（★ ここを返す）
+        両方 / どちらでもない          → 決めない（今までどおり断る）
+    ★ 語の解釈をしないので誤爆の余地が小さい。表に聞くだけ。
+    """
+    if op != "DELETE_COLUMN":
+        return None
+    name = str((resolved_args or {}).get("col") or "").strip()
+    if not name:
+        return None
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
+    if name in headers:
+        return None                      # ★ 見出しに在る ── 列削除で正しい
+    hit_cols = [h for h in headers if h and name in
+                task_names_real_values(name, book_meta, sheet, h, header_row)]
+    if len(hit_cols) != 1:
+        return None                      # ★ 決められない（0 個 / 複数）── 断る側へ
+    return (f"『{name}』は列の名前ではなく、『{hit_cols[0]}』列の値です"
+            f"（行を消すつもりなら、そのまま『{name}の行を削除して』と言い直せます）")
+
+
 def task_says_except(task: str) -> bool:
     """依頼文が「〜以外」を言っているか（語の集合は removal_reading と共有）。"""
     return any(w in (task or "") for w in _EXCEPT_WORDS)
@@ -11661,11 +11696,28 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   削除にならなかった（3 表で EXTRACT / OUT_OF_VOCAB / 条件付き抽出 に返り分かれた）。
     #   ★ 「除く」は 2 通りに読める。**できる読みだけ**を提案し、できない読み（〜以外を
     #     残す）は名指しで断る ── 黙って逆のことをすると、残したい行を消す事故になる。
+    # ★★ 2026-09-05: 門の条件を 1 つ足した ── **軸が実表と食い違う削除**も読み直す。
+    #   実測: 「ナットを削除して」が 5 回に 1 回、列削除として返る（機械は
+    #   「列『ナット』がこの表にありません」と正しく断るが、誰もが最初に打つ形が落ちる）。
+    #   ★ 宣言による門は「消すのか」は見分けるが「**行か列か**」は見分けられない ──
+    #     どちらも WRITE_REMOVE を宣言しているため、この門は閉じたままだった。
+    #   ★ 新しい門を増やさない。**同じ門の鍵に、実表が決める軸を足す**。
+    _axis_wrong = None
+    if plan and len(plan) == 1:
+        _st0 = plan[0] or {}
+        _axis_wrong = removal_axis_is_wrong(
+            str(_st0.get("op") or ""), _st0.get("args") or {}, book_meta, _sheet_h)
     if (not _reread_done and plan
-            and not any(_op_writes((st or {}).get("op"), WRITE_REMOVE) for st in plan)):
+            and (_axis_wrong is not None
+                  or not any(_op_writes((st or {}).get("op"), WRITE_REMOVE) for st in plan))):
         _rm = removal_reading(a.task, book_meta, _sheet_h)
         if _rm:
             _rat, _rnote = _rm
+            # ★ 2026-09-05: **直せた時だけ言う** ── 先に「軸を直しました」と言って
+            #   行が解決しなければ、言ったのに何もしないことになる（在っても鳴らない
+            #   の反対側 ── 鳴ったのに何も起きない）。
+            if _axis_wrong:
+                print(f"（軸を直しました ── {_axis_wrong}）")
             print(f"（『行削除』として読み直しました ── {_rnote}）")
             plan = [{"op": "DELETE_ROWS", "args": {"at": _rat, "count": 1}}]
             _reread_done = True
