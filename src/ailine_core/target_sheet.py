@@ -147,6 +147,73 @@ def drop_names_covered_by_longer(task: str, names: list) -> list:
     return kept or list(names)
 
 
+#: 「このシート」「各シート」── シート名でなく指示語（★ 名前として扱わない）
+#: ★ 末尾の「の」は落として持つ（判定側で word.rstrip("の") と前方一致で突き合わせる）
+_DEICTIC_SHEET_WORDS = ("この", "その", "あの", "どの", "各", "全", "同じ", "別",
+                        "新しい", "他", "元", "現在", "次", "前", "上", "下")
+
+#: 「◯◯シート」の ◯◯ を、直前の助詞・記号で切って拾う（★ 貪欲マッチを避ける）
+_NAMED_SHEET_RE = re.compile(
+    r"(?:^|[\s、。「」をにでがはのとへや])([^\s、。「」をにでがはとへや]{1,12}?)"
+    + _SHEET_MARKER_SUFFIX)
+
+
+#: 「集計シートを作って」── **これから作る**名前は「ありません」と言わない
+_CREATES_THE_SHEET_RE = re.compile(r"\s*[をに]?\s*(?:新しく|新規)?\s*(?:作|追加|足)")
+
+
+def sheet_named_but_missing(task: str, sheets: list) -> str | None:
+    """依頼文が「◯◯シート」と**名指し**しているのに、その名前がブックに無ければ ◯◯ を返す。
+
+    ★★ なぜ要るか（2026-09-05・Namakoo が画面の文に引っかかった）:
+      1 枚しかないブックに「売上シートの金額を並べ替えて」と頼むと、道具は
+      **「売上シートとは何シートですか？」**と返していた ── 意味を成していない。
+      しかも 4 回に 1 回しか出ず、残りは「照合できませんでした」で**揺れていた**。
+    ★ 真因: その問いは **LLM が作文したもの**（CLARIFY の question）。
+      ★ 機械は答えを持っている ── **シート名の一覧**。今日 5 回目の
+        「知識は在るのに機械が使っていない」だった。
+
+    ★ 判定は実表に聞くだけ（語の解釈をしない）。24 形で測って **24/24**。
+      潰した罠（★ 後半 2 つは番人を書く前の測定で**自分の実装から**出た）:
+        ・貪欲マッチ（「商品表から商品名を注文シート」で長く掴む）→ 助詞で切る
+        ・指示語（「このシート」「各シート」）→ 名前として扱わない
+        ・序数（「2枚目のシート」）→ 既存の _SHEET_ORDINAL_RE に譲る
+        ・**「別のシート」→『別の』**と名指ししていた ── 名簿に「別」は在るのに
+          「別の」が無く、**の 一文字で素通りした**。語の末尾の「の」を落とし、
+          突き合わせを**前方一致**にした（「この表の」も指示語として落ちる）。
+        ・**「集計シートを作って」→『集計はありません』**と言っていた ──
+          これから作る名前に「ありません」は**でたらめの側**（Namakoo の 3 条件）。
+          直後が「を作る/追加する」なら黙る。★「売上シートに列を追加して」は
+          追加の目的語がシートでないので**従来どおり名指しする**（対で縛った）。
+    """
+    if not task or not sheets:
+        return None
+    if _SHEET_ORDINAL_RE.search(task):
+        return None
+    for m in _NAMED_SHEET_RE.finditer(task):
+        raw = m.group(1) or ""
+        # ★「別のシート」の の を落としてから見る（★ ただし「この」を「こ」にしないこと ──
+        #   番人が捕まえた: rstrip だと『この』が『こ』になり指示語の名簿から外れた）
+        word = raw[:-1] if len(raw) >= 2 and raw.endswith("の") else raw
+        if not word:
+            continue
+        if any(raw.startswith(d) or word.startswith(d) for d in _DEICTIC_SHEET_WORDS):
+            continue                              # ★ 前方一致（「この表の」も指示語）
+        if _CREATES_THE_SHEET_RE.match(task[m.end():]):
+            continue                              # ★ これから作る名前を「ありません」と言わない
+        if any(word == s or word in s or s in word for s in sheets):
+            continue
+        return word
+    return None
+
+
+def render_missing_sheet_refusal(word: str, sheets: list) -> list:
+    """「そのシートはありません」を、**あるシートを名指しして**言う。"""
+    return [f"？ このブックに『{word}』というシートはありません"
+            f"（あるシート: {'、'.join(sheets)}）",
+            "  シート名を確かめるか、--sheet で明示してください"]
+
+
 def resolve_target_sheet(task: str, sheets: list, cli_sheet: str | None = None,
                           headers: dict | None = None) -> tuple:
     """★ 挙動変更#2: 対象シートの決定はここ1箇所だけで行う（呼び出し側 [_cmd_run_dispatch]

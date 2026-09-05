@@ -173,6 +173,7 @@ from ailine_core.sum_identity import rows_matching_sum_above   # noqa: F401 ─�
 from ailine_core import row_identity   # ★ 行内の等式（金額＝件数×単価）が操作で崩れたら言う
 from ailine_core.target_sheet import (
     drop_names_covered_by_longer, sheets_named_explicitly,   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
+    sheet_named_but_missing, render_missing_sheet_refusal,   # ★ 無いシート名を機械が名指しする（2026-09-05）
     resolve_target_sheet, describe_target_sheet, wrap_basic_for_sheet,
     format_sheet_field, sheet_conflict_choice_lines, conflict_excluded_sheets,
     sheet_names_mentioned_in,   # ★ 単位E: シート名照合の素材（決定側と助言側が共有する）
@@ -12972,6 +12973,24 @@ def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None =
     #   **なぜ扱えないか**も**どう言い直せばよいか**も言っていなかった。
     #   ★ 軸（op_axes.py）が「まだ無い機能」を名指しできるなら、そちらを先に言う。
     #   ★ 判定に要るのは実表の列名だけ ── 無ければ従来どおりの断りに落ちる。
+    # ★★ 2026-09-05: 依頼文が「◯◯シート」と名指ししているのに、その名前がブックに
+    #   無ければ**機械がそう言う**。実測: 1 枚しかないブックに「売上シートの金額を…」で
+    #   **「売上シートとは何シートですか？」**（LLM の作文・意味を成さない）が出ていた。
+    #   しかも 4 回に 1 回しか出ず、残りは「照合できませんでした」で揺れていた。
+    #   ★ 機械はシート名の一覧を持っている ── 今日 5 回目の「知識は在るが使っていない」。
+    try:
+        _sheets_now = build_book_meta(book).get("sheets") or []
+    except Exception:
+        _sheets_now = []
+    _missing_sheet = sheet_named_but_missing(a.task, _sheets_now)
+    if _missing_sheet:
+        for _ln in render_missing_sheet_refusal(_missing_sheet, _sheets_now):
+            print(_ln)
+        _finish_run(a, book, {"ok": False, "attempts": 0, "task": a.task,
+                               "model": a.model, "path": "vocab_miss", "command": None,
+                               "postcondition": None, "changes": [], "out": str(book)},
+                    failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/sheet_missing")
+        return 3
     _ax_heads = []
     try:
         _bm = build_book_meta(book)
