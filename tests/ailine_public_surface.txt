@@ -464,6 +464,7 @@ def backup_path_for(book: 'Path', ts: 'str | None' = None, shelf: 'bool' = False
 def bare_value_from_task(task: 'str', row_name: 'str | None', col_name: 'str | None', headers=None) -> 'str | None'
 def basrun_apply(book: 'Path', code: 'str', workdir: 'Path', helper_files=(), timeout: 'float | None' = 180.0) -> 'tuple'
 def basrun_path() -> 'Path'
+def before_after_advisories(before_path, after_path, resolved: 'dict | None', *, cell_ref, identity_advisory=None, header_rows: 'dict | None' = None) -> 'list'
 def book_columns(path: 'Path', header_rows: 'dict | None' = None) -> 'dict'
 def broken_identity_advisory(source_book, out_book, resolved: 'dict') -> 'list'
 def build_advisories(task: 'str', before: 'dict', after: 'dict', exclude_sheets: 'set | None' = None, *, op: 'str | None' = None, resolved: 'dict | None' = None, meta: 'dict | None' = None, sheet_conflict=None, precondition_broken: 'str | None' = None, after_path: 'Path | None' = None) -> 'list'

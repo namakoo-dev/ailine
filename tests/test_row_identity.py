@@ -84,9 +84,27 @@ def test_the_advisory_is_wired_to_every_declared_path():
       `resolved`（宣言）が無い。**比べる相手が無いところでは黙る**のが正しい。
       （最初は 5 箇所すべてに配って NameError を 2 回出した。呼び出し側の変数名に
        頼る書き方をやめ、渡すものを resolved 1 つに減らして直した。）
+
+    ★★ 2026-09-06: 前後を見る助言の入口を 1 本に畳んだ（`before_after_advisories`）。
+      この番人は「`broken_identity_advisory(` が 5 回現れる」という**字面**で数えて
+      いたので、畳んだ瞬間に落ちた ── **不変（宣言が在る経路すべてに配る）は
+      保たれているのに、数え方が古かった**。★ 意味で数える形に直す:
+        ・宣言が在る経路は `identity_advisory=` を渡して入口を通る
+        ・自由生成の段（宣言が無い）は渡さない ＝ 意図的な非対称
+      ★ 「同じ形が 2 箇所にあれば片配線」ではない。非対称の理由が在るかを見る。
     """
-    assert count_in_product("broken_identity_advisory(") == 5, "定義 1 + 呼び出し 4 のはず"
-    assert "broken_identity_advisory(stepsource, out_book, resolved" not in product_text() or         count_in_product("broken_identity_advisory(stepsource") == 1, "FREEFORM 段に配っている"
+    text = product_text()
+    doors = text.count("before_after_advisories(")
+    assert doors >= 5, f"前後を見る助言の入口が {doors} 箇所（5 経路のはず）"
+    declared = text.count("identity_advisory=broken_identity_advisory")
+    assert declared == 4, (
+        f"宣言を渡している経路が {declared} 箇所（op が決まる 4 経路のはず）── "
+        "自由生成の段は宣言が無いので渡さない")
+    # ★ 位置でなく**意味**で見る（2026-09-06: 入口の次の行にコメントを 2 行挟んだら、
+    #   「入口の次の行」を見ていた版が落ちた ── 番人が位置を仮定していた）。
+    #   自由生成の段の印は「**宣言に None を渡している**」こと。それが在ればよい。
+    assert "out_book, None, cell_ref=" in text, \
+        "自由生成の段が入口を通っていない（または宣言を渡してしまっている）"
 
 
 @pytest.mark.local

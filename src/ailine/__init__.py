@@ -164,7 +164,10 @@ from ailine_core.chart_range import chart_data_last_row   # ★ operator10 ①: 
 from ailine_core import compare_blocked
 from ailine_core.column_type import column_is_all_numeric, value_parses_as_number   # ★ operator10 ④: 型の機械決定
 from ailine_core.xml_readback import numeric_cells_became_strings   # ★ operator10 ⑤: 数式セルの偽アラーム防止   # noqa: F401 ── 再輸出/在否確認のため残す
-from ailine_core.formula_health import formula_error_advisory, detect_write_target_type_change   # ★ 挙動変更#1(a)(b)
+from ailine_core.formula_health import (   # noqa: F401 ── ★ formula_error_advisory は
+    # 2026-09-06 に before_after_advisories へ畳んだので本体からは呼ばないが、
+    # **公開面の凍結（tests/ailine_public_surface.txt）に載っている**ので再輸出は残す。
+    before_after_advisories, formula_error_advisory, detect_write_target_type_change)
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）   # noqa: F401 ── 再輸出/在否確認のため残す
     check_write_preconditions_detail,
     own_prior_output_notice_lines,   # ★ 単位H 開示: 関所が黙った理由を1行で見せる
@@ -12882,7 +12885,10 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     advisories = compose_dsl_step_advisories(   # mode="flat" は単発固有（dsl_step.py 参照）
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
         sheet_conflict=getattr(a, "_sheet_conflict", None),
-        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(source_book, out_book, cell_ref=_cell_ref) + broken_identity_advisory(source_book, out_book, resolved if isinstance(resolved, dict) else {})   # ★ 挙動変更#1(a)
+        precondition_broken=precondition_broken, after_path=out_book) + before_after_advisories(
+            source_book, out_book, resolved, cell_ref=_cell_ref,
+            identity_advisory=broken_identity_advisory,
+            header_rows=(book_meta or {}).get("header_rows"))   # ★ 前後を見る助言はここ 1 本に畳んである
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -13065,10 +13071,10 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
     advisories = compose_dsl_step_advisories(
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
         sheet_conflict=getattr(a, "_sheet_conflict", None),
-        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(
-            source_book, out_book, cell_ref=_cell_ref) + broken_identity_advisory(
-            source_book, out_book,
-            resolved if isinstance(resolved, dict) else {})
+        precondition_broken=precondition_broken, after_path=out_book) + before_after_advisories(
+            source_book, out_book, resolved, cell_ref=_cell_ref,
+            identity_advisory=broken_identity_advisory,
+            header_rows=(book_meta or {}).get("header_rows"))
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -13233,10 +13239,10 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
     advisories = compose_dsl_step_advisories(
         "flat", op, resolved, book_meta, a.task, before, after, deps=deps,
         sheet_conflict=getattr(a, "_sheet_conflict", None),
-        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(
-            source_book, out_book, cell_ref=_cell_ref) + broken_identity_advisory(
-            source_book, out_book,
-            resolved if isinstance(resolved, dict) else {})
+        precondition_broken=precondition_broken, after_path=out_book) + before_after_advisories(
+            source_book, out_book, resolved, cell_ref=_cell_ref,
+            identity_advisory=broken_identity_advisory,
+            header_rows=(book_meta or {}).get("header_rows"))
     for adv in advisories:
         print(adv)
     result["changes"] = lines
@@ -13931,7 +13937,12 @@ def run_freeform_plan_step(a: argparse.Namespace, task_text: str, out_book: Path
                                        after_path=out_book)   # ★ 誤爆#3
         # ★ W10f 項目2: 旧・単発 cmd_run_freeform と同じ率リテラルの機械スキャン。この段の
         #   依頼文(task_text)だけを出典として見る（他段の依頼文言に混ざらないよう局所判定）。
-        advisories = advisories + scan_rate_literals(code, task_text, vocab) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
+        # ★ 自由生成の段は op が決まっていない＝宣言が無いので、宣言を要する助言
+        #   （等式の検算）は渡さない。入口は他の 4 経路と同じ 1 本を通す。
+        advisories = advisories + scan_rate_literals(code, task_text, vocab) + before_after_advisories(
+            # ★ 自由生成の段は book_meta を持たない＝見出し行を知らないので渡さない
+            #   （知らないものを推測しない ── 既定の 1 行目に落ちる）
+            stepsource, out_book, None, cell_ref=_cell_ref)   # ★ 挙動変更#1(a)
         # ★ 止血3: 呼び出し元(cmd_run_plan)は lines をそのまま「  {ln}」で表示するだけ
         #   なので、切り詰め注記はここで lines に混ぜて渡す。
         notice = _truncation_notice(before, after, exhaustive_postcondition=False)
@@ -14121,7 +14132,10 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
         print(f"{step_prefix}{own_notice}")
     step_advisories.extend(compose_dsl_step_advisories(
         "structural", op, resolved, current_meta, task, step_before, step_after, deps=deps,
-        precondition_broken=precondition_broken, after_path=out_book) + formula_error_advisory(stepsource, out_book, cell_ref=_cell_ref) + broken_identity_advisory(stepsource, out_book, resolved if isinstance(resolved, dict) else {}))   # ★ 挙動変更#1(a)
+        precondition_broken=precondition_broken, after_path=out_book) + before_after_advisories(
+            stepsource, out_book, resolved, cell_ref=_cell_ref,
+            identity_advisory=broken_identity_advisory,
+            header_rows=(current_meta or {}).get("header_rows")))   # ★ 前後を見る助言の合流点
 
     status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
     # ★ 止血1/2: "error"→fail 扱い。"warn"(検証対象不足)は成功は名乗るが機械検証済みとは言わない。
