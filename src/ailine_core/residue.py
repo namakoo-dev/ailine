@@ -35,6 +35,38 @@ _CONTENT_RUN_RE = re.compile(
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
+def unaccounted_request_words(task: str, declaration: str, pool_phrases, headers) -> list:
+    """依頼に在って**実行した解釈のどこにも出ていない列名**を返す（無ければ空）。
+
+    ★★ なぜ在るか（2026-09-06・実測で決めた）: 事後条件が見るのは「宣言 vs 実体」だけで、
+      **依頼から落ちた分は原理的に見えない**。実際 3179 件の本物の走行を調べたところ、
+      条件つき書換を *行追加* と誤読した 28 件は**事後条件が pass**と言っていた。
+      同じ依頼の前後で自然実験になっており、直った後は黙る:
+
+          09-04 06:26〜09-05 03:34  op=ADD_ROW    解釈に『所属』が出ない → 鳴る
+          09-05 06:01 以降          op=SET_WHERE  解釈に『所属』が出る   → 黙る
+
+    ★ 3179 件で鳴ったのは 28 件（0.88%）で、**そのすべてが本物の欠陥**（誤爆 0）。
+      再現は `bench/residue_gate_on_history.py`。
+
+    ★ 宣言は**解釈行**（人に見せる方）を渡すこと ── 引数の dict ではない。
+      「ナットの行を削除して」は引数だと `row=3` に化けて『ナット』が消えるが、
+      解釈行には「位置の根拠:『ナット』の行＝3行目」として残る。引数で測った版は
+      誤爆 21% だった（`bench/residue_gate_probe.py --values`）。
+
+    ★ 絞りを **実表の列名**に限るのが要（この絞りが無いと履歴で 49% が鳴る）。
+
+    ★ 捕まえない形（測って分かっている・広げようとして却下した）:
+      ・落ちたのが**値だけ**の時（列名は宣言に在る）
+      ・**否定の反転**（「営業以外」を「営業」と読む ── 語は 1 つも落ちない）
+      どちらも同じ履歴に実例が在り、実際に黙っていた。**開示して持つ**。
+    """
+    left = find_unconsumed_words(task, {}, pool_phrases)
+    decl = declaration or ""
+    heads = {str(h) for h in (headers or ()) if h}
+    return [w for w in left if w not in decl and w in heads]
+
+
 def find_unconsumed_words(task: str, resolved_args: dict, pool_phrases) -> list:
     """依頼文 task のうち、resolved_args の文字列値・pool_phrases・数字のどれにも
        消費されなかった内容語を、出現順・重複除去で返す（無ければ空リスト）。

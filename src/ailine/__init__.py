@@ -11424,6 +11424,27 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             print(f"⚠ 表の終わりまで走査できませんでした（{_why}）── "
                   "操作した範囲を全部確かめたとは言えないため、機械保証は出しません")
         machine_verified = False
+    # ★★ 2026-09-06（Namakoo 決裁 B「✓ を出さず ⚠ を出して、そのまま続ける」）:
+    #   依頼に在るのに**実行した解釈のどこにも出ていない列名**が在れば ✓ を名乗らない。
+    #   ★ 事後条件は「宣言 vs 実体」しか見ないので、依頼が痩せた分は原理的に見えない
+    #     ── 3179 件の実走行で、条件つき書換を行追加と誤読した 28 件は post=pass だった。
+    #   ★ 判定は ailine_core/residue.py に 1 つだけ置き、ここは**材料を渡すだけ**。
+    #     呼び出し側 4 箇所には配らない（走査の未達と同じ畳み方＝片配線を作らない）。
+    #   ★ 止めない・直さない ── ⚠ を出して警告数に足すだけ（憲法「参照のズレは既定では
+    #     直さない」／「機械で検証できないものに ✓ を出さない」）。
+    if machine_verified and scope:
+        try:
+            _hh = (build_book_meta(book).get("headers") or {})
+            _heads = {str(h) for hs in _hh.values() for h in (hs or []) if h}
+        except Exception:
+            _heads = set()          # ★ 読めなければ黙る（測れないものを鳴らさない）
+        for _w in suggest_residue.unaccounted_request_words(
+                getattr(a, "task", "") or "", scope,
+                _op_match_pool(str(result.get("op") or "")), _heads):
+            print(f"⚠ 依頼にある『{_w}』が、実行した解釈のどこにも出ていません "
+                  "── この語を反映したとは言えないため、機械保証は出しません")
+            warning_count += 1
+
     # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。
     #   --copy でも --inplace でも成果物は out_book なので、1 本の測定で両経路を覆う。
     # ★ 2026-09-05: 宣言（何を消すと言ったか）を渡す ── 件数だけでは誤報になる。
