@@ -31,8 +31,31 @@ from ailine_core import formula_health  # noqa: E402
 SRC = inspect.getsource(ailine)
 NL = chr(10)
 
-#: 適用の前後を受け取る助言（★ 足したらここにも 1 行）
-BEFORE_AFTER_ADVISORIES = ("formula_error_advisory", "broken_identity_advisory")
+def _advisories_behind_the_door() -> tuple:
+    """扉（`before_after_advisories`）が**実際に呼んでいる**助言の名前を機械で引く。
+
+    ★★ 2026-09-06（自作 review が拾った）: ここは手書きの名簿だった
+      （「★ 足したらここにも 1 行」）。案の定 **3 本目（formula_loss_advisory）が漏れ**、
+      その助言だけ「呼び出し側が直接呼んでも捕まらない」状態になっていた。
+      ★ この repo の原則は「索引は手書きしない」── 名簿を実装から引く形に替える。
+    ★★ 助言は **2 通りの住み方**をする。片方だけ引くと名簿が痩せる:
+      ① `formula_health` の中で直接呼ばれるもの（formula_error / formula_loss）
+      ② `ailine.py` 側に住み、扉へ **注入**されるもの（`identity_advisory=...`）
+      ★ 実際 2026-09-06 に①だけを引く版を書いて、手書き名簿に在った
+        `broken_identity_advisory` を**落とした**（しかも試験は緑のままだった）──
+        機械化したら被覆が減る、という形。だから下の**下限**を必ず併せて置く。
+    """
+    import re
+    src = inspect.getsource(formula_health.before_after_advisories)
+    direct = {n for n in re.findall(r"([A-Za-z_]+_advisory)\s*\(", src)
+              if hasattr(formula_health, n)}
+    injected = {n for n in re.findall(r"identity_advisory=([A-Za-z_]+)", SRC)
+                if n != "None" and hasattr(ailine, n)}
+    return tuple(sorted(direct | injected))
+
+
+#: 適用の前後を受け取る助言（★ 実装から機械で引く ── 手書きしない）
+BEFORE_AFTER_ADVISORIES = _advisories_behind_the_door()
 
 #: 合流点（呼び出し側が通ってよい唯一の入口）
 DOOR = "before_after_advisories"
@@ -70,6 +93,10 @@ def test_the_door_actually_calls_them_all():
       「番人の書き方」自体を縛っている）。分母を先に確かめる。
     """
     assert BEFORE_AFTER_ADVISORIES, "名簿が空（この試験は 1 度も回らない）"
+    # ★ **下限**（2026-09-06 に引き方が狭まって 3 → 2 に痩せたのを、試験が見逃した）。
+    #   減ったら「助言を消した」か「引き方が狭まった」── どちらも人が見るべき事件。
+    assert len(BEFORE_AFTER_ADVISORIES) >= 3, (
+        f"名簿が痩せた: {BEFORE_AFTER_ADVISORIES}（引き方が狭まっていないか）")
     body = inspect.getsource(getattr(formula_health, DOOR))
     missing = [n for n in BEFORE_AFTER_ADVISORIES
                if n not in body and "identity_advisory" not in body]

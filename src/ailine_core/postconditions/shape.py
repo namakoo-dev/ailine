@@ -567,6 +567,14 @@ def check_set_where(path: Path, args: dict, header_row: int = 1,
             #     （同じ関数で数えたら恒真になる ── 2026-09-06 の朝に実弾で確かめた）。
             c2col, c2cmp, c2val = (args.get("cond2_col"), args.get("cond2_cmp"),
                                    args.get("cond2_value"))
+            # ★★ 2026-09-06（自作 review が致命として拾った）: 宣言された 2 組目の列が
+            #   **実表に無い**なら、黙って 1 条件に落として pass してはいけない。
+            #   旧版は `c2col in headers` が偽なら match2=None にして通していたため、
+            #   見出しの綴りが違うだけで 2 組目が**丸ごと無視されたまま ✓** が出た
+            #   （col / cond_col には同じ検査が在るのに、2 組目にだけ無かった＝片配線）。
+            if c2col and c2col not in headers:
+                return "fail", (f"宣言した 2 つ目の条件の列『{c2col}』が表にありません"
+                                "（この宣言は検証できません）")
             c2i = headers.index(c2col) + 1 if c2col in headers else None
             match2 = _extract_predicate(c2cmp, c2val) if c2i else None
             wrong_hit, wrong_miss, hits = [], [], 0

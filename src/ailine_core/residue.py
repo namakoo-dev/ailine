@@ -35,6 +35,36 @@ _CONTENT_RUN_RE = re.compile(
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
+_COND_RE_CACHE: dict = {}
+
+
+def stated_as_condition(task: str, column: str, value: str) -> bool:
+    """依頼文が「<列名> が <値>」の形で**条件として書いている**か。
+
+    ★★ 2026-09-06（自作 review が致命 2 件・重大 1 件として拾った）: 2 組目の条件を
+      「残差に残った語 ∩ 他の列の実在値」だけで決めていたため、**条件として書かれて
+      いない語**まで条件に採っていた:
+
+          「田中さんのように、所属が営業の行のメモに○を付けて」
+            → 『田中』が氏名列の実在値なので「かつ氏名が田中」が勝手に付き、
+              3 行に当たるはずが **1 行**に縮んだ（警告なし・✓ のまま）
+
+    ★ 今日の否定の直しと**同じ形**だ ── 文に在るかではなく、**何に付いているか**を見る。
+      （[[negation.reading]] が値／列名の別で 3 通りに割ったのと対）。
+
+    ★ 括弧は 1 つだけ挟めるようにする（「担当が『主任』の行」も条件として書かれている）。
+    """
+    text, col, val = task or "", str(column or ""), str(value or "")
+    if not text or not col or not val:
+        return False
+    key = (col, val)
+    rx = _COND_RE_CACHE.get(key)
+    if rx is None:
+        rx = re.compile(re.escape(col) + r"[がはのを]?[「『\"']?" + re.escape(val))
+        _COND_RE_CACHE[key] = rx
+    return bool(rx.search(text))
+
+
 def unaccounted_request_words(task: str, declaration: str, pool_phrases, headers) -> list:
     """依頼に在って**実行した解釈のどこにも出ていない列名**を返す（無ければ空）。
 
@@ -81,7 +111,22 @@ def find_unconsumed_words(task: str, resolved_args: dict, pool_phrases) -> list:
     #   部分文字列として含む場合、短い方を先に消費すると長い方の残骸（「コード」）が
     #   偽の残差として漏れる（pool_phrases 側は元々この順でやっていた・args 側に同じ規律を
     #   足すだけ＝pool と対称）。
-    for v in sorted({v for v in (resolved_args or {}).values() if isinstance(v, str) and v},
+    # ★★ 2026-09-06（自作 review が致命として拾った）: **リストの中身も消費する**。
+    #   否定（cmp=nin）では `cond_value` が `['営業']` のようなリストになるが、
+    #   ここが文字列しか見ていなかったため、**否定した値が未消費のまま残差に残り**、
+    #   他の列に同じ値が在ると「頼んでいない 2 組目の条件」として採られていた
+    #   （実測: 「所属が営業でない行のメモに『済』」→ 担当=営業 が勝手に付き 2 行 → 1 行）。
+    #   ★ この欠陥は同じ日に**測定器の中で見つけて直していた**（bench/residue_gate_probe.py）。
+    #     測定器だけ直して**本体に持ち帰らなかった** ── 直す時は必ず両方を見る。
+    #   ★ 呼び出し側で平らにしない（4 箇所ある）── 消費の意味はここ 1 つが持つ。
+    def _flat(v):
+        if isinstance(v, str):
+            return [v] if v else []
+        if isinstance(v, (list, tuple, set)):
+            return [x for x in v if isinstance(x, str) and x]
+        return []
+
+    for v in sorted({s for v in (resolved_args or {}).values() for s in _flat(v)},
                     key=len, reverse=True):
         if v in remaining:
             remaining = remaining.replace(v, " ")

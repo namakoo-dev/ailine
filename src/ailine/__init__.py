@@ -5192,7 +5192,7 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
             [p for _o in OP_META for p in _op_match_pool(_o) if p])
     except Exception:
         _left = []
-    _c2_hits = []
+    _c2_hits, _c2_skipped = [], []
     for _h in (headers.get(first_sheet) or []):
         _hh = str(_h)
         if not _hh or _hh in (resolved.get("col"), resolved.get("cond_col")):
@@ -5205,8 +5205,29 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
         #   両方外して測ったら**値の門だけで足りる**と分かったので畳んだ ──
         #   要らない門は「在っても鳴らない」の一種で、読む人に守りを誤解させる）。
         _vals = [v for v in _vals if str(v) in _left]
-        if _vals:
+        # ★★ 2026-09-06（自作 review・致命 2 + 重大 1 の共通の根）: 残差に残って実表にも
+        #   在る、だけでは足りない。**条件の形で書かれているか**まで見る。
+        #     「田中さんのように、所属が営業の行…」→『田中』は氏名列の実在値だが、
+        #      条件として書かれていない ── 採ると 3 行が 1 行に縮み、警告も出なかった。
+        #   ★ 今日の否定の直しと同じ形（文に在るかでなく、何に付いているか）。
+        _bound = [v for v in _vals if suggest_residue.stated_as_condition(task, _hh, v)]
+        _rest = [v for v in _vals if v not in _bound]
+        # ★★ 列挙（OR）の見分け方: 同じ列に**結び付いた値と余った値が混在**するか、
+        #   結び付いていない値が **2 つ以上**あるなら「A か B」の言い方だ。
+        #   実測:「金額が1000以上で部門が経理か営業の行…」は『経理』だけが結び付き、
+        #   **『営業』が黙って落ちて 1 条件になっていた**（今朝直した『半分だけ』の再発）。
+        #   ★ 扱えないので**断って道を案内する**（下の枝へ落とす）── 黙って半分やらない。
+        if (_bound and _rest) or len(_rest) >= 2:
             _c2_hits.append((_hh, list(_vals)))
+        elif _bound:
+            _c2_hits.append((_hh, list(_bound)))
+        elif _vals:
+            # ★ 採らなかった候補は**黙らない** ── 直さないが ✓ も出さない（今日の関所と同じ）。
+            _c2_skipped.append((_hh, list(_vals)))
+    for _h, _v in _c2_skipped:
+        resolved["_warnings"] = resolved.get("_warnings", []) + [
+            f"依頼にある『{"、".join(str(x) for x in _v)}』は『{_h}』列に在る値ですが、"
+            "条件の形で書かれていないため条件に使っていません"]
     if len(_c2_hits) == 1 and len(_c2_hits[0][1]) == 1:
         _c2col, _c2val = _c2_hits[0][0], _c2_hits[0][1][0]
         resolved["cond2_col"], resolved["cond2_cmp"] = _c2col, "eq"
@@ -5214,21 +5235,32 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
         resolved["_cond_label"] += f"、かつ『{_c2col}』が『{_c2val}』"
         resolved["_sources"] = {**resolved.get("_sources", {}),
                                 "cond2_value": f"実表の『{_c2col}』列に在る値"}
-    elif len(_c2_hits) >= 2:
+    elif len(_c2_hits) >= 2 or (_c2_hits and len(_c2_hits[0][1]) >= 2):
         # ★★ 3 条件以上 ── **半分だけやらない**（それは静かな嘘）。断って道を案内する。
         #   ★ 案内の文は**実表から作る**ので、でたらめが入る余地が原理的に無い
         #     （列名も値も、実表に在って依頼文にも在るものだけ）。
         #   ★ 行数を添える ── どちらで絞るかは人が決めることなので、材料を渡す。
         #   ★ 実測（2026-09-06）: 案内する文はどちらも実機で通ることを確かめてある
         #     （tests/test_two_conditions_are_not_half_done.py の実機の検体）。
+        # ★★ 2026-09-06（自作 review・致命）: **1 列に 2 値以上**（「経理か営業の行」＝ OR）も
+        #   ここへ落とす。旧版はどちらの枝にも入らず、**2 組目が黙って未設定のまま
+        #   1 条件だけで走っていた** ── 今朝「半分だけやって ✓ を出していた」と直した
+        #   事故の再発だった。値ごとに 1 行ずつ案内する（実表から作るので出鱈目は入らない）。
         _lines = []
         for _h, _v in _c2_hits:
-            _n = _rows_matching(book_meta, first_sheet, _h, "eq", _v[0],
-                                 resolved.get("_header_row", 1))
-            _cnt = f"（{len(_n)} 行）" if _n is not None else ""
-            _lines.append(f"「{_h}が{_v[0]}の行を抜き出して」{_cnt}")
+            for _one in _v:
+                _n = _rows_matching(book_meta, first_sheet, _h, "eq", _one,
+                                     resolved.get("_header_row", 1))
+                _cnt = f"（{len(_n)} 行）" if _n is not None else ""
+                _lines.append(f"「{_h}が{_one}の行を抜き出して」{_cnt}")
+        # ★ 断る理由は 2 種類あるので、**理由ごとに違う文**を出す（丸めると嘘になる）。
+        _why = ("条件が 3 つ以上あります。この道具は一度に 2 つまでです"
+                if len(_c2_hits) >= 2 else
+                f"『{_c2_hits[0][0]}』に複数の値"
+                f"（{'、'.join(str(x) for x in _c2_hits[0][1])}）を挙げています。"
+                "この道具は 1 つの条件に 1 つの値までです")
         return False, resolved, inferred, (
-            "条件が 3 つ以上あります。この道具は一度に 2 つまでです ── "
+            _why + " ── "
             "まず抽出で絞ってから、残りの条件で書き換えてください。" + chr(10)
             + "  絞り方の候補: " + " ／ ".join(_lines) + chr(10)
             + "  （抜き出した先のシートで「" + str(resolved.get("_cond_label") or "")
