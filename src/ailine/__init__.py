@@ -5150,6 +5150,66 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
                                     and float(_cv).is_integer())
                   else (_fmt_cell_value(_cv) if _is_number(_cv) else _cv))
     resolved["_cond_label"] = f"『{resolved['cond_col']}』が {_shown} {_lab}"
+    # ★★ 2026-09-06: **2 つ目の条件**（AND）。実測で見つけた穴の処置 ──
+    #   「金額が1000以上で部門が営業の行に○」で **部門が丸ごと無視されて ✓** が出ていた。
+    #   ★ 材料は既に在った: 残差に『部門』『営業』が「使わなかった語」として出ている。
+    #   ★ 2 組目は **実表に在る値**しか採らない（task_names_real_values）──
+    #     「営業」（実表に無い）では空が返り、従来どおりになる。だから比較は `eq` で足り、
+    #     `contains` の曖昧さに踏み込まない。
+    #   ★ **1 列に絞れた時だけ**採る（0 個/2 個以上なら決めない）── 3 条件の依頼は
+    #     2 列に当たるので、ここで自然に外れる（その回は下の案内が出る）。
+    # ★★ 1 組目で**使い切った語**は 2 組目の材料にしない（2026-09-06・既存の検体が捕まえた）。
+    #   実測: 「売上が700以上の行のチェック列に『◎』」で、閾値の **700 が原価列にも在る**
+    #   ため「原価が700」を 2 組目として採り、行が [2,3] → [2] に減った。
+    #   ★ 閾値・書き込む値・列名は 1 組目が消費済み ── 残差（消費されなかった語）だけを
+    #     2 組目の材料にする。新しい判定器は作らない（既に在る器官を通す）。
+    try:
+        _left = suggest_residue.find_unconsumed_words(
+            task, {k: v for k, v in resolved.items() if isinstance(v, str)},
+            [p for _o in OP_META for p in _op_match_pool(_o) if p])
+    except Exception:
+        _left = []
+    _c2_hits = []
+    for _h in (headers.get(first_sheet) or []):
+        _hh = str(_h)
+        if not _hh or _hh in (resolved.get("col"), resolved.get("cond_col")):
+            continue
+        try:
+            _vals = task_names_real_values(task, book_meta, first_sheet, _hh, _hr_here)
+        except Exception:
+            _vals = []
+        # ★ 1 組目が消費しなかった値だけを採る（★ 列名の側にも同じ門を置いていたが、
+        #   両方外して測ったら**値の門だけで足りる**と分かったので畳んだ ──
+        #   要らない門は「在っても鳴らない」の一種で、読む人に守りを誤解させる）。
+        _vals = [v for v in _vals if str(v) in _left]
+        if _vals:
+            _c2_hits.append((_hh, list(_vals)))
+    if len(_c2_hits) == 1 and len(_c2_hits[0][1]) == 1:
+        _c2col, _c2val = _c2_hits[0][0], _c2_hits[0][1][0]
+        resolved["cond2_col"], resolved["cond2_cmp"] = _c2col, "eq"
+        resolved["cond2_value"] = _c2val
+        resolved["_cond_label"] += f"、かつ『{_c2col}』が『{_c2val}』"
+        resolved["_sources"] = {**resolved.get("_sources", {}),
+                                "cond2_value": f"実表の『{_c2col}』列に在る値"}
+    elif len(_c2_hits) >= 2:
+        # ★★ 3 条件以上 ── **半分だけやらない**（それは静かな嘘）。断って道を案内する。
+        #   ★ 案内の文は**実表から作る**ので、でたらめが入る余地が原理的に無い
+        #     （列名も値も、実表に在って依頼文にも在るものだけ）。
+        #   ★ 行数を添える ── どちらで絞るかは人が決めることなので、材料を渡す。
+        #   ★ 実測（2026-09-06）: 案内する文はどちらも実機で通ることを確かめてある
+        #     （tests/test_two_conditions_are_not_half_done.py の実機の検体）。
+        _lines = []
+        for _h, _v in _c2_hits:
+            _n = _rows_matching(book_meta, first_sheet, _h, "eq", _v[0],
+                                 resolved.get("_header_row", 1))
+            _cnt = f"（{len(_n)} 行）" if _n is not None else ""
+            _lines.append(f"「{_h}が{_v[0]}の行を抜き出して」{_cnt}")
+        return False, resolved, inferred, (
+            "条件が 3 つ以上あります。この道具は一度に 2 つまでです ── "
+            "まず抽出で絞ってから、残りの条件で書き換えてください。" + chr(10)
+            + "  絞り方の候補: " + " ／ ".join(_lines) + chr(10)
+            + "  （抜き出した先のシートで「" + str(resolved.get("_cond_label") or "")
+            + "」の書き換えを頼めます）")
     # ★ 当てはまる行を**先に数えて画面に出す**（0 行なら、走らせる前に断る ──
     #   「何も起きなかった」を後から × で知らせるのは、正しくても不親切）。
     # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
@@ -5159,6 +5219,15 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
             f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
     _hits = _rows_matching(book_meta, first_sheet, resolved["cond_col"],
                             _cmp, resolved["cond_value"], resolved["_header_row"])
+    # ★★ 2026-09-06: 2 組目が在るなら**交わり**を取る。ここは画面に出る行数なので、
+    #   絞り忘れると「当てはまる 3 行」と見せて 2 行しか書かない ── 人は数字を見て
+    #   y と答えるので、**宣言と実体がずれる最短の道**になる。
+    if _hits is not None and resolved.get("cond2_col"):
+        _hits2 = _rows_matching(book_meta, first_sheet, resolved["cond2_col"],
+                                 resolved["cond2_cmp"], resolved["cond2_value"],
+                                 resolved["_header_row"])
+        if _hits2 is not None:
+            _hits = [r for r in _hits if r in set(_hits2)]
     if _hits is not None:
         if not _hits:
             return False, resolved, inferred, (
@@ -6734,8 +6803,28 @@ def _codegen_set_where(*, op, resolved_args, book_meta, use_formula, headers, fi
     # ★ 外す行は**構造の事実**なので Python が渡す（条件の判定は Basic が自分で行う ──
     #   そこを渡すと事後条件が独立した検算でなくなる）。
     skip = ",".join(str(int(r) - 1) for r in (resolved_args.get("_skip_rows") or []))
-    return wrap('    Call SetColumnValueWhere(oDoc, %d, %d, %d, %d, %s, "%s", "%s")%s'
-                 % (hr0, wcol, ccol, code, thr_lit, val, skip, chr(10)))
+    # ★★ 2026-09-06: 2 組目の条件（AND）。無ければ従来どおり引数を足さない ──
+    #   Basic 側は Optional なので、既存の呼び出しは 1 文字も変わらない。
+    #   ★ 述語（RowMatches）は無傷のまま **2 回呼ぶ**だけ（凍結した真理表を触らない）。
+    c2 = resolved_args.get("cond2_col")
+    if not c2:
+        return wrap('    Call SetColumnValueWhere(oDoc, %d, %d, %d, %d, %s, "%s", "%s")%s'
+                     % (hr0, wcol, ccol, code, thr_lit, val, skip, chr(10)))
+    # ★ 列の番号は 1 組目と**同じ引き方**にする（headers はこの op ではその表の列名の並び）
+    c2col = headers.index(c2) if c2 in headers else 0
+    code2 = _EXTRACT_CMP_CODE[resolved_args["cond2_cmp"]]
+    thr2 = resolved_args["cond2_value"]
+    if isinstance(thr2, (list, tuple, set)):
+        _j2 = chr(2).join(str(v) for v in thr2)
+        thr2_lit = ('"' + _j2.replace(chr(34), chr(34) * 2)
+                            .replace(chr(2), '" & Chr(2) & "') + '"')
+    else:
+        _n2 = _is_number(thr2) and not isinstance(thr2, bool)
+        thr2_lit = (repr(float(thr2)) if _n2
+                     else '"%s"' % str(thr2).replace(chr(34), chr(34) * 2))
+    return wrap('    Call SetColumnValueWhere(oDoc, %d, %d, %d, %d, %s, "%s", "%s", %d, %d, %s)%s'
+                 % (hr0, wcol, ccol, code, thr_lit, val, skip,
+                    c2col, code2, thr2_lit, chr(10)))
 
 
 def _codegen_add_column(*, op, resolved_args, book_meta, use_formula, headers, first_sheet,

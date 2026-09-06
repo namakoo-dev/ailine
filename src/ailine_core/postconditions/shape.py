@@ -560,7 +560,15 @@ def check_set_where(path: Path, args: dict, header_row: int = 1,
                  for c in range(1, cols_b + 1)] != headers:
                 return "fail", "見出しが変わっています（条件つき書換で見出しは動かないはず）"
             last = max(last_a, last_b)
-            match = _extract_predicate(cmp, thr)
+            match1 = _extract_predicate(cmp, thr)
+            # ★★ 2026-09-06: 2 組目の条件（AND）。**述語は 1 条件のまま 2 回作る** ──
+            #   Basic 側も `RowMatches` を 2 回呼ぶだけで、どちらの実装も無傷。
+            #   ★ 本体（Basic）と検算（ここ）が**別実装**である性質を保つ
+            #     （同じ関数で数えたら恒真になる ── 2026-09-06 の朝に実弾で確かめた）。
+            c2col, c2cmp, c2val = (args.get("cond2_col"), args.get("cond2_cmp"),
+                                   args.get("cond2_value"))
+            c2i = headers.index(c2col) + 1 if c2col in headers else None
+            match2 = _extract_predicate(c2cmp, c2val) if c2i else None
             wrong_hit, wrong_miss, hits = [], [], 0
             skip_rows = set(int(x) for x in (args.get("_skip_rows") or []))
             for r in range(header_row + 1, last + 1):
@@ -573,7 +581,10 @@ def check_set_where(path: Path, args: dict, header_row: int = 1,
                             != bv_b.cell_value(r, wi, args.get("_target_sheet"))):
                         wrong_hit.append(r)
                     continue
-                if match(bv_b.cell_value(r, ci, args.get("_target_sheet"))):
+                _hit = match1(bv_b.cell_value(r, ci, args.get("_target_sheet")))
+                if _hit and match2 is not None:
+                    _hit = match2(bv_b.cell_value(r, c2i, args.get("_target_sheet")))
+                if _hit:
                     hits += 1
                     if str(bv.cell_value(r, wi, args.get("_target_sheet")) or "") != str(value):
                         wrong_miss.append(r)

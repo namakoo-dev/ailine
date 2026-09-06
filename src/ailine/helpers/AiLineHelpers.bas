@@ -846,11 +846,28 @@ End Sub
 ' skipRowsCsv: 対象から外す行（0 起点・カンマ区切り）。合計行など「データ行でない行」を
 '   Python 側が構造として見つけて渡す。★ **条件の判定は渡さない** ── そこは Basic が
 '   自分で決めるからこそ、Python の事後条件が独立した検算になる（片方に寄せない）。
+' ★★ 2026-09-06: 条件を **2 つまで** 受ける（AND）。実測で見つけた穴の処置 ──
+'   「金額が1000以上で部門が営業の行に○」で **部門の条件が丸ごと無視され、しかも ✓** が
+'   出ていた（宣言＝金額の条件・実体＝そのとおり なので事後条件は正しく通る。
+'   欠けていたのは「依頼 vs 宣言」）。
+' ★★ **RowMatches は 1 文字も変えない。** 述語は Python 側の別実装と凍結した真理表
+'   （tests/test_predicate_truth_table.py）の 3 箇所が持っており、そこを触ると 3 つの
+'   同期がずれる。★ 代わりに **呼ぶ側で 2 回呼んで And する** ── 述語は畳んだまま、
+'   合成だけを呼び出し側に置く。
+' ★ 2 組目は Optional。既存の呼び出しは 1 行も変えなくてよい（この repo に Optional の
+'   前例が 4 件在る）。★ 変数名は予約語と衝突しないこと（oR/Or の事故を実測済み）。
 Sub SetColumnValueWhere(oDoc As Object, headerRow As Integer, writeCol As Integer, _
                          condCol As Integer, cmpCode As Integer, cmpValue As Variant, _
-                         sValue As String, Optional skipRowsCsv As Variant)
+                         sValue As String, Optional skipRowsCsv As Variant, _
+                         Optional cond2Col As Variant, Optional cmp2Code As Variant, _
+                         Optional cmp2Value As Variant)
     Dim oSheet As Object, oCur As Object, lastRow As Long, i As Long
     Dim skips As String
+    Dim has2 As Boolean
+    has2 = False
+    If Not IsMissing(cond2Col) Then
+        If VarType(cond2Col) <> 0 Then has2 = True
+    End If
     skips = ""
     If Not IsMissing(skipRowsCsv) Then skips = "," & CStr(skipRowsCsv) & ","
     oSheet = oDoc.Sheets.getByIndex(0)
@@ -864,7 +881,17 @@ Sub SetColumnValueWhere(oDoc As Object, headerRow As Integer, writeCol As Intege
         If Len(skips) > 2 And InStr(skips, "," & CStr(i) & ",") > 0 Then
             ' 対象外の行（合計行など）── 触らない
         ElseIf RowMatches(oSheet.getCellByPosition(condCol, i), cmpCode, cmpValue) Then
-            oSheet.getCellByPosition(writeCol, i).setString(sValue)
+            ' ★ 2 組目は**この Sub の中で**判定する。IsMissing は自分の Optional 引数に
+            '   しか使えない ── 別の Function へ渡した時点で「渡された値」になる
+            '   （実測: 包みに切り出したらモジュールごと黙って死に、事後条件が × で止めた）。
+            If has2 Then
+                If RowMatches(oSheet.getCellByPosition(CInt(cond2Col), i), _
+                               CInt(cmp2Code), cmp2Value) Then
+                    oSheet.getCellByPosition(writeCol, i).setString(sValue)
+                End If
+            Else
+                oSheet.getCellByPosition(writeCol, i).setString(sValue)
+            End If
         End If
     Next i
 End Sub
