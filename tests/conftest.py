@@ -115,3 +115,43 @@ def _release_run_lock_after_each_test():
             _al.release_run_lock(handle[1])
         except Exception:
             _al._RUN_LOCK_HANDLE = None
+
+
+# ★ 実機を起こした走行は、終わりに LibreOffice を落とす -----------------------
+
+_LOCAL_RAN = []
+
+
+@pytest.fixture(autouse=True)
+def _remember_if_the_real_machine_was_used(request):
+    """この走行で実機（@pytest.mark.local）が 1 本でも走ったかを覚える。"""
+    if request.node.get_closest_marker("local"):
+        _LOCAL_RAN.append(1)
+    yield
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """★★ 2026-09-06: 実機を起こした走行は、終わりに待ち受けを落とす。
+
+    ★ 実測: `pytest -m local` が終わっても `soffice` が 2 つ（約 270MB）残り続ける。
+      成功した走行でも毎回残る ── 押すたびに増える。手で PID を見て落としていた。
+    ★ 落とし方は `basrun stop` に委譲する ── UNO で**接続先だけ** terminate するので、
+      人が GUI で開いている LibreOffice は巻き込まない（別プロファイル・別ポート）。
+      名前一括の kill は使わない（[[feedback_taskkill_kills_mcp]] の教訓）。
+    ★ 実機を 1 本も走らせていない回は**何もしない**（起こしてもいないものを止めない）。
+    ★ ここでの失敗は無視する ── 後始末が走行の合否を変えてはいけない。
+
+    ★ 断り書き: 居残りが「実機テストの大量失敗」を起こしたという証拠は**無い**
+      （2026-09-06 に再現を試みて失敗した ── 切られた後の待ち受けは健康だった）。
+      これは**資源の後始末**として正しいから入れる。原因不明の失敗への処方ではない。
+    """
+    if not _LOCAL_RAN:
+        return
+    try:
+        import subprocess
+        import sys as _sys
+        import ailine as _al
+        subprocess.run([_sys.executable, str(_al.basrun_path()), "stop"],
+                       capture_output=True, timeout=60)
+    except Exception:
+        pass

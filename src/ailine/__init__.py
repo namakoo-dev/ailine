@@ -9544,6 +9544,16 @@ def basrun_apply(book: Path, code: str, workdir: Path, helper_files=(),
         # basrun 自身の内部タイムアウトで落ちた場合も、同じ「実行時エラー」分類に正規化する。
         if timeout and "秒応答しなかった" in raw:
             return False, _timeout_error_message(timeout), raw
+        # 2026-09-06: **何も出力せずに終わった回**を、空のエラーとして返さない。
+        #   実測: 実機テストが大量に落ちた回の画面が「basrun_apply が失敗した: 」の
+        #   1 行だけで、**何が起きたのか誰にも分からなかった**（原因は今も未確定）。
+        #   空文字は「エラーが無い」ではなく「黙って死んだ」 ── 別の事実だ。
+        #   終了コードを添えて、環境側を疑う導線まで出す（次に起きた時に読めるように）。
+        if not raw.strip():
+            return False, (
+                f"basrun が何も出力せずに終了しました（終了コード {proc.returncode}）"
+                " ── LibreOffice を起こせなかったか、走行ごと止められた可能性があります"
+            ), raw
         return False, raw.strip()[-800:], raw
     return True, None, raw
 
