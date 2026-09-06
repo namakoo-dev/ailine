@@ -8409,7 +8409,15 @@ def insert_rows_should_have_been_add_row(task: str, resolved: dict,
     #     （②は呼び出し側が確かめる: 第二段が values を出し、その値が依頼文に literal で
     #      在ること ── 値をでっち上げた回に switch しない）。
     #   ★ 「空行が欲しい」「行を 1 本」は上で既に除いてある（別の意図）。
-    at, note = resolve_row_anchor(text, book_meta or {}, sheet)
+    # ★★ 2026-09-06（実物の請求書で実測）: ここは `header_row` を渡しておらず、
+    #   **見出し行をデータ行として走査**していた。実物は見出しが 16 行目なので、
+    #   「金額の列を全部 0 にして」の**見出しの語『金額』**を行の名前として拾い、
+    #   「『金額』の行＝16行目」と解いて**『行追加』に読み替えて**いた。
+    #   ★ 呼び出し側 4 箇所のうち、渡していなかったのはここ 1 箇所だけ（片配線）。
+    #   ★ `book_meta` は `header_rows` を持っている ── 呼び出し側に持たせず、
+    #     ここで引く（次に呼ぶ人も間違えない）。
+    _hr = int(((book_meta or {}).get("header_rows") or {}).get(sheet, 1) or 1)
+    at, note = resolve_row_anchor(text, book_meta or {}, sheet, header_row=_hr)
     if at is not None:
         return f"依頼文が場所を{note}と指しています（行挿入は空行を挿すだけです）"
     return None
