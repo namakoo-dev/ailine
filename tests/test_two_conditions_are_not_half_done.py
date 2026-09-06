@@ -202,6 +202,90 @@ def test_a_threshold_is_not_reused_as_a_second_condition(tmp_path):
     assert res["_match_rows"] == [2, 3], res["_match_rows"]
 
 
+def test_a_one_character_value_cannot_be_a_second_condition(tmp_path):
+    """★ **既知の限界**を明示して持つ（2026-09-06 に測って分かった）。
+
+    2 組目の材料は**残差**（1 組目が消費しなかった語）から採るが、残差の抽出は
+    **2 文字以上**しか拾わない（1 文字を拾うと助詞や記号を大量に掴む設計）。
+    だから『主』『甲』のような **1 文字の値**は 2 組目に採れない ── その回は
+    従来どおり 1 条件で走る（★ 半分やることになるので、ここは**穴として残る**）。
+
+    ★ 直すなら residue 側の意味論を変えることになり、4 つの呼び出し全部に影響する。
+      いまは**扱えないと知っている**方を選ぶ（黙って持たない）。
+    ★ この試験が赤くなったら「1 文字も採れるようになった」の意味 ── 期待値を反転して commit。
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "名簿"
+    ws.append(["氏名", "所属", "担当", "メモ"])
+    for r in [("田中", "営業", "主", ""), ("鈴木", "経理", "副", ""),
+              ("佐藤", "営業", "副", ""), ("山田", "総務", "主", "")]:
+        ws.append(r)
+    p = tmp_path / "one.xlsx"
+    wb.save(p)
+    bm = ailine.build_book_meta(p)
+    _ok, res, _inf, _err = ailine.verify_dsl_args(
+        "SET_WHERE", {"col": "メモ", "cond_col": "所属", "cmp": "eq", "value": "○"},
+        bm, task="所属が経理で担当が主の行のメモに「○」を付けて",
+        vocab=ailine.load_vocab())
+    assert res.get("cond2_col") is None, "1 文字の値が採れるようになった（限界が動いた）"
+
+    # ★ 対で縛る: **2 文字**なら同じ形で採れる（限界が「1 文字」であることの証明）
+    wb2 = openpyxl.load_workbook(p)
+    ws2 = wb2["名簿"]
+    for r, v in zip(range(2, 6), ("主任", "副任", "副任", "主任")):
+        ws2.cell(r, 3).value = v
+    q = tmp_path / "two.xlsx"
+    wb2.save(q)
+    wb2.close()
+    bm2 = ailine.build_book_meta(q)
+    _ok2, res2, _i2, _e2 = ailine.verify_dsl_args(
+        "SET_WHERE", {"col": "メモ", "cond_col": "所属", "cmp": "eq", "value": "○"},
+        bm2, task="所属が経理で担当が主任の行のメモに「○」を付けて",
+        vocab=ailine.load_vocab())
+    assert res2.get("cond2_col") == "担当" and res2.get("cond2_value") == "主任", res2
+
+
+def test_two_conditions_hold_together_with_the_negation(tmp_path):
+    """★ 否定（〜以外）と 2 組目が**同時に**効くこと（今日の午前と午後の合流点）。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "名簿"
+    ws.append(["氏名", "所属", "担当", "メモ"])
+    for r in [("田中", "営業", "主任", ""), ("鈴木", "経理", "副任", ""),
+              ("佐藤", "営業", "副任", ""), ("山田", "総務", "主任", "")]:
+        ws.append(r)
+    p = tmp_path / "neg2.xlsx"
+    wb.save(p)
+    bm = ailine.build_book_meta(p)
+    ok, res, _inf, err = ailine.verify_dsl_args(
+        "SET_WHERE", {"col": "メモ", "cond_col": "所属", "cmp": "eq", "value": "○"},
+        bm, task="所属が営業以外で担当が主任の行のメモに「○」を付けて",
+        vocab=ailine.load_vocab())
+    assert ok, err
+    assert res["cmp"] == "nin" and res.get("cond2_col") == "担当"
+    # 営業でない かつ 主任 ＝ 山田（5 行目）だけ
+    assert res["_match_rows"] == [5], res["_match_rows"]
+
+
+def test_no_row_matches_is_refused_before_writing(tmp_path):
+    """★ 2 条件で該当が 0 行なら、**書かずに断る**こと。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "名簿"
+    ws.append(["氏名", "所属", "担当", "メモ"])
+    for r in [("田中", "営業", "主任", ""), ("鈴木", "経理", "副任", "")]:
+        ws.append(r)
+    p = tmp_path / "none.xlsx"
+    wb.save(p)
+    ok, _res, _inf, err = ailine.verify_dsl_args(
+        "SET_WHERE", {"col": "メモ", "cond_col": "所属", "cmp": "eq", "value": "○"},
+        ailine.build_book_meta(p),
+        task="所属が経理で担当が主任の行のメモに「○」を付けて", vocab=ailine.load_vocab())
+    assert not ok
+    assert "当てはまる行がありません" in err and "何も書いていません" in err, err
+
+
 def test_the_single_condition_path_is_untouched(book):
     """★ 対で縛る ── 条件が 1 つの依頼は 1 ビットも変わらないこと。"""
     ok, res, _inf, err = _resolve(book, "金額が1000以上の行の備考に「○」を付けて")
