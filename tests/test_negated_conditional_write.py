@@ -102,7 +102,11 @@ def test_a_request_that_says_except_never_runs_as_equals(book, monkeypatch):
     monkeypatch.setattr(ailine, "task_names_real_values", lambda *a, **k: [])
     ok, _res, _inf, err = _resolve(book, NEG)
     assert not ok
-    assert "以外" in err, err
+    # ★ 2026-09-06: 否定の語彙が「以外」の 3 語から広がった（でない/ではない/
+    #   じゃない/を除く/を除いて）ので、断りの文言は「以外」を名指ししなくなった。
+    #   ★ 守りたいのは**断りが自分を説明すること**（何について決められないのか）。
+    #     緑にするために assert を消さず、意図の側で縛り直す。
+    assert "否定" in err and "所属" in err, err
 
 
 def test_it_refuses_when_the_named_value_is_not_in_the_table(book):

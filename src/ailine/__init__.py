@@ -193,6 +193,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
 )
 from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/照合/保存形式（純関数）
 from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もしかして提案の候補生成（語としての厳格一致+about）
+from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
 from ailine_core.ask_choice import (   # ★ 挙動変更#3: 「選択肢を出して選ばせる」対話部品
@@ -4260,7 +4261,16 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
             #   読み直しが cmp=nin を立てた直後にここが `eq` へ上書きし、
             #   **味噌汁だけを抜き出して △ を出していた** ── 逆のことをして合格。
             #   ★ 片配線そのもの: 読み直しに足して、決定の場所に足し忘れた。
-            _neg = task_says_except(task)
+            # ★★ 2026-09-06: 否定は「何に付いているか」で読む（SET_WHERE と同じ判定器）。
+            #   実測で抽出にも同じ 2 つの反転が残っていた
+            #   （「営業でない…抜き出して」→ eq ／「メモ以外は変えずに…」→ nin）。
+            _neg_read = negation_reading.reading(
+                task, _named_vals, [str(h) for h in (headers.get(first_sheet) or [])])
+            if _neg_read == negation_reading.UNCLEAR:
+                return False, resolved, inferred, (
+                    f"『{resolved.get('col')}』のどの値の否定なのかを"
+                    "依頼文から決められません（列に在る値を名指ししてください）")
+            _neg = (_neg_read == negation_reading.NEGATED)
             if _neg:
                 resolved["cmp"] = "nin"
                 resolved["value"] = list(_named_vals)
@@ -5033,7 +5043,28 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
     #   実測: 一段目は `neq` を返してきた（語彙に無い）。ここで先に許可リストへ当てると
     #   「そんな比較はありません」で終わり、扱えるはずの否定が断られる。
     #   ★ 比較は機械が勝つ、という既存の原則（上の _mech_cmp と同じ）を否定にも通す。
-    if task_says_except(task) and _cmp != "nin":
+    # ★★ 2026-09-06: 否定は「文に在るか」ではなく「**何に付いているか**」で読む。
+    #   旧版は `any("以外" in task)` だったため、実測で 2 つの反転が出た
+    #   （`bench/negation_reading_probe.py`・本物の CLI を --dry で 11 件）:
+    #     Q1「営業でない/ではない/じゃない/を除いて」→ 否定と読まれず eq（4/4）
+    #     Q2「メモ以外は変えずに、所属が営業の行…」→ nin が強制され**逆の行に書く**（3/3）
+    #   ★ 判定は ailine_core/negation.py に 1 つだけ置き、ここは**材料を渡すだけ**。
+    #     値の解決（task_names_real_values）は 1 回で済ませ、下の枝が同じ物を読む。
+    _hr_here = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
+    try:
+        _neg_vals = list(task_names_real_values(
+            task, book_meta, first_sheet, resolved["cond_col"], _hr_here) or [])
+    except Exception:
+        _neg_vals = []
+    _neg_read = negation_reading.reading(
+        task, _neg_vals, [str(h) for h in (headers.get(first_sheet) or [])])
+    if _neg_read == negation_reading.UNCLEAR:
+        # ★ 決まらないなら**断る**（2026-09-05 の振る舞いをそのまま保つ）。
+        #   ここで eq に落ちると、依頼と逆のことをして ✓ が出る。
+        return False, resolved, inferred, (
+            f"『{resolved['cond_col']}』のどの値の否定なのかを"
+            "依頼文から決められません（列に在る値を名指ししてください）")
+    if _neg_read == negation_reading.NEGATED and _cmp != "nin":
         # ★ 警告は**本当に食い違っている時だけ**。実測で一段目は `neq` を返してきたが、
         #   これは「語彙に無いだけで意図は合っている」── それを食い違いとして ⚠ を出すと
         #   否定の依頼が毎回 △ に落ちる（実測でそうなった）。嘘に近い警告は出さない。
@@ -5042,7 +5073,7 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
         if _cmp in _EXTRACT_CMPS:
             resolved["_warnings"] = resolved.get("_warnings", []) + [
                 f"LLM が返した比較({_cmp})は否定ではないため、"
-                "依頼文の「以外」を採用しました(nin)"]
+                "依頼文の否定を採用しました(nin)"]
         _cmp = "nin"
     if _cmp not in _EXTRACT_CMPS:
         return False, resolved, inferred, (
@@ -5050,7 +5081,6 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
     resolved["cmp"] = _cmp
     # ★ 閾値は**依頼文の数字**から機械が取る（LLM に確定させない）。
     _nums = _re_threshold_num.findall((task or "").translate(_ZENKAKU_DIGITS))
-    _hr_here = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
     # ★★ 2026-09-04（段2.5 の実測）: **文字列の条件が構造的に表現できなかった**。
     #   「所属が営業と等しい行のメモに『○』を付けて」は、読み直しが正しく
     #   条件つき書換まで来ているのに「条件の**数値**が読み取れません」で止まっていた
@@ -5065,15 +5095,8 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
     # ★★ 2026-09-05（否定の対応）: 「〜以外」は**値の一覧の否定**（cmp=nin）。
     #   兄弟の EXTRACT が既にこの形で解いている（resolve_named_extraction）ので、
     #   同じ器官（task_names_real_values）で同じ形に解く ── 別の勘定を作らない。
-    if task_says_except(task):
-        _neg_vals = list(task_names_real_values(
-            task, book_meta, first_sheet, resolved["cond_col"], _hr_here) or [])
-        if not _neg_vals:
-            # ★ 決まらないなら**断る**。ここで eq に落ちると、依頼と逆のことをして
-            #   ✓ が出る（2026-09-04 に実測した静かな嘘そのもの）。
-            return False, resolved, inferred, (
-                f"『{resolved['cond_col']}』のどの値の「以外」なのかを"
-                "依頼文から決められません（列に在る値を名指ししてください）")
+    if _neg_read == negation_reading.NEGATED:
+        # ★ 値は上で 1 回だけ解いてある（UNCLEAR ならここへ来ないので必ず空でない）。
         _cmp = "nin"
         resolved["cmp"] = "nin"
         resolved["cond_value"] = _neg_vals
@@ -7946,8 +7969,17 @@ def removal_axis_is_wrong(op: str, resolved_args: dict, book_meta: dict,
 
 
 def task_says_except(task: str) -> bool:
-    """依頼文が「〜以外」を言っているか（語の集合は removal_reading と共有）。"""
-    return any(w in (task or "") for w in _EXCEPT_WORDS)
+    """依頼文が否定を言っている**かもしれない**か ── ★ 安い前置きであって決定ではない。
+
+    ★★ 2026-09-06: これは「文のどこかに否定語が在るか」しか見ない。実測でここを
+      **決定**に使うと 2 通りに反転した（`bench/negation_reading_probe.py`）ので、
+      「否定として読むか」の判断は `ailine_core/negation.py` の `reading()` が
+      **値に付いているか**まで見て決める。ここはその手前の足切りだけに使う。
+    ★ 語の集合は `negation_reading.NEGATION_WORDS`（`_EXCEPT_WORDS` を含む上位集合）。
+      `_EXCEPT_WORDS` の方は `removal_reading` と共有しているので触らない
+      ── 含有関係は tests/test_negation_binds_to_a_value.py が機械で縛る。
+    """
+    return any(w in (task or "") for w in negation_reading.NEGATION_WORDS)
 
 
 def except_extraction_reading(book_meta: dict, sheet: str | None, task: str,
@@ -7965,7 +7997,16 @@ def except_extraction_reading(book_meta: dict, sheet: str | None, task: str,
     """
     if not task_says_except(task):
         return None, None
-    return resolve_named_extraction(book_meta, sheet, task, header_row)
+    _col, _vals = resolve_named_extraction(book_meta, sheet, task, header_row)
+    if not _col or not _vals:
+        return None, None
+    # ★★ 2026-09-06: 値に付いた否定でなければ、否定として読まない。
+    #   実測:「メモ以外は変えずに、所属が営業の行を抜き出して」がここで nin になり、
+    #   **営業でない行を抜き出していた**（依頼と逆）。列名に付いた「以外」は条件ではない。
+    _heads = [str(h) for hs in ((book_meta.get("headers") or {}).values()) for h in (hs or [])]
+    if negation_reading.reading(task, _vals, _heads) != negation_reading.NEGATED:
+        return None, None
+    return _col, _vals
 
 
 CHOICE_PREFIX = "候補: "
