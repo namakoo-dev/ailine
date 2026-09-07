@@ -428,7 +428,7 @@ def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, 
 def _verify_insert_rows(resolved, inferred, book_meta, task, sheets, op)
 def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, task, headers, op)
 def _verify_merge(resolved, inferred)
-def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in)
+def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in, task='')
 def _verify_pivot(resolved, inferred, first_sheet, resolve_in)
 def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers)
 def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers, op)

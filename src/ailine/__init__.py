@@ -5799,7 +5799,7 @@ def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in, t
     return None
 
 
-def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in):
+def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in, task=""):
     """NUMBER_FORMAT の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
     ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
@@ -5823,6 +5823,15 @@ def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in
         return False, resolved, inferred, err
     if resolved.get("style") != "thousands":
         return False, resolved, inferred, f"書式『{resolved.get('style')}』は未対応です（対応: thousands）"
+    # ★★ 2026-09-07: 上の検査は**宣言**しか見ていない。LLM は「円マーク」を、持っている
+    #   書式（thousands）へ**正規化して**返すので素通りし、¥ が付かないまま ✓ が出ていた。
+    #   ★ 依頼文の側を見る（三項のうち依頼が落ちる形は、今日これで 4 つ目）。
+    if (_fmt := intent_mismatch.format_asked_but_not_supported(
+            task, (book_meta.get("headers") or {}).get(first_sheet) or [])):
+        return False, resolved, inferred, (
+            f"{_fmt}はこの道具の数値書式では扱えません（扱えるのは桁区切りだけです）"
+            "── 桁区切りだけでよければ「桁区切りを付けて」と頼んでください。"
+            "要望として記録します")
     return None
 
 
@@ -6013,7 +6022,7 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return r
 
     elif op == "NUMBER_FORMAT":
-        r = _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in)
+        r = _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in, task)
         if r is not None:
             return r
 

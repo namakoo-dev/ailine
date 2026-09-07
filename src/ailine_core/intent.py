@@ -33,6 +33,42 @@
 from __future__ import annotations
 
 
+#: 「消す」と読める**裸の動詞**（op の照合語彙は「行を消して」の形しか持たないため）。
+BARE_REMOVALS = ("消して", "削除して", "消す", "削除する", "取り除いて", "取り除く")
+
+#: 数値書式で頼まれがちだが、この道具が**持っていない**書き方（語 → 人に見せる名前）。
+#: ★ 持っているのは桁区切りだけ（FormatThousands）。
+UNSUPPORTED_FORMATS = {
+    "円マーク": "通貨記号（¥）", "￥": "通貨記号（¥）", "¥": "通貨記号（¥）",
+    "通貨": "通貨記号（¥）", "パーセント": "百分率（%）", "％": "百分率（%）",
+    "%": "百分率（%）", "小数": "小数点以下の桁数", "年月日": "日付の書き方",
+}
+
+
+def format_asked_but_not_supported(task: str, column_names=()) -> str | None:
+    """依頼文が**この道具に無い書き方**を名指ししているなら、その名前を返す。
+
+    ★★ なぜ在るか（2026-09-07・外部の査定が false ✓ として拾った）:
+
+        依頼   「金額に**円マーク**を付けて」
+        実行   数値書式 書式:thousands（桁区切り）→ 実ファイルは `#,##0`（¥ 無し）
+        出力   **✓ 機械検証済み**
+
+      ★ `style != "thousands"` を弾く番人は**在った**。だが LLM は「円マーク」を
+        持っている書式へ**正規化して**返すので、宣言だけ見ていると素通りする。
+        ── 三項（依頼・宣言・実体）のうち、また**依頼**が見られていなかった。
+
+    ★ 列名に当たる語では鳴らさない（「日付の列に桁区切りを付けて」の『日付』は
+      書式の指定ではなく対象）── 今日の他の判定と同じ**結び先を見る**作法。
+    """
+    text = task or ""
+    cols = {str(c) for c in (column_names or ()) if c}
+    for word, label in UNSUPPORTED_FORMATS.items():
+        if word in text and word not in cols:
+            return label
+    return None
+
+
 #: 「消す」意味の語 ── 値として書き込むと、literal で『空』と書いてしまう。
 ERASERS = ("空", "空欄", "クリア", "未入力", "なし", "ブランク", "空白")
 
@@ -86,4 +122,12 @@ def removal_asked_but_not_done(task: str, op: str, vocab_by_op: dict,
         if other == op or not removes.get(other):
             continue
         hits += [p for p in (phrases or ()) if p and p in text]
+    if not hits:
+        # ★★ 2026-09-07: **裸の動詞**まで見る。op の照合語彙は「行を消して」の形しか
+        #   持たないので、「田中さんの分だけ残して**他は消して**」が素通りしていた
+        #   （外部の査定が false ✓ として拾った 2 件目 ── 抽出に化けて ✓ が出ていた）。
+        #   ★ 広げる前に測った: 4,556 件の実走行で 0.37% → 0.70%。増えた 15 件は
+        #     すべて DEDUP（新シートを作るだけで元の重複は残る）＝既に本物と数えた家系。
+        #     **新しい誤爆は 0 件**だったので広げる。
+        hits = [w for w in BARE_REMOVALS if w in text]
     return list(dict.fromkeys(hits))
