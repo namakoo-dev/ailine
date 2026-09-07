@@ -11618,15 +11618,24 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         #   『削除』のような**動詞**の食い違いは拾えなかった。実測した事故:
         #     「ヤマノ食品の行を削除して」→ 操作:抽出（新シートを作り元の行はそのまま）→ ✓
         #   ★ op 名でなく**効果の種類**で見る（4,538 件で 16 件 0.35%・全部が本物）。
+        # ★★ 2026-09-07: 「取り除き」限定から**効果の種類の食い違い**へ広げた。
+        #   実測: 「机の行と棚の行を**交換して**」が 23 回中 1 回 **行追加**に化け、
+        #   行が 4 → 5 に増えたのに成功と報告していた（取り除き限定では黙る形）。
+        #   ★ 5,045 件の実走行で 21 件 0.42%・全部が本物（誤爆 0）。
         _op_now = str(result.get("op") or "")
-        _asked = intent_mismatch.removal_asked_but_not_done(
-            getattr(a, "task", "") or "", _op_now,
+        _asked = intent_mismatch.op_effect_mismatch(
+            getattr(a, "task", "") or "",
+            {_op_now} | {str(o) for o in (result.get("ops") or []) if o}, scope,
             {_o: [p for p in _op_match_pool(_o) if p] for _o in OP_META},
-            {_o: (WRITE_REMOVE in (getattr(OP_WRITE_TARGET.get(_o), "writes", ()) or ()))
+            {_o: set(getattr(OP_WRITE_TARGET.get(_o), "writes", ()) or ())
              for _o in OP_META})
         if _asked:
-            print(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は行や列を"
-                  "取り除きません（元の表はそのまま残っています）"
+            _removes = WRITE_REMOVE in (
+                getattr(OP_WRITE_TARGET.get(_op_now), "writes", ()) or ())
+            _tail = ("行や列を取り除きません（元の表はそのまま残っています）"
+                     if not _removes else
+                     f"『{OP_LABELS.get(_op_now, _op_now)}』です")
+            print(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は{_tail}"
                   "── 頼んだ通りかを「解釈:」行で確かめてください")
             warning_count += 1
 

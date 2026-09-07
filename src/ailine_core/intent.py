@@ -99,35 +99,53 @@ def why_not_a_value(value, column_names, sheet_names, op_words) -> str | None:
     return None
 
 
-def removal_asked_but_not_done(task: str, op: str, vocab_by_op: dict,
-                               removes: dict) -> list:
-    """「取り除く」を頼まれたのに取り除かなかったなら、当たった語を返す（無ければ空）。
+def op_effect_mismatch(task: str, ops, declaration: str,
+                       vocab_by_op: dict, effects: dict) -> list:
+    """依頼が名指しした操作と、実行した操作の**効果の種類**が食い違うなら、当たった語を返す。
 
-    task        … 依頼文
-    op          … 実行した操作
-    vocab_by_op … {op: その op の照合語彙}（`_op_match_pool` の結果）
-    removes     … {op: その op が「取り除く」を書くか}（書き込み様式の登録簿から）
+    ★★ なぜ一般形が要るか（2026-09-07・効果の行列が本物の欠陥を 1 件掴んだ）:
 
-    ★ 実行した op **自身の語彙**が依頼文に当たっているなら、食い違いとは言わない
-      （「重複行を削除して」で DEDUP が選ばれた回に、DEDUP の語彙も当たっていれば
-      利用者はその操作を名指ししている）。
+        依頼   「机の行と棚の行を**交換して**」
+        実行   操作:**行追加** 挿入位置:2 入れる値:品名=棚
+        出力   成功（行が 4 → 5 に増えた）
+
+      ★ 23 回中 22 回は正しく入れ替えており、**1 回だけ化けた**。取り除きだけを見る版
+        （旧 removal_asked_but_not_done）では、入れ替えも行追加も「取り除かない」ので黙る。
+
+    ★ 拒否は 3 つ（この 3 つで、実測の誤爆 24 件が全部消えた）:
+      ① 実行した op **自身の語彙**が依頼文に在る（利用者がその操作を名指ししている）
+      ② 2 つの op の**効果が重なる**（COMPUTE_COLUMN と ADD_COLUMN は共に列を作る＝上位下位）
+      ③ 当たった語が**解釈行に出ている**（『小計の列を追加』の『小計』は新しい列の名前
+         ＝依頼は宣言に反映されている ── 残差の関所と同じ考え）
+
+    ★ 実測: 5,045 件の実走行で **21 件 0.42%・全部が本物**
+      （DEDUP と EXTRACT が「消して」と言われて消さない 19 件 ＋ 入れ替えが行追加に化けた 2 件）。
     """
-    text = task or ""
-    if not text or removes.get(op):
-        return []                       # 取り除く op を実行したなら、食い違わない
-    if any(p for p in (vocab_by_op.get(op) or ()) if p and p in text):
-        return []                       # 実行した op 自身が名指しされている
+    text, decl = task or "", declaration or ""
+    if not text:
+        return []
+    # ★★ 2026-09-07（今朝の凍結予測①が当たった）: **複合計画で誤爆した**。
+    #   「単価で並べ替えして、数量と単価を掛けた金額の列を足して」は 2 段の計画で、
+    #   依頼文が複数の操作を名指しするのは**当たり前**。1 段ぶんの op と比べると、
+    #   もう一方の段の語が必ず食い違いに見える。
+    #   ★ だから比べる相手は「その走行が**実行した op の集合**」にする。
+    mine_ops = {str(o) for o in (ops if isinstance(ops, (list, tuple, set)) else [ops]) if o}
+    if any(p for o in mine_ops for p in (vocab_by_op.get(o) or ()) if p and p in text):
+        return []                                   # ① 自分の操作が名指しされている
+    mine = set()
+    for o in mine_ops:
+        mine |= set(effects.get(o) or ())
     hits = []
     for other, phrases in (vocab_by_op or {}).items():
-        if other == op or not removes.get(other):
-            continue
-        hits += [p for p in (phrases or ()) if p and p in text]
-    if not hits:
-        # ★★ 2026-09-07: **裸の動詞**まで見る。op の照合語彙は「行を消して」の形しか
-        #   持たないので、「田中さんの分だけ残して**他は消して**」が素通りしていた
-        #   （外部の査定が false ✓ として拾った 2 件目 ── 抽出に化けて ✓ が出ていた）。
-        #   ★ 広げる前に測った: 4,556 件の実走行で 0.37% → 0.70%。増えた 15 件は
-        #     すべて DEDUP（新シートを作るだけで元の重複は残る）＝既に本物と数えた家系。
-        #     **新しい誤爆は 0 件**だったので広げる。
-        hits = [w for w in BARE_REMOVALS if w in text]
+        theirs = set(effects.get(other) or ())
+        if other in mine_ops or not theirs or (theirs & mine):
+            continue                                # ② 効果が重なるなら食い違いでない
+        hits += [p for p in (phrases or ()) if p and p in text and p not in decl]  # ③
+    if not hits and mine and not (mine & {WRITE_REMOVE}):
+        hits = [w for w in BARE_REMOVALS if w in text and w not in decl]
     return list(dict.fromkeys(hits))
+
+
+#: 「取り除く」の効果名（登録簿の writes に入る値）。
+WRITE_REMOVE = "remove"
+

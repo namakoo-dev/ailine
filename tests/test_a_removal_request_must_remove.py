@@ -31,10 +31,27 @@ def _pools():
     return {op: [p for p in ailine._op_match_pool(op) if p] for op in ailine.OP_META}
 
 
-def _removes():
-    return {op: (ailine.WRITE_REMOVE in
-                 (getattr(ailine.OP_WRITE_TARGET.get(op), "writes", ()) or ()))
+def _effects():
+    """op ごとの**効果の種類**（登録簿そのまま）。"""
+    return {op: set(getattr(ailine.OP_WRITE_TARGET.get(op), "writes", ()) or ())
             for op in ailine.OP_META}
+
+
+#: 解釈行の代わり ── ★ **実物に合わせる**。宣言が薄いと「当たった語が宣言に出ている」
+#: という拒否（残差と同じ考え）を素通りさせ、判定でなく検体の粗を測ることになる。
+DECLS = {
+    "COMPUTE_COLUMN": "操作:計算列 新しい列の名前:小計 演算対象:数量 演算子:* 単価",
+    "SORT": "操作:並べ替え 対象:金額 順:降順",
+    "DELETE_ROWS": "操作:行削除 削除位置:3 行数:1",
+    "EXTRACT": "操作:抽出 対象列:取引先 条件:等しい 値:ヤマノ食品",
+    "DEDUP": "操作:重複除去 対象列:品名",
+    "ADD_ROW": "操作:行追加 挿入位置:2 入れる値:品名=棚",
+    "SWAP": "操作:入れ替え 入れ替える一方:机 もう一方:棚",
+}
+
+
+def _decl(op):
+    return DECLS.get(op, f"操作:{ailine.OP_LABELS.get(op, op)}")
 
 
 # --- ① 効果の種類の食い違い（純ロジック）------------------------------------
@@ -47,7 +64,20 @@ def _removes():
     ("重複行を削除して重複を除く", "DEDUP", False),      # ★ 自分の語彙が名指しされている
 ])
 def test_a_removal_request_that_removes_nothing_is_named(task, op, fires):
-    got = intent.removal_asked_but_not_done(task, op, _pools(), _removes())
+    got = intent.op_effect_mismatch(task, {op}, _decl(op), _pools(), _effects())
+    assert bool(got) is fires, got
+
+
+@pytest.mark.parametrize("task, op, fires", [
+    # ★★ 2026-09-07: 効果の行列が掴んだ本物の欠陥 ── 「交換して」が 23 回中 1 回
+    #   **行追加**に化け、行が 4 → 5 に増えたのに成功と報告していた。
+    #   ★ 取り除き限定の版では黙る（入れ替えも行追加も取り除かない）。
+    ("机の行と棚の行を交換して", "ADD_ROW", True),
+    ("机の行と棚の行を交換して", "SWAP", False),          # ★ 正しく入れ替えた回は黙る
+    ("あかね商事の行とうえだ物産の行を交換して", "ADD_ROW", True),
+])
+def test_a_swap_that_became_an_insert_is_named(task, op, fires):
+    got = intent.op_effect_mismatch(task, {op}, _decl(op), _pools(), _effects())
     assert bool(got) is fires, got
 
 
@@ -57,9 +87,9 @@ def test_op_names_are_not_what_we_compare():
     「列を追加して」は ADD_COLUMN の語彙に当たるが、実行した COMPUTE_COLUMN も
     列を書く op なので**食い違いではない**。実測でここが 22 件を占めていた。
     """
-    assert intent.removal_asked_but_not_done(
-        "数量に単価をかけた小計の列を追加して", "COMPUTE_COLUMN",
-        _pools(), _removes()) == []
+    assert intent.op_effect_mismatch(
+        "数量に単価をかけた小計の列を追加して", {"COMPUTE_COLUMN"},
+        "操作:計算列 新しい列の名前:小計 演算対象:数量 単価", _pools(), _effects()) == []
 
 
 # --- ② 見出し + 構造の語（『原価列』→『原価』）------------------------------
@@ -96,6 +126,20 @@ def _run_finish_apply(tmp_path, task, scope, op, capsys, name="in"):
     ailine._finish_apply(a, book, out, work, {"op": op}, machine_verified=True,
                          scope=scope, scope_note="", warning_count=0)
     return capsys.readouterr().out
+
+
+def test_a_swap_that_became_an_insert_loses_the_check(tmp_path, capsys):
+    """★ 実物の宣言で、✓ が消えることまで縛る（判定だけ正しくても意味が無い）。
+
+    ★ 実測の宣言をそのまま使う ── 「操作:行追加 挿入位置:2 位置の根拠:『机』の行＝2行目
+      入れる値:品名=棚」。ここに『交換』は出ていないので、依頼の語が落ちている。
+    """
+    shown = _run_finish_apply(
+        tmp_path, "机の行と棚の行を交換して",
+        "操作:行追加 挿入位置:2 位置の根拠:『机』の行＝2行目 入れる値:品名=棚",
+        "ADD_ROW", capsys, name="swapbad")
+    assert "交換" in shown and "⚠" in shown, shown
+    assert "✓" not in shown, shown
 
 
 def test_the_mismatch_gate_is_wired_into_the_only_place_that_prints_the_check(
