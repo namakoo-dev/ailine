@@ -3,7 +3,8 @@
   "resolved": {
     "at": 3,
     "count": 2,
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": null

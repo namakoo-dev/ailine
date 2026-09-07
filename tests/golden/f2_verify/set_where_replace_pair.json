@@ -3,6 +3,7 @@
   "resolved": {
     "col": "商品",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "cond_col": "商品",
     "cmp": "eq",
     "cond_value": "りんご",
@@ -17,7 +18,6 @@
     ],
     "_header_row": 1,
     "_cond_label": "『商品』が『りんご』の行（→『林檎』に）",
-    "_skip_rows": [],
     "_match_rows": [
       2
     ],

@@ -4,6 +4,7 @@
     "col": "商品",
     "sep": ",",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "_parts": 3,
     "_new_cols": [
       "商品_1",

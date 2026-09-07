@@ -2,7 +2,8 @@
   "ok": false,
   "resolved": {
     "at": 1,
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "1行目は見出し行（1行目）またはその上です ── 見出しを壊す操作は受け付けません"

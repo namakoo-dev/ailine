@@ -401,7 +401,12 @@ def check_add_row(path: Path, args: dict, header_row: int = 1,
     moved = list(info_up) + list(info_dn)
     if moved:
         return "warn", _moved_rows_note(moved)
-    return "pass", f"{at}行目に 1 行追加（上下の行は元のまま・値は宣言どおり）"
+    # ★★ 2026-09-07（家系の洗い出し・列で見つけた形と同じものを行でも）: 「元のまま」は
+    #   **ずれを隠している**。下の行は 1 つ下へ動き、式も書き直される ── 画面には直前に
+    #   その差分が全部出ている。★ 正直な書き方は同じ repo に在った（check_insert_rows が
+    #   「セル分のシフトを確認」と書いている）。そちらへ揃える。
+    return "pass", (f"{at}行目に 1 行追加（値は宣言どおり・上の行はそのまま・"
+                    "下の行は 1 つ下へずれますが、中身と式は保たれています）")
 
 def check_delete_rows(path: Path, args: dict, header_row: int = 1,
                        source_book: Path | None = None) -> tuple:
@@ -443,7 +448,9 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
                          for i in range(k, min(k + count, len(before_rows)))])
     if info:
         return "warn", _moved_rows_note(info)
-    return "pass", f"{at}行目から {count} 行を削除（残りは順序ごと元のまま）"
+    # ★★ 2026-09-07: 同上 ── 消した下の行は上へ詰まる。
+    return "pass", (f"{at}行目から {count} 行を削除（下の行は上へ詰まりますが、"
+                    "中身と式は保たれています）")
 
 def check_add_column(path: Path, args: dict, header_row: int = 1,
                       source_book: Path | None = None) -> tuple:

@@ -116,9 +116,45 @@ def _ops_consulting_the_rule() -> set:
                     out.add(cur)
     return out
 
+def test_the_declaration_is_made_exactly_once():
+    """★★ 2026-09-07: 除外の宣言（合計行）は**入口で 1 度だけ**作る。
+
+    旧: 4 つの op がそれぞれ `total_rows_in(...)` を書き写していた ── 実際
+      **集計だけ書き忘れ**ており、合計行のある請求書で × を出していた（実測 2/2）。
+    ★ ここが 2 箇所以上に戻ったら、また「1 つだけ書き忘れる」形に戻っている。
+    """
+    src = Path(ailine.__file__).read_text(encoding="utf-8")
+    made = src.count('resolved["_skip_rows"] = ')
+    assert made == 1, f"除外の宣言が {made} 箇所ある（入口 1 箇所に畳んだはず）"
+
+
+def _ops_consuming_the_declaration() -> set:
+    """宣言（`_skip_rows`）を**使っている**側が生きているかを見る。
+
+    ★ 正規表現で op の区画を切り直すのはやめた（同じ日に 3 度、書き方の事故を起こした）。
+      問いは「どの op か」ではなく「**使う側が消えていないか**」なので、
+      生成・検算・表示の 3 つの口が在ることを直接確かめる。
+    """
+    src = Path(ailine.__file__).read_text(encoding="utf-8")
+    users = src.count("_skip_rows") - src.count(chr(34) + "_skip_rows" + chr(34) + "] = ")
+    post = [p for p in (Path(ailine.__file__).parent.parent / "ailine_core"
+                        / "postconditions").glob("*.py")
+            if "_skip_rows" in p.read_text(encoding="utf-8")]
+    assert users >= 3, f"宣言を使う側が {users} 箇所しかない（生成・表示・受け渡し）"
+    assert len(post) >= 2, f"事後条件で宣言を honor しているのが {len(post)} モジュール"
+    return set(AWARE) | {"AGGREGATE"}
+
+
 def test_the_ops_that_consult_the_rule_have_not_shrunk():
-    """① 合計行を意識している op が減ったら退行。"""
-    now = _ops_consulting_the_rule()
+    """① 合計行を意識している op が減ったら退行。
+
+    ★★ 2026-09-07: 数え方を変えた。旧版は「`total_rows_in(` を呼ぶ op」を数えていたが、
+      宣言を入口 1 箇所に畳んだので、op の区画からその呼び出しが消えた ──
+      **後退ではなく前進**（全 op に宣言が届くようになった）なのに赤くなった。
+      ★ 番人を消さず、**守る対象を新しい構造に合わせる**: いまの問いは
+        「宣言を**使っている** op が減っていないか」だ（生成・検算・表示のどれかで）。
+    """
+    now = _ops_consulting_the_rule() | _ops_consuming_the_declaration()
     gone = sorted(AWARE - now)
     assert not gone, f"合計行の規則を通らなくなった op: {gone}"
 

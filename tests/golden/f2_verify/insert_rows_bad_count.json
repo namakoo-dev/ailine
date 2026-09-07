@@ -3,7 +3,8 @@
   "resolved": {
     "at": 3,
     "count": "abc",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "挿入行数『abc』が不正です（1以上の整数）"

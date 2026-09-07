@@ -3,7 +3,8 @@
   "resolved": {
     "template_sheet": "単価表",
     "name_col": "商品",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "帳票段はファイルの実体が無いと検証できません（book_meta に path が無い）"

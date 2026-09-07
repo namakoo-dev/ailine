@@ -2,7 +2,8 @@
   "ok": false,
   "resolved": {
     "target": "xyz",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "対象『xyz』の形式が不明です（row:N / col:列名 / cell:行,列 / all）"

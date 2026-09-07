@@ -4,7 +4,8 @@
     "col": "金額",
     "cmp": "gte",
     "value": "",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "抽出する値(value)が依頼文から読み取れません"

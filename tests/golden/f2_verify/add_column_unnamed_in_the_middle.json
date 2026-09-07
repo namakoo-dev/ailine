@@ -2,6 +2,7 @@
   "ok": true,
   "resolved": {
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "name": "",
     "_at_col": 3,
     "_at_basis": "『数量』（2列目）の右＝3列目",

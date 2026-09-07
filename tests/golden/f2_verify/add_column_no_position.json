@@ -3,6 +3,7 @@
   "resolved": {
     "name": "備考",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "_at_col": 5,
     "_at_basis": "末尾＝5列目（依頼文に位置の指定が無いため）",
     "_headers": [

@@ -3,7 +3,8 @@
   "resolved": {
     "col": "金額",
     "style": "thousands",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": null

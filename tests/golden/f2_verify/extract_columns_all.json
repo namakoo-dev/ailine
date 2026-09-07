@@ -1,7 +1,8 @@
 {
   "ok": false,
   "resolved": {
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "全部の列が指定されています（抜き出す意味がありません）"

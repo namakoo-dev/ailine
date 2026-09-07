@@ -6,6 +6,7 @@
     ],
     "operator": "*",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "factor": 0.0
   },
   "inferred": [],

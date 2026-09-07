@@ -3,7 +3,8 @@
   "resolved": {
     "target": "col:金額",
     "color": "red",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": null

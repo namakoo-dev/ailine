@@ -6,7 +6,8 @@
       "存在しない"
     ],
     "operator": "*",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "列『存在しない』がありません。ある列: 商品, 数量, 単価, 金額"

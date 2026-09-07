@@ -3,7 +3,8 @@
   "resolved": {
     "at": 3,
     "values": {},
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "入れる値が読み取れません（列名と値の組で書いてください）"

@@ -5,6 +5,7 @@
     "cmp": "eq",
     "value": "みかん",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "_warnings": [
       "LLM が返した値『ミカン』は列『商品』に無いため、依頼文が名指しする実在の値（みかん）を採用しました"
     ],

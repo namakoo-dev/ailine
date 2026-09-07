@@ -86,7 +86,11 @@ def test_add_row_in_the_middle_pushes_the_rest_down(tmp_path):
     args = {"at": 3, "values": {"商品": "梨", "売上": 600, "原価": 300}}
     status, reason = ailine.check_add_row(after, args, source_book=before)
     assert status == "pass", reason
-    assert "元のまま" in reason
+    # ★ 2026-09-07: 「元のまま」は**ずれを隠していた**ので文言を実体に合わせた
+    #   （下の行は 1 つ下へ動き、式も書き直される）。守りたいのは「中身が保たれている
+    #   ことを言う」で、そこは変えない。
+    assert "中身と式は保たれています" in reason, reason
+    assert "ずれ" in reason, reason
 
 
 def test_add_row_catches_an_overwrite(tmp_path):

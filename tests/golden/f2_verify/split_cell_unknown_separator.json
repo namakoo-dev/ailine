@@ -3,7 +3,8 @@
   "resolved": {
     "col": "商品",
     "sep": "これは区切りの説明としか読めない長い文字列",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "区切り(sep)が読み取れません（改行/カンマ/、/スペース などで指定してください）"

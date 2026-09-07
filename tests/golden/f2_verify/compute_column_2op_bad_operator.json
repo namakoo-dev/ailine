@@ -6,7 +6,8 @@
       "単価"
     ],
     "operator": "%",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "演算子『%』が不明です"

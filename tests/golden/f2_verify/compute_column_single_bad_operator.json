@@ -5,7 +5,8 @@
       "金額"
     ],
     "operator": "+",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "演算子『+』は列1つの計算（税込み/税抜き等）では * か / のみ対応です"

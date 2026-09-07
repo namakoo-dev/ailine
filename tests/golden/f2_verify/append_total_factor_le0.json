@@ -3,6 +3,7 @@
   "resolved": {
     "col": "金額",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "label": "合計",
     "factor": 0.0
   },

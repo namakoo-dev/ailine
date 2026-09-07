@@ -5,7 +5,8 @@
     "target_col": "単価",
     "source_sheet": "単価表",
     "key_col": "商品",
-    "_target_sheet": "単価表"
+    "_target_sheet": "単価表",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": null

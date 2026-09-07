@@ -3,7 +3,8 @@
   "resolved": {
     "col": "金額",
     "order": "ascending",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "順序『ascending』は asc/desc のどちらでもありません"

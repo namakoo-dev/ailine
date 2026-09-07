@@ -3,7 +3,8 @@
   "resolved": {
     "col": "金額",
     "style": "percent",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "書式『percent』は未対応です（対応: thousands）"

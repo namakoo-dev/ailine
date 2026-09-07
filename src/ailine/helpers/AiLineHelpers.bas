@@ -603,9 +603,20 @@ End Sub
 '   headerRow : 集計元(1枚目シート)の見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
 '   groupCol  : 分類の基準列（0起点。例: 部門=1）
 '   valueCol  : 合計する値の列（例: 金額=4）
-Sub SummaryTable(oDoc As Object, headerRow As Integer, groupCol As Integer, valueCol As Integer)
+'   skipRowsCsv : 対象から外す行（0 起点・カンマ区切り・省略可）。合計行など
+'                 「データ行でない行」を分類に混ぜないため。
+' ★ 2026-09-07 の実測: 合計行のある請求書を集計すると、元の合計行が「合計という取引先」
+'   として 1 グループになり、そのうえで総計が足されて **2 倍**になっていた。
+' ★ 除外の宣言は Python 側が 1 箇所で作る（_skip_rows）── ここは受け取るだけ。
+Sub SummaryTable(oDoc As Object, headerRow As Integer, groupCol As Integer, valueCol As Integer, _
+                 Optional skipRowsCsv As Variant)
     Dim oSheet As Object, oOut As Object
     Dim lastRow As Long, i As Long, j As Long
+    Dim skips As String
+    ' ★ IsMissing は**自分の Optional 引数**にしか効かない（別の Sub へ渡すと必ず False に
+    '   なり、モジュールごと黙って死ぬ）── だから判定はこの Sub の中で済ませる。
+    skips = ""
+    If Not IsMissing(skipRowsCsv) Then skips = "," & CStr(skipRowsCsv) & ","
     oSheet = oDoc.Sheets.getByIndex(0)
     lastRow = headerRow + 1
     Do While oSheet.getCellByPosition(0, lastRow).getString() <> "" : lastRow = lastRow + 1 : Loop
@@ -622,6 +633,10 @@ Sub SummaryTable(oDoc As Object, headerRow As Integer, groupCol As Integer, valu
     Dim total As Double : total = 0
     Dim k As String, v As Double, found As Integer
     For i = headerRow + 1 To lastRow
+        If Len(skips) > 2 And InStr(skips, "," & CStr(i) & ",") > 0 Then
+            ' 対象外の行（合計行など）── 分類に混ぜない
+            GoTo NextSummaryRow
+        End If
         k = oSheet.getCellByPosition(groupCol, i).getString()
         v = oSheet.getCellByPosition(valueCol, i).getValue()
         found = -1
@@ -634,6 +649,7 @@ Sub SummaryTable(oDoc As Object, headerRow As Integer, groupCol As Integer, valu
             sums(found) = sums(found) + v
         End If
         total = total + v
+NextSummaryRow:
     Next i
 
     If oDoc.Sheets.hasByName("集計") Then oDoc.Sheets.removeByName("集計")

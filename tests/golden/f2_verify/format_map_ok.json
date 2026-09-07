@@ -3,6 +3,7 @@
   "resolved": {
     "template_sheet": "様式",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "_placeholders": [
       {
         "cell": "A2",

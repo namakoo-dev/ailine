@@ -31,11 +31,30 @@ def _arg_count(args: str) -> int:
     return 0 if args.strip() == "" else len(args.split(","))
 
 
+def _join_continuations(text: str) -> str:
+    """Basic の行継続（末尾の `_`）を 1 行に畳む。
+       ★ 署名が 2 行に分かれる helper が実在するので、畳まないと引数を数え落とす。
+    """
+    pattern = chr(95) + r"[ 	]*" + chr(92) + "n" + r"\s*"
+    return re.sub(pattern, " ", text.replace(chr(13), ""))
+
+
 def _parse_bas_signatures(text: str) -> dict:
-    """`Sub 名(引数...)` を実体の正とみなし、名前→引数個数の辞書にする。"""
+    """`Sub 名(引数...)` を実体の正とみなし、名前→**(必須の数, 全部の数)** にする。
+
+    ★★ 2026-09-07: 旧版は個数を 1 つしか持たず、**Optional を知らなかった**。
+      `SummaryTable` に任意引数（合計行の除外）を足したところ、4 引数の呼び出し例が
+      「実体は 5 引数」と食い違い扱いになった ── **4 引数の呼び出しは正当**なのに。
+      ★ 番人を緩めるのではなく、**正しく数えられるように**する
+        （必須 ≦ 例の個数 ≦ 全部、を満たせばよい）。
+    ★ 行継続（`_`）に対応する ── 署名が 2 行に分かれる helper が実在する。
+    """
     sigs = {}
-    for m in re.finditer(r"^Sub\s+([A-Za-z_]\w*)\s*\(([^)]*)\)", text, re.MULTILINE):
-        sigs[m.group(1)] = _arg_count(m.group(2))
+    flat = _join_continuations(text)      # ★ 行継続を 1 行に畳んでから読む
+    for m in re.finditer(r"^Sub\s+([A-Za-z_]\w*)\s*\(([^)]*)\)", flat, re.MULTILINE):
+        parts = [] if m.group(2).strip() == "" else m.group(2).split(",")
+        required = len([p for p in parts if "Optional" not in p])
+        sigs[m.group(1)] = (required, len(parts))
     return sigs
 
 
@@ -74,18 +93,19 @@ def test_helper_signatures_stay_in_sync_across_readme_ailine_and_bas():
     assert catalog_sigs, "ailine.py のカタログから Call 例が1件もパースできなかった"
 
     mismatches = []
-    for name, count in readme_sigs.items():
-        bas_count = bas_sigs.get(name)
-        if bas_count is None:
-            mismatches.append(f"README: `{name}` は helpers/*.bas に実体が無い")
-        elif bas_count != count:
-            mismatches.append(f"README: {name}({count}引数) != 実体({bas_count}引数)")
-    for name, count in catalog_sigs.items():
-        bas_count = bas_sigs.get(name)
-        if bas_count is None:
-            mismatches.append(f"ailine.py カタログ: `{name}` は helpers/*.bas に実体が無い")
-        elif bas_count != count:
-            mismatches.append(f"ailine.py カタログ: {name}({count}引数) != 実体({bas_count}引数)")
+    def _check(where: str, sigs: dict):
+        for name, count in sigs.items():
+            sig = bas_sigs.get(name)
+            if sig is None:
+                mismatches.append(f"{where}: `{name}` は helpers/*.bas に実体が無い")
+                continue
+            need, total = sig
+            if not (need <= count <= total):     # ★ 任意引数は省いてよい
+                mismatches.append(
+                    f"{where}: {name}({count}引数) は実体（必須 {need}・全部 {total}）に合わない")
+
+    _check("README", readme_sigs)
+    _check("ailine.py カタログ", catalog_sigs)
 
     assert not mismatches, (
         "README/カタログ と ヘルパ実体の引数個数が食い違っている:\n" + "\n".join(mismatches)

@@ -6,6 +6,7 @@
     ],
     "operator": "*",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "factor": 1.1,
     "_sources": {
       "factor": "用語集: 消費税"

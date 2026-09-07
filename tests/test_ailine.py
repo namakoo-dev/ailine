@@ -2696,7 +2696,10 @@ def test_verify_dsl_args_sort_ok():
     ok, resolved, inferred, err = ailine.verify_dsl_args("SORT", {"col": "金額", "order": "desc"}, _SAMPLE_META)
     assert ok is True
     # ★ 挙動変更#2: resolved は対象シートの決定(_target_sheet)を常に積む（省略時は1枚目）。
-    assert resolved == {"col": "金額", "order": "desc", "_target_sheet": "Sheet"}
+    # ★ 2026-09-07: 合計行の除外(_skip_rows)も**入口で 1 度だけ**積むようにした
+    #   （旧: 4 つの op が書き写し、集計だけ書き忘れて × を出していた＝片配線）。
+    assert resolved == {"col": "金額", "order": "desc",
+                        "_target_sheet": "Sheet", "_skip_rows": []}
     assert inferred == set()
     assert err is None
 
@@ -3754,6 +3757,7 @@ def test_check_aggregate_use_formula_default_false_keeps_old_behavior(tmp_path):
         ws.append(row)
     out = wb.create_sheet("集計")
     out.append(["部門", "合計 - 金額"]); out.append(["営業", 300])
+    out.append(["合計", 300])   # ★ 実物の SummaryTable は総計の行を必ず書く
     p = tmp_path / "agg_default.xlsx"
     wb.save(p)
     status, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
@@ -3768,6 +3772,7 @@ def test_check_aggregate_operand_from_prior_formula_column_passes_when_cache_pre
     out = wb.create_sheet("集計")
     out.append(["部門", "合計 - 金額"])
     out.append(["営業", 400])
+    out.append(["合計", 400])   # ★ 実物の SummaryTable は総計の行を必ず書く
     wb.save(p)
     _inject_formula_cache(p, "xl/worksheets/sheet1.xml", {"E2": 300, "E3": 100})
     status, reason = ailine.check_aggregate(

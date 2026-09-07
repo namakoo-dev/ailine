@@ -3788,9 +3788,8 @@ def _verify_sort(resolved: dict, inferred: set, first_sheet: str, book_meta: dic
             #   同じ口を使う ── 警告にすると決裁③で ✓ が △ に落ち、合計行のある表を
             #   並べ替えるたびに「確かめきれていない」と言うことになる。
             #   ★ 宣言どおりに動いて検算も通っているのだから、それは ✓ でよい。
-            resolved["_skip_rows"] = list(_s_tot)
             resolved["_skip_label"] = ("合計行 " + "、".join(
-                f"{r}行目" for r in _s_tot) + "（データ行でないため並べ替えません）")
+                f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため並べ替えません）")
     # ★ 並べ替えで「指す先の中身が変わる式」を名指しする（★ 付き＝決裁③で ✓→△）。
     #   ここは疑いなので警告でよい ── 合計行の除外（開示）とは性質が違う。
     _s_last = resolved.get("_sort_end_row") or 10 ** 7
@@ -4233,11 +4232,9 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
     #   ★ 並べ替え・条件つき書換では既に外していたのに、**抽出だけ外していなかった**
     #     ── また片配線。判定は凍結済みの規則（total_rows_in）を借りる。
     #   ★ ここも**早い出口より前**に置く（後ろに置いて 1 度素通りさせた）。
-    _x_hr = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
-    if (_x_tot := total_rows_in(book_meta, first_sheet, _x_hr)):
-        resolved["_skip_rows"] = list(_x_tot)
+    if resolved["_skip_rows"]:
         resolved["_skip_label"] = ("合計行 " + "、".join(
-            f"{r}行目" for r in _x_tot) + "（データ行でないため抜き出しません）")
+            f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため抜き出しません）")
     if (err := resolve_in("col", first_sheet)):
         return False, resolved, inferred, err
     # ★★ 2026-08-27（Namakoo「みかんの行とりんごの行だけを抽出して」）:
@@ -5014,7 +5011,7 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
         resolved["_cond_label"] = (f"『{resolved['cond_col']}』が『{_pair[0]}』の行"
                                     f"（→『{_pair[1]}』に）")
         # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
-        resolved["_skip_rows"] = total_rows_in(book_meta, first_sheet, resolved["_header_row"])
+        #   （値は入口で 1 度だけ宣言済み ── ここはラベルだけ）
         if resolved["_skip_rows"]:
             resolved["_skip_label"] = ("合計行 " + "、".join(
                 f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
@@ -5269,7 +5266,7 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
     # ★ 当てはまる行を**先に数えて画面に出す**（0 行なら、走らせる前に断る ──
     #   「何も起きなかった」を後から × で知らせるのは、正しくても不親切）。
     # ★ 合計行は**データ行ではない**ので対象から外す。外したことは必ず画面に出す。
-    resolved["_skip_rows"] = total_rows_in(book_meta, first_sheet, resolved["_header_row"])
+    #   （値は入口で 1 度だけ宣言済み ── ここはラベルだけ）
     if resolved["_skip_rows"]:
         resolved["_skip_label"] = ("合計行 " + "、".join(
             f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため）")
@@ -5887,6 +5884,15 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     first_sheet = target_sheet if target_sheet in sheets else sheets[0]
     resolved = dict(args)
     resolved["_target_sheet"] = first_sheet
+    # ★★ 2026-09-07（外部の検品が拾った × の真因）: 合計行は**表の性質**であって
+    #   op の性質ではない ── ここで **1 度だけ**宣言する。
+    #   旧: 4 つの op がそれぞれ同じ式を書き写し、AGGREGATE だけ書き忘れていた。
+    #   実測: 合計行のある請求書で「取引先ごとに金額を集計して」が 2/2 で × ──
+    #   機械は正しく 6 グループを作ったのに、**検算が『合計』もグループだと数えていた**。
+    #   ★ 呼び出し側に残すのは**ラベルの文**だけ（op ごとに「何をしないか」が違うため）。
+    resolved["_skip_rows"] = total_rows_in(
+        book_meta, first_sheet,
+        int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1))
     if book_meta.get("_sheet_source"):
         resolved["_sheet_source"] = book_meta["_sheet_source"]
     inferred: set = set()
@@ -6515,6 +6521,11 @@ def _codegen_aggregate(*, op, resolved_args, book_meta, use_formula, headers, fi
     """AGGREGATE の Basic を組む（★ codegen_dsl から**本文をそのまま**移した）。"""
     g_idx = headers[first_sheet].index(resolved_args["group_col"])
     v_idx = headers[first_sheet].index(resolved_args["value_col"])
+    # ★★ 2026-09-07: 合計行を分類に混ぜない ── 除外の宣言（入口で 1 度だけ作る
+    #   `_skip_rows`）をそのまま渡す。条件つき書換が既にこの形で受けている。
+    _skip = ",".join(str(int(r) - 1) for r in (resolved_args.get("_skip_rows") or []))
+    if _skip:
+        return wrap(f'    Call SummaryTable(oDoc, {hr0}, {g_idx}, {v_idx}, "{_skip}")\n')
     return wrap(f"    Call SummaryTable(oDoc, {hr0}, {g_idx}, {v_idx})\n")
 
 

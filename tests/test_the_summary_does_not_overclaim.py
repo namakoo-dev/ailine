@@ -57,6 +57,33 @@ def test_deleting_a_column_does_not_claim_nothing_moved(before, tmp_path):
     assert "中身" in msg, msg
 
 
+@pytest.mark.parametrize("which", ["add_row", "delete_rows"])
+def test_row_operations_do_not_claim_nothing_moved(before, tmp_path, which):
+    """★ 行でも同じ ── 挿せば下がり、消せば詰まる。「元のまま」はずれを隠している。
+
+    ★ 正直な書き方は同じ repo に在った（check_insert_rows の「シフトを確認」）。
+      片方だけ直さず、行と列の 4 箇所すべてを同じ作法へ揃えた。
+    """
+    if which == "add_row":
+        after = _book(tmp_path / "ar.xlsx", ["品名", "単価", "在庫", "売上", "利益"],
+                      [("ボルト", 100, 5, 1000), ("新品", None, None, None),
+                       ("ナット", 50, 8, 800)],
+                      [("E2", "=D2-B2"), ("E4", "=D4-B4")])
+        st, msg = move.check_add_row(
+            after, {"at": 3, "_target_sheet": "在庫表", "values": {"品名": "新品"}},
+            header_row=1, source_book=before)
+    else:
+        after = _book(tmp_path / "dr.xlsx", ["品名", "単価", "在庫", "売上", "利益"],
+                      [("ナット", 50, 8, 800)], [("E2", "=D2-B2")])
+        st, msg = move.check_delete_rows(
+            after, {"at": 2, "count": 1, "_target_sheet": "在庫表"},
+            header_row=1, source_book=before)
+    assert st in ("pass", "warn"), (st, msg)
+    if st == "pass":
+        assert "元のまま" not in msg, msg
+        assert "ずれ" in msg or "詰まり" in msg, msg
+
+
 def test_inserting_a_column_does_not_claim_nothing_moved(before, tmp_path):
     """★ 対で縛る ── 挿入側にも同じ文が在った（片方だけ直すのが事故の形）。"""
     after = _book(tmp_path / "i.xlsx", ["品名", "単価", "備考", "在庫", "売上", "利益"],

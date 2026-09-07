@@ -4,7 +4,8 @@
     "col": "金額",
     "cmp": "between",
     "value": "100",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "比較『between』は gte/lte/gt/lt/eq/contains/in/nin のどれでもありません"

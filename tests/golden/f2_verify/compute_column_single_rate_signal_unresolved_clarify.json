@@ -5,7 +5,8 @@
       "金額"
     ],
     "operator": "*",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "依頼『税率をどうにかして』は税/込を含みますが倍率が分かりません。依頼文に税率を書く（例:「消費税10%」）か、用語集に登録してください（例: ailine vocab add 消費税 1.1）"

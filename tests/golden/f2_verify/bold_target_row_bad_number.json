@@ -2,7 +2,8 @@
   "ok": false,
   "resolved": {
     "target": "row:abc",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "行番号『abc』が不正です"

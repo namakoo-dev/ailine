@@ -83,8 +83,17 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
         expect: dict = {}
         _stringy_seen: list = []
         uncached = 0
+        # ★★ 2026-09-07: 合計行は**データ行ではない**ので分類に混ぜない。
+        #   実測（合計行のある請求書・2/2 再現）: 機械は 6 グループを正しく作ったのに、
+        #   ここが最終行の『合計』も 1 グループと数えて「集計に含まれないグループがある」
+        #   と × を出していた。★ 除外の宣言（_skip_rows）は入口で 1 度だけ作られ、
+        #   抽出や条件つき書換は既に読んでいた ── **ここだけ配線されていなかった**。
+        _skip = {int(x) for x in (args.get("_skip_rows") or [])}
         r = header_row + 1
         while src.cell(row=r, column=1).value not in (None, ""):
+            if r in _skip:
+                r += 1
+                continue
             k_raw = src.cell(row=r, column=gi).value
             v_raw = src.cell(row=r, column=vi).value
             if use_formula:
@@ -124,6 +133,26 @@ def check_aggregate(path: Path, args: dict, header_row: int = 1, use_formula: bo
                 return "fail", f"グループ『{k}』の合計が不一致 (期待 {expect.get(k)} 実際 {v})"
             seen.add(k)
             r += 1
+        # ★★ 2026-09-07: 走査は最初の『合計』で止まるので、**その先を誰も見ていなかった**。
+        #   実測（合計行のある請求書）: 元の合計行が 1 グループとして混じり、総計が
+        #   **2 倍**（356400 → 712800）になっていたのに、この検算は通っていた。
+        #   ★ この穴のせいで、私は一度「生成でなく検算を黙らせる」直し方を通しかけた
+        #     ── 出来上がりを独立に読んで気づいた。空虚な合格をここで潰す。
+        _tot_k = out.cell(row=r, column=1).value
+        if _tot_k != "合計":
+            # ★ ここは「間違い」ではなく「**確かめきれていない**」── ✓ は出さないが
+            #   × でもない。実測（2026-09-07）: 既存シートへ書こうとして上書きの確認で
+            #   止まる検体で × を出してしまい、**上書きの案内ごと消していた**。
+            #   ★ 主張の強さを事実に合わせる（弱めて逃げるのとは違う ── ✓ は出さない）。
+            return "warn", (f"{len(expect)} グループは検証しましたが、総計の行が"
+                            f"見当たりません（{r}行目は {_tot_k!r}）")
+        _tot_v = out.cell(row=r, column=2).value
+        _want_total = sum(expect.values())
+        if not _is_number(_tot_v) or abs(_tot_v - _want_total) > 1e-6:
+            return "fail", f"総計が不一致 (期待 {_want_total} 実際 {_tot_v!r})"
+        _after = out.cell(row=r + 1, column=1).value
+        if _after not in (None, ""):
+            return "fail", f"総計の下に余分な行があります（{r + 1}行目: {_after!r}）"
     if seen != set(expect.keys()):
         return "fail", "集計に含まれないグループがある"
     return "pass", f"{len(expect)} グループを検証"

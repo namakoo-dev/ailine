@@ -3,7 +3,8 @@
   "resolved": {
     "a": "",
     "b": "みかん",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "入れ替える 2 つを取り出せませんでした（『みかんとぶどうを入れ替えて』のように 2 つの名前を書いてください）"

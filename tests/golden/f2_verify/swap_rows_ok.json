@@ -4,6 +4,7 @@
     "a": "りんご",
     "b": "みかん",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "_headers": [
       "商品",
       "金額"

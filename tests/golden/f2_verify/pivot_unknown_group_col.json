@@ -3,7 +3,8 @@
   "resolved": {
     "group_col": "不明",
     "value_col": "金額",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "列『不明』がありません。ある列: 商品, 数量, 単価, 金額"

@@ -7,7 +7,8 @@
       "金額"
     ],
     "operator": "*",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": "演算対象が2つの列名になっていません"

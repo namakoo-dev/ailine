@@ -3,7 +3,8 @@
   "resolved": {
     "group_col": "商品",
     "value_col": "金額",
-    "_target_sheet": "Sheet"
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
   },
   "inferred": [],
   "err": null

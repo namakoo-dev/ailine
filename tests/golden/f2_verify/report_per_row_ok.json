@@ -4,6 +4,7 @@
     "template_sheet": "雛形",
     "name_col": "商品",
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "_placeholders": [
       {
         "cell": "B1",

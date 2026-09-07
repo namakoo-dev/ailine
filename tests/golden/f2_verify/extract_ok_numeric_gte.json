@@ -5,6 +5,7 @@
     "cmp": "gte",
     "value": 40000.0,
     "_target_sheet": "Sheet",
+    "_skip_rows": [],
     "_source_headers": [
       "商品",
       "数量",
