@@ -60,6 +60,23 @@ def _error_cells(path: Path) -> dict:
     return out
 
 
+def new_error_cells(before_path, after_path) -> dict:
+    """適用で**新たに**エラーになったセル {(シート, 行, 列): 値}（無ければ空）。
+
+    ★★ 2026-09-08（盲検の検品が拾った）: 「丸和物流の行を削除して」で合計式が
+      `=SUM(#REF!:INDEX(E:E,ROW()-1))` に壊れ、**原本に `#REF!` が残った**。
+      ★ 検出はこの器官が既にしていた（助言として ⚠ を出し ✓ も降ろしていた）──
+        足りなかったのは**帰結**で、「言ったうえで書いて」いた。
+      ★ だから計算はここ 1 箇所のまま、呼ぶ側（反映の関所）を増やす。
+
+    ★ 総数でなく**セル単位の新規発生**で見る（総数が同じでも、あるセルが壊れ別のセルが
+      直った場合は別の問題）。
+    """
+    before_errors = _error_cells(before_path)
+    after_errors = _error_cells(after_path)
+    return {k: v for k, v in after_errors.items() if k not in before_errors}
+
+
 def formula_error_advisory(before_path: Path, after_path: Path, *, cell_ref: Callable) -> list:
     """(a) 適用前後でエラー値セルを比較し、新たにエラーになったセル（前はエラーでなかった・
        今はエラー）が1件でもあれば助言を返す。
@@ -68,9 +85,7 @@ def formula_error_advisory(before_path: Path, after_path: Path, *, cell_ref: Cal
        （ブリーフの「個数を数え、増えていたら報告」の趣旨をセル単位に強めた設計判断）。
        cell_ref: (row, col) -> "B2" のような表示用文字列に変換する関数（ailine.py の
        `_cell_ref` を渡す想定・表示フォーマットを二重管理しない）。"""
-    before_errors = _error_cells(before_path)
-    after_errors = _error_cells(after_path)
-    new_breaks = {k: v for k, v in after_errors.items() if k not in before_errors}
+    new_breaks = new_error_cells(before_path, after_path)
     if not new_breaks:
         return []
     items = sorted(new_breaks.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2]))

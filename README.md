@@ -24,7 +24,7 @@
 |---|---|
 | repo 全体 | 2026-08-10 起点・200 commit 超 |
 | 課題期間にやったこと | ① 外部の目による盲検レビュー 5 面 → 出た致命 10 件を全件処置 ② 表の基本操作（行の追加・削除／列の削除／1 セル書換） ③ 評価者が触れる GUI ④ 自分で GUI を触って出た欠陥 13 件の処置（8/31） |
-| 課題期間にやらなかったこと | 新機能の拡張。単一ファイル（<!-- MAIN_FILE_LINES -->16828<!-- /MAIN_FILE_LINES --> 行）の分割は**着手済み** ── 44% を `ailine_core/` へ出し、判定の段は op ごとに割り終えました（理由と残りは「4. 判断・制約・学び」） |
+| 課題期間にやらなかったこと | 新機能の拡張。単一ファイル（<!-- MAIN_FILE_LINES -->16848<!-- /MAIN_FILE_LINES --> 行）の分割は**着手済み** ── 44% を `ailine_core/` へ出し、判定の段は op ごとに割り終えました（理由と残りは「4. 判断・制約・学び」） |
 
 土台が既存であることを踏まえて読んでいただくために、何を今週やったかは
 `git log --since=2026-08-26 --until=2026-09-03 --oneline` で追える形にしてあります（9/3 以降の commit は課題期間の外での継続です）。
@@ -219,7 +219,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->3614<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
+期待: 全件緑（<!-- TOTAL_TESTS -->3617<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
 ollama）が要るものは `-m "not local"` が自動的に外します。外れた本数は実行結果の
 `deselected` に出ます）。
 ★ 総数は `tests/test_local_test_count.py` が実測と突き合わせています ──

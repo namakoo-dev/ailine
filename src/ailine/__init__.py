@@ -168,7 +168,8 @@ from ailine_core.xml_readback import numeric_cells_became_strings   # ★ operat
 from ailine_core.formula_health import (   # noqa: F401 ── ★ formula_error_advisory は
     # 2026-09-06 に before_after_advisories へ畳んだので本体からは呼ばないが、
     # **公開面の凍結（tests/ailine_public_surface.txt）に載っている**ので再輸出は残す。
-    before_after_advisories, formula_error_advisory, detect_write_target_type_change)
+    before_after_advisories, formula_error_advisory, detect_write_target_type_change,
+    new_error_cells)   # ★ 2026-09-08: 壊れた式が生まれた回を、原本へ被せる前に止める
 from ailine_core.write_precondition import (   # ★ 単位F/G: 宣言した領域の前提（破れた種類つき）   # noqa: F401 ── 再輸出/在否確認のため残す
     check_write_preconditions_detail,
     own_prior_output_notice_lines,   # ★ 単位H 開示: 関所が黙った理由を1行で見せる
@@ -11652,6 +11653,25 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         broken = _why_output_is_unusable(out_book)
         if broken:
             print(f"× 作った結果が壊れているため、原本には反映しませんでした（{broken}）")
+            print(_untouched_original_line(book, out_book))
+            result["out"] = str(out_book)
+            return False
+        # ★★ 2026-09-08（盲検の検品が拾った）: 「丸和物流の行を削除して」で合計式が
+        #   `=SUM(#REF!:INDEX(E:E,ROW()-1))` に壊れ、**原本に `#REF!` が残った**。
+        #   ★ 検出は既にできていた（⚠ を出し ✓ も降ろしていた）── 足りなかったのは
+        #     **帰結**で、「言ったうえで書いて」いた。壊れた式が新しく生まれた回は、
+        #     原本へ被せない（.out に残す）。★ 削除に限らず**全 op** に効く位置に置く。
+        #   ★ 逃げ道は増やさない ── 結果が要るなら --copy で今までどおり受け取れる。
+        try:
+            _newly_broken = new_error_cells(book, out_book)
+        except Exception:
+            _newly_broken = {}
+        if _newly_broken:
+            _items = sorted(_newly_broken.items())[:3]
+            _where = "、".join(f"{s}!{_cell_ref(r, c)}={v}" for (s, r, c), v in _items)
+            _more = f"、ほか{len(_newly_broken) - 3}件" if len(_newly_broken) > 3 else ""
+            print("× 結果に壊れた式が生まれたため、原本には反映しませんでした"
+                  f"（{_where}{_more}）")
             print(_untouched_original_line(book, out_book))
             result["out"] = str(out_book)
             return False

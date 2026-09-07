@@ -631,6 +631,7 @@ def maybe_show_notice_v2(path: 'Path | None' = None) -> 'bool'
 def mention_overlap_advisory(mentions: 'dict', before: 'dict', after: 'dict', exclude_sheets: 'set | None' = None, exclude_cols: 'set | None' = None) -> 'list'
 def name_matches_task(name, task: 'str', others=()) -> 'bool'
 def new_column_name_from_task(task: 'str', headers=None, *, require_position: 'bool' = True) -> 'str | None'
+def new_error_cells(before_path, after_path) -> 'dict'
 def new_sheet_advisories(before: 'dict', after: 'dict') -> 'list'
 def normalize_book(book, workdir, timeout=None)
 def note_deleted(args: 'dict', rows) -> 'None'
