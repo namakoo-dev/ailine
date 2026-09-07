@@ -33,6 +33,36 @@
 from __future__ import annotations
 
 
+#: 「消す」意味の語 ── 値として書き込むと、literal で『空』と書いてしまう。
+ERASERS = ("空", "空欄", "クリア", "未入力", "なし", "ブランク", "空白")
+
+
+def why_not_a_value(value, column_names, sheet_names, op_words) -> str | None:
+    """その語を**書き込む値として採ってはいけない**なら、その理由を返す（採れるなら None）。
+
+    ★★ なぜ在るか（2026-09-07・Namakoo「値なのか操作なのか、属性なのかを判別出来るなら
+      『』はいらない」）: 値を「」で囲ませているのは小型モデルの限界への回避策だった。
+      ★ 実測（未見 20 本）: いまの製品のモデル(no thinking)は 17/20 まで取れる。
+        外した中身は「操作を値と読む」「列名を値と読む」で、**そこは機械がタダで止められる**。
+
+    ★ ここは**拒否だけ**をする（取り出しはモデルの仕事）── 役割を混ぜない。
+    ★ 判定を広げない: 列名・シート名・操作の語・消す語、の 4 つだけ。
+      「それ以外は値」と決めるのはこの関数ではなく、呼び出し側の段（空の列か等）。
+    """
+    v = str(value or "").strip()
+    if not v:
+        return "値が空です"
+    if v in {str(c) for c in (column_names or ()) if c}:
+        return f"『{v}』は列の名前です（書き込む値ではありません）"
+    if v in {str(s) for s in (sheet_names or ()) if s}:
+        return f"『{v}』はシートの名前です（書き込む値ではありません）"
+    if any(w and w in v for w in (op_words or ())):
+        return f"『{v}』は操作の名前を含みます（書き込む値ではありません）"
+    if v in ERASERS:
+        return f"『{v}』は消す操作です（その文字を書き込むことはできません）"
+    return None
+
+
 def removal_asked_but_not_done(task: str, op: str, vocab_by_op: dict,
                                removes: dict) -> list:
     """「取り除く」を頼まれたのに取り除かなかったなら、当たった語を返す（無ければ空）。

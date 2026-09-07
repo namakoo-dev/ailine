@@ -162,7 +162,8 @@ from ailine_core.date_compare import (   # noqa: F401  ← 試験と呼び出し
 from ailine_core.chart_check import check_chart_series, charts_by_sheet   # ★ グラフ段: 事後条件②（種別+参照の検証）+ operator10 ②（シート別グラフ数）
 from ailine_core.chart_range import chart_data_last_row   # ★ operator10 ①: グラフ範囲から合計行を除く
 from ailine_core import compare_blocked
-from ailine_core.column_type import column_is_all_numeric, value_parses_as_number   # ★ operator10 ④: 型の機械決定
+from ailine_core.column_type import (column_is_all_numeric, column_is_empty,   # ★ operator10 ④: 型の機械決定
+                                     value_parses_as_number)
 from ailine_core.xml_readback import numeric_cells_became_strings   # ★ operator10 ⑤: 数式セルの偽アラーム防止   # noqa: F401 ── 再輸出/在否確認のため残す
 from ailine_core.formula_health import (   # noqa: F401 ── ★ formula_error_advisory は
     # 2026-09-06 に before_after_advisories へ畳んだので本体からは呼ばないが、
@@ -5540,12 +5541,43 @@ def _verify_set_column_value(resolved, inferred, first_sheet, book_meta, resolve
     llm_value_raw = resolved.pop("value", None)
     quoted = extract_quoted_literal(task)
     if quoted is None:
-        return False, resolved, inferred, (
-            "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで"
-            "書いてください（例:「備考列を全部『確認済み』にして」）"
-        )
+        # ★★ 2026-09-07（第一段・Namakoo「『』を外すのは本当に用心してくれ」）:
+        #   「」を要求しているのは**小型モデルの限界への回避策**で、能力の線ではない。
+        #   実測（未見 20 本）: いまのモデル(no thinking)は 17/20 まで取れており、
+        #   外した中身は「操作を値と読む」「列名を値と読む」── **機械が止められる形**。
+        #   ★ ただし一括書換は**列を丸ごと**書き換える。取り違えたときに失う量が最大なので、
+        #     **失うものが無い列（空の列）から**だけ緩める（賭け金で段を切る）。
+        #   ★ データの在る列は今までどおり断る ── 「」は消さず、逃げ道として残す。
+        _cand = str(llm_value_raw or "").strip()
+        _why = intent_mismatch.why_not_a_value(
+            _cand, headers.get(first_sheet) or [], book_meta.get("sheets") or [],
+            [p for _o in OP_META for p in _op_match_pool(_o) if p]) if _cand else "値がありません"
+        _empty = False
+        if not _why and book_meta.get("path"):
+            try:
+                _empty = column_is_empty(
+                    book_meta["path"], first_sheet,
+                    headers[first_sheet].index(resolved["col"]) + 1,
+                    int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1))
+            except Exception:
+                _empty = False
+        if not (_cand and not _why and _empty):
+            _tail = f"（{_why}）" if _why and _cand else ""
+            return False, resolved, inferred, (
+                "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで"
+                f"書いてください（例:「備考列を全部『確認済み』にして」）{_tail}"
+            )
+        resolved["value"] = _cand
+        resolved["_sources"] = {**resolved.get("_sources", {}),
+                                "value": "依頼文から機械が取りました（この列は空です）"}
+        quoted = _cand
     resolved["value"] = quoted
-    resolved["_sources"] = {**resolved.get("_sources", {}), "value": f"依頼文: 「{quoted}」"}
+    # ★ 出所は**本当のこと**を書く ── 囲んでいないのに「依頼文の引用」と言わない
+    #   （2026-09-07: 空の列で「」を外した回に、ここが上書きして嘘の出所を出していた）。
+    resolved.setdefault("_sources", {})
+    resolved["_sources"] = {**resolved["_sources"],
+                            "value": resolved["_sources"].get("value")
+                            or f"依頼文: 「{quoted}」"}
     if llm_value_raw not in (None, "") and str(llm_value_raw) != quoted:
         resolved["_warnings"] = resolved.get("_warnings", []) + [
             f"LLM が返した値('{llm_value_raw}')と依頼文の引用('{quoted}')が食い違うため"

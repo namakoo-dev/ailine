@@ -550,6 +550,7 @@ def cmd_vocab(a: 'argparse.Namespace') -> 'int'
 def codegen_dsl(op: 'str', resolved_args: 'dict', book_meta: 'dict', use_formula: 'bool' = True) -> 'str'
 def column_index_from_string(col)
 def column_is_all_numeric(path, sheet_name, col_idx: 'int', header_row: 'int' = 1) -> 'bool'
+def column_is_empty(path, sheet_name, col_idx: 'int', header_row: 'int' = 1) -> 'bool'
 def compare_moved_rows(after_rows: 'list', before_rows: 'list', label: 'str') -> 'tuple'
 def compare_report_cells(path, sheet_name: 'str', declared: 'dict') -> 'ReportCellsResult'
 def compose_dsl_step_advisories(mode: 'str', op: 'str', resolved: 'dict', meta: 'dict', task: 'str', before: 'dict', after: 'dict', *, exclude_sheets: 'set | None' = None, sheet_conflict=None, precondition_broken: 'str | None' = None, after_path=None, deps: 'DslStepDeps') -> 'list'

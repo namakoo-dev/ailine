@@ -35,6 +35,27 @@ def column_is_all_numeric(path, sheet_name, col_idx: int, header_row: int = 1) -
         wb.close()
 
 
+def column_is_empty(path, sheet_name, col_idx: int, header_row: int = 1) -> bool:
+    """その列の**データ行が 1 つも埋まっていない**なら True（1起点の列番号）。
+
+    ★★ なぜ要るか（2026-09-07・値を「」で囲ませるのを外す第一段）:
+      一括書換は**列を丸ごと**書き換える。取り違えたときに失う量が最大の操作なので、
+      緩めるなら**失うものが無い列から**にする（賭け金で段を切る ── モデルの自信で
+      決めない）。空の列に書くのは、外しても消えるものが無い。
+    ★ 見出し行は数えない（列の名前は消さない）。
+    """
+    wb = openpyxl.load_workbook(path, data_only=True)
+    try:
+        ws = wb[sheet_name] if sheet_name else wb.active
+        for r in range(header_row + 1, (ws.max_row or header_row) + 1):
+            v = ws.cell(row=r, column=col_idx).value
+            if v is not None and str(v).strip() != "":
+                return False
+        return True
+    finally:
+        wb.close()
+
+
 def value_parses_as_number(value) -> float | None:
     """value（str/int/float）が数値として読めれば float を返す。桁区切りのカンマは許容
        （ailine_core.formula_health._parses_as_number と同じ緩さ）。読めなければ None。"""
