@@ -65,6 +65,29 @@ def stated_as_condition(task: str, column: str, value: str) -> bool:
     return bool(rx.search(text))
 
 
+#: 見出し名の後ろに付く**構造の語**（★ 開いた接頭辞一致にはしない ── `原価率` のような
+#: 別の語まで拾うと、誤爆の側へ倒れる）。
+_STRUCTURE_SUFFIXES = ("列", "行", "欄", "の列", "の行", "の欄")
+
+
+def _names_a_header(word: str, headers) -> str | None:
+    """その語が見出しを指しているなら、**見出しの側**の名前を返す（無ければ None）。
+
+    ★★ 2026-09-07（UX 検品が拾った・昨日入れた関所が黙っていた真因）:
+      残差は語を**最長で**切り出すので、「原価**列**の右隣に」からは『原価列』が出る。
+      見出しは『原価』なので完全一致に失敗し、**関所が鳴らなかった**。
+      実際の事故: 「原価列の右隣に備考列を追加して」→ 備考が**末尾**に入り、
+      解釈行は「依頼文に位置の指定が無いため」と**嘘をついて** `✓` を出していた。
+    ★ 「原価列」と書くのは利用者にとってごく自然な言い方 ── そこに穴が開いていた。
+    """
+    if word in headers:
+        return word
+    for h in headers:
+        if word.startswith(h) and word[len(h):] in _STRUCTURE_SUFFIXES:
+            return h
+    return None
+
+
 def unaccounted_request_words(task: str, declaration: str, pool_phrases, headers) -> list:
     """依頼に在って**実行した解釈のどこにも出ていない列名**を返す（無ければ空）。
 
@@ -94,7 +117,12 @@ def unaccounted_request_words(task: str, declaration: str, pool_phrases, headers
     left = find_unconsumed_words(task, {}, pool_phrases)
     decl = declaration or ""
     heads = {str(h) for h in (headers or ()) if h}
-    return [w for w in left if w not in decl and w in heads]
+    out = []
+    for w in left:
+        name = _names_a_header(w, heads)
+        if name and name not in decl and w not in decl:
+            out.append(name)
+    return list(dict.fromkeys(out))
 
 
 def find_unconsumed_words(task: str, resolved_args: dict, pool_phrases) -> list:

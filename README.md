@@ -24,7 +24,7 @@
 |---|---|
 | repo 全体 | 2026-08-10 起点・200 commit 超 |
 | 課題期間にやったこと | ① 外部の目による盲検レビュー 5 面 → 出た致命 10 件を全件処置 ② 表の基本操作（行の追加・削除／列の削除／1 セル書換） ③ 評価者が触れる GUI ④ 自分で GUI を触って出た欠陥 13 件の処置（8/31） |
-| 課題期間にやらなかったこと | 新機能の拡張。単一ファイル（<!-- MAIN_FILE_LINES -->16712<!-- /MAIN_FILE_LINES --> 行）の分割は**着手済み** ── 44% を `ailine_core/` へ出し、判定の段は op ごとに割り終えました（理由と残りは「4. 判断・制約・学び」） |
+| 課題期間にやらなかったこと | 新機能の拡張。単一ファイル（<!-- MAIN_FILE_LINES -->16728<!-- /MAIN_FILE_LINES --> 行）の分割は**着手済み** ── 44% を `ailine_core/` へ出し、判定の段は op ごとに割り終えました（理由と残りは「4. 判断・制約・学び」） |
 
 土台が既存であることを踏まえて読んでいただくために、何を今週やったかは
 `git log --since=2026-08-26 --until=2026-09-03 --oneline` で追える形にしてあります（9/3 以降の commit は課題期間の外での継続です）。
@@ -219,7 +219,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->3552<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
+期待: 全件緑（<!-- TOTAL_TESTS -->3567<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
 ollama）が要るものは `-m "not local"` が自動的に外します。外れた本数は実行結果の
 `deselected` に出ます）。
 ★ 総数は `tests/test_local_test_count.py` が実測と突き合わせています ──
@@ -239,7 +239,7 @@ B. 実機で確かめられること（LibreOffice + ollama が要る・「5. �
 | 6 | 「原価が 500 以上の項目のチェック列に「◎」を付けて」→ 実行 | 原価 700/900 の行だけに ◎ が付く。300 の行は空のまま |
 | 7 | 「みかんとぶどうを入れ替えて」→ 実行 | 2 行が入れ替わる。利益の式は自分の行を指したまま（値を交換する実装だと、ここで各行の金額が他の行の値になる） |
 | 8 | undo を押す | 1 つ前の状態にバイト単位で戻る |
-| 9 | ★ `demo/3_売上_欠けあり.xlsx` で 2 を繰り返す | `✓` が出ない。「検証できていない行がある」と名指しで出て `△` に落ちる |
+| 9 | ★ `demo/3_売上_欠けあり.xlsx` で 2 を繰り返す | `✓` が出ない。**書けなかった行を名指しして `×` で止まり**（例:「4行目: 式が期待形でない」）、**原本は 1 バイトも変わらない**（作業結果は `.out.xlsx` に残る） |
 | 10 | ★ 一覧に無い依頼（例:「画像を挿入して」）を出す | 生成に入らない。「何をしますか」と聞き返し、`ailine ops`（頼める操作の一覧）へ誘導して終わる（終了コード 3）。コードは 1 行も書かれない |
 
 ★ 9 と 10 がこの道具の山場です。動くところではなく、`✓` を出さないところを見てください。
@@ -520,8 +520,8 @@ git clone https://github.com/namakoo-dev/basrun ../basrun
 CLI だけ使う場合は、タグを固定して入れることもできます（GUI とデモ検体は付きません）:
 
 ```bash
-uv tool install git+https://github.com/namakoo-dev/ailine@v0.2.2
-#   uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.2.2
+uv tool install git+https://github.com/namakoo-dev/ailine@v0.2.3
+#   uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.2.3
 ```
 
 ### 環境変数

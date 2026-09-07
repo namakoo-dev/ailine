@@ -504,7 +504,14 @@ def check_add_column(path: Path, args: dict, header_row: int = 1,
     if info:
         return "warn", _moved_rows_note(info)
     label = f"『{name}』" if name else "見出しの無い列"
-    return "pass", f"{at}列目に{label}を挿入（他の列は 1 セルも変わらず）"
+    # ★★ 2026-09-07（外部の検品が拾った）: 「1 セルも変わらず」は**検算より広い主張**だった。
+    #   列を途中に挿すと右の列は右へ動き、式も書き直される ── 画面には直前に
+    #   その差分が全部出ているのに、要約文が「1 セルも変わらず」と言っていた
+    #   （実測: 列削除で 20 セル近い変化を出した 2 行下でこの文が出る）。
+    #   ★ 検算が本当に証明しているのは「**中身が、列を 1 本足した並びと一致する**」こと。
+    #     文を検算に合わせる（検算を文に合わせない）。
+    return "pass", (f"{at}列目に{label}を挿入"
+                    "（右の列は右へずれますが、中身と式は保たれています）")
 
 def _check_swap_cells(path: Path, args: dict, header_row: int,
                        source_book) -> tuple:
@@ -642,7 +649,9 @@ def check_swap(path: Path, args: dict, header_row: int = 1,
 
 def check_delete_column(path: Path, args: dict, header_row: int = 1,
                          source_book: Path | None = None) -> tuple:
-    """DELETE_COLUMN の事後条件。**他の列が 1 セルも変わらない**ことを証明する。"""
+    """DELETE_COLUMN の事後条件。**残った列の中身が、その 1 列を抜いた並びと一致する**
+       ことを証明する（★ 列は左へ詰まるので「1 セルも変わらない」ではない ──
+       2026-09-07 に文言をここへ合わせた）。"""
     name = str(args["col"])
     with BookView(path) as bv:
         ws = bv.sheet(args.get("_target_sheet"))
@@ -676,7 +685,9 @@ def check_delete_column(path: Path, args: dict, header_row: int = 1,
     note_deleted(args, [(r[j][1],) for r in before_rows])
     if info:
         return "warn", _moved_rows_note(info)
-    return "pass", f"列『{name}』を削除（残りの列は 1 セルも変わらず）"
+    # ★★ 2026-09-07: 同上 ── 列を消すと右の列は左へ詰まる。文を検算に合わせる。
+    return "pass", (f"列『{name}』を削除"
+                    "（右の列は左へ詰まりますが、中身と式は保たれています）")
 
 def note_deleted(args: dict, rows) -> None:
     """消した中身を機械の値として残す（呼び出し側が人に見せる）。

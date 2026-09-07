@@ -193,6 +193,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
 )
 from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/照合/保存形式（純関数）
 from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もしかして提案の候補生成（語としての厳格一致+about）
+from ailine_core import intent as intent_mismatch   # ★ 依頼が名指しした操作の種類と食い違わないか
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -11526,6 +11527,21 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
                 _op_match_pool(str(result.get("op") or "")), _heads):
             print(f"⚠ 依頼にある『{_w}』が、実行した解釈のどこにも出ていません "
                   "── この語を反映したとは言えないため、機械保証は出しません")
+            warning_count += 1
+        # ★★ 2026-09-07（外部の検品が最重として拾った）: 上の関所は**列名**しか見ないので、
+        #   『削除』のような**動詞**の食い違いは拾えなかった。実測した事故:
+        #     「ヤマノ食品の行を削除して」→ 操作:抽出（新シートを作り元の行はそのまま）→ ✓
+        #   ★ op 名でなく**効果の種類**で見る（4,538 件で 16 件 0.35%・全部が本物）。
+        _op_now = str(result.get("op") or "")
+        _asked = intent_mismatch.removal_asked_but_not_done(
+            getattr(a, "task", "") or "", _op_now,
+            {_o: [p for p in _op_match_pool(_o) if p] for _o in OP_META},
+            {_o: (WRITE_REMOVE in (getattr(OP_WRITE_TARGET.get(_o), "writes", ()) or ()))
+             for _o in OP_META})
+        if _asked:
+            print(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は行や列を"
+                  "取り除きません（元の表はそのまま残っています）"
+                  "── 頼んだ通りかを「解釈:」行で確かめてください")
             warning_count += 1
 
     # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。
