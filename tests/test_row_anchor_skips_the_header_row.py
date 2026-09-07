@@ -23,6 +23,7 @@
   別の言い回しで偶然に正しい引数が出れば、黙って違う操作が走りうる ── だから
   「壊す前に止まった」を根拠に放置しない。
 """
+import re
 import sys
 from pathlib import Path
 
@@ -97,8 +98,13 @@ def test_every_caller_passes_the_header_row():
     ★ 2026-09-06 に測ったとき、4 箇所のうち 1 箇所だけが渡していなかった。
       1 箇所直して満足せず、**入口側から数える**（この repo の系譜）。
     """
-    src = product_text()
-    calls = [ln.strip() for ln in src.splitlines() if "resolve_row_anchor(" in ln
+    # ★★ 2026-09-07: 行を跨いだ呼び出しを見落としていた（実際、引数を足して 2 行に
+    #   分けたら「渡していない」と誤検出した）。★ 番人を緩めず、**畳んでから数える**
+    #   ── 同じ弱さをヘルパ台帳の番人でも同日に直している（形でなく意味で守る）。
+    src = product_text().replace(chr(13), "")
+    flat = re.sub(r"\(\s*" + chr(10) + r"\s*", "(", src)          # 開き括弧の直後の改行
+    flat = re.sub(r",\s*" + chr(10) + r"\s*", ", ", flat)          # 引数の間の改行
+    calls = [ln.strip() for ln in flat.splitlines() if "resolve_row_anchor(" in ln
              and not ln.lstrip().startswith("def ")]
     assert calls, "呼び出しが 1 つも見つからない（検出が壊れている疑い）"
     bare = [c for c in calls if "header_row" not in c]

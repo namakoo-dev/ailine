@@ -436,7 +436,13 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     k = at - header_row - 1
     if k < 0 or k >= len(before_rows):
         return "fail", f"{at}行目は表の範囲外です（データは {len(before_rows)} 行）"
-    expected = before_rows[:k] + before_rows[k + count:]
+    # ★★ 2026-09-07: 名前が複数行に当たった削除は、**その行を全部**消す。
+    #   ここも at+count でなく宣言された一覧を見る（生成と同じ宣言を読む）。
+    if (_rows := sorted(int(x) for x in (args.get("_delete_rows") or []))):
+        _drop = {r - header_row - 1 for r in _rows}
+        expected = [row for i2, row in enumerate(before_rows) if i2 not in _drop]
+    else:
+        expected = before_rows[:k] + before_rows[k + count:]
     if len(after_rows) != len(expected):
         return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行から {count} 行消えて "
                          f"{len(expected)} 行のはずが {len(after_rows)} 行）")

@@ -283,6 +283,13 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
     for w in subject_warnings:
         print(f"{step_prefix}{w}")
     warn_overwrite = deps.maybe_warn_target_overwrite(op, resolved, meta, warn_book)
+    # ★★ 2026-09-07（Namakoo 決裁「削除は聞く。確認が必要だから」）: 名前が**複数行**に
+    #   当たった削除は、断らずに**行を全部挙げて確認を取る**。
+    #   ★ 新しい関所も新しい exit code も作らない ── 上書きの関所にそのまま載せ、
+    #     聞く文だけ「削除しますか？」に差し替える（単位E が同じ形で再利用している）。
+    _ask_delete = str(resolved.get("_confirm_delete") or "")
+    if _ask_delete and not warn_overwrite:
+        warn_overwrite = _ask_delete
     if warn_overwrite:
         summary = deps.interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
         if summary:
@@ -291,7 +298,8 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
     for w in resolved.get("_warnings", []):   # ★ A': LLM由来の値と機械抽出の食い違い
         print(f"{step_prefix}⚠ {w}")
     gate_exit = deps.confirm_overwrite_or_gate(a, warn_overwrite, step_prefix=step_prefix,
-                                                subject_mismatch=bool(subject_warnings))
+                                                subject_mismatch=bool(subject_warnings),
+                                                prompt="削除しますか？" if _ask_delete else None)
     return DslConfirmResult(line=line, label=label, warn_overwrite=warn_overwrite,
                              mismatch_warning=None if folded else mismatch_warning,
                              gate_exit=gate_exit,

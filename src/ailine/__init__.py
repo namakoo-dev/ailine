@@ -5308,9 +5308,30 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
     #   ★ 機械が決めた位置は LLM の数字より優先する ── 実表を見た側が正しい。
     _sheet0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
     _hr0 = int((book_meta.get("header_rows") or {}).get(_sheet0, 1) or 1)
-    _at_anchor, _anchor_note = resolve_row_anchor(task, book_meta, _sheet0, header_row=_hr0)
+    _anchor0: dict = {}
+    _at_anchor, _anchor_note = resolve_row_anchor(
+        task, book_meta, _sheet0, header_row=_hr0, anchor_out=_anchor0)
     if _anchor_note and _at_anchor is None:
-        return False, resolved, inferred, _anchor_note
+        # ★★ 2026-09-07（外部の検品・Namakoo 決裁「削除は聞く」）: 名前が**複数行**に
+        #   当たった回、旧版は断って「行番号で指してください」と言っていた。断り方は
+        #   親切だが、買い手の目には**「消してと言ったのに何も起きない」＝失敗**だ。
+        #   ★ 決められないのではなく **聞けば決まる** ── 行を全部挙げて確認を取る。
+        #   ★ 削除は取り返しがつかないので**必ず聞く**（既存の破壊の関所に載せる ──
+        #     新しい関所も新しい exit code も作らない）。
+        _rows0 = list(_anchor0.get("rows") or [])
+        if op == "DELETE_ROWS" and len(_rows0) > 1:
+            resolved["_delete_rows"] = _rows0
+            # ★ 宣言を実体に合わせる ── 2 行消すのに「行数:1」と出したら、
+            #   今日ずっと潰している「宣言と実体のずれ」を自分で作ることになる。
+            resolved["at"], resolved["count"] = _rows0[0], len(_rows0)
+            resolved["_at_basis"] = (
+                f"『{_anchor0.get('name')}』の行＝"
+                + "、".join(f"{r}行目" for r in _rows0))
+            resolved["_confirm_delete"] = (
+                f"『{_anchor0.get('name')}』に当てはまる {len(_rows0)} 行"
+                f"（{'、'.join(str(r) for r in _rows0)}行目）を削除します")
+        else:
+            return False, resolved, inferred, _anchor_note
     if _at_anchor is not None:
         resolved["at"] = _at_anchor
         resolved["_at_basis"] = _anchor_note
@@ -6819,6 +6840,13 @@ def _codegen_add_row(*, op, resolved_args, book_meta, use_formula, headers, firs
 def _codegen_delete_rows(*, op, resolved_args, book_meta, use_formula, headers, first_sheet,
                  header_row, hr0, wrap):
     """DELETE_ROWS の Basic を組む（★ codegen_dsl から**本文をそのまま**移した）。"""
+    # ★★ 2026-09-07: 名前が複数行に当たった回は、その行を**全部**消す。
+    #   ★ **下から順に**呼ぶ ── 上から消すと、その下の行番号がずれる。
+    #   ★ Basic 側は変えない（DeleteRows を複数回呼ぶだけ）── 新しいヘルパを作らない。
+    if (_rows := list(resolved_args.get("_delete_rows") or [])):
+        body = "".join(f"    Call DeleteRows(oDoc, {int(r) - 1}, 1)" + chr(10)
+                       for r in sorted(_rows, reverse=True))
+        return wrap(body)
     at0 = int(resolved_args["at"]) - 1
     count = int(resolved_args.get("count", 1) or 1)
     return wrap(f"    Call DeleteRows(oDoc, {at0}, {count})\n")
@@ -8904,7 +8932,7 @@ def _row_named_anywhere_in_task(task: str, rows: dict, headers: list,
 
 
 def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
-                        header_row: int = 1) -> tuple:
+                        header_row: int = 1, anchor_out: dict | None = None) -> tuple:
     """依頼文の「**みかんの下に**」「**みかんとぶどうの間に**」から行番号を決める。
 
     ★ 2026-08-27（Namakoo が実測）: ADD_ROW は位置を**行番号**でしか受け取れないのに、
@@ -8986,6 +9014,12 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
             headers_here = [str(ws.cell(row=header_row, column=c).value or "").strip()
                              for c in range(1, last_col + 1)]
             hits = [r for r, vals in ws_rows.items() if name in vals]
+            # ★★ 2026-09-07: 当たった行を**呼び出し側へ渡す口**（判断はここ 1 箇所のまま）。
+            #   削除の道は「2 行に当たったら断る」でなく「**聞いてから両方消す**」に変えた
+            #   ── 買い手の目には「消してと言ったのに何も起きない」は失敗だから。
+            #   ★ 一覧を作る所を 2 箇所に書かない（片配線を作らない）ので、out 引数にする。
+            if anchor_out is not None:
+                anchor_out["name"], anchor_out["rows"] = name, list(hits)
     except Exception:
         return None, None
     if not hits:
@@ -12868,7 +12902,8 @@ def _interpretation_summary_line(resolved: dict, inferred: set) -> str | None:
 
 
 def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None,
-                                step_prefix: str = "", subject_mismatch: bool = False) -> int | None:
+                                step_prefix: str = "", subject_mismatch: bool = False,
+                                prompt: str | None = None) -> int | None:
     """★ W10a 項目1: 破壊の関所。既定(原本へ直接反映)で、既存データへの上書きが起きる
        操作（_maybe_warn_target_overwrite が検出）は、--ask 無指定でも確認を挟む
        （監査実測: target が誤って既存列に解決され、確認なしで実データが上書きされた
@@ -12888,11 +12923,15 @@ def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None
     if not (reason and getattr(a, "inplace", False) and not getattr(a, "dry", False)
             and not getattr(a, "ask", False) and not getattr(a, "overwrite", False)):
         return None
-    prompt = "上書きしますか？" if warn_overwrite else "この対象で実行しますか？"
+    # ★ 2026-09-07: 聞く文だけ差し替えられるようにした（関所そのものは 1 つのまま）。
+    prompt = prompt or ("上書きしますか？" if warn_overwrite else "この対象で実行しますか？")
     try:
         ans = input(f"{step_prefix}{prompt} [y/N]: ").strip().lower()
     except EOFError:
-        options = [("--overwrite", "上書きを承知して続行する（バックアップから ailine undo で戻せる）"),
+        _del = prompt == "削除しますか？"
+        options = [("--overwrite", ("削除を承知して続行する（バックアップから ailine undo で戻せる）"
+                                     if _del else
+                                     "上書きを承知して続行する（バックアップから ailine undo で戻せる）")),
                    ("--copy", "原本には触らず .out に結果を作る（原本は無変更）")] if warn_overwrite \
             else [("--copy", "原本には触らず .out に結果を作る（原本は無変更）"),
                   ("--sheet / 列名を依頼文に明記", "対象を依頼文で名指しして、もう一度実行する")]
