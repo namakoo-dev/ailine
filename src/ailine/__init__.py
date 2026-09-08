@@ -197,6 +197,7 @@ from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/�
 from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もしかして提案の候補生成（語としての厳格一致+about）
 from ailine_core import intent as intent_mismatch   # ★ 依頼が名指しした操作の種類と食い違わないか
 from ailine_core import arith as arith_request   # ★ 依頼が書いた式と、実行した計算が同じか
+from ailine_core import required_word   # ★「その語が在る時だけ使う」を散文でなく機械にする
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -2589,7 +2590,27 @@ OP_META = {
     "AUTOFIT": {"category": "見た目を整える", "label": "列幅自動調整", "folder": False,
                  "synonyms": ["幅を内容に合わせる", "列幅調整", "列を自動調整"],
                  "match_phrases": ["列幅を自動調整", "はみ出しを直す", "列幅を整える"]},
+    # ★ requires_word: 依頼文にこの語が在る時だけ使ってよい（プロンプトの散文を宣言に）。
+    #   without_the_word: 語が無い回に読み替える先（引数の形が同じ op）。None なら断る。
+    # ★★ この表は**許可**なので、狭すぎる方が高くつく（2026-09-08・Namakoo の
+    #   「ピボットで出してと言わない場合はどうやって出すの？」で発覚）:
+    #     広すぎる → モデルがその op を選んだ回だけ通る（元の分類精度に戻るだけ）
+    #     狭すぎる → **正当な依頼を黙って別の op に変える**（実測: 「クロス表にして」が
+    #                ピボット 4/4 → 集計になった。俺がプロンプトの散文をそのまま写し、
+    #                op 自身の同義語『クロス集計』を見なかったため）
+    #   ★ ただし照合語(match_phrases)は流用しない ── PIVOT のそれには『入れ替え』が
+    #     入っており（コメント自身が「取り合いになる語」と書いている）、許可に使うと
+    #     行の入れ替えが全部ピボットになりうる。**名指ししている語だけ**を入れる。
+    # ★★ 宣言するのは PIVOT だけにした（2026-09-08）。DRAW_BORDERS/AUTOFIT にも
+    #   同じ散文が在るので一度は宣言したが、**既存の番人と二重になっていた** ──
+    #   依頼に無い段が湧く形は「捏造段」の機械が既に名指しして ✓ を降ろしている
+    #   （tests/test_operator9_fixes.py）。重ねた結果、複合計画の**正当な段まで
+    #   巻き添えに断って**いた（実測で番人が捕まえた）。読み替え先が無い op は、
+    #   断るより「その段だけ名指しして降格」の方が人の役に立つ。
+    #   ★ 発火条件: 読み替え先（引数の形が同じ op）を持つ op が増えたら宣言する。
     "PIVOT": {"category": "計算する", "label": "ピボット", "folder": False,
+               "requires_word": ("ピボット", "クロス", "縦", "横"),
+               "without_the_word": "AGGREGATE",
                "synonyms": ["ピボットテーブル", "ピボットで集計", "クロス集計"],
                "match_phrases": ["縦横に組み替える", "行と列を入れ替えて集計", "クロス表にする",
                                  "行と列を入れ替え", "入れ替え"]},
@@ -3362,11 +3383,7 @@ DRAW_BORDERS: 依頼文に「けい線/罫線/枠線」という言葉が明示�
   絶対に使わない（曖昧なら CLARIFY で確認する）
 AUTOFIT: 依頼文に「列幅/幅」という言葉が明示された時だけ使う。列幅を内容に合わせて自動調整する。
   args不要（全列が対象）★ 具体性の無い依頼には使わない（曖昧なら CLARIFY で確認する）
-PIVOT: 依頼文に「ピボット」「ピボットテーブル」という言葉が明示された時だけ使う。
-  本物のピボットテーブル(DataPilot)を作る。args: group_col(分類する列), value_col(合計する列)
-  ★「ピボット」の語が無いグループ別集計（「集計」「まとめる」「小計」「合計がみたい」等、
-  ピボットという語を伴わない言い方はすべて）は AGGREGATE を使う（PIVOT は LibreOffice で
-  開き直すたび書式が消える癖があるため、書式つきの見栄えが要るなら AGGREGATE の方が適する）
+PIVOT: 本物のピボットテーブル(DataPilot)を作る。args: group_col(分類する列), value_col(合計する列)
 SET_COLUMN_VALUE: 既存列の値を全部、同じ1つの値に書き換える。args: col(書き換える既存列名)
   ★ 実際に書き込む値(value)は依頼文の「」または『』で囲まれた引用を機械が抽出する
   （ここに書いてもよいが、依頼文の引用と食い違えば依頼文側が優先される）。税率等の
@@ -12768,6 +12785,23 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
                        "「みかんの下に梨を追加して。売上は600」）")
                 print("  （空の行が欲しいなら: 例「3行目の下に1行挿入して」）")
                 return plan, 3
+
+    # ★★ 2026-09-08（Namakoo「使い方の広い操作に出る不具合が怖い」から辿った）:
+    #   「分類ごとの売上を出して」が **4/4 でピボット**になり ✓ を出していた。
+    #   禁止はプロンプトに 3 行 + few-shot 1 例まで書いてあったのに守られていない
+    #   ── 指示は意図、保証は機械。**散文を宣言(requires_word)に移して機械が縛る。**
+    #   ★ 狭い op が広い op を奪う形（集計は「〜ごとに」「まとめて」が流れ込む広い口）。
+    #   ★ 人が op を固定した回は触らない（画面に出した読みと実行を食い違わせない）。
+    #   ★ 判定は ailine_core/required_word.py に 1 つだけ ── ここは材料を渡すだけ。
+    if plan and not getattr(a, "_forced_op", None):
+        _rules = {_o: (_m["requires_word"], _m.get("without_the_word"),
+                        OP_LABELS.get(_m.get("without_the_word"), ""))
+                   for _o, _m in OP_META.items() if _m.get("requires_word")}
+        plan, _wlines, _wrefuse = required_word.enforce(plan, a.task, _rules)
+        for _ln in _wlines:
+            print(_ln)
+        if _wrefuse:
+            return plan, 3
     return plan, None
 
 

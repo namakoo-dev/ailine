@@ -189,7 +189,7 @@ def test_t3_unrelated_existing_sheet_is_gated(tmp_path, monkeypatch, capsys):
     # ★ 依頼文に「集計」の語を入れない: 入れると対象シートの解決が『集計』シート自身へ寄り、
     #   接地検証が先に落ちて（exit 3）適用まで行かない（実測）。③ の本体は「無関係な
     #   『集計』シートが SummaryTable に消される」ことなので、そこだけを残す。
-    rc = _run(tmp_path, monkeypatch, book, "取引先ごとに金額を合計して",
+    rc = _run(tmp_path, monkeypatch, book, "取引先ごとに金額をピボットで合計して",
               "AGGREGATE", {"group_col": "取引先", "value_col": "金額"}, fake)
     out = capsys.readouterr().out
     assert rc == 7, out
@@ -230,7 +230,7 @@ def test_t4_pivot_with_unrelated_sheet_does_not_fire(tmp_path, monkeypatch, caps
         "集計": [["年度", "予算"], [2025, 1000], [2026, 2000]],
     })
     _pivot_structure_check_is_faked(monkeypatch)
-    rc = _run(tmp_path, monkeypatch, book, "取引先ごとに金額を合計して",
+    rc = _run(tmp_path, monkeypatch, book, "取引先ごとに金額をピボットで合計して",
               "PIVOT", {"group_col": "取引先", "value_col": "金額"}, _fake_pivot_sheet)
     out = capsys.readouterr().out
     assert rc == 0, out
@@ -249,7 +249,7 @@ def test_t4b_pivot_over_an_existing_pivot_sheet_is_gated(tmp_path, monkeypatch, 
         "ピボット": [["前回のメモ", "手入力"], ["残しておきたい", 999]],
     })
     _pivot_structure_check_is_faked(monkeypatch)
-    rc = _run(tmp_path, monkeypatch, book, "取引先ごとに金額を合計して",
+    rc = _run(tmp_path, monkeypatch, book, "取引先ごとに金額をクロス集計して",
               "PIVOT", {"group_col": "取引先", "value_col": "金額"}, _fake_pivot_sheet)
     out = capsys.readouterr().out
     assert rc == 7, out

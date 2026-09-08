@@ -6271,7 +6271,16 @@ def test_op_meta_entries_have_category_label_synonyms():
     # ★ W10 便C1（2026-08-22）: match_phrases（もしかして提案 suggest_ops の照合専用プール・
     #   synonyms とは別・件数上限なし）を追加。全 op が持つので必須キーに昇格させる。
     for op, meta in ailine.OP_META.items():
-        assert set(meta.keys()) == {"category", "label", "synonyms", "folder", "match_phrases"}
+        # ★ 2026-09-08: requires_word / without_the_word は**任意**の宣言
+        #   （「依頼文にこの語が在る時だけ使う」をプロンプトの散文から機械へ移した分）。
+        #   持つ op だけが持つので必須キーには入れず、持つ回だけ形を確かめる。
+        assert set(meta.keys()) - {"requires_word", "without_the_word"} == {
+            "category", "label", "synonyms", "folder", "match_phrases"}
+        if "requires_word" in meta:
+            assert isinstance(meta["requires_word"], tuple) and meta["requires_word"]
+            assert all(isinstance(w, str) and w for w in meta["requires_word"])
+            fb = meta.get("without_the_word")
+            assert fb is None or fb in ailine.OP_META, fb
         assert isinstance(meta["category"], str) and meta["category"]
         assert isinstance(meta["label"], str) and meta["label"]
         assert isinstance(meta["synonyms"], list) and meta["synonyms"]
