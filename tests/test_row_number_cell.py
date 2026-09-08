@@ -181,7 +181,10 @@ def test_a_request_without_a_quoted_value_is_never_stolen():
 
 def test_a_conditional_request_is_never_stolen():
     """★ 「原価が500以上の…に『◎』を付けて」は 1 行ではない ── 比較語で止める。"""
-    i = product_text().index("if not _reread_done and plan_writes_beyond_one_cell(plan):")
+    # ★ 2026-09-09: 門の条件に `not _wants_new_row` が入って**字面が変わった**ので、
+    #   探し方を条件式でなく**門の目印**（plan_writes_beyond_one_cell）に寄せた。
+    #   ★ 守っている不変は同じ ── 比較語のある依頼を 1 セルへ落とさないこと。
+    i = product_text().index("plan_writes_beyond_one_cell(plan):")
     assert "extract_cmp_from_task(a.task) is None" in product_text()[i:i + 900], \
         "1 セルの読み直しが、条件つき書換の依頼まで拾う形になっている"
 

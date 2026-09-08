@@ -201,6 +201,7 @@ from ailine_core import required_word   # ★「その語が在る時だけ使�
 from ailine_core.new_sheet import empty_new_sheets   # ★ 新しく作ったシートが空なら頼まれたことは起きていない
 from ailine_core.header_cell import header_cell_target   # ★「<列名>の見出しに」は列ぜんぶでなく 1 セル
 from ailine_core.row_conflict import value_not_in_the_named_row   # ★「N行目の<値>」で、その行にその値が無い
+from ailine_core.row_placement import task_places_a_new_row   # ★「〜の下に…足して」は行を増やす依頼（1セルへ読み替えない）
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -12378,6 +12379,12 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     #   ★ ただし**読めなかった回**は今までどおり断る ── 下の読み直しで
     #     列も値も決まらなければ、黙って別のことをしない。
 
+    # ★★ 2026-09-09: 「〜の下/上/間に … 足す」は**行を増やす**依頼。1 セル書換へ
+    #   着地する門が 2 つあるので、**ここで 1 度だけ**判定して両方が読む
+    #   （門ごとに書き足すと、また片方だけ直る ── 昨日 8 回見た形）。
+    _wants_new_row = task_places_a_new_row(a.task, _ANCHOR_AFTER, _ANCHOR_BEFORE,
+                                            _re_between)
+
     def _already_places_a_row(st):
         # ★★ 2026-08-29（Namakoo の通しで実測）: 「件数の合計も合計行に入れて」が
         #   **行追加**に化けた。一段目は 3/3 とも正しく APPEND_TOTAL を返していたのに、
@@ -12430,8 +12437,17 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     #     （三項の「依頼」が抜けた形・今日 2 度目）。
     #   ★ 依頼文が**入れ替え**と言っているなら、1 セル書換に読み替えてはいけない。
     #     入れ替えは 2 か所が動く操作で、1 セル書換は 1 か所しか動かない ── 別の仕事。
+    # ★★ 2026-09-09（到達率の器を広い op まで厚くした最初の一撃）:
+    #   「みかんの**下に**「ぶどう」の行を**足して**」が **1 セル書換**に読み直され、
+    #   みかんの商品名が『ぶどう』に**上書き**されていた（行は増えず、みかんが消える）。
+    #   ★ 「下に」も「足して」も見ていない ── 読み直し自身が依頼を落とした形。
+    #   ★ ADD_ROW は走行の **18.1%**（いちばん広い op）。器の分母に無かったので
+    #     誰も気づいていなかった（09-08 の作業前から在る・A/B で確認）。
+    #   ★ 分かれ目は**向き**: 下/上/間 ＝ 行を増やす ／ 右/左/隣 ＝ 1 セル
+    #     （後者は 09-08 に直した「鈴木の右に東棟」── そちらは塞がない）。
     if (not _reread_done and plan
             and not task_asks_for_a_swap(a.task)
+            and not _wants_new_row
             and not any(_already_writes_one_cell(st) for st in plan)
             and not any(_is_a_different_job(st) for st in plan)):
         _cell = resolve_cell_target_from_task(a.task, book_meta, _sheet_h)
@@ -12463,7 +12479,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     #     **ADD_ROW**（行の追加）を返していた。op 名で門を作っていたので素通り ──
     #     op 名の数え上げは今日 3 度目に破れた形なので、ここは**宣言**で門を作る。
     #     三項（行を指す・列を指す・値を引用する）が揃った時だけ 1 セルへ落とす。
-    if not _reread_done and plan_writes_beyond_one_cell(plan):
+    if not _reread_done and not _wants_new_row and plan_writes_beyond_one_cell(plan):
         _row_no = task_names_a_row_number(a.task)
         _named = _task_names_a_row(a.task, book_meta, _sheet_h)
         _wide = any((st or {}).get("op") == "SET_COLUMN_VALUE" for st in plan)
