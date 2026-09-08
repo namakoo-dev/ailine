@@ -94,17 +94,27 @@ def test_an_op_without_its_word_is_rerouted_or_refused(task, op, want):
         assert lines == [], lines
 
 
-def test_the_prose_no_longer_repeats_what_the_machine_guarantees():
-    """★ 同じ規則を散文と宣言の 2 箇所に持たない（片配線の種になる）。
+def test_the_prose_and_the_declaration_are_kept_on_purpose():
+    """★★ 散文と宣言が**二重に**在ることを、意図として固定する（2026-09-08・測って戻した）。
 
-    ★ ピボットの禁止は機械が持つので、プロンプトからは外した（5 行 → 1 行）。
-      DRAW_BORDERS/AUTOFIT の散文は**残す** ── そちらは宣言を持たせず、既存の
-      「捏造段」の機械に任せると決めたため（重ねると正当な段まで断ってしまう）。
+    はじめ「機械が縛るなら散文は要らない」と考えてピボットの説明を 5 行 → 1 行に削った。
+    実 CLI の A/B で **別の op が壊れた**:
+
+        「1行目のA列とB列を結合して」  セル結合 4/4 → **(空) 4/4**
+        犯人はピボットの **-4 行**（列移動の +1 行ではない・切り分け済み）
+
+    ★ 「説明を厚くする方が高くつく」は言い過ぎで、**削っても壊れる**。
+      プロンプトは一枚の絡まった塊で、どちらの向きに触っても分類全体が組み変わる。
+    ★ だから散文は据え置く。**authority は宣言（requires_word）の方**で、
+      散文を直しても挙動は変わらない ── この試験がその約束を固定する。
     """
     doc = ailine.OPS_DOC
     pivot = [l for l in doc.splitlines() if l.startswith("PIVOT:")]
     assert len(pivot) == 1, pivot
-    assert "明示された時だけ" not in pivot[0], pivot[0]
+    # ★ 散文は残っている（減らすと他の op が壊れると実測した）
+    assert "明示された時だけ" in pivot[0], pivot[0]
+    # ★ ただし挙動を決めるのは宣言の方
+    assert ailine.OP_META["PIVOT"].get("requires_word"), "宣言が消えている"
 
 
 def test_a_forced_op_is_left_alone():
