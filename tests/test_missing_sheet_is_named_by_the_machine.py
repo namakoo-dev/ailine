@@ -127,4 +127,53 @@ def test_the_machine_answers_instead_of_asking_what_a_sheet_is(tmp_path):
     assert got.returncode == 3, got.stdout[-400:]
     assert "『売上』というシートはありません" in got.stdout, got.stdout[-400:]
     assert "在庫" in got.stdout, got.stdout[-400:]
-    assert not re.search(r"とは何シート", got.stdout), got.stdout[-400:]
+    # ★★ 2026-09-08: 旧版は「とは何**シート**ですか」しか禁じておらず、
+    #   **「売上シートとは何ですか？」**で素通りしていた（6 回に 1 回・押しを
+    #   2 回落とした）。★ 在るのに その事故の形では鳴らない、の実例。
+    #   真因は配線 ── 09-05 に直したのは断りの経路だけで、CLARIFY には
+    #   通っていなかった（_answer_before_asking に畳んで両方へ）。
+    assert not re.search(r"とは(何|どの)", got.stdout), got.stdout[-400:]
+
+
+# --- ④ 聞き返しの経路（2026-09-08・押しを 2 回落とした揺れの真因）-------------
+
+def test_asking_is_wired_into_every_place_that_asks():
+    """★★ **確率的な番人は番人ではない。**
+
+    実機の試験（上）は LLM が CLARIFY を返す回にしか効かず、**6 回に 1 回**しか
+    欠陥を踏まない ── 配線を切る変異を掛けても緑のままだった。
+    ★ だから「聞き返しを出す所」と「出す前に実表へ聞く所」の**数が合っているか**を
+      静的に縛る。新しい聞き返しを足して配線を忘れたら、ここが赤くなる。
+    ★ 出所: 09-05 に真因（LLM の作文を人に見せない）を直したのに、直した先が
+      断りの経路だけで CLARIFY には通っていなかった（片配線）。
+    """
+    src = (Path(__file__).resolve().parent.parent / "src" / "ailine"
+            / "__init__.py").read_text(encoding="utf-8")
+    asks = src.count('question = step.get("question")')
+    guards = src.count("if _answer_before_asking(a, book, book_meta,")
+    assert asks >= 1, "聞き返しを出す所が見つからない（番人が守る対象を失っている）"
+    assert asks == guards, (
+        f"聞き返し {asks} 箇所に対して、実表へ聞く配線が {guards} 箇所 ── "
+        "片方だけ直すと、また 6 回に 1 回だけ作文が出る")
+
+
+def test_the_machine_answers_a_missing_sheet_without_the_model(tmp_path, capsys):
+    """★ 決定論の試験 ── LLM を通さずに『答える側』が働くことを見る。"""
+    import argparse
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "在庫"
+    ws.append(["品名", "金額"])
+    ws.append(["机", 12000])
+    book = tmp_path / "b.xlsx"
+    wb.save(book)
+
+    a = argparse.Namespace(task="売上シートの金額を並べ替えて", model="m",
+                           json=False, book=str(book))
+    stopped = ailine._answer_before_asking(a, book, {"sheets": ["在庫"]}, ["在庫"])
+    shown = capsys.readouterr().out
+    assert stopped is True, shown
+    assert "『売上』というシートはありません" in shown, shown
+    assert "在庫" in shown, shown

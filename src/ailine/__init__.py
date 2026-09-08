@@ -200,6 +200,7 @@ from ailine_core import arith as arith_request   # ★ 依頼が書いた式と�
 from ailine_core import required_word   # ★「その語が在る時だけ使う」を散文でなく機械にする
 from ailine_core.new_sheet import empty_new_sheets   # ★ 新しく作ったシートが空なら頼まれたことは起きていない
 from ailine_core.header_cell import header_cell_target   # ★「<列名>の見出しに」は列ぜんぶでなく 1 セル
+from ailine_core.row_conflict import value_not_in_the_named_row   # ★「N行目の<値>」で、その行にその値が無い
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -11876,6 +11877,28 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             print(f"⚠ 新しく作った『{_empty}』に中身がありません（見出しだけ）"
                   "── 頼んだことが起きたとは言えないため、機械保証は出しません")
             warning_count += 1
+        # ★★ 2026-09-08（曖昧な行の測定で出た・実害のある false ✓）:
+        #   「**3行目のナット**を削除して」で 3 行目は**ボルト**だったのに、機械は
+        #   番号だけ取って ボルト を消し **✓** を出していた（『ナット』は解釈行のどこにも
+        #   出ていない）。残差の関所が黙るのは、値であって見出しでないから。
+        #   ★ 見るのは**依頼と実表**だけ ── 依頼が自己矛盾なら、何をしたとしても
+        #     「頼まれたとおり」とは言えない。だから op を 1 つも列挙しない。
+        #   ★ 判定は ailine_core/row_conflict.py に 1 つだけ。
+        try:
+            _bm_rc = build_book_meta(book)
+            _sheet_rc = (getattr(a, "_target_sheet", None)
+                          or (_bm_rc.get("sheets") or [None])[0])
+            _hr_rc = int((_bm_rc.get("header_rows") or {}).get(_sheet_rc, 1) or 1)
+        except Exception:
+            _sheet_rc, _hr_rc = None, 1
+        _clash = value_not_in_the_named_row(
+            getattr(a, "task", "") or "", task_names_a_row_number(
+                getattr(a, "task", "") or ""), book, _sheet_rc, _hr_rc)
+        if _clash:
+            print(f"⚠ 依頼は『{_clash}』と行番号の両方を指していますが、"
+                  f"その行に『{_clash}』はありません "
+                  "── どちらを指しているか確かめてください")
+            warning_count += 1
 
     # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。
     #   --copy でも --inplace でも成果物は out_book なので、1 本の測定で両経路を覆う。
@@ -12850,6 +12873,42 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     return plan, None
 
 
+def _answer_before_asking(a: argparse.Namespace, book: Path, book_meta: dict,
+                           sheets: list) -> bool:
+    """聞き返しを出す**前に**、機械が答えを持っていないか実表へ聞く（2026-09-08）。
+
+    戻り値: 断って終わったら True（呼び出し側は exit 3 で返る）。
+
+    ★★ 出所（押しを 2 回・計 80 分落とした揺れの真因）: 1 枚しかないブックに
+      「売上シートの金額を並べ替えて」で、6 回に 1 回 **「売上シートとは何ですか？」**
+      （LLM の作文）が出ていた。2026-09-05 に真因を特定して直したのに、
+      直した先が**断りの経路だけ**で CLARIFY には配線されていなかった ── 片配線。
+      番人も「とは何**シート**ですか」しか禁じておらず「とは何ですか」で素通りした
+      （在るのに その事故の形では鳴らない）。
+    ★★ Namakoo の指摘で設計が見えた ── これは**属性**の話だった。
+      ailine_core/attributes.py の決裁どおり、聞く前に実表へ聞く:
+        候補 0 → 答える（「ありません」）／1 → 聞かない／2 以上 → 聞いて覚える
+      どちらも既に実装済みで、**この経路にだけ通っていなかった**。
+    ★ CLARIFY は単発と複合計画の 2 箇所にあるので、**畳んでここ 1 つに置く**
+      （両方に配ると、また片方だけ直る ── 今日 8 回見た形）。
+    """
+    missing = sheet_named_but_missing(a.task, sheets)
+    if missing:
+        for line in render_missing_sheet_refusal(missing, sheets):
+            print(line)
+        _finish_run(a, book, {"ok": False, "attempts": 0, "task": a.task,
+                               "model": a.model, "path": "vocab_miss",
+                               "command": None, "postcondition": None,
+                               "changes": [], "out": str(book)},
+                    failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/sheet_missing")
+        return True
+    try:
+        _ask_about_a_suspicious_word(a, book, book_meta)
+    except Exception:
+        pass   # ★ 聞き返しの経路を、聞く仕掛けの失敗で落とさない
+    return False
+
+
 def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path,
                              struct_dump: dict, sheets: list) -> int:
     """対象シートが決まった後の残り（見出し行 → 翻訳 → 計画の振り分け）。
@@ -13024,6 +13083,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         else:
             _flush_pending_sheet_announce(a)
         if op == "CLARIFY":
+            if _answer_before_asking(a, book, book_meta,
+                                      list(book_meta.get("sheets") or [])):
+                return 3
             question = step.get("question") or "確認が必要です"
             # ★★ 2026-09-05: 聞き返しの中の「（例: …）」を**実測で通る例**に差し替える。
             #   元の例は few-shot の作文で、そのまま打つと断られることがあった
@@ -14877,6 +14939,9 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
         op = step.get("op")
 
         if op == "CLARIFY":
+            if _answer_before_asking(a, book, book_meta,
+                                      list(book_meta.get("sheets") or [])):
+                return 3
             question = step.get("question") or "確認が必要です"
             items.append((i, question, "fail", "計画の途中で確認が必要なため対応できません"))
             plan_json.append({"op": "CLARIFY", "command": None, "status": "fail", "postcondition": None})
