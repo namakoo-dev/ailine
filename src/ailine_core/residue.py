@@ -112,7 +112,11 @@ def unaccounted_request_words(task: str, declaration: str, pool_phrases, headers
     ★ 捕まえない形（測って分かっている・広げようとして却下した）:
       ・落ちたのが**値だけ**の時（列名は宣言に在る）
       ・**否定の反転**（「営業以外」を「営業」と読む ── 語は 1 つも落ちない）
-      どちらも同じ履歴に実例が在り、実際に黙っていた。**開示して持つ**。
+      ・**宣言の語に部分一致して消える**形（`w not in decl` は部分文字列で見るため、
+        依頼の『利益』は宣言の『利益率』に食われる ── 2026-09-08 に実測）。
+        新しい列の名前が依頼の語を含む回は、この関所は原理的に黙る。
+        ★ 式の食い違いは `ailine_core/arith.py` が隣で受け持つ。
+      どれも同じ履歴に実例が在り、実際に黙っていた。**開示して持つ**。
     """
     left = find_unconsumed_words(task, {}, pool_phrases)
     decl = declaration or ""

@@ -23,6 +23,8 @@ freeform ゲート18桁）を、`max(len(flag)) + 2` で再現する形にした
 """
 from __future__ import annotations
 
+from ailine_core import route   # ★ 断る前に「別のコマンドで出来る」を見る
+
 from pathlib import Path
 
 # --- 生成 .bas コード表示ブロック（単発 DSL / 自由生成の試行ループ / 複合計画の語彙外段） --
@@ -90,7 +92,7 @@ def freeform_notice_reason(op: str, about: str = "") -> str:
 #   複合計画側の render_freeform_notice_compact（下）は生成が残る経路なので変えない。
 
 def render_vocab_miss_refusal(about: str = "", sunset_notice: bool = False,
-                               translate_error: bool = False) -> list:
+                               translate_error: bool = False, task: str = "") -> list:
     """単発の語彙外（FREEFORM/OUT_OF_VOCAB）の断り。既存の CLARIFY 系（`？` 接頭・
        「（頼める操作の一覧: ailine ops）」の1文）に文体をそろえる。3要素は必須:
        理由・vocab_miss を記録する開示・次の手（ops/言い換え/照合への導線）。
@@ -112,6 +114,15 @@ def render_vocab_miss_refusal(about: str = "", sunset_notice: bool = False,
             "  → `ailine doctor` で、何が足りないかを名指しします",
             "     （よくある原因: ollama が起動していない / モデルが未取得）",
         ]
+    # ★★ 2026-09-08（盲検の検品が挙げた摩擦）: `run` では出来なくても、**別のコマンドで
+    #   出来る**ものが在る（「PDF にして」→ `ailine export-pdf` は実在する）。
+    #   その回に「要望として記録します」と言うのは、持っている物を持っていないと言う形。
+    #   ★ 判定は ailine_core/route.py に 1 つだけ置き、ここは材料を渡すだけ。
+    if (_go := route.command_that_can_do_this(task)):
+        _cmd, _note = _go
+        return [f"？ この依頼{suffix}は `ailine run` では受け取れません。",
+                f"  → `{_cmd}` が同じことをします（{_note}）",
+                "  （頼める操作の一覧: ailine ops）"]
     lines = [f"？ この依頼{suffix}は、頼める操作の一覧に照合できませんでした。要望として記録します。"]
     if sunset_notice:
         lines.append("自由生成は廃止しました（理由: 機械検証できない操作は行わない方針）。")

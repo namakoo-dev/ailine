@@ -702,6 +702,56 @@ def check_delete_column(path: Path, args: dict, header_row: int = 1,
     return "pass", (f"列『{name}』を削除"
                     "（右の列は左へ詰まりますが、中身と式は保たれています）")
 
+def check_move_column(path: Path, args: dict, header_row: int = 1,
+                      source_book: Path | None = None) -> tuple:
+    """MOVE_COLUMN の事後条件。**その 1 列だけが動き、他は順番も中身も変わらない**
+       ことを証明する。
+
+    ★ 検算は宣言（`_headers_after`）と突き合わせるのではなく、**適用前の並びから
+      この関数が独立に組み直した並び**と比べる ── 宣言をそのまま信じると恒真になる
+      （「検証は本体と別実装で」）。宣言側は解釈行で人に見せる用。
+    ★ 中身の比較は挿入・削除と**同じ 1 箇所**（compare_moved_rows）を通す。
+      列が動くと式の参照は自動で追随するので、文字で比べてはいけない。
+    """
+    name = str(args["col"])
+    with BookView(path) as bv:
+        ws = bv.sheet(args.get("_target_sheet"))
+        last_row, last_col = data_extent(ws, header_row)
+        headers_after = [str(ws.cell(row=header_row, column=c).value or "")
+                         for c in range(1, last_col + 1)]
+        if source_book is None or not Path(source_book).exists():
+            return "warn", f"列『{name}』の位置のみ確認（適用前ファイルとの突き合わせ無し）"
+        with BookView(source_book) as bv_b:
+            ws_b = bv_b.sheet(args.get("_target_sheet"))
+            lr_b, lc_b = data_extent(ws_b, header_row)
+            headers_before = [str(ws_b.cell(row=header_row, column=c).value or "")
+                              for c in range(1, lc_b + 1)]
+            if name not in headers_before:
+                return "fail", f"適用前に列『{name}』が無い（動かした対象が特定できない）"
+            after_rows = _cells_for_shift(bv, args.get("_target_sheet"),
+                                          header_row, last_row, last_col)
+            before_rows = _cells_for_shift(bv_b, args.get("_target_sheet"),
+                                           header_row, lr_b, lc_b)
+    src = headers_before.index(name)
+    dst = int(args["_move_to"])
+    rest = headers_before[:src] + headers_before[src + 1:]
+    want_headers = rest[:dst] + [name] + rest[dst:]
+    if headers_after != want_headers:
+        return "fail", (f"見出しの並びが期待と違う（期待: {"、".join(want_headers)} ／ "
+                        f"実際: {"、".join(headers_after)}）")
+    expected = []
+    for r in before_rows:
+        rest_r = list(r[:src]) + list(r[src + 1:])
+        expected.append(tuple(rest_r[:dst] + [r[src]] + rest_r[dst:]))
+    st, info = compare_moved_rows(after_rows, expected, "動かした後の各列")
+    if st == "broken":
+        return "fail", "動かした後の中身が元と違う ── 別の列を巻き込んだ疑いがあります"
+    if info:
+        return "warn", _moved_rows_note(info)
+    return "pass", (f"列『{name}』を {src + 1}列目 → {dst + 1}列目 へ移動"
+                    "（他の列は順番どおりに詰まり、中身と式は保たれています）")
+
+
 def note_deleted(args: dict, rows) -> None:
     """消した中身を機械の値として残す（呼び出し側が人に見せる）。
 

@@ -109,6 +109,8 @@ value _CJK_KANJI_RE
 value _COLUMN_ARG_KEYS
 value _COL_AFTER
 value _COL_BEFORE
+value _COL_HEAD
+value _COL_TAIL
 value _CONFIRM_FIELDS
 value _CSV_REASON_LABELS
 class _CsvEvaluation(error: 'str' = None, sha256: 'str' = None, encoding: 'object' = None, parsed: 'object' = None, classifications: 'list' = None, warnings: 'list' = None) -> None
@@ -219,6 +221,7 @@ def _codegen_format_map(*, op, resolved_args, book_meta, use_formula, headers, f
 def _codegen_insert_rows(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
 def _codegen_lookup_fill(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
 def _codegen_merge(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
+def _codegen_move_column(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
 def _codegen_number_format(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
 def _codegen_pivot(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
 def _codegen_report_per_row(*, op, resolved_args, book_meta, use_formula, headers, first_sheet, header_row, hr0, wrap)
@@ -378,6 +381,7 @@ def _scan_last_row_basic(var: 'str' = 'oSheet', key_col: 'str' = '0', start_row:
 def _sheet_conflict_gate(a: 'argparse.Namespace', op: 'str') -> 'int | None'
 def _sheet_looks_like_template(source_book: 'Path', sheet_name: 'str') -> 'bool'
 def _sheet_only_snapshot(snap: 'dict', sheet: 'str') -> 'dict'
+def _sheet_values_multiset(snap: 'dict', sheet: 'str') -> 'tuple'
 def _shelve_bytes(book: 'Path', data: 'bytes') -> 'None'
 def _soffice_to_pdf(book_path, out_path, sheet=None, orientation=None, fit_to_width=False) -> 'tuple'
 def _sort_rows_lost_their_identity(source_book, after_rows: 'list', args: 'dict', header_row: 'int', phys_cols: 'int') -> 'str | None'
@@ -428,6 +432,7 @@ def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, 
 def _verify_insert_rows(resolved, inferred, book_meta, task, sheets, op)
 def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, task, headers, op)
 def _verify_merge(resolved, inferred)
+def _verify_move_column(resolved, inferred, book_meta, task)
 def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in, task='')
 def _verify_pivot(resolved, inferred, first_sheet, resolve_in)
 def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers)
@@ -505,6 +510,7 @@ def check_format_map(path: 'Path', args: 'dict', header_row: 'int' = 1, source_b
 def check_insert_rows(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
 def check_lookup_fill(path: 'Path', args: 'dict', header_row: 'int' = 1, use_formula: 'bool' = False) -> 'tuple'
 def check_merge(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
+def check_move_column(path: 'Path', args: 'dict', header_row: 'int' = 1, source_book: 'Path | None' = None) -> 'tuple'
 def check_number_format(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
 def check_openpyxl_fidelity_loss(original: 'Path', normalized: 'Path') -> 'list'
 def check_pivot(path: 'Path', args: 'dict', header_row: 'int' = 1) -> 'tuple'
@@ -701,7 +707,7 @@ def render_verify_match_report(out_label: 'str', a_label: 'str', b_label: 'str',
 def render_verify_report(out_label: 'str', folder_label: 'str', result: 'dict') -> 'list'
 def render_vocab_add_result(ok: 'bool', msg: 'str') -> 'str'
 def render_vocab_listing(vocab: 'dict', vocab_file: 'Path') -> 'list'
-def render_vocab_miss_refusal(about: 'str' = '', sunset_notice: 'bool' = False, translate_error: 'bool' = False) -> 'list'
+def render_vocab_miss_refusal(about: 'str' = '', sunset_notice: 'bool' = False, translate_error: 'bool' = False, task: 'str' = '') -> 'list'
 def replace_examples_in_question(question: 'str', ops=None) -> 'str'
 def resolve_cell_target_from_task(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)
 def resolve_col_anchor(task: 'str', headers: 'list') -> 'tuple'

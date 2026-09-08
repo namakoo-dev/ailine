@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "金額",
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
+  },
+  "inferred": [],
+  "err": "どこへ動かすかが依頼文から読み取れません（例:「取引先の列を一番左に」「担当を金額の右に」）"
+}

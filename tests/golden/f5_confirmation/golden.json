@@ -24,6 +24,7 @@
   "insert_rows_count_inferred": "解釈: 操作:行挿入 挿入位置:3 行数:1(推定)",
   "lookup_fill_key_col_inferred": "解釈: 操作:転記 対象シート:Sheet 対象列:単価 参照シート:単価表 キー列:商品(推定)",
   "merge": "解釈: 操作:セル結合 範囲:A1:B1",
+  "move_column_to_head": "解釈: 操作:列移動 動かす列:金額 移動先:1列目 位置の根拠:『一番左』＝1列目",
   "number_format": "解釈: 操作:数値書式 対象列:金額 書式:thousands",
   "pivot": "解釈: 操作:ピボット 分類列:商品 集計列:金額",
   "report_per_row": "解釈: 操作:帳票作成 雛形:雛形 シート名の元列:取引先",

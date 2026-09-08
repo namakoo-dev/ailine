@@ -183,6 +183,20 @@ _add("delete_rows_default_count", "DELETE_ROWS", {"at": 3})
 _add("delete_rows_on_header", "DELETE_ROWS", {"at": 1})
 _add("delete_column_ok", "DELETE_COLUMN", {"col": "金額"})
 _add("delete_column_unknown", "DELETE_COLUMN", {"col": "存在しない"})
+# --- ★ 2026-09-08: 列移動（目的地は依頼文から機械が決める）------------------
+_add("move_column_to_head", "MOVE_COLUMN", {"col": "金額"},
+     task="金額の列を一番左に持ってきて")
+_add("move_column_to_tail", "MOVE_COLUMN", {"col": "商品"},
+     task="商品の列を末尾に移動して")
+_add("move_column_beside", "MOVE_COLUMN", {"col": "商品"},
+     task="商品を金額の右に移して")
+# ★ 断る回も凍結する（黙って端へ寄せない・在らぬ列を動かさない・空振りしない）
+_add("move_column_unknown", "MOVE_COLUMN", {"col": "存在しない"},
+     task="存在しないの列を一番左に")
+_add("move_column_no_place", "MOVE_COLUMN", {"col": "金額"},
+     task="金額の列を動かして")
+_add("move_column_already_there", "MOVE_COLUMN", {"col": "商品"},
+     task="商品の列を一番左に持ってきて")
 
 # --- ★ 2026-08-27: 1 セル書換 -----------------------------------------------
 # ★ 行を**中身**で指すので、この golden も実ファイルを持つ book_meta が要る

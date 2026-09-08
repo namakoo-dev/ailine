@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "商品",
+    "_target_sheet": "Sheet",
+    "_skip_rows": [],
+    "_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_move_from": 0,
+    "_move_to": 3,
+    "_at_basis": "『金額』（4列目）の右＝5列目",
+    "_to_label": "4列目",
+    "_new_col_from": 0,
+    "_move_new_col_to": 4,
+    "_headers_after": [
+      "数量",
+      "単価",
+      "金額",
+      "商品"
+    ]
+  },
+  "inferred": [],
+  "err": null
+}

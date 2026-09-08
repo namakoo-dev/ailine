@@ -1591,7 +1591,10 @@
       "text": "商品と金額の列だけ抜き出して",
       "expect": {
         "op": "EXTRACT_COLUMNS",
-        "cols": ["商品", "金額"]
+        "cols": [
+          "商品",
+          "金額"
+        ]
       }
     },
     {
@@ -1600,7 +1603,10 @@
       "text": "商品と売上の列だけ取り出して",
       "expect": {
         "op": "EXTRACT_COLUMNS",
-        "cols": ["商品", "売上"]
+        "cols": [
+          "商品",
+          "売上"
+        ]
       }
     },
     {
@@ -1621,6 +1627,36 @@
         "op": "EXTRACT",
         "col": "商品",
         "cmp": "in"
+      }
+    }
+  ],
+  "items_v18": [
+    {
+      "id": 1801,
+      "book": "invoice",
+      "text": "取引先の列を一番左に持ってきて",
+      "expect": {
+        "op": "MOVE_COLUMN",
+        "col": "取引先"
+      },
+      "why": "★ 2026-09-08: 盲検の検品 #18。実務で毎日やる操作なのに op が無く、断りの理由も誤診断だった"
+    },
+    {
+      "id": 1802,
+      "book": "sample",
+      "text": "在庫の列を末尾に移動して",
+      "expect": {
+        "op": "MOVE_COLUMN",
+        "col": "在庫"
+      }
+    },
+    {
+      "id": 1803,
+      "book": "sample",
+      "text": "金額を商品の右に移して",
+      "expect": {
+        "op": "MOVE_COLUMN",
+        "col": "金額"
       }
     }
   ]

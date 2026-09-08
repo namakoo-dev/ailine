@@ -53,6 +53,11 @@ _add("add_row_values", "ADD_ROW",
      {"at": 3, "values": {"商品": "梨"}, "_values_label": "商品=梨／金額=600"})
 _add("delete_rows_inferred", "DELETE_ROWS", {"at": 3, "count": 1}, inferred=("count",))
 _add("delete_column_one", "DELETE_COLUMN", {"col": "金額"})
+# ★ 列移動（2026-09-08）: 根拠の文が**二重に**出ないことも、この凍結が守る
+#   （横断層が「入れる位置」を足す条件を、ラベルでなく中身で見るようにした）。
+_add("move_column_to_head", "MOVE_COLUMN",
+     {"col": "金額", "_move_to": 0, "_to_label": "1列目",
+      "_at_basis": "『一番左』＝1列目"})
 _add("set_cell_value_one", "SET_CELL_VALUE",
      {"row": "りんご", "col": "金額", "value": "2000"})
 _add("extract_columns", "EXTRACT_COLUMNS",

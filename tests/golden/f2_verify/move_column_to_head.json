@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "resolved": {
+    "col": "金額",
+    "_target_sheet": "Sheet",
+    "_skip_rows": [],
+    "_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ],
+    "_move_from": 3,
+    "_move_to": 0,
+    "_at_basis": "『一番左』＝1列目",
+    "_to_label": "1列目",
+    "_new_col_from": 3,
+    "_move_new_col_to": 0,
+    "_headers_after": [
+      "金額",
+      "商品",
+      "数量",
+      "単価"
+    ]
+  },
+  "inferred": [],
+  "err": null
+}

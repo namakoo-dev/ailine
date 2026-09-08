@@ -196,6 +196,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
 from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/照合/保存形式（純関数）
 from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もしかして提案の候補生成（語としての厳格一致+about）
 from ailine_core import intent as intent_mismatch   # ★ 依頼が名指しした操作の種類と食い違わないか
+from ailine_core import arith as arith_request   # ★ 依頼が書いた式と、実行した計算が同じか
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -229,7 +230,8 @@ from ailine_core.postconditions.move import (   # noqa: F401 ── 再輸出（
     _check_swap_cells, _column_block_values, _dedup_key_display, _dedup_normalize_key_part,
     _fmt_amount, _nested_total_reason, _sort_rows_lost_their_identity,
     _total_row_left_the_bottom_reason, check_add_column, check_add_row, check_append_total,
-    check_dedup, check_delete_column, check_delete_rows, check_insert_rows, check_sort,
+    check_dedup, check_delete_column, check_delete_rows, check_insert_rows,
+    check_move_column, check_sort,
     check_split_cell, check_swap, note_deleted, _APPEND_TOTAL_FORMULA_RE,
 )
 from ailine_core.postconditions.derive import (   # noqa: F401 ── 再輸出（POSTCONDITIONS 辞書と公開面の凍結が名前で引く）
@@ -1620,6 +1622,32 @@ def unrequested_new_sheet_advisory(task: str, before: dict, after: dict, *,
 #   すり替わった）への対抗。detect_ghost_data/detect_uniform_fill と同じ保守的な方針
 #   （両条件とも『原本にあった非空セルが全部』変わった時だけ発火＝一部だけの更新・
 #   再計算は対象外＝誤検知回避優先）。
+def _sheet_values_multiset(snap: dict, sheet: str) -> tuple:
+    """スナップショットの 1 シートにある**非空の値**を (多重集合, 式セルの数) で返す。
+
+    ★ 並べ替え系の中立化に使う ── 位置は変わってよいが、値は増減してはいけない。
+    ★★ 式セルは**数に数えるだけで中身は比べない**（2026-09-08 実測）: 列が動くと
+      式の参照は自動で追随する（`=E2*1.1` → `=F2*1.1`）ので、文字で比べると
+      必ず食い違う。ここは「値が増減していないか」だけを見る粗い測りで、
+      式が正しく動いたことの証明は事後条件（compare_moved_rows・キャッシュ値で
+      比べる別実装）が持つ。**この関数だけで ✓ を出すのではない。**
+    """
+    got: dict = {}
+    formulas = 0
+    prefix = sheet + "!"
+    for key, cell in (snap.get("cells") or {}).items():
+        if not key.startswith(prefix):
+            continue
+        val = cell[0] if cell else None
+        if val in (None, ""):
+            continue
+        if isinstance(val, str) and val.startswith("="):
+            formulas += 1
+            continue
+        got[val] = got.get(val, 0) + 1
+    return got, formulas
+
+
 def existing_sheet_replaced_advisory(before: dict, after: dict, *, op: str | None = None,
                                       precondition_broken: str | None = None) -> list:
     """before・after の両方に実在するシート（新規作成ではない）のうち、原本の使用範囲に
@@ -1670,6 +1698,16 @@ def existing_sheet_replaced_advisory(before: dict, after: dict, *, op: str | Non
             continue   # 一部だけの変更、または全消去（置き換えではない）→ 発火しない
         if sheet == declared_sheet:
             lines.append(f"（既存シート『{sheet}』の更新は意図どおりです）")
+            continue
+        # ★★ 2026-09-08（列移動を入れて実測）: 「列を一番左へ」は使用範囲の**全セル**が
+        #   ずれるので、この検出が丸ごと当たる（行の並べ替えは見出し行が動かないので
+        #   当たらなかった ── 列を動かす op が初めてここに触れた）。
+        #   ★ 宣言（writes=reorder）だけでは黙らせない。**値の多重集合が保たれた**
+        #     ことを実際に測ってから中立にする（単位G: 前提が破れたら権利を失う）。
+        if _op_writes(op, WRITE_REORDER) and _sheet_values_multiset(
+                before, sheet) == _sheet_values_multiset(after, sheet):
+            lines.append(f"（シート『{sheet}』は並び替わりましたが、"
+                          "値の集合は 1 つも増減していません）")
             continue
         lines.append(f"★ 疑わしい: 既存シート『{sheet}』の中身が置き換わりました"
                       f"（元データ {total} セル分が別の内容に変わっています）")
@@ -2273,6 +2311,13 @@ _RATE_BAI_RE = re.compile(r"(\d+(?:\.\d+)?)\s*倍")
 #   割るは 1/n（税抜き＝税込み金額から逆算する倍率）。
 _RATE_KAKE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:を|に)?\s*掛け")
 _RATE_WARI_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:で|に)?\s*割っ")
+# ★★ 2026-09-08（盲検の検品が「経理の常用語が通らない」として挙げた・**測って戻した**）:
+#   「単価を全部**1割**値上げして」は断られる。『1割』を率（=10%）として読む regex を
+#   書いて実機で確かめたところ、断りが**別のことをして △**に化けた ── 単価は上がらず、
+#   新しい列『単価*1.1』が増える（COMPUTE_COLUMN は**新しい列**しか書けないため）。
+#   ★ 率が読めないことは本当の欠けではない。欠けているのは**既存列をその場で書き換える
+#     計算**で、率だけ読めるようにすると「もっともらしく違うこと」をして通ってしまう。
+#     正直な断りの方が良いので戻した。実装する時は率と一緒に入れる。
 _RATE_KEYWORD_RE = re.compile(r"税|倍率")
 _RATE_BARE_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
 # ★ W10c 高: 依頼文に「率らしい語」が一切無いのに COMPUTE_COLUMN の「1列×率」パターン
@@ -2531,6 +2576,13 @@ OP_META = {
     "DELETE_COLUMN": {"category": "表を編集する", "label": "列削除", "folder": False,
                        "synonyms": ["列を削除", "列を消す", "列を取り除く"],
                        "match_phrases": ["列を削除して", "列を消して", "この列は要らない"]},
+    # ★★ 2026-09-08（盲検の検品が「取引先の列を一番左に持ってきて」で挙げた）:
+    #   実務で毎日やる操作なのに、断りの理由が『転記』の話になっていた（誤診断）。
+    #   ★ 部品は既に在った ── MoveColumnTo は「新しい列を作ってから動かす」ために
+    #     実戦投入済み。足りないのは**既存の列を動かす op** だけだった。
+    "MOVE_COLUMN": {"category": "表を編集する", "label": "列移動", "folder": False,
+                     "synonyms": ["列を移動", "列の位置を変える", "列を持ってくる"],
+                     "match_phrases": ["列を一番左に", "列を左に持ってきて", "列を末尾に移して"]},
     "DRAW_BORDERS": {"category": "見た目を整える", "label": "けい線", "folder": False,
                        "synonyms": ["けい線を引く", "罫線を引く", "枠線を付ける"],
                        "match_phrases": ["線で囲む", "表に枠を付ける", "けい線"]},
@@ -2776,6 +2828,8 @@ OP_SCHEMA = {
     "ADD_ROW": ("at", "values"),
     "DELETE_ROWS": ("at",),
     "DELETE_COLUMN": ("col",),
+    # ★ 目的地(to)は LLM に言わせない ── 位置は機械が実表と依頼文から決める（A' 原則）。
+    "MOVE_COLUMN": ("col",),
     # ★ a/b = 入れ替える 2 つの名前。行名か列名かは機械が実表から決める（_axis）。
     "SWAP": ("a", "b"),
     # ★ EXTRACT_COLUMNS: cols(残す列名の並び)。出力シート名は機械が決める（A' 原則）。
@@ -2926,6 +2980,8 @@ OP_WRITE_TARGET = {
                             proves_which_cells=True),
     "DELETE_ROWS": WriteTarget(writes=(WRITE_REMOVE,)),
     "DELETE_COLUMN": WriteTarget(writes=(WRITE_REMOVE,)),
+    # ★ 列の移動は値を消さない・増やさない（reorder）── 入れ替えと同じ種別。
+    "MOVE_COLUMN": WriteTarget(writes=(WRITE_REORDER,)),
     # ★ 入れ替えは値の多重集合が保存される（reorder）── 前提の番人
     #   (_check_value_multiset) が「動かすだけのはずが値が消えた」を見る。
     "SWAP": WriteTarget(writes=(WRITE_REORDER,)),
@@ -3034,6 +3090,7 @@ OP_SUBJECT_SLOTS = {
     "ADD_ROW": (("at", SUBJ_ROW),),
     "DELETE_ROWS": (("at", SUBJ_ROW),),
     "DELETE_COLUMN": (("col", SUBJ_COLUMN),),
+    "MOVE_COLUMN": (("col", SUBJ_COLUMN),),
     # ★ a/b は行名にも列名にもなりうる ── 依頼文が直接名指す「対象」なので
     #   SUBJ_COLUMN 側に置く（EXTRACT の col と同じ扱い・実在照合は verify_dsl_args）。
     "SWAP": (("a", SUBJ_COLUMN), ("b", SUBJ_COLUMN)),
@@ -3293,6 +3350,8 @@ INSERT_ROWS: **空行だけ**を挿入する。値を入れる依頼なら ADD_R
 ADD_ROW: 値を入れた行を1本追加する。args: at(1起点の行番号), values(列名→値の対応)
 DELETE_ROWS: 行を削除して詰める。args: at(1起点の行番号), count(省略可・既定1)
 DELETE_COLUMN: 列を1本削除する。args: col(列名)
+MOVE_COLUMN: 既にある列を、表の中の別の位置へ動かす（中身と式はそのまま）。args: col(動かす列名)
+  ★ どこへ動かすかは書かないこと（「一番左」「金額の右」等の位置は機械が依頼文から決める）
 DRAW_BORDERS: 依頼文に「けい線/罫線/枠線」という言葉が明示された時だけ使う。表にけい線(格子線)を
   引く。args不要（表全体が対象）★「整えて」「いい感じに」のような具体性の無い依頼には
   絶対に使わない（曖昧なら CLARIFY で確認する）
@@ -5857,6 +5916,58 @@ def _verify_delete_column(resolved, inferred, book_meta, sheets, headers):
     return None
 
 
+def _verify_move_column(resolved, inferred, book_meta, task):
+    """MOVE_COLUMN の引数を確かめ、**目的地を機械が決める**。
+
+    ★ 分担は列追加と同じ ── LLM は「どの列を」だけ言う。「どこへ」は依頼文の
+      言い回し（一番左／金額の右／…）から `resolve_col_anchor` が実表の見出しで解く。
+    ★ 位置が読み取れなければ**動かさない**（黙って端へ寄せない ── 静かに違う所へ
+      入るのが一番こわい、を列でも同じに扱う）。
+    """
+    name = str(resolved.get("col", "")).strip()
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(
+        resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or [])]
+    if name not in headers:
+        return False, resolved, inferred, (
+            f"列『{name}』がこの表にありません（ある列: {"、".join(headers)}）")
+    if len([h for h in headers if h != ""]) <= 1:
+        return False, resolved, inferred, "列が 1 本しかないので動かせません"
+    at, note = resolve_col_anchor(task, headers)
+    if at is None:
+        return False, resolved, inferred, (
+            note or "どこへ動かすかが依頼文から読み取れません"
+            "（例:「取引先の列を一番左に」「担当を金額の右に」）")
+    src0 = headers.index(name)
+    # ★★ `at` は「今の見出しの何番目の**手前**に入れるか」（1起点）。動かす列は
+    #   自分もその並びに居るので、自分より右を指したら**自分が抜けた分**だけ詰まる。
+    #   ★ ここが持つのは**動いた後の最終位置**（事後条件が突き合わせるのもこれ）。
+    #     ヘルパ(MoveColumnTo)が要る引数は別物なので、codegen 側で換算する
+    #     ── 「約束する形」と「道具に渡す形」を混ぜない。
+    to0 = int(at) - 1
+    if src0 < to0:
+        to0 -= 1
+    to0 = max(0, min(to0, len(headers) - 1))
+    if to0 == src0:
+        return False, resolved, inferred, (
+            f"列『{name}』はもうそこに在ります（{src0 + 1}列目）── 動かす必要がありません")
+    resolved["col"] = name
+    resolved["_headers"] = headers
+    resolved["_move_from"] = src0
+    resolved["_move_to"] = to0
+    resolved["_at_basis"] = note
+    resolved["_to_label"] = f"{to0 + 1}列目"
+    # ★★ 移動を出す口は repo に**1 つだけ**（codegen の wrap）── 2 本目を書くと
+    #   片配線になるので、番人が機械で止める（test_column_placement）。
+    #   ★ ここは横断層と同じ鍵に材料を置くだけ。ヘルパの第2引数は「1本広げた
+    #     途中の並び」での位置なので、右へ動かす回だけ最終位置より 1 大きい。
+    resolved["_new_col_from"] = src0
+    resolved["_move_new_col_to"] = to0 + 1 if to0 > src0 else to0
+    # ★ 動いた後の見出しの並びを**先に**確定して宣言に載せる（事後条件が突き合わせる）。
+    rest = headers[:src0] + headers[src0 + 1:]
+    resolved["_headers_after"] = rest[:to0] + [name] + rest[to0:]
+    return None
+
+
 def _verify_pivot(resolved, inferred, first_sheet, resolve_in):
     """PIVOT の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
@@ -6057,6 +6168,11 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         if r is not None:
             return r
 
+    elif op == "MOVE_COLUMN":
+        r = _verify_move_column(resolved, inferred, book_meta, task)
+        if r is not None:
+            return r
+
     # --- ★ 2026-08-27: 列の抽出（残す列を依頼文の実在列から機械が拾う）------------
     elif op == "EXTRACT_COLUMNS":
         r = _verify_extract_columns(resolved, inferred, first_sheet, book_meta, task, headers)
@@ -6200,6 +6316,8 @@ _CONFIRM_FIELDS = {
     "DELETE_ROWS": (("削除位置", "at", None), ("位置の根拠", "_at_basis", None),
                      ("行数", "count", None)),
     "DELETE_COLUMN": (("削除する列", "col", None),),
+    "MOVE_COLUMN": (("動かす列", "col", None), ("移動先", "_to_label", None),
+                     ("位置の根拠", "_at_basis", None)),
     # ★ a/b をそのまま出す ── `ailine ops` の「必要な情報」はこの登録簿からラベルを引く
     #   ので、ここに無い slot は生の英字（a・b）のまま人に見えてしまう。
     "SWAP": (("入れ替える一方", "a", None), ("もう一方", "b", None),
@@ -6502,8 +6620,11 @@ def format_confirmation_line(op: str, resolved_args: dict, inferred: set,
     # ★★ 2026-08-27: 位置の言い回しを解いた回は、**どの op でも**根拠を出す。
     #   op ごとの _CONFIRM_FIELDS に足して回ると、足し忘れた op が黙って位置を動かす
     #   （見えない変更が一番こわい）。横断層で解いたものは横断層で見せる。
-    if resolved_args.get("_at_basis") and not any(p.startswith("入れる位置:") for p in parts):
-        parts.append(f"入れる位置:{resolved_args['_at_basis']}")
+    # ★★ 2026-09-08: 見張るのは**ラベル**でなく**中身**にする ── op 側が同じ根拠を
+    #   別のラベル（「位置の根拠」）で出していると、同じ文が 2 度並ぶ（列移動で実測）。
+    _basis = resolved_args.get("_at_basis")
+    if _basis and not any(str(_basis) in p for p in parts):
+        parts.append(f"入れる位置:{_basis}")
     return "解釈: " + " ".join(parts)
 
 
@@ -6902,6 +7023,15 @@ def _codegen_delete_column(*, op, resolved_args, book_meta, use_formula, headers
     return wrap(f"    Call DeleteColumn(oDoc, {col0})\n")
 
 
+def _codegen_move_column(*, op, resolved_args, book_meta, use_formula, headers, first_sheet,
+                 header_row, hr0, wrap):
+    """MOVE_COLUMN の Basic を組む。★ 列を動かす手は**横断層に 1 本だけ**在り、
+       新しい列の配置もこの op も同じ口を通る（列を動かす実装を 2 つ持たない）。"""
+    # ★ 本文は空 ── 列を動かす Call は横断層（wrap）が 1 箇所で足す。
+    #   ここで書くと「移動の配線が 2 箇所」になり、番人が赤くなる（それが正しい）。
+    return wrap("")
+
+
 def _codegen_extract_columns(*, op, resolved_args, book_meta, use_formula, headers, first_sheet,
                  header_row, hr0, wrap):
     """EXTRACT_COLUMNS の Basic を組む（★ codegen_dsl から**本文をそのまま**移した）。"""
@@ -7251,6 +7381,7 @@ CODEGEN_BY_OP = {
     "ADD_ROW": _codegen_add_row,
     "DELETE_ROWS": _codegen_delete_rows,
     "DELETE_COLUMN": _codegen_delete_column,
+    "MOVE_COLUMN": _codegen_move_column,
     "EXTRACT_COLUMNS": _codegen_extract_columns,
     "SET_WHERE": _codegen_set_where,
     "ADD_COLUMN": _codegen_add_column,
@@ -9107,6 +9238,12 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
 #   「位置は op に依らず位置」なので、片方だけ賢くしない。
 _COL_AFTER = ("の右に", "の右へ", "の右側に", "の後ろに", "のうしろに", "の次に")
 _COL_BEFORE = ("の左に", "の左へ", "の左側に", "の前に", "の手前に")
+# ★★ 2026-09-08（盲検の検品が「取引先の列を**一番左に**持ってきて」で挙げた）:
+#   端を指す言い方を 1 つも持っていなかった ── 隣（誰かの右/左）しか読めない。
+#   ★ 列を作る時にも動かす時にも同じ言い回しが来るので、**位置の層に置く**
+#     （op ごとに if を書かない ── この層が在る理由そのもの）。
+_COL_HEAD = ("一番左", "いちばん左", "先頭", "最初", "左端", "いちばん前", "一番前")
+_COL_TAIL = ("一番右", "いちばん右", "末尾", "最後", "右端", "いちばん後ろ", "一番後ろ")
 # 「原価と売上の右側に」＝ 2 つのうち右の方の隣（Namakoo が挙げた実例）。
 _re_col_pair = re.compile(r"([^\s、。]+?)\s*と\s*([^\s、。]+?)\s*の\s*(右|左)")
 # 依頼文が「列を追加/足す/挿入」と言っているか（第二段へ回すための証拠）。
@@ -9453,13 +9590,30 @@ def resolve_col_anchor(task: str, headers: list) -> tuple:
         m = _re_anchor(suf).search(text)
         if not m:
             continue
-        idx, name = _header_index(names, m.group(1).strip())
+        # ★★ 2026-09-08（列移動を入れて実測）: この正規表現は**いちばん早い開始位置**
+        #   から伸びるので、「締め日を金額の右に」で『締め日を金額』を丸ごと掴み、
+        #   「そんな列はありません」と嘘の診断を出していた（列追加でも同じ形）。
+        #   ★ 掴んだ文字列を**実表の見出しで切り直す**（推測でなく実表で決める）。
+        _grabbed = m.group(1).strip()
+        if _grabbed not in names:
+            _tails = [h for h in names if h and _grabbed.endswith(h)]
+            if len(_tails) >= 1:
+                _grabbed = max(_tails, key=len)
+        idx, name = _header_index(names, _grabbed)
         if idx is None:
             return None, (f"『{name}』という列がありません"
                            f"（ある列: {"、".join(names)}）")
         after = suf in _COL_AFTER
         at = idx + 1 if after else idx
         return at, f"『{name}』（{idx}列目）の{"右" if after else "左"}＝{at}列目"
+    # ★ 端の指定は**隣の指定より後**に見る ── 「原価の右に」の方が具体的なので、
+    #   両方書いてあったら隣を採る（具体が一般に勝つ）。
+    for w in _COL_HEAD:
+        if w in text:
+            return 1, f"『{w}』＝1列目"
+    for w in _COL_TAIL:
+        if w in text:
+            return len(names) + 1, f"『{w}』＝{len(names) + 1}列目"
     return None, None
 
 
@@ -9503,7 +9657,8 @@ POSTCONDITIONS = {
     "INSERT_ROWS": check_insert_rows, "DRAW_BORDERS": check_draw_borders,
     # ★ 2026-08-26: 表の基本操作 3 種
     "ADD_ROW": check_add_row, "DELETE_ROWS": check_delete_rows,
-    "DELETE_COLUMN": check_delete_column, "SET_CELL_VALUE": check_set_cell_value,
+    "DELETE_COLUMN": check_delete_column, "MOVE_COLUMN": check_move_column,
+    "SET_CELL_VALUE": check_set_cell_value,
     "SWAP": check_swap, "ADD_COLUMN": check_add_column, "SET_WHERE": check_set_where,
     "EXTRACT_COLUMNS": check_extract_columns,
     "AUTOFIT": check_autofit, "PIVOT": check_pivot,
@@ -9579,7 +9734,8 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
         if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
-                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "SET_CELL_VALUE", "SWAP",
+                   "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "MOVE_COLUMN",
+                   "SET_CELL_VALUE", "SWAP",
                    "ADD_COLUMN", "SET_WHERE",
                    "EXTRACT_COLUMNS", "BOLD", "FILL_COLOR", "CENTER_ALIGN"):
             return fn(out_book, resolved_args, header_row, source_book=source_book)
@@ -11638,6 +11794,20 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
                      f"『{OP_LABELS.get(_op_now, _op_now)}』です")
             print(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は{_tail}"
                   "── 頼んだ通りかを「解釈:」行で確かめてください")
+            warning_count += 1
+        # ★★ 2026-09-08（盲検の検品が唯一の false ✓ として拾った）: 上の 2 つは
+        #   **列名**と**効果の種類**を見るので、「どの列を、どの向きで割るか」は拾えない。
+        #     依頼 「利益率（**利益÷売上**）の列を追加して」（表に『利益』列は無い）
+        #     実行 演算対象:**売上 と 原価** 演算子:/ → 実物 1.714（頼んだ式なら 0.417）
+        #   ★ 残差の関所は**二重に**黙る（実測で両方確かめた）:
+        #       ① 『利益』は実表の見出しでないので、そもそも報告の対象外
+        #       ② 仮に見出しでも、宣言の『利益**率**』に部分一致して消費される
+        #     どちらも設計どおりの沈黙なので、依頼が**式そのものを書いた**回を別に見る。
+        #   ★ 判定は ailine_core/arith.py に 1 つだけ置き、ここは材料を渡すだけ。
+        if (_calc := arith_request.calculation_mismatch(
+                getattr(a, "task", "") or "", scope)):
+            print(f"⚠ 依頼は『{_calc}』と読めますが、実行した計算はそれと違います "
+                  "── 頼んだ式かを「解釈:」行で確かめてください")
             warning_count += 1
 
     # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。
@@ -13916,7 +14086,8 @@ def cmd_refuse_vocab_miss(a: argparse.Namespace, book: Path, step: dict | None =
             except Exception:
                 pass   # ★ 断りの経路を、聞く仕掛けの失敗で落とさない
     for ln in render_vocab_miss_refusal(about, sunset_notice=bool(getattr(a, "allow_freeform", False)),
-                                         translate_error=(reason == "translate_error")):
+                                         translate_error=(reason == "translate_error"),
+                                         task=getattr(a, "task", "") or ""):
         print(ln)
     result = {"ok": False, "attempts": 0, "task": a.task, "model": a.model,
               "path": "vocab_miss", "command": None, "postcondition": None,

@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "resolved": {
+    "col": "商品",
+    "_target_sheet": "Sheet",
+    "_skip_rows": []
+  },
+  "inferred": [],
+  "err": "列『商品』はもうそこに在ります（1列目）── 動かす必要がありません"
+}

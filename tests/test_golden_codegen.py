@@ -144,6 +144,14 @@ _add("add_row_string_only", "ADD_ROW",
 _add("delete_rows_at3", "DELETE_ROWS", {"at": 3, "count": 1})
 _add("delete_rows_at2_count3", "DELETE_ROWS", {"at": 2, "count": 3})
 _add("delete_column_second", "DELETE_COLUMN", {"col": "金額", "_headers": ["商品", "金額"]})
+# ★ 列移動（2026-09-08）: 本文は空で、Call は横断層（wrap）が足す。
+#   右へ動かす回は `_move_new_col_to` が最終位置より 1 大きい（換算の凍結）。
+_add("move_column_to_head", "MOVE_COLUMN",
+     {"col": "金額", "_headers": ["商品", "金額", "在庫"],
+      "_move_from": 1, "_move_to": 0, "_new_col_from": 1, "_move_new_col_to": 0})
+_add("move_column_to_tail", "MOVE_COLUMN",
+     {"col": "商品", "_headers": ["商品", "金額", "在庫"],
+      "_move_from": 0, "_move_to": 2, "_new_col_from": 0, "_move_new_col_to": 3})
 
 _add("set_cell_value_number", "SET_CELL_VALUE",
      {"row": "りんご", "col": "金額", "value": "2000", "_write_numeric": True,
