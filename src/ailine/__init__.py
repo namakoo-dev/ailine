@@ -198,6 +198,7 @@ from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もし�
 from ailine_core import intent as intent_mismatch   # ★ 依頼が名指しした操作の種類と食い違わないか
 from ailine_core import arith as arith_request   # ★ 依頼が書いた式と、実行した計算が同じか
 from ailine_core import required_word   # ★「その語が在る時だけ使う」を散文でなく機械にする
+from ailine_core.new_sheet import empty_new_sheets   # ★ 新しく作ったシートが空なら頼まれたことは起きていない
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -11842,6 +11843,18 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
                 getattr(a, "task", "") or "", scope)):
             print(f"⚠ 依頼は『{_calc}』と読めますが、実行した計算はそれと違います "
                   "── 頼んだ式かを「解釈:」行で確かめてください")
+            warning_count += 1
+        # ★★ 2026-09-08（盲検 B が実害のある false ✓ として拾った）: 「合計より上の行だけ
+        #   抽出して」が条件を誤変換し **0 行**を抽出、事後条件は「4行中0行が一致 →
+        #   0行を抽出」と**自分で数えたうえで** pass を返し、✓ が出ていた。
+        #   ★ 検出は在って**帰結が無い**（同日の「壊れた式を原本へ書く」と同じ形）。
+        #   ★ 掃き出して分かったこと: 「0 件なら落とす」ではない ── DEDUP は重複 0 件
+        #     でも成果物（表）が残るので正しく pass。分かれ目は**成果物が空か**。
+        #   ★ op 名を列挙しない（材料は前後のファイルだけ）ので、新しい op を足しても
+        #     自動で守られる。判定は ailine_core/new_sheet.py に 1 つだけ。
+        for _empty in empty_new_sheets(book, out_book):
+            print(f"⚠ 新しく作った『{_empty}』に中身がありません（見出しだけ）"
+                  "── 頼んだことが起きたとは言えないため、機械保証は出しません")
             warning_count += 1
 
     # ★ 忠実度は**置換より前**に測る（book がまだ原本・out_book が成果物）。

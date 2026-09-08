@@ -581,6 +581,7 @@ def diff_snapshots(before: 'dict', after: 'dict') -> 'tuple'
 def doctor_checks(model: 'str' = 'qwen2.5-coder:7b') -> 'list'
 def drop_names_covered_by_longer(task: 'str', names: 'list') -> 'list'
 def duplicate_name_warning(col: 'str', values) -> 'str | None'
+def empty_new_sheets(before_path, after_path) -> 'list'
 def except_extraction_reading(book_meta: 'dict', sheet: 'str | None', task: 'str', header_row: 'int' = 1) -> 'tuple'
 def existing_sheet_replaced_advisory(before: 'dict', after: 'dict', *, op: 'str | None' = None, precondition_broken: 'str | None' = None) -> 'list'
 def exit_environment(message: 'str')
