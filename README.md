@@ -133,9 +133,16 @@ Excel の定型作業を自動化したい。でも既存の AI ツールには 
 
 ![✓ 機械検証済み](https://raw.githubusercontent.com/namakoo-dev/ailine/main/docs/screenshots/2_verified.jpg)
 
-③ `△` 確かめきれていないところがあります ── 同じ依頼を欠けのある表に出した回。
-`⚠ 1 行は検証できていません（1 列目が空のため走査がそこで止まり、この行を見ていない）`
-と名指しして、`✓` を取り下げます。
+③ `△` 確かめきれていないところがあります ── 確かめられた範囲と確かめられなかった
+範囲を名指しして、`⚠` を出し `✓` を取り下げます（例:
+`⚠ 依頼は『利益÷売上』と読めますが、実行した計算はそれと違います`）。
+
+★ **この写真だけは、その後に挙動が変わっています**（開示のため残しています）。
+写真は 2026-08 時点で、欠けのある表に同じ依頼を出すと `△` で通していました。
+2026-09-05 に「**走査が表の終わりに届かなかった回は `✓` も `△` も名乗らない**」
+と決めたので、いま同じ依頼を出すと `×` で止まり、原本は 1 バイトも変わりません
+（下の手順表 項番 9 がそちらです）。★ 厳しくなった側への変更です。
+写真は GUI を作り直す時に撮り直します。
 
 ![△ 確かめきれていないところがあります](https://raw.githubusercontent.com/namakoo-dev/ailine/main/docs/screenshots/3_partial_with_warning.jpg)
 
@@ -225,7 +232,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->3717<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
+期待: 全件緑（<!-- TOTAL_TESTS -->3718<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
 ollama）が要るものは `-m "not local"` が自動的に外します。外れた本数は実行結果の
 `deselected` に出ます）。
 ★ 総数は `tests/test_local_test_count.py` が実測と突き合わせています ──

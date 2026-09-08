@@ -72,3 +72,24 @@ def test_the_flagship_demo_behaves_as_the_readme_says(tmp_path):
     mark = "×" if "×" in said else ("△" if "△" in said else "?")
     assert mark in row, (
         f"実物は『{mark}』で終わったのに、README は違うことを書いている: {row}")
+
+
+def test_the_screenshot_note_discloses_that_the_behaviour_changed():
+    """★★ 番人が**片側にしか無かった**（2026-09-08 に盲検が見つけた）。
+
+    README は同じ検体・同じ依頼を 2 箇所で語っていた:
+      ・手順表 項番 9  → `✓` が出ず `×` で止まる  ← 上の実機の番人が守っている
+      ・写真 ③ の説明  → `△` で通す              ← ★ 誰も守っていなかった
+
+    写真は 2026-08 の実物で、2026-09-05 に「走査が表の終わりに届かなかった回は
+    ✓ も △ も名乗らない」と決めたため、いまは `×` になる。★ 写真を隠さず、
+    変わったことを**開示して持つ**と決めた ── この試験はその開示文を凍結する。
+    """
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    i = text.find("3_partial_with_warning.jpg")
+    assert i > 0, "③ の写真が README から消えている"
+    block = text[max(0, i - 1200):i]
+    assert "その後に挙動が変わっています" in block, (
+        "写真 ③ の『挙動が変わった』開示が消えている ── "
+        "消すなら、写真を撮り直して説明も現物に合わせること")
+    assert "×" in block and "項番 9" in block, block[-300:]
