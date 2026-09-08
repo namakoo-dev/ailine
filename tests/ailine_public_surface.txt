@@ -420,7 +420,7 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op)
 def _verify_aggregate(resolved, inferred, first_sheet, resolve_in)
 def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in, args, task, vocab, headers)
 def _verify_autofit()
-def _verify_bold(resolved, inferred, first_sheet, headers, op)
+def _verify_bold(resolved, inferred, first_sheet, headers, op, task='', header_row=1)
 def _verify_chart(resolved, inferred, first_sheet, resolve_in, task, headers)
 def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers, op)
 def _verify_dedup(resolved, inferred, first_sheet, headers)
@@ -610,6 +610,7 @@ def formula_for_basic(formula: 'str') -> 'str'
 def formula_rewrites_for_shift(book_meta: 'dict', sheet: 'str | None', shift) -> 'tuple'
 def freeform_notice_reason(op: 'str', about: 'str' = '') -> 'str'
 def get_column_letter(col_idx)
+def header_cell_target(task: 'str', target: 'str', header_row: 'int', columns) -> 'str | None'
 def header_row_drops_columns(ws, chosen_row: 'int') -> 'str | None'
 def insert_rows_should_have_been_add_row(task: 'str', resolved: 'dict', book_meta: 'dict | None' = None, sheet: 'str | None' = None) -> 'str | None'
 def inspection_sheet_basic_call(sheet_name: 'str', header: 'list', rows: 'list', types: 'str') -> 'str'

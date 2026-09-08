@@ -199,6 +199,7 @@ from ailine_core import intent as intent_mismatch   # ★ 依頼が名指しし�
 from ailine_core import arith as arith_request   # ★ 依頼が書いた式と、実行した計算が同じか
 from ailine_core import required_word   # ★「その語が在る時だけ使う」を散文でなく機械にする
 from ailine_core.new_sheet import empty_new_sheets   # ★ 新しく作ったシートが空なら頼まれたことは起きていない
+from ailine_core.header_cell import header_cell_target   # ★「<列名>の見出しに」は列ぜんぶでなく 1 セル
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -5572,7 +5573,8 @@ def _verify_add_column(resolved, inferred, book_meta, task, sheets, headers):
     return None
 
 
-def _verify_bold(resolved, inferred, first_sheet, headers, op):
+def _verify_bold(resolved, inferred, first_sheet, headers, op, task="",
+                  header_row=1):
     """BOLD の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
     ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
@@ -5604,6 +5606,22 @@ def _verify_bold(resolved, inferred, first_sheet, headers, op):
         resolved["target"] = f"col:{v}"
         if was_inferred:
             inferred.add("target")
+        # ★★ 2026-09-08（盲検 B の false ✓）: 「金額の**見出し**に色を付けて太字に」が
+        #   E1〜E8 全部（データ行も合計式の行も）に広がって ✓ が出ていた。
+        #   依頼の「見出し」が宣言のどこにも出ていない ── 三項の「依頼」が落ちた形。
+        #   ★ 08-27 の判断は反転しない: 列を言わない「見出しを太字に」は**見出し行
+        #     ぜんぶ**の意味でもありうるので曖昧 ── 狭めない。列が名指しされた回だけ。
+        #   ★ ここ（col: を実在の列に解いた直後）に置くと、**複合計画の各段**にも効く
+        #     ── 読み直しの門は len(plan)==1 の時しか動かないので届かなかった。
+        #   ★ 判定は ailine_core/header_cell.py に 1 つだけ。
+        _hc = header_cell_target(task, resolved["target"], header_row,
+                                  headers.get(first_sheet, []))
+        if _hc:
+            resolved["target"] = _hc
+            # ★ 宣言から列名を消さない ── `cell:1,5` だけでは人にどの列か伝わらず、
+            #   残差の関所も「依頼の『金額』が解釈に出ていない」と正しく鳴く。
+            #   狭めた事実と、狭めた先の列名を**両方**見せる。
+            resolved["_header_col"] = v
     elif target.startswith("cell:"):
         # ★ cell: は**機械が作る**形（LLM には出させない）。R,C は 1 起点。
         try:
@@ -6164,7 +6182,8 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return r
 
     elif op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
-        r = _verify_bold(resolved, inferred, first_sheet, headers, op)
+        r = _verify_bold(resolved, inferred, first_sheet, headers, op, task,
+                          int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1))
         if r is not None:
             return r
 
@@ -6329,14 +6348,15 @@ _CONFIRM_FIELDS = {
     "LOOKUP_FILL": (("対象シート", "target_sheet", None), ("対象列", "target_col", None),
                      ("参照シート", "source_sheet", None), ("キー列", "key_col", None)),
     "AGGREGATE": (("分類列", "group_col", None), ("集計列", "value_col", None)),
-    "BOLD": (("対象", "target", None),),
-    "FILL_COLOR": (("対象", "target", None), ("色", "color", None)),
+    "BOLD": (("対象", "target", None), ("見出しだけ", "_header_col", None)),
+    "FILL_COLOR": (("対象", "target", None), ("見出しだけ", "_header_col", None),
+                    ("色", "color", None)),
     "NUMBER_FORMAT": (("対象列", "col", None), ("書式", "style", None)),
     "MERGE": (("範囲", "range", None),),
     "CHART": (("値列", "value_col", None),
                ("種類", "kind", lambda v: _CHART_KIND_LABELS.get(v, v)),
                ("横軸列", "category_col", None)),
-    "CENTER_ALIGN": (("対象", "target", None),),
+    "CENTER_ALIGN": (("対象", "target", None), ("見出しだけ", "_header_col", None)),
     # ★ W8a 項目5: 表示ラベルのみ「倍率」→「率」（税率・掛け率の文脈での事務向け言い換え）。
     #   内部キー("factor")・関数名・コメントは不変。
     "APPEND_TOTAL": (("対象列", "col", None), ("ラベル", "label", None), ("率", "factor", None)),
