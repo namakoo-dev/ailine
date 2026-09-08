@@ -91,7 +91,7 @@ value WRITE_REMOVE
 value WRITE_REORDER
 value WRITE_ROW_SHIFT
 value WRITE_SINGLE_CELL
-class WriteTarget(writes: 'tuple' = (), col_key: 'str | None' = None, sheet_key: 'str | None' = None, reads_only: 'tuple' = (), cols_key: 'str | None' = None, keeps_subject: 'bool' = False, col_index_key: 'str | None' = None, proves_which_cells: 'bool' = False) -> None
+class WriteTarget(writes: 'tuple' = (), col_key: 'str | None' = None, sheet_key: 'str | None' = None, reads_only: 'tuple' = (), cols_key: 'str | None' = None, keeps_subject: 'bool' = False, col_index_key: 'str | None' = None, needs_col_anchor: 'bool' = False, proves_which_cells: 'bool' = False) -> None
 value _ANCHOR_AFTER
 value _ANCHOR_BEFORE
 value _APPEND_TOTAL_FORMULA_RE

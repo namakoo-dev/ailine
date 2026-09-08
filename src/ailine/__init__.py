@@ -2929,6 +2929,11 @@ class WriteTarget:
                  出さない ── 助言は**証明が届かない所**にだけ要る。
                  ★ SET_COLUMN_VALUE は False のまま: あちらの事後条件は「全データ行が
                    その値か」しか見ず、元が空欄だったかを問わないので助言が仕事をする。
+       needs_col_anchor: この op は「どの列の隣か」で**行き先が決まる**（MOVE_COLUMN）。
+                 ★ 2026-09-08 に足した宣言。列移動を語彙に入れた途端、位置の言い回し
+                   （「鈴木の右に東棟」）を**1 セル書換から奪った**（効果の行列で 5 件）。
+                   語彙で線を引くと op が増えるたびに引き直しになるので、**実表で**
+                   決める ── 行き先が実在の列に接地しないなら、それは列の話ではない。
        col_index_key: 書き込み先列を**位置（1 起点の番号）**で指す resolved args のキー。
                  名前でなく位置で決まる op（ADD_COLUMN・位置は機械が見出しから解決する）
                  のため。col_key/cols_key と同じく、宣言を読むだけで新規列が分かる形に保つ
@@ -2940,6 +2945,7 @@ class WriteTarget:
     cols_key: str | None = None
     keeps_subject: bool = False
     col_index_key: str | None = None
+    needs_col_anchor: bool = False
     proves_which_cells: bool = False
 
 
@@ -2981,7 +2987,7 @@ OP_WRITE_TARGET = {
     "DELETE_ROWS": WriteTarget(writes=(WRITE_REMOVE,)),
     "DELETE_COLUMN": WriteTarget(writes=(WRITE_REMOVE,)),
     # ★ 列の移動は値を消さない・増やさない（reorder）── 入れ替えと同じ種別。
-    "MOVE_COLUMN": WriteTarget(writes=(WRITE_REORDER,)),
+    "MOVE_COLUMN": WriteTarget(writes=(WRITE_REORDER,), needs_col_anchor=True),
     # ★ 入れ替えは値の多重集合が保存される（reorder）── 前提の番人
     #   (_check_value_multiset) が「動かすだけのはずが値が消えた」を見る。
     "SWAP": WriteTarget(writes=(WRITE_REORDER,)),
@@ -3350,8 +3356,7 @@ INSERT_ROWS: **空行だけ**を挿入する。値を入れる依頼なら ADD_R
 ADD_ROW: 値を入れた行を1本追加する。args: at(1起点の行番号), values(列名→値の対応)
 DELETE_ROWS: 行を削除して詰める。args: at(1起点の行番号), count(省略可・既定1)
 DELETE_COLUMN: 列を1本削除する。args: col(列名)
-MOVE_COLUMN: 既にある列を、表の中の別の位置へ動かす（中身と式はそのまま）。args: col(動かす列名)
-  ★ どこへ動かすかは書かないこと（「一番左」「金額の右」等の位置は機械が依頼文から決める）
+MOVE_COLUMN: 既にある列を別の位置へ動かす（位置は機械が決める）。args: col(動かす列名)
 DRAW_BORDERS: 依頼文に「けい線/罫線/枠線」という言葉が明示された時だけ使う。表にけい線(格子線)を
   引く。args不要（表全体が対象）★「整えて」「いい感じに」のような具体性の無い依頼には
   絶対に使わない（曖昧なら CLARIFY で確認する）
@@ -12302,7 +12307,25 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
 
     def _is_a_different_job(st):
         op_ = (st or {}).get("op")
-        return any(_op_writes(op_, k) for k in (WRITE_FORMAT_ONLY, WRITE_REMOVE, WRITE_REORDER))
+        if not any(_op_writes(op_, k)
+                    for k in (WRITE_FORMAT_ONLY, WRITE_REMOVE, WRITE_REORDER)):
+            return False
+        # ★★ 2026-09-08（Namakoo「語彙が増えると類似の意味に引っ張られる。制御可能か」）:
+        #   列移動を語彙に入れた途端、「鈴木の右に東棟」（1 セル書換）が**列移動**に
+        #   読まれ、効果の行列で 5 件が ✓ → ？ に落ちた。位置の言い回しそのものが
+        #   新しい op に吸い寄せられた形。
+        #   ★ 語彙で線を引き直すと op が増えるたびに引き直しになる。**実表で決める**
+        #     ── 行き先が実在の列に接地しないなら、それは列の話ではないので、
+        #     この計画に「別の仕事だから読み直すな」と言う資格は無い。
+        #   ★ 宣言（needs_col_anchor）を読むだけ ── op 名の if を増やさない。
+        wt_ = OP_WRITE_TARGET.get(op_)
+        if wt_ is not None and wt_.needs_col_anchor:
+            _hh = [str(h) for h in
+                    ((book_meta.get("headers") or {}).get(_sheet_h) or [])]
+            at_, _why_ = resolve_col_anchor(a.task, _hh)
+            if at_ is None:
+                return False
+        return True
 
     # ★★ 2026-08-29（Namakoo が実測・qwen も gemma4 も外した）:
     #   「丸山重工の右にPCパーツ」→ qwen は SPLIT_CELL（区切り文字を聞き返す）、

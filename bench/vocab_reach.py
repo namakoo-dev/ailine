@@ -22,8 +22,10 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 import openpyxl
@@ -103,6 +105,17 @@ CASES = [
     ("MERGE", ["A1とB1を結合して",
                 "1行目の左2つのセルを繋げて",
                 "見出しの2セルをまとめて1つにして"]),
+    # ★★ 2026-09-08（Namakoo「語彙が増えると類似の意味に引っ張られる。着目しておいて」）:
+    #   この 2 つは**今日の奪い合いの当事者**。列移動を語彙に入れた途端、位置の言い回し
+    #   「鈴木の右に東棟」が 1 セル書換から列移動へ流れ、効果の行列で 5 件落ちた。
+    #   ★ 奪われた側（SET_CELL_VALUE）がこの検体に**入っていなかった**ので、
+    #     この器では原理的に捕まえられなかった。器の穴を先に塞ぐ。
+    ("SET_CELL_VALUE", ["りんごの担当を「佐藤」にして",
+                         "みかんの右に果物",
+                         "3行目の担当を佐藤にして"]),
+    ("MOVE_COLUMN", ["担当の列を一番左に持ってきて",
+                      "日付を先頭に移動して",
+                      "原価を担当の右に移して"]),
 ]
 
 
@@ -146,10 +159,12 @@ def main() -> int:
         _book(p)
         hit = miss = oov = 0
         bad = []
+        seen: dict = {}     # 依頼文 → 到達した op（記録と突き合わせる材料）
         for want, tasks in CASES:
             marks = []
             for t in tasks:
                 ok, got = _reached(p, t, want)
+                seen[t] = got
                 hit += ok
                 if not ok:
                     miss += 1
@@ -169,7 +184,52 @@ def main() -> int:
             print("★ 届かなかったもの（期待 / 依頼 / 返ってきた op）:")
             for w, t, g in bad:
                 print(f"    {w:18} {t}  → {g}")
+            print()
+            print("★ 奪い合い（期待 → 実際）── 同じ向きが 2 件以上なら家系:")
+            pairs = Counter((w, g) for w, _t, g in bad)
+            for (w, g), c in pairs.most_common():
+                print(f"    x{c}  {w} → {g}")
+        _report_drift(seen)
     return 0
+
+
+RECORD = ROOT / "bench" / "vocab_reach_recorded.json"
+
+
+def _report_drift(seen: dict) -> None:
+    """前回の記録と突き合わせ、**どの依頼がどの op へ移ったか**を出す。
+
+    ★★ なぜ要るか（2026-09-08・Namakoo「操作が他の op に奪われる現象は後に大きな
+      問題になるはずだから着目しておいて」）: 到達率という 1 つの数字では、
+      **誰が誰から奪ったか**が見えない。op を 1 本足すたびに、既存の op が
+      静かに削られる ── 実測が既に 3 つある:
+        ・OPS_DOC に 16 行足した回     op 分類 98.1% → 94.2%
+        ・op を増やした回              完遂率 98.9% → 82.8%・壊した 0 → 9
+        ・列移動を足した回（今日）     効果の行列で 1 セル書換が 5 件落ちた
+    ★ 記録を更新するのは**中身を読んで納得した時だけ**（`--record`）。
+      黙って上書きすると、奪われたことが記録ごと消える。
+    """
+    old = {}
+    if RECORD.is_file():
+        old = json.loads(RECORD.read_text(encoding="utf-8")).get("got", {})
+    if "--record" in sys.argv:
+        RECORD.write_text(json.dumps(
+            {"_why": "各依頼が到達した op の記録。op を足したら差分を読むこと。",
+             "model": MODEL, "got": seen}, ensure_ascii=False, indent=2) + chr(10),
+            encoding="utf-8")
+        print(chr(10) + f"記録を更新した: {RECORD.name}（{len(seen)} 件）")
+        return
+    if not old:
+        print(chr(10) + f"★ 記録が無い（{RECORD.name}）── `--record` で作れる")
+        return
+    moved = [(t, old[t], seen[t]) for t in seen if t in old and old[t] != seen[t]]
+    print()
+    if not moved:
+        print(f"★ 前回の記録から動いた依頼: 0 件（記録 {len(old)} 件と突き合わせ）")
+        return
+    print(f"★ 前回から動いた依頼 {len(moved)} 件 ── **op を足した回はここを読む**:")
+    for t, o, n in moved:
+        print(f"    {o} → {n}   ← {t}")
 
 
 if __name__ == "__main__":

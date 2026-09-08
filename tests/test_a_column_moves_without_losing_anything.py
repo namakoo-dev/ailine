@@ -174,3 +174,50 @@ def test_it_really_moves_on_real_libreoffice(tmp_path):
     vals = openpyxl.load_workbook(
         book.with_name(book.stem + ".out.xlsx"), data_only=True)["請求"]
     assert [vals.cell(r_, 5).value for r_ in (2, 3)] == [3000, 10000]
+
+
+# --- ⑥ 語彙が増えると意味の近い op に奪われる（2026-09-08・Namakoo が名指しした現象）--
+
+def test_a_position_phrase_alone_does_not_make_it_a_column_move():
+    """★★ 実測した奪い合い: 列移動を語彙に入れた途端、「鈴木の右に東棟」（1 セル書換）が
+      **列移動**に読まれ、効果の行列で 5 件が ✓ → ？ に落ちた。
+
+    ★ 直しは語彙でなく**実表**。行き先が実在の列に接地しないなら列の話ではないので、
+      その計画は「別の仕事だから読み直すな」と言う資格を失う（宣言 needs_col_anchor）。
+    ★ ここでは判定の材料（行き先が解けるか）だけを縛る ── 読み直しが実際に働くことは
+      下の実機試験が見る。
+    """
+    heads = ["氏名", "所属", "内線", "メモ"]
+    # ★ 『鈴木』は行の値であって列ではない → 位置は解けない
+    assert ailine.resolve_col_anchor("鈴木の右に東棟", heads)[0] is None
+    # ★ 対の試験: 実在の列を指した回はちゃんと解ける（門を閉じすぎない）
+    assert ailine.resolve_col_anchor("メモを所属の右に移して", heads)[0] == 3
+
+
+def test_the_declaration_says_which_op_needs_a_column_anchor():
+    """★ 門は op 名でなく**宣言**を読む（op が増えても配線が要らない）。"""
+    assert ailine.OP_WRITE_TARGET["MOVE_COLUMN"].needs_col_anchor is True
+    assert ailine.OP_WRITE_TARGET["SWAP"].needs_col_anchor is False
+
+
+@pytest.mark.local
+def test_a_cell_write_is_not_stolen_by_the_new_column_move(tmp_path):
+    """★ 実機 ── 「鈴木の右に東棟」が 1 セル書換として通ること（奪われないこと）。"""
+    book = tmp_path / "meibo.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "名簿"
+    ws.append(["氏名", "所属", "内線", "メモ"])
+    for r in [["山田", "営業", 101, None], ["鈴木", "経理", 202, None],
+              ["高橋", "総務", 305, None]]:
+        ws.append(r)
+    wb.save(book)
+    r = subprocess.run(
+        [sys.executable, "-m", "ailine", "run", str(book), "鈴木の右に東棟",
+         "--copy", "--sheet", "名簿", "--timeout", "300"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
+        env={**os.environ, "PYTHONPATH": str(REPO / "src")})
+    assert r.returncode == 0, r.stdout[-700:]
+    out = openpyxl.load_workbook(book.with_name(book.stem + ".out.xlsx"))["名簿"]
+    assert [out.cell(3, c).value for c in range(1, 4)] == ["鈴木", "東棟", 202], (
+        r.stdout[-700:])
