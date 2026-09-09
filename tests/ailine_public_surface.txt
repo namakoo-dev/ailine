@@ -598,6 +598,7 @@ def extract_replace_pair(task: 'str')
 def extract_task_mentions(task: 'str', sheet_names: 'list') -> 'dict'
 def fabricated_subject_refusal(op: 'str', resolved: 'dict', book_meta: 'dict', task: 'str', sheet: 'str | None') -> 'str | None'
 def fold_identical_steps(plan) -> 'tuple'
+def fold_insert_then_add(plan) -> 'tuple'
 def format_confirmation_line(op: 'str', resolved_args: 'dict', inferred: 'set', sheets: 'list | None' = None, target_sheet: 'str | None' = None) -> 'str'
 def format_doctor_report(results: 'list') -> 'tuple'
 def format_fidelity_warning(fidelity: 'dict') -> 'str'

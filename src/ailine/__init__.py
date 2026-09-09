@@ -202,6 +202,7 @@ from ailine_core.new_sheet import empty_new_sheets   # ★ 新しく作ったシ
 from ailine_core.header_cell import header_cell_target   # ★「<列名>の見出しに」は列ぜんぶでなく 1 セル
 from ailine_core.row_conflict import value_not_in_the_named_row   # ★「N行目の<値>」で、その行にその値が無い
 from ailine_core.row_placement import task_places_a_new_row   # ★「〜の下に…足して」は行を増やす依頼（1セルへ読み替えない）
+from ailine_core.fold_insert_add import fold_insert_then_add   # ★ 空行を挿してから値を入れる 2 段を 1 段に畳む
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -9214,16 +9215,29 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
     if m:
         want_after, name, second = True, m.group(1).strip(), m.group(2).strip()
     else:
+        # ★★ 2026-09-09（盲検 D が打った言い方で実測）: 「北斗精機**の行**の下に」で
+        #   掴むのが『北斗精機の行』になり、実表に無いので落ちて、後段の「<X>の行」
+        #   規則が**その行そのもの**（6行目）を返していた ── 「の下に」が丸ごと消え、
+        #   新しい行が**上**に入る。★ 事務の人が最も自然に言う形。
+        #   ★ 掴んだ語から**構造の語**（の行／の列）を落とす。09-08 に列側でやった
+        #     「掴んだ語を実表の見出しで切り直す」と同じ形（軸が違うだけ）。
+        def _strip_structure(s: str) -> str:
+            t = (s or "").strip()
+            for suffix in ("の行", "の列", "行", "列"):
+                if len(t) > len(suffix) and t.endswith(suffix):
+                    return t[: -len(suffix)]
+            return t
+
         for suf in _ANCHOR_AFTER:
             m = _re_anchor(suf).search(text)
             if m:
-                want_after, name = True, m.group(1).strip()
+                want_after, name = True, _strip_structure(m.group(1))
                 break
         if name is None:
             for suf in _ANCHOR_BEFORE:
                 m = _re_anchor(suf).search(text)
                 if m:
-                    want_after, name = False, m.group(1).strip()
+                    want_after, name = False, _strip_structure(m.group(1))
                     break
     if not name:
         # ★ 2026-08-27（実測）:「りんごの行を削除して」── 人は行を**中身**で指す。
@@ -13124,6 +13138,15 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         plan, _folded = fold_identical_steps(plan)
         if _folded:
             print(f"（同じ操作が {_folded + 1} 回書かれていたので 1 回にまとめました）")
+        # ★★ 2026-09-09（盲検 D が false refusal として拾った）: 人が手順どおりに
+        #   「空行を挿してから値を入れる」と言うと、モデルが素直に 2 段で返し、
+        #   下の関所が「行を 2 回足そうとしています」と**正しく**断っていた。
+        #   ★ 断りは正しいが人が困る形 ── ADD_ROW はそれ自体が行を作るので畳める。
+        #   ★ 畳む条件は狭く取る（1 行だけ／値が在る／空けた行に入れる）。
+        #     釣り合わない回は畳まない ── 本当に空行が欲しいのかもしれない。
+        plan, _fold_note = fold_insert_then_add(plan)
+        if _fold_note:
+            print(_fold_note)
 
     # ★★ 関所（2026-08-29・Namakoo の設計判断）: 同じ軸に位置を作る段が 2 つ以上ある
     #   計画は実行しない。上の読み直しで 1 本に畳めていればここは通る ── 畳めなかった
