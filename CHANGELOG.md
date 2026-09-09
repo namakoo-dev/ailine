@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.2.4](https://github.com/namakoo-dev/ailine/compare/v0.2.3...v0.2.4) - 2026-09-09
+
 ## [v0.2.3](https://github.com/namakoo-dev/ailine/compare/v0.2.2...v0.2.3) - 2026-09-07
 
 **「✓ の嘘」を 2 種類、機械で塞いだ**版。27 commit / 87 ファイル / +8,621 行。
