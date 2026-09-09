@@ -65,8 +65,49 @@ def test_load_helpers_catalog_and_files():
     catalog, files = ailine.load_helpers(ailine.DEFAULT_HELPERS)
     assert any(f.name.endswith(".bas") for f in files)
     assert "SortByColumn" in catalog
-    assert "InsertBarChart" in catalog
     assert "Call" in catalog          # Call 形式で呼ばせる指示が入っている
+    # ★★ 2026-09-09: 旧版はここで `InsertBarChart` を見ていた ── だが**それは
+    #   ヘルパではない**。`.bas` の「旧 InsertBarChart は列0固定だったが」という
+    #   経緯コメントの中の語で、見た目は「グラフのヘルパが載っている」検査なのに
+    #   実際は歴史メモを見ていた（在っても、その事故の形では鳴らない番人）。
+    # ★ 本物の契約に替える: **実在する Sub が 1 本も欠けずカタログに載ること**。
+    #   カタログを実装本文から署名だけに絞った時、ここが唯一の落ちどころになる。
+    from ailine_core.helper_interface import names_in
+    real = set(names_in(ailine.DEFAULT_HELPERS.joinpath("AiLineHelpers.bas")
+                        .read_text(encoding="utf-8")))
+    assert real, "helpers/*.bas から Sub を 1 本も読めていない（検査が空回りしている）"
+    missing = sorted(n for n in real if f"Sub {n}(" not in catalog)
+    assert not missing, f"カタログから消えたヘルパがある（モデルには存在しないのと同じ）: {missing}"
+
+def test_interfaces_only_keeps_the_call_shape_and_drops_the_body():
+    """★ 絞った後も「呼び方」は 1 文字も変わらないこと（2026-09-09）。
+
+    ★ 行継続（末尾 `_`）で 2 行に分かれた署名を落とすと、モデルには
+      **そのヘルパが存在しない**のと同じになる ── 実在するのに使えなくなる。
+    """
+    from ailine_core.helper_interface import interfaces_only, names_in
+    bas = chr(10).join([
+        "' 表を並べ替える。",
+        "'   col  : 基準列（0 起点）",
+        "' ★ W3: 設計の経緯（モデルには要らない）",
+        "Sub A(oDoc As Object, col As Integer)",
+        "    Dim x As Integer",
+        "    x = 1        ' 実装本文",
+        "End Sub",
+        "",
+        "' 2 行に分かれた署名。",
+        "Sub B(oDoc As Object, _",
+        "      n As Integer)",
+        "    n = 0",
+        "End Sub",
+    ])
+    got = interfaces_only(bas)
+    assert names_in(got) == ["A", "B"], "署名を落としている（行継続の Sub が消えた）"
+    assert "n As Integer)" in got, "行継続の 2 行目が落ちている（引数が減って見える）"
+    assert "'   col  : 基準列（0 起点）" in got, "引数の意味が落ちている"
+    assert "実装本文" not in got and "Dim x" not in got, "実装本文が残っている"
+    assert "W3" not in got, "保守する人間向けの経緯が残っている"
+
 
 def test_load_helpers_missing_dir(tmp_path):
     catalog, files = ailine.load_helpers(tmp_path / "nope")

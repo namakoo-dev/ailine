@@ -135,6 +135,7 @@ from ailine_core.filetypes import (BOOKLIKE_SUFFIXES, CSV_SUFFIX,
                                    RUN_SUPPORTED_SUFFIXES)   # ★ 拡張子判定の登録簿
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
 from ailine_core.prompt_window import describe_the_loss   # ★ 窓に入らなかった分を捕まえる
+from ailine_core.helper_interface import interfaces_only   # ★ ヘルパは呼び方だけ見せる
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
@@ -406,12 +407,13 @@ MAX_COLS = 64
 #: 翻訳層はこれで足りる（実測 4,153 tok / 窓 8,192）。
 NUM_CTX = 8192
 
-#: 語彙外段（自由生成）の窓。★ こちらはヘルパのカタログ全部を渡すので桁が違う
-#:   （実測 2026-09-09: 26,574 tok・68,029 字）。8,192 のままだと **CONTRACT も
-#:   カタログの前 8 割もモデルが一度も見ない**まま Basic を書いていた ── 印を
-#:   3 か所に置いて確かめた（先頭×／中ほど×／末尾○）。例外もテストの赤も出ない形。
-#: 代償は実測で 10.5 秒 → 24.8 秒（語彙外段だけ・毎回通る翻訳層は変わらない）。
-NUM_CTX_FREEFORM = 32768
+#: 語彙外段（自由生成）の窓。★ **翻訳層と同じ床**を使う ── Namakoo 決裁 2026-09-09:
+#:   「実運用でノート PC を想定しているので、ハードウェア性能への依存をなるべく避けたい」。
+#:   窓を広げて解決すると、同じ依頼が俺の機械では ✓ が出て買い手の機械では止まる ──
+#:   **保証が相手の VRAM 次第**になる。だから窓は宣言する床にし、プロンプトの側を合わせる。
+#: ★ 合わせ方: ヘルパは実装本文でなく呼び方だけ渡す（helper_interface.interfaces_only）。
+#:   実測 26,547 tok → 4,132 tok（床 8,192・生成 1,600 を引いて余白 2,460）。
+NUM_CTX_FREEFORM = NUM_CTX
 
 
 def ask_ollama(body: dict, messages: list) -> dict:
@@ -483,7 +485,10 @@ def load_helpers(helpers_dir: Path) -> tuple:
     files = sorted(helpers_dir.glob("*.bas")) if helpers_dir.is_dir() else []
     if not files:
         return "", []
-    srcs = "\n".join(f.read_text(encoding="utf-8").strip() for f in files)
+    # ★★ 2026-09-09: 以前はここで **実装本文を丸ごと**渡していた（24,800 tok・
+    #   プロンプト全体の 94%）。カタログ自身が「中身は絶対に書き写すな」と書いている
+    #   のだから、要るのは呼び方だけ ── 判定は ailine_core/helper_interface.py に 1 つ。
+    srcs = "\n".join(interfaces_only(f.read_text(encoding="utf-8")).strip() for f in files)
     catalog = (
         "\n\n## 定義済みヘルパ（★ 呼ぶだけ・再定義しない）\n"
         "arcane な操作（並べ替え等）は、自分で書かず次のヘルパを使うこと。\n"
@@ -12997,9 +13002,9 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     if plan:
         _heads = [h for _hs in (book_meta.get("headers") or {}).values()
                   for h in (_hs or [])]
-        if (_attr := intent_mismatch.attribute_asked_but_not_writable(a.task, _heads)):
-            print(f"？ この道具は『{_attr}』を変えられません "
-                  "── 近い操作（背景色・太字など）で代わりに実行することはしません。")
+        if (_attr := intent_mismatch.asked_for_what_we_do_not_do(a.task, _heads)):
+            print(f"？ この道具は『{_attr}』に対応していません "
+                  "── 近い操作で代わりに実行することはしません。")
             print("  （頼める操作の一覧: ailine ops）")
             return plan, 3
 

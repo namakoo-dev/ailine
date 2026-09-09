@@ -624,6 +624,7 @@ def header_cell_target(task: 'str', target: 'str', header_row: 'int', columns) -
 def header_row_drops_columns(ws, chosen_row: 'int') -> 'str | None'
 def insert_rows_should_have_been_add_row(task: 'str', resolved: 'dict', book_meta: 'dict | None' = None, sheet: 'str | None' = None) -> 'str | None'
 def inspection_sheet_basic_call(sheet_name: 'str', header: 'list', rows: 'list', types: 'str') -> 'str'
+def interfaces_only(bas_text: 'str') -> 'str'
 def is_interactive(*, stdin_isatty: 'bool', json_mode: 'bool' = False, dry: 'bool' = False) -> 'bool'
 def is_transient_lo_error(err: 'str | None') -> 'bool'
 def is_truncated_code(code: 'str') -> 'bool'

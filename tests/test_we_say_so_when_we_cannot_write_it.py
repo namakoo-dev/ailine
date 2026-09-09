@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ailine
-from ailine_core.intent import UNWRITABLE_ATTRIBUTES, attribute_asked_but_not_writable
+from ailine_core.intent import WE_DO_NOT_DO, asked_for_what_we_do_not_do
 from _product_source import count_in_product  # noqa: E402 ── ★ 本体決め打ちで読まない
 
 
@@ -45,7 +45,7 @@ def test_the_list_does_not_eat_an_ability_we_have():
     ours.update(str(v) for v in ailine.OP_LABELS.values())
 
     collisions = []
-    for word in UNWRITABLE_ATTRIBUTES:
+    for word in WE_DO_NOT_DO:
         for mine in ours:
             if mine and (word in mine or mine in word):
                 collisions.append((word, mine))
@@ -61,30 +61,35 @@ def test_the_list_does_not_eat_an_ability_we_have():
     ("品名に取り消し線を引いて", "取り消し線"),
     ("行の高さを30にして", "行の高さ"),
     ("文字サイズを大きくして", "文字の大きさ"),
+    ("ウィンドウ枠を固定して", "ウィンドウ枠の固定"),
+    ("印刷範囲をA1:D5に設定して", "印刷範囲"),
+    ("用紙の向きを変えて", "用紙の向き"),
 ])
 def test_we_name_the_attribute_we_cannot_write(task, want):
-    assert attribute_asked_but_not_writable(task) == want
+    assert asked_for_what_we_do_not_do(task) == want
 
 
 @pytest.mark.parametrize("task", [
     "見出しに背景色を付けて", "見出しを太字にして", "けい線を引いて",
     "列幅を自動調整して", "単価に桁区切りを付けて", "単価で降順に並べ替えて",
     "元に戻して",              # ★『取り消し』を含むが『取り消し線』ではない
+    "単価が3000以上の行を抽出して",   # ★ 二重語 ── 『フィルタ』は別名で持っている能力
+    "部門ごとに金額を集計して",       # ★ 同上 ── 『グループ化』は集計で出来る
 ])
 def test_we_stay_quiet_for_what_we_can_do(task):
     """★ 逆向き ── 出来ることで鳴ったら、それは能力を殺す番人になる。"""
-    assert attribute_asked_but_not_writable(task) is None
+    assert asked_for_what_we_do_not_do(task) is None
 
 
 def test_a_real_column_by_that_name_is_a_target_not_an_attribute():
     """『書体』という列が実在する表なら、それは対象であって属性の指定ではない。"""
-    assert attribute_asked_but_not_writable("書体の列を太字にして", ["書体", "品名"]) is None
-    assert attribute_asked_but_not_writable("書体を変えて", ["品名"]) == "フォントの種類"
+    assert asked_for_what_we_do_not_do("書体の列を太字にして", ["書体", "品名"]) is None
+    assert asked_for_what_we_do_not_do("書体を変えて", ["品名"]) == "フォントの種類"
 
 
 def test_the_judgement_lives_in_exactly_one_place():
     """★ 判定は 1 箇所 ── 呼び出し側に op ごとの if を配らない（片配線を作らない）。"""
-    assert count_in_product("attribute_asked_but_not_writable(") == 2, (
+    assert count_in_product("asked_for_what_we_do_not_do(") == 2, (
         "定義 1 + 呼び出し 1 のはず（増えていたら、判定が散っている）")
 
 
