@@ -141,6 +141,7 @@ value _NEW_COL_MAKE_TAILS
 value _NEW_COL_TAILS
 value _NEW_SHEET_MENTION_RE
 value _NUMFMT_WORDS
+value _OPS_THAT_SKIP_NON_DATA_ROWS
 value _OP_SCHEMA_NOTES
 value _PARTICLES
 value _QUOTE_PATTERNS
@@ -582,6 +583,7 @@ def detect_uniform_fill(before: 'dict', after: 'dict', single_cell: 'bool' = Fal
 def detect_write_target_type_change(before: 'dict', after: 'dict', *, op: 'str | None', resolved: 'dict | None', meta: 'dict | None', op_write_target: 'dict', is_number: 'Callable', after_path=None) -> 'str | None'
 def diff_snapshots(before: 'dict', after: 'dict') -> 'tuple'
 def doctor_checks(model: 'str' = 'qwen2.5-coder:7b') -> 'list'
+def drop_delete_that_was_only_a_qualifier(plan, task: 'str', skips_rows_itself) -> 'tuple'
 def drop_names_covered_by_longer(task: 'str', names: 'list') -> 'list'
 def duplicate_name_warning(col: 'str', values) -> 'str | None'
 def empty_new_sheets(before_path, after_path) -> 'list'

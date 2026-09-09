@@ -203,6 +203,7 @@ from ailine_core.header_cell import header_cell_target   # ★「<列名>の見�
 from ailine_core.row_conflict import value_not_in_the_named_row   # ★「N行目の<値>」で、その行にその値が無い
 from ailine_core.row_placement import task_places_a_new_row   # ★「〜の下に…足して」は行を増やす依頼（1セルへ読み替えない）
 from ailine_core.fold_insert_add import fold_insert_then_add   # ★ 空行を挿してから値を入れる 2 段を 1 段に畳む
+from ailine_core.drop_redundant_delete import drop_delete_that_was_only_a_qualifier   # ★「除いて」は対象から外す意味（削除ではない）
 from ailine_core import negation as negation_reading   # ★ 否定は「何に付いているか」で読む
 from ailine_core import residue as suggest_residue   # ★ W10 便C2 S5: もしかして提案の残差検出（純ロジック）
 from ailine_core.interpretation import build_interpretation   # ★ 段1: 解釈を機械可読で出す（--json の interpretation/provenance）
@@ -8805,6 +8806,12 @@ def fold_identical_steps(plan) -> tuple:
     return out, dropped
 
 
+#: 合計行など「データ行でない行」を**自分で対象外にする** op（_skip_rows を立てる側）。
+#: ★ 実測で確かめた 3 つ（_verify_sort / _verify_extract / _verify_set_where が
+#:   「データ行でないため…ません」を画面に出す）。増やす時はここだけ直す。
+_OPS_THAT_SKIP_NON_DATA_ROWS = frozenset({"SORT", "EXTRACT", "SET_WHERE"})
+
+
 def too_many_placements(plan) -> str | None:
     """同じ軸に位置を作る段が 2 つ以上あるなら、その理由（無ければ None）。
 
@@ -13147,6 +13154,17 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         plan, _fold_note = fold_insert_then_add(plan)
         if _fold_note:
             print(_fold_note)
+        # ★★ 2026-09-09（盲検 C と D が**独立に**同じ所を指した）:
+        #   「合計行を**除いて**売上の多い順に並べ替えて」で、1段目の行削除が
+        #   **合計行を消していた**。「除いて」は「対象から外して」であって
+        #   「削除して」ではない ── しかも並べ替え・抽出・条件つき書換は
+        #   **元から合計行を外す**（_skip_rows）。だからこの段は要らない。
+        #   ★ 計画だけでは区別できないと実測した（「消してから」も同じ 2 段）。
+        #     依頼文の語で分ける ── 消す意図が明示されている回は落とさない。
+        plan, _drop_note = drop_delete_that_was_only_a_qualifier(
+            plan, a.task, lambda _op: _op in _OPS_THAT_SKIP_NON_DATA_ROWS)
+        if _drop_note:
+            print(_drop_note)
 
     # ★★ 関所（2026-08-29・Namakoo の設計判断）: 同じ軸に位置を作る段が 2 つ以上ある
     #   計画は実行しない。上の読み直しで 1 本に畳めていればここは通る ── 畳めなかった
