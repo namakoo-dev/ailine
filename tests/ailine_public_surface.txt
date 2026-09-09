@@ -41,6 +41,8 @@ value NEW_COLUMN_ORIGIN
 value NOOP_MACRO
 value NOTICE_V2_FILE
 value NOTICE_V2_TEXT
+value NUM_CTX
+value NUM_CTX_FREEFORM
 class NoOlderBackupError(?)
 class NothingToRedoError(?)
 value OLLAMA
@@ -464,6 +466,7 @@ def append_misclass(entry: 'dict', path: 'Path | None' = None) -> 'None'
 def apply_dsl_step(op: 'str', resolved: 'dict', code: 'str', *, apply_target: 'Path', before: 'dict', before_charts: 'int', workdir: 'Path', helper_files, apply_timeout, header_row: 'int', use_formula: 'bool', source_book: 'Path | None', deps: 'DslStepDeps', apply_progress_label: 'str', print_changes: 'bool', step_prefix: 'str' = '', before_chart_paths: 'frozenset | None' = None) -> 'DslApplyResult'
 def apply_known_attributes(task: 'str', source_book: 'Path', book_meta: 'dict', path: 'Path | None' = None) -> 'tuple'
 def ask_choice(lines: 'list', choices: 'list', *, interactive: 'bool', input_fn: 'Callable | None' = None, print_fn: 'Callable | None' = None, prompt: 'str' = '> ') -> 'ChoiceResult'
+def ask_ollama(body: 'dict', messages: 'list') -> 'dict'
 def ask_yes_no(question: 'str', *, interactive: 'bool', default: 'bool' = False, input_fn: 'Callable | None' = None) -> 'bool'
 def atomic_replace_inplace(book: 'Path', out_book: 'Path', workdir: 'Path', keep_backups: 'int' = 10) -> 'tuple'
 def attr_add(word: 'str', cand, book_key: 'dict', path: 'Path | None' = None) -> 'tuple'
@@ -575,6 +578,7 @@ class datetime(?)
 def describe_book(path: 'Path') -> 'str'
 def describe_cell_change(before: 'tuple | None', after: 'tuple | None') -> 'str'
 def describe_target_sheet(sheets: 'list', target_sheet: 'str | None', source: 'str') -> 'str | None'
+def describe_the_loss(messages: 'list', prompt_eval_count, num_ctx: 'int') -> 'str'
 def detect_first_column_gap(ws, header_row: 'int' = 1, look_ahead: 'int' = 200) -> 'str | None'
 def detect_ghost_data(before: 'dict', after: 'dict', *, new_col_letter: 'str | None' = None, new_row_at_end: 'bool' = False) -> 'str | None'
 def detect_header_row(sheet_struct: 'dict') -> 'tuple'

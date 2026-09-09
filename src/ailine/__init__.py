@@ -134,6 +134,7 @@ from ailine_core.filetypes import (BOOKLIKE_SUFFIXES, CSV_SUFFIX,
                                    OPENPYXL_PROBEABLE_SUFFIXES,
                                    RUN_SUPPORTED_SUFFIXES)   # ★ 拡張子判定の登録簿
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
+from ailine_core.prompt_window import describe_the_loss   # ★ 窓に入らなかった分を捕まえる
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
@@ -400,26 +401,66 @@ MAX_COLS = 64
 # ローカル LLM（ollama）
 # ---------------------------------------------------------------------------
 
-def ollama_generate(model: str, messages: list, temperature: float = 0.2) -> str:
-    body = json.dumps({
-        "model": model, "messages": messages, "stream": False,
-        "options": {"temperature": temperature, "num_predict": 1600, "num_ctx": 8192},
-    }).encode()
-    req = urllib.request.Request(ollama_url("/api/chat"), data=body,
+#: 文脈の窓。★ 越えると ollama は例外を出さず**窓の半分に落として**黙って生成する
+#:   （実測 2026-09-09: 真の長さ 9,126 tok → 読まれた 4,098）。ask_ollama が毎回検算する。
+#: 翻訳層はこれで足りる（実測 4,153 tok / 窓 8,192）。
+NUM_CTX = 8192
+
+#: 語彙外段（自由生成）の窓。★ こちらはヘルパのカタログ全部を渡すので桁が違う
+#:   （実測 2026-09-09: 26,574 tok・68,029 字）。8,192 のままだと **CONTRACT も
+#:   カタログの前 8 割もモデルが一度も見ない**まま Basic を書いていた ── 印を
+#:   3 か所に置いて確かめた（先頭×／中ほど×／末尾○）。例外もテストの赤も出ない形。
+#: 代償は実測で 10.5 秒 → 24.8 秒（語彙外段だけ・毎回通る翻訳層は変わらない）。
+NUM_CTX_FREEFORM = 32768
+
+
+def ask_ollama(body: dict, messages: list) -> dict:
+    """/api/chat を叩く**唯一の口**。通信の診断と「窓に入ったか」の検算をここで済ませる。
+
+    ★★ なぜ 1 本に畳むか（2026-09-09）: 以前は通常生成（ollama_generate）と翻訳層
+      （ollama_generate_json）が別々に urlopen していて、**診断は片方にしか無く**
+      （翻訳層は try すら無く、HTTP 400 が生の traceback で出ていた）、窓の検算は
+      どちらにも無かった。この repo で何度も踏んだ〈片配線〉そのもの ── 処方は
+      「両方に足す」ではなく **1 関数に畳んで呼び出し側に持たせない**こと。
+    """
+    req = urllib.request.Request(ollama_url("/api/chat"),
+                                 data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
+    model = body.get("model")
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
             d = json.load(r)
     except urllib.error.HTTPError as e:
         # ★ HTTPError は URLError のサブクラスなので先に拾う。
         #   404 は「繋がっているがモデルが無い」で、接続不能とは原因も対処も別。
+        #   ★ 本文を捨てない ── 同日、第二の脳の側で本文を握り潰して
+        #     「ollama が応答しない」と嘘の診断を出し、健康な ollama を疑って時間を溶かした。
         if e.code == 404:
             exit_environment(f"ollama にモデル '{model}' が見つからない (HTTP 404)。\n"
                      f"★ `ollama pull {model}` で取得してから再実行して。")
-        exit_environment(f"ollama がエラーを返した ({OLLAMA}): HTTP {e.code} {e.reason}")
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            detail = ""
+        exit_environment(f"ollama がエラーを返した ({OLLAMA}): HTTP {e.code} {e.reason}"
+                         + (f"\n  内訳: {detail}" if detail else ""))
     except urllib.error.URLError as e:
         exit_environment(f"ollama に繋がらない ({OLLAMA}): {e}\n"
                  "★ `ollama serve` が動いているか確認。外部送信はしない設計。")
+    lost = describe_the_loss(messages, d.get("prompt_eval_count"),
+                             (body.get("options") or {}).get("num_ctx", 0))
+    if lost:
+        # ★ 読まれていない材料で書かせた結果に ✓ は出せない。黙って進まない。
+        exit_environment(lost)
+    return d
+
+
+def ollama_generate(model: str, messages: list, temperature: float = 0.2) -> str:
+    d = ask_ollama({
+        "model": model, "messages": messages, "stream": False,
+        "options": {"temperature": temperature, "num_predict": 1600,
+                    "num_ctx": NUM_CTX_FREEFORM},
+    }, messages)
     return d.get("message", {}).get("content", "")
 
 
@@ -3589,14 +3630,13 @@ def ollama_generate_json(model: str, messages: list, temperature: float = 0.1,
        戻り値は content 文字列（json.loads は呼び出し側 translate_task が行う）。"""
     body = {
         "model": model, "messages": messages, "stream": False, "format": "json",
-        "options": {"temperature": temperature, "num_predict": num_predict, "num_ctx": 8192},
+        "options": {"temperature": temperature, "num_predict": num_predict, "num_ctx": NUM_CTX},
     }
     if "qwen3" in model:
         body["think"] = False
-    req = urllib.request.Request(ollama_url("/api/chat"), data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as r:
-        d = json.load(r)
+    # ★ 2026-09-09: ここは以前 try すら無く、HTTP 400 が生の traceback で出ていた。
+    #   通信の診断も窓の検算も ask_ollama に畳んである（片配線を作らない）。
+    d = ask_ollama(body, messages)
     return d.get("message", {}).get("content", "")
 
 
@@ -12945,6 +12985,24 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     #   ★ 狭い op が広い op を奪う形（集計は「〜ごとに」「まとめて」が流れ込む広い口）。
     #   ★ 人が op を固定した回は触らない（画面に出した読みと実行を食い違わせない）。
     #   ★ 判定は ailine_core/required_word.py に 1 つだけ ── ここは材料を渡すだけ。
+    # ★★ 2026-09-09（語彙外の台が初回で拾った決定論的な false ✓・Namakoo 決裁①）:
+    #   「品名の**文字色**を赤にして」→ 操作:背景色 → **✓ 機械検証済み**（3/3 再現）。
+    #   ★ 既存の関所は列名の粒度（residue）と効果の種類の粒度（op_effect_mismatch）
+    #     しか持たず、**属性**の粒度が無かった。判定は ailine_core/intent.py に 1 つだけ。
+    #   ★ 段ごとに割り当てない ── 計画の段は自分の依頼文を持たないので、どの段の話かを
+    #     機械では決められない。**依頼ごと断る**（複合に未対応が混じった時に × を返す
+    #     既存の振る舞いと揃う）。出来ない部分を黙って落として残りをやる方が悪い。
+    #   ★ _forced_op でも通す ── これは読みの話ではなく**能力の話**で、人が op を
+    #     固定しても書けないものは書けない。
+    if plan:
+        _heads = [h for _hs in (book_meta.get("headers") or {}).values()
+                  for h in (_hs or [])]
+        if (_attr := intent_mismatch.attribute_asked_but_not_writable(a.task, _heads)):
+            print(f"？ この道具は『{_attr}』を変えられません "
+                  "── 近い操作（背景色・太字など）で代わりに実行することはしません。")
+            print("  （頼める操作の一覧: ailine ops）")
+            return plan, 3
+
     if plan and not getattr(a, "_forced_op", None):
         _rules = {_o: (_m["requires_word"], _m.get("without_the_word"),
                         OP_LABELS.get(_m.get("without_the_word"), ""))
