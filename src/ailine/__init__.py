@@ -7832,6 +7832,18 @@ def _re_anchor(suffix: str):
 
 _ANCHOR_AFTER = ("の下に", "の下へ", "の後に", "の後ろに", "の次に")
 _ANCHOR_BEFORE = ("の上に", "の上へ", "の前に")
+# ★★ 2026-09-09（Namakoo「言い間違えを除けば位置語の指定が精度に直結する」）:
+#   位置の語彙を軸ごとに並べたら**列にだけ端が在り、行には無かった**:
+#       概念        列                    行
+#       隣（後）    6 語                  5 語
+#       隣（前）    5 語                  3 語
+#       2 つの間    _re_between（共有）   同左        ← ここだけ対称だった
+#       端          _COL_HEAD/_COL_TAIL   ★ 無い
+#   ★ 09-08 に列側へ端を足したので、非対称が**広がって**いた。到達率の器が
+#     名指しした 4 件（「一番下に行を入れて」等）はここに落ちていた。
+#   ★ 行と列の非対称は、この repo で 3 度目（間・端・…）。列と**同じ形**で持つ。
+_ANCHOR_TOP = ("一番上", "いちばん上", "先頭", "最初", "上端", "一番最初")
+_ANCHOR_BOTTOM = ("一番下", "いちばん下", "末尾", "最後", "下端", "一番最後", "最終行")
 
 
 _re_row_number_word = re.compile(r"[0-9０-９]+\s*行(?:目)?")
@@ -9079,6 +9091,21 @@ def _resolve_named_row(book_meta: dict, sheet: str | None, name: str) -> tuple:
         if _n > hr:
             return _n, f"{_n}行目（依頼文の行番号）"
         return None, f"{_n}行目は見出し行（{hr}行目）またはその上です"
+    # ★★ 2026-09-09: LLM は位置を**語**で返すことがある（挿入位置=「最後」）。
+    #   旧版はそれを**行の名前**として実表に探しに行き、「『最後』という行が
+    #   見つかりません」と断っていた ── 位置語を値として扱っていた形。
+    #   ★ ここは住所の解決を集めている 1 箇所なので、足せば全部の op に効く
+    #     （上の行番号と同じ理由・専用の判定を作らない）。
+    _pos = str(name or "").strip()
+    if _pos and any(w in _pos for w in _ANCHOR_TOP + _ANCHOR_BOTTOM):
+        try:
+            with BookView(Path(path)) as _bv0:
+                _last0, _ = data_extent(_bv0.sheet(sheet), hr)
+        except Exception:
+            return None, None
+        if any(w in _pos for w in _ANCHOR_TOP):
+            return hr + 1, f"『{_pos}』＝{hr + 1}行目（見出しの次）"
+        return _last0 + 1, f"『{_pos}』＝{_last0 + 1}行目（表の終わりの次）"
     try:
         with BookView(Path(path)) as bv:
             ws = bv.sheet(sheet)
@@ -9210,6 +9237,16 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
         alt = _row_named_anywhere_in_task(task, rows_h, heads_h)
         if alt:
             return alt[0], f"『{alt[1]}』の行＝{alt[0]}行目"
+        # ★★ 2026-09-09: 端の指定は**隣の指定より後**に見る（「みかんの下に」の方が
+        #   具体的なので、両方書いてあったら隣を採る ── 列側と同じ順序）。
+        #   ★ 実表を数えて決める（「一番下」は見出しでも 1 行目でもない）。
+        _last = header_row + len(rows_h)
+        for w in _ANCHOR_TOP:
+            if w in text:
+                return header_row + 1, f"『{w}』＝{header_row + 1}行目（見出しの次）"
+        for w in _ANCHOR_BOTTOM:
+            if w in text and rows_h:
+                return _last + 1, f"『{w}』＝{_last + 1}行目（表の終わりの次）"
         return None, None
     # ★ 2026-08-27（自分で入れた誤爆・既存の検体が捕まえた）:
     #   「**2行目の前に**1行挿入して」の「2行目」を中身の名前として探し、
@@ -9269,6 +9306,16 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
         _n_here = task_names_a_row_number(task)
         if _n_here and _n_here > header_row:
             return _n_here, f"{_n_here}行目（依頼文の行番号）"
+        # ★★ 2026-09-09: 端の語（一番下/最後/…）は**位置**であって行の名前ではない。
+        #   ★ 住所を解く所は 2 つ在るので、両方に同じ語彙を持たせる
+        #     （片方だけだと「一番下に足して」は通るのに「最後の行を削除して」が
+        #     断られる ── 実測でそうなった）。
+        _pos2 = str(name or "").strip()
+        if _pos2 and any(w in _pos2 for w in _ANCHOR_TOP + _ANCHOR_BOTTOM):
+            if any(w in _pos2 for w in _ANCHOR_TOP):
+                return header_row + 1, f"『{_pos2}』＝{header_row + 1}行目（見出しの次）"
+            _last2 = header_row + len(ws_rows)
+            return _last2, f"『{_pos2}』＝{_last2}行目（表の最後）"
         return None, (f"『{name}』という行が見つかりません"
                        "（この表に在る値で指してください・行番号でも指せます）")
     if len(hits) > 1:
