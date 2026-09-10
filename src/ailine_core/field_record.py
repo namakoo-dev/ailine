@@ -34,7 +34,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field as _field
+from dataclasses import dataclass
 
 #: 区分の語。★ ここが唯一の出どころ（番人が src 全体を AST で走査して縛る）。
 CONFIRMED = "確"
