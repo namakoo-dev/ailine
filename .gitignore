@@ -25,3 +25,8 @@ dist/
 #   取り直しは AILINE_GOLDEN_OUT=bench/verify_golden.json で全テストを 1 回。
 bench/folder_map/invoices40/
 bench/folder_map/_答え.json
+bench/received_invoices/real14/
+bench/received_invoices/received40/
+bench/received_invoices/*.xlsx
+bench/received_invoices/答え_*.json
+bench/received_invoices/lo-profile-mk/
