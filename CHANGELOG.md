@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.2.5](https://github.com/namakoo-dev/ailine/compare/v0.2.4...v0.2.5) - 2026-09-10
+
 ## [v0.2.4](https://github.com/namakoo-dev/ailine/compare/v0.2.3...v0.2.4) - 2026-09-09
 
 **外の目が挙げた `✓` の嘘を塞ぎ続け、「語彙の共食い」を測る器を据えた**版。
