@@ -61,7 +61,7 @@ SKELETONS = [
     {   # マネーフォワード（別レイアウト）
         "src": SP / "inv21.xlsx",
         "sheet": "インボイス対応請求書",
-        "issuer": "B11",
+        "issuer": "H11",         # ★ B11 は宛先ブロック。発行者は右の H ブロック（20:29 に訂正）
         "atesaki": "B13",
         "atesaki_fmt": "{}　御中",
         "detail": {"start": 32, "name": "D", "qty": "I", "unit": "H", "rows": 14, "also": ("B", "C", "E", "F", "G", "J"), "date": "B", "rate": "J"},
