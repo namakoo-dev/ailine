@@ -216,3 +216,132 @@ def op_effect_mismatch(task: str, ops, declaration: str,
 #: 「取り除く」の効果名（登録簿の writes に入る値）。
 WRITE_REMOVE = "remove"
 
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 依頼に**無い**値が実体に書かれる向き（2026-09-10）
+# ─────────────────────────────────────────────────────────────────────
+#
+# ★★ なぜ在るか（出荷前の実機テストが落ちて分かった・実測 11 回中 7 回）:
+#
+#     依頼   「5行目に丸山工業の行を作って」   ← 値の指定は**どこにも無い**
+#     実物   5行目 = ['丸山工業', 1, 1000, 1000]
+#     出力   **✓ 機械検証済み**
+#
+#   これまで塞いできたのは「依頼に在るものが宣言から落ちる」向きで、`residue` と
+#   `op_effect_mismatch` がその隣を受け持っていた。**逆向き**は誰も見ていなかった。
+#
+# ★★ 実害は 2 つある（2 つ目の方が重い）:
+#
+#   ① 請求書に単価 1000・金額 1000 が入る。1×1000=1000 で**算数が合っている**ので、
+#      行として自然に見え、人の目でも滑る。
+#   ② ★ 捏造した値は `formula_columns_to_inherit` の除外集合に入るので、
+#      **その列の式の継承が止まる**。実測（式を持つ表・6 回）:
+#
+#          捏造なし   金額 = '=B5*C5'   式が継承された
+#          捏造あり   金額 = 1000       ★ 式が入らない（件数を直しても追随しない）
+#
+#      つまり捏造は、ゴミを足すだけでなく**表の整合そのものを殺す**。
+#
+# ★ 落とす向きの誤り（人が本当に指定した値を落とす）の方が怖いので、判定は**緩い側**に
+#   倒す ── 漢数字・全角・桁区切りを開いてから照合し、当たらなかった値だけを落とす。
+#   落とした列は**必ず名指しで人に見せる**（黙って空にするのは別の嘘になる）。
+#
+# ★ 数値は**部分文字列で照合しない**。`件数=1` が依頼文の `1000` に当たって
+#   「接地した」と誤判定する（この判定を書いていて自分で踏んだ）。数として比べる。
+
+_KANJI_DIGIT = {"〇": 0, "零": 0, "一": 1, "二": 2, "三": 3, "四": 4,
+                 "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_KANJI_UNIT = {"十": 10, "百": 100, "千": 1000}
+_KANJI_BIG = {"万": 10 ** 4, "億": 10 ** 8}
+_KANJI_ALL = set(_KANJI_DIGIT) | set(_KANJI_UNIT) | set(_KANJI_BIG)
+
+
+def _kanji_run_to_int(run: str):
+    """漢数字の連なりを整数にする（「千」=1000・「二十」=20・「三万五千」=35000）。
+
+    ★ 読めなければ None を返す（推測しない）。
+    """
+    total, section, digit, seen = 0, 0, None, False
+    for ch in run:
+        if ch in _KANJI_DIGIT:
+            digit, seen = _KANJI_DIGIT[ch], True
+        elif ch in _KANJI_UNIT:
+            section += (digit if digit is not None else 1) * _KANJI_UNIT[ch]
+            digit, seen = None, True
+        elif ch in _KANJI_BIG:
+            section += digit or 0
+            total += (section or 1) * _KANJI_BIG[ch]
+            section, digit, seen = 0, None, True
+        else:
+            return None
+    if not seen:
+        return None
+    return total + section + (digit or 0)
+
+
+def _numbers_in(text: str) -> set:
+    """依頼文に現れる数を全部集める（半角化・桁区切り除去・漢数字を開いたうえで）。"""
+    import re
+    import unicodedata
+    t = unicodedata.normalize("NFKC", text or "")
+    t = t.replace(",", "").replace("，", "")
+    out = set()
+    for m in re.finditer(r"\d+(?:\.\d+)?", t):
+        try:
+            out.add(float(m.group(0)))
+        except ValueError:
+            pass
+    # ★ 漢数字（「単価は千円で」→ 1000）。読めた連なりだけ足す。
+    for m in re.finditer("[" + "".join(_KANJI_ALL) + "]+", t):
+        v = _kanji_run_to_int(m.group(0))
+        if v is not None:
+            out.add(float(v))
+    return out
+
+
+def _as_number(value):
+    """数として読めれば float、読めなければ None。"""
+    import unicodedata
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = unicodedata.normalize("NFKC", str(value)).strip().replace(",", "")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def values_not_grounded_in_the_request(task: str, values) -> list:
+    """依頼文に接地しない値の**列名**を返す（＝道具が発明した値）。
+
+    Args:
+        task: 人が書いた依頼文。
+        values: 列名 → 入れる値 の対応（ADD_ROW の `values`）。
+
+    Returns:
+        接地しなかった列名のリスト（依頼文の順序ではなく `values` の順）。
+
+    ★ 判定は緩い側に倒す ── 当たらなかったものだけを挙げる。
+    """
+    import unicodedata
+    if not values or not task:
+        return []
+    hay = unicodedata.normalize("NFKC", task).replace(",", "").replace("，", "")
+    nums = _numbers_in(task)
+    out = []
+    for col, v in values.items():
+        if v is None or str(v).strip() == "":
+            continue                     # 空は書かれないので見ない
+        n = _as_number(v)
+        if n is not None:
+            # ★ 数は数として比べる（部分文字列だと 1 が 1000 に当たる）
+            if not any(abs(n - x) < 1e-9 for x in nums):
+                out.append(str(col))
+            continue
+        s = unicodedata.normalize("NFKC", str(v)).strip()
+        if s and s not in hay:
+            out.append(str(col))
+    return out

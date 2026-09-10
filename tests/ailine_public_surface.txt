@@ -583,6 +583,7 @@ def detect_first_column_gap(ws, header_row: 'int' = 1, look_ahead: 'int' = 200) 
 def detect_ghost_data(before: 'dict', after: 'dict', *, new_col_letter: 'str | None' = None, new_row_at_end: 'bool' = False) -> 'str | None'
 def detect_header_row(sheet_struct: 'dict') -> 'tuple'
 def detect_helper_sweep(code: 'str', helper_names: 'set') -> 'str | None'
+def detect_new_row_missing_key(op, resolved, meta) -> 'str | None'
 def detect_uniform_fill(before: 'dict', after: 'dict', single_cell: 'bool' = False, new_col_letter=None, proved: 'bool' = False) -> 'str | None'
 def detect_write_target_type_change(before: 'dict', after: 'dict', *, op: 'str | None', resolved: 'dict | None', meta: 'dict | None', op_write_target: 'dict', is_number: 'Callable', after_path=None) -> 'str | None'
 def diff_snapshots(before: 'dict', after: 'dict') -> 'tuple'

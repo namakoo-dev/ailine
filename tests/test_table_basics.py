@@ -71,7 +71,8 @@ def test_refusals(op, args, expect):
 def test_a_real_request_passes():
     """誤爆防止: 実在する列・見出しより下なら通る。"""
     ok, resolved, _inf, err = ailine.verify_dsl_args(
-        "ADD_ROW", {"at": 3, "values": {"商品": "梨", "売上": 600}}, META, task="t")
+        "ADD_ROW", {"at": 3, "values": {"商品": "梨", "売上": 600}}, META,
+        task="3行目に梨を売上600で足して")
     assert ok, err
     assert resolved["_values_label"] == "商品=梨／売上=600"
 
@@ -245,7 +246,8 @@ def test_positional_values_are_named_by_the_machine(tmp_path):
     """★ LLM は values を**並び**で返すことがある。列名は機械が付ける（決めた対応は出す）。"""
     _p, meta = _anchor_meta(tmp_path)
     ok, resolved, _inf, err = ailine.verify_dsl_args(
-        "ADD_ROW", {"at": 3, "values": ["梨", 600, 300]}, meta, task="3行目に足して")
+        "ADD_ROW", {"at": 3, "values": ["梨", 600, 300]}, meta,
+            task="3行目に梨 600 300 で足して")
     assert ok, err
     assert resolved["values"] == {"商品": "梨", "売上": 600, "原価": 300}, resolved
     assert resolved["_values_label"] == "商品=梨／売上=600／原価=300"
@@ -274,7 +276,8 @@ def test_empty_values_are_not_written_as_the_word_none(tmp_path):
     """
     _p, meta = _anchor_meta(tmp_path)
     ok, resolved, _inf, err = ailine.verify_dsl_args(
-        "ADD_ROW", {"at": 3, "values": ["梨", None, None]}, meta, task="3行目に足して")
+        "ADD_ROW", {"at": 3, "values": ["梨", None, None]}, meta,
+            task="3行目に梨を足して")
     assert ok, err
     assert resolved["values"] == {"商品": "梨"}, resolved["values"]
     assert "None" not in resolved["_values_label"], resolved["_values_label"]
@@ -285,7 +288,7 @@ def test_named_empty_values_are_dropped_too(tmp_path):
     _p, meta = _anchor_meta(tmp_path)
     ok, resolved, _inf, err = ailine.verify_dsl_args(
         "ADD_ROW", {"at": 3, "values": {"商品": "梨", "売上": None, "原価": ""}},
-        meta, task="3行目に足して")
+        meta, task="3行目に梨を足して")
     assert ok, err
     assert resolved["values"] == {"商品": "梨"}, resolved["values"]
 
