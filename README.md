@@ -539,8 +539,8 @@ git clone https://github.com/namakoo-dev/basrun ../basrun
 CLI だけ使う場合は、タグを固定して入れることもできます（GUI とデモ検体は付きません）:
 
 ```bash
-uv tool install git+https://github.com/namakoo-dev/ailine@v0.2.4
-#   uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.2.4
+uv tool install git+https://github.com/namakoo-dev/ailine@v0.2.5
+#   uv が無ければ: pipx install git+https://github.com/namakoo-dev/ailine@v0.2.5
 ```
 
 ### 環境変数
