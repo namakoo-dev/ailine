@@ -34,8 +34,40 @@ def _tags():
     return [t for t in (r.stdout or "").splitlines() if t.strip()]
 
 
+def _version_in_pyproject():
+    """pyproject の version を "vX.Y.Z" で返す（★ 版はここが正）。"""
+    try:
+        text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r'^version\s*=\s*"([0-9][0-9.]*)"', text, re.M)
+    return "v" + m.group(1) if m else None
+
+
+def _readme_is_current(pinned, newest, next_ver):
+    """★ 判定はこの 1 本だけ。試験も本体もここを通る（分岐を書き写さない）。"""
+    if pinned == [newest]:
+        return True
+    return next_ver is not None and pinned == [next_ver]
+
+
 def test_readme_points_at_the_newest_tag():
-    """① 版を上げたら README も上がる ── 人の記憶でなく機械で縛る。"""
+    """① 版を上げたら README も上がる ── 人の記憶でなく機械で縛る。
+
+    ★★ 2026-09-11: この番人は**リリースのたびに必ず一度赤くなる**構造だった。
+
+        先に README を上げる → そのタグはまだ存在しない          → 赤
+        後で README を上げる → タグが先に出て README が古くなる  → 赤
+
+      どちらの順序でも通れない。実際 2 日続けて両方の踏み方をした
+      （9-10 は後者・9-11 は前者）。★「手順が無い」のではなく、
+      **番人が要求する順序が存在しなかった。**
+
+    ★ 抜け道は**最小**にする ── 「これから出す版（pyproject の version）と一致」
+      している時だけ通す。tagpr のリリースブランチからは誰も install しないので、
+      元の実害（README どおりに入れたら最初の 1 コマンドで詰まる）は起きない。
+    ★ 緩めが本物の事故を素通りさせないことは、下の負の被覆の試験が縛る。
+    """
     tags = _tags()
     if not tags:
         pytest.skip("タグがまだ無い（測れない回は skip と書く）")
@@ -43,9 +75,31 @@ def test_readme_points_at_the_newest_tag():
     text = README.read_text(encoding="utf-8")
     pinned = sorted(set(re.findall(r"ailine@(v[0-9][0-9.]*)", text)))
     assert pinned, "README に入れ方のタグ指定が無い"
-    assert pinned == [newest], (
-        f"README が案内するタグ {pinned} が最新タグ {newest} と違う ── "
+    next_ver = _version_in_pyproject()
+    assert _readme_is_current(pinned, newest, next_ver), (
+        f"README が案内するタグ {pinned} が、最新タグ {newest} とも "
+        f"これから出す版 {next_ver} とも違う ── "
         "この案内で入れた人は、README と違う版を使うことになる")
+
+
+def test_the_escape_hatch_does_not_let_a_stale_readme_through():
+    """★ 負の被覆 ── 緩めた穴が、本物の事故を通さないこと。
+
+    実害の形は「README が**古い**版を指す」（初回体験の盲検で @v0.1.0 で入れて
+    `ailine demo` が無く詰まった、あの事故）。抜け道は「これから出す版」だけを許す。
+    ★ 本体と同じ _readme_is_current を通す（判定を書き写すと恒真になる）。
+    """
+    newest, next_ver = "v0.2.4", "v0.2.5"
+    assert _readme_is_current([newest], newest, next_ver), "最新タグ → 通るはず"
+    assert _readme_is_current([next_ver], newest, next_ver), "これから出す版 → 通るはず"
+    assert not _readme_is_current(["v0.1.0"], newest, next_ver), \
+        "★ 古い版を指す README が通った ── 抜け道が広すぎる"
+    assert not _readme_is_current(["v99.0.0"], newest, next_ver), \
+        "★ 存在しない未来の版が通った"
+    assert not _readme_is_current([newest, next_ver], newest, next_ver), \
+        "★ 2 つ書いてあるのに通った（案内は 1 つのはず）"
+    assert not _readme_is_current([next_ver], newest, None), \
+        "★ pyproject が読めない時に通った（抜け道は版が確定している時だけ）"
 
 
 def test_the_first_command_exists_in_that_tag():
