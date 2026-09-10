@@ -23,3 +23,5 @@ dist/
 
 # ★ verify_dsl_args の入出力ゴールデンは repo に置く（B の組み替えで前後を比べるため）。
 #   取り直しは AILINE_GOLDEN_OUT=bench/verify_golden.json で全テストを 1 回。
+bench/folder_map/invoices40/
+bench/folder_map/_答え.json
