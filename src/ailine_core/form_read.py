@@ -1,0 +1,726 @@
+"""form_read — 帳票から項目を読む**規則**の層（2026-09-11）。
+
+★★ 立ち位置:
+      form_grid   … 座標と中身だけ。意味を持たない
+      form_read   … ここ。「どこを見れば請求元か」を規則として持つ
+      field_record… 集めた根拠から区分（確/単/割/無）を導く。**区分はそこだけ**
+
+★★ 規則は**実物から**書いた（俺の頭の中の請求書からではない）。
+  検体 v2 の「基礎」36 冊だけを見て書き、凍結してから残り 51 冊（敵対・税率・混入）で測る。
+  ★ 見た分に当てはめた規則を全体の成績として報告しないため（~/.agents/skills/tuning-audit）。
+
+★★ 実物が教えた、頭の中の請求書と違う点（すべて基礎 36 冊の実測）:
+
+  ① **御中の付いたセルは会社名とは限らない。**
+     `B3=ナギ商会株式会社` / `B4=経理部　御中` ── 御中が付くのは部署・担当者の側。
+     ★ 2026-09-10 に「宛先 15/16 取れた」と誤報したのは、この御中セルを読んでいたから。
+     ただし `B7=ナギ商会株式会社　御中` のように同じセルに同居する骨もある。**両方要る。**
+
+  ② **住所ブロックは名前の上にも下にも来る。**
+     misoca 系: 社名 → 〒 → 住所 → TEL   ／ inv21: 〒 → 住所 → 社名 → 登録番号
+     → 「〒 の直上が請求元」は骨に依存した規則で、一般形ではない。
+
+  ③ **宛先ブロックと請求元ブロックは同じ形をしている**（〒・住所・社名）。
+     検体側が罠として明記している。だから難所は「探す」ではなく「**どちらがどちらか**」。
+
+  ④ **ラベルのすぐ右が答えとは限らない。**
+     `E38=消費税 | G38=0.1 | H38=6900` ── いちばん近い右は**税率**。
+     `B12=ご請求金額 | (空) | (空) | E12=2200` ── 2 列空くこともある。
+     → 「右へ進んで最初に出会う**数**」で当たるが、消費税の行だけは率を跨ぐ必要がある。
+
+  ⑤ **ラベルの語中に空白が入る。** `O19=合 計 金 額` / `B11= ご請求金額　`（全角）
+     / `B22=ご請求金額⏎（消費税込）`（改行）→ 照合前に**空白を全部落とす**。
+
+  ⑥ **帯の値は同じ列に揃うとは限らない。**
+     construction_bill: `C28=小計 E28=8000` / `G28=800`（列が違う）。
+
+★★ ★ 検算のつもりが同じ計算になる罠（設計の要）:
+  「小計 ＋ 消費税 ＝ 合計」を 2 つ目の根拠に数えたい。だが **合計セルが `=H37+H38`
+  という式なら、一致するのは当たり前**で、検算ではない ── 2026-09-10 に踏んだ
+  「自分の写しと一致して裏が取れた」と同じ形。
+  → だから合計の**式**を読み、小計・消費税のセルを参照していたら
+    その算術は `independent=False` として **2 つ目に数えない**。
+
+★ ailine を import しない（ailine_core の作法）。
+"""
+from __future__ import annotations
+
+import re
+
+from ailine_core.field_record import (GRADES_WITH_VALUE, SPLIT, Evidence,
+                                      Record, grade_of)
+from ailine_core.field_record import value as grade_value
+from ailine_core.form_grid import Grid
+from ailine_core.primitives import is_number as _is_number
+
+# ── 語の正規化 ────────────────────────────────────────────
+_SPACE = re.compile(r"[\s　 ]+")
+
+
+def norm(s) -> str:
+    """照合用に均す。★ 空白（半角・全角・改行）を**全部落とす**（実物の癖⑤）。"""
+    return _SPACE.sub("", str(s or ""))
+
+
+#: 会社の形をした名前の語尾／語頭。★ 「これは組織の名前だ」の唯一の手がかり。
+_CORP = ("株式会社", "有限会社", "合同会社", "合資会社", "合名会社",
+         "(株)", "（株）", "(有)", "（有）", "医療法人", "社会福祉法人",
+         "一般社団法人", "公益財団法人", "協同組合", "工房", "事務所")
+
+#: 宛先を名指す印。★ これが付いたセル**そのもの**が名前とは限らない（癖①）。
+_HONORIFIC = ("御中", "様")
+
+#: 請求額の上部ラベル。
+_LABEL_BILLED = ("ご請求金額", "請求金額", "御請求金額", "ご請求額", "今回ご請求額",
+                 "今回請求額", "合計金額", "ご請求金額（消費税込）")
+#: 小計のラベル。★ 「対象額（税抜）」を入れてはいけない ── あれは**列の見出し**で
+#:   小計ではない。入れると税区分の 10% 欄を小計と誤認し、8% だけの冊で
+#:   「明細 110,000 と小計 0 が合わない」と**偽の食い違い**を出す（実測 R01/R02）。
+_LABEL_SUBTOTAL = ("小計", "小計金額", "税抜金額", "小計（税抜）")
+_LABEL_TAX = ("消費税", "消費税額", "内消費税", "税額")
+_LABEL_TOTAL = ("合計金額", "合計", "総合計", "税込合計", "ご請求金額")
+
+#: 登録番号（インボイス制度）。★ 請求元の側にしか付かない ── 買い手には付かない。
+_REGNO = re.compile(r"^T\d{13}$")
+
+
+def _looks_like_org(text: str) -> bool:
+    t = norm(text)
+    return any(k in t for k in _CORP)
+
+
+#: 名前の行ではないと分かる語。★ その行は連絡先・役割であって、社名そのものではない。
+#: ★ 敬称（御中・様）はここに入れない ── 宛先の側では**敬称の付いた行こそが名前**。
+#:   請求元の側で敬称つきを避けたいなら、呼ぶ前に弾く（read_issuer がそうしている）。
+#:   ここに入れると、1 関数に畳んだときに片方の都合がもう片方を壊す（実測 13 冊）。
+_NOT_A_NAME_LINE = ("登録番号", "担当", "TEL", "ＴＥＬ", "FAX", "ＦＡＸ", "E-mail",
+                    "E-Mail", "〒", "電話", "取次", "代理店")
+
+#: 雛形のプレースホルダに使われる字。★ これしか無い名前は名前ではない。
+_PLACEHOLDER = "〇○●◯番地×✕＊*_－-― 　"
+
+
+def name_lines(raw: str) -> list:
+    """1 セルの中身を行に割り、**名前になり得る行だけ**返す。
+
+    ★ 実物は 1 セルに改行で同居する（実測）:
+        `高梨産業株式会社⏎(登録番号:T7010001234567)`
+      初版はセルの中身をそのまま名前として返し、登録番号ごと持ち出した。
+    """
+    out = []
+    for line in str(raw or "").splitlines():
+        t = _strip_honorific(line).strip()   # ★ 敬称は行を落とす前に外す
+        if not t:
+            continue
+        if _REGNO.match(norm(t)):
+            continue
+        if any(k in t for k in _NOT_A_NAME_LINE):
+            continue
+        out.append(t)
+    return out
+
+
+def is_placeholder(name: str) -> bool:
+    """雛形のまま（`株式会社 〇〇〇`）か。★ 名前の部分が飾り字しか無い。"""
+    body = norm(name)
+    for k in _CORP:
+        body = body.replace(norm(k), "")
+    body = body.strip()
+    if not body:
+        return True
+    return all(ch in _PLACEHOLDER for ch in body)
+
+
+def clean_org_name(raw) -> tuple:
+    """1 セルの中身から**組織の名前**を取り出す。★ 名前を作る道はここ 1 本だけ。
+
+    ★★ なぜ 1 本に畳むか（2026-09-11、一度も測っていない実物の雛形 15 冊で踏んだ）:
+      プレースホルダ（`○○株式会社`）の番人を **請求元の側にだけ**書いていた。
+      宛先の側は同じ判定を持たず、空の雛形に対して「宛先＝○○株式会社」を
+      **値として出していた**。
+      ★ この repo は「二重化した経路は片配線が既定で起きる」を何度も踏んでいる。
+        処方は**両方直すことではなく、1 関数に畳んで呼び出し側に選ばせないこと**。
+        番人も 1 本の試験で両方の項目を縛る（片方を壊せば必ず赤になる）。
+
+    戻り値: (名前, 使えない理由) ── 理由が空でなければ、その名前は使えない
+    """
+    # ★ 敬称を外すのは `name_lines` の中で 1 回だけ。ここで**もう一度**外すと
+    #   守りが二重になり、片方を壊しても緑のままになる（番人が何も見なくなる）。
+    #   実測: 敬称の扱いを 3 か所に重ねていて、どれを壊しても試験が通った。
+    lines = [ln for ln in name_lines(raw) if _looks_like_org(ln)]
+    if not lines:
+        return "", "組織の名前の行が見つかりません（連絡先や役割の行だけです）"
+    name = lines[0]
+    if not name:
+        return "", "敬称を除くと何も残りません"
+    if is_placeholder(name):
+        return "", f"雛形のまま（{name}）で、実際の社名ではありません"
+    return name, ""
+
+
+def _strip_honorific(text: str) -> str:
+    t = str(text or "")
+    for h in _HONORIFIC:
+        t = t.replace(h, "")
+    return t.strip().strip("　")
+
+
+#: 金額の枠に入っていたら「答えの枠は埋まっている」とみなす文字の形。
+#:   ★ `¥1,320,000-` / `１，３２０，０００`（全角）/ `#REF!` など。
+_MONEYISH = re.compile(r"^[¥￥\$]?[\d０-９][\d０-９,，\.．\-ー－\s　]*[-ー－]?$")
+_ERRORISH = ("#REF!", "#VALUE!", "#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!")
+
+
+def _looks_like_money_text(v) -> bool:
+    """文字で入った金額か、式の壊れか。★ 跨いではいけない中身。"""
+    if not isinstance(v, str):
+        return False
+    t = norm(v)
+    if not t:
+        return False
+    return t in _ERRORISH or bool(_MONEYISH.match(t))
+
+
+def _first_number_right(grid: Grid, cell, span: int = 10, skip_rate: bool = True):
+    """ラベルの右へ進んで最初の**数**（癖④）。
+
+    ★ `skip_rate` は消費税の行だけの措置 ── `消費税 | 0.1 | 6900` の 0.1 は率であって
+      額ではない。0 < v < 1 の数は率とみなして跨ぐ。
+
+    ★★ 2026-09-11、未見 51 冊で踏んだ事故への処方:
+      答えの枠に **文字で入った金額**（`¥1,320,000-` / 全角数字）や **`#REF!`** が
+      在るとき、初版はそれを黙って跨いで**別のセルの数**を読み、しかも「確」と言った。
+      → 枠が埋まっているなら、そこで**止まる**。読めないなら読めないと言う
+        （黙って別のものを読むのが、この repo でいちばん高くつく失敗）。
+    戻り値: (セル, 事情) ── 事情が空でなければ、値としては使えない。
+    """
+    for c in grid.right_of(cell, span=span):
+        if _is_number(c.value):
+            if skip_rate and 0 < float(c.value) < 1:
+                continue                       # 税率は額ではない
+            return c, ""
+        if _looks_like_money_text(c.value):
+            t = norm(c.value)
+            if t in _ERRORISH:
+                return c, f"{c.at} が {t} になっています（式が壊れています）"
+            return c, f"{c.at} の金額が数値ではなく文字で入っています（{str(c.value)[:20]}）"
+    return None, ""
+
+
+def _labelled_number(grid: Grid, labels, *, rows=None, skip_rate=True) -> list:
+    """ラベルに一致する文字セルを探し、その右の最初の数を返す。
+
+    戻り値: [(ラベルのセル, 値のセル, 事情)] ── 事情が空でなければ値として使えない
+    """
+    out = []
+    wanted = {norm(x) for x in labels}
+    seen = set()
+    for t in grid.text_cells():
+        if rows and not (rows[0] <= t.row <= rows[1]):
+            continue
+        if norm(t.value) not in wanted or t.anchor in seen:
+            continue
+        seen.add(t.anchor)                     # ★ 結合の写しで同じラベルを 2 度数えない
+        v, note = _first_number_right(grid, t, skip_rate=skip_rate)
+        if v is not None:
+            out.append((t, v, note))
+    return out
+
+
+#: ★ 「請求額」がどの数字を指すか決められなくなる欄。
+#:   2026-09-11 の実測から ── 繰越請求（前回請求額・入金額・繰越金額・今回請求額）や
+#:   源泉徴収の控除（合計金額とお振込金額が違う）が在る帳票では、
+#:   合計を「請求額」として出すと**人が振り込む額と違う数字**を渡すことになる。
+#:   ★ こういう冊は「取れなかった」のではなく「**決められない**」。空欄＋理由が正解。
+#:   ★ 実物は `B42=お振込金額　121,790 円` のように **ラベルと金額が同じセルに同居**する
+#:     ので、ラベルの右を見る規則では一生見つからない。文字として探す。
+_AMBIGUITY_MARKS = ("繰越", "前回請求額", "源泉", "差引請求", "差引金額",
+                    "お振込金額", "御振込金額", "相殺", "前受金")
+
+#: 帯の始まりを示す語。★ この語がどこかに在る行から下は、もう明細ではない。
+_BAND_LABELS = {norm(x) for x in (
+    "小計", "小計金額", "税抜金額", "消費税", "消費税額", "内消費税", "税額",
+    "合計", "合計金額", "総合計", "税込合計", "ご請求金額", "請求金額",
+    "10%対象", "8%対象", "10％対象", "8％対象", "対象額（税抜）", "税率区分",
+    "値引", "値引き", "備考")}
+
+#: 明細の見出し。★ この行が見つかれば、その下が明細ブロック。
+_DETAIL_HEAD_ITEM = ("品番・品名", "品名", "品目", "内容", "摘要", "件名", "作業内容")
+_DETAIL_HEAD_AMOUNT = ("金額", "金額（税抜）", "小計")
+
+
+#: 明細の計算に関わる列の見出し。★ ここが空だと、合計は正しく見えても中身が抜ける。
+_COL_QTY = ("数量", "数 量", "数")
+_COL_UNIT = ("単価", "単 価", "単価（税抜）")
+
+
+def detail_row_anomalies(grid: Grid, item_head, amt_head, stop_row: int) -> list:
+    """明細の**行ごとの算術**を見る。★ 帯と合計が一致していても中身は壊れている。
+
+    ★★ 2026-09-11、未見 51 冊の実測から:
+      数量の入力漏れで `単価 5,000 × 数量(空) = 金額 0` になっている行があった。
+      小計は SUM なので **0 を足しても一致する** ── 上部・帯・明細合計の
+      3 つが揃って一致し、「確」が立つ。**壊れた冊が満場一致で通る。**
+      → 行の中の算術（数量 × 単価 ＝ 金額）を見に行く。
+
+    戻り値: [(行, 事情の 1 行)]
+    """
+    # 見出しの行から、数量・単価の列を拾う
+    qty_col = unit_col = None
+    for c in grid.all_cells():
+        if c.row != item_head.row or not isinstance(c.value, str):
+            continue
+        t = norm(c.value)
+        if qty_col is None and t in {norm(x) for x in _COL_QTY}:
+            qty_col = c.col
+        if unit_col is None and t in {norm(x) for x in _COL_UNIT}:
+            unit_col = c.col
+    if qty_col is None or unit_col is None:
+        return []
+
+    out = []
+    for r in _detail_rows(grid, item_head, amt_head, stop_row):
+        q = grid.cell(r, qty_col)
+        u = grid.cell(r, unit_col)
+        a = grid.cell(r, amt_head.col)
+        qv = q.value if q is not None and _is_number(q.value) else None
+        uv = u.value if u is not None and _is_number(u.value) else None
+        av = a.value if a is not None and _is_number(a.value) else None
+        label = _detail_row_name(grid, item_head, amt_head, r)
+        if uv is not None and qv is None:
+            out.append((r, f"{r} 行目「{label}」は単価 {uv:,.0f} が入っているのに"
+                           f"数量が空で、金額が {0 if av is None else av:,.0f} です"))
+            continue
+        if qv is not None and uv is not None and av is not None:
+            if abs(qv * uv - av) >= 0.005:
+                out.append((r, f"{r} 行目「{label}」は 数量 {qv:g} × 単価 {uv:,.0f} と"
+                               f"金額 {av:,.0f} が合いません"))
+    return out
+
+
+def _detail_rows(grid: Grid, item_head, amt_head, stop_row: int) -> list:
+    """明細の行を数える。★ 行の目印は**金額の列に数が在ること**。
+
+    ★ 初版は「品名の列に文字が在る行」で数えていたが、実物は見出しと値の列が
+      ずれる（inv21 は見出し `C32=品目` に対して値が `D33`）。
+      その結果、行が 1 つも見つからず番人が黙って何も言わなかった。
+    """
+    return [r for r in range(amt_head.row + 1, stop_row)
+            if grid.cell(r, amt_head.col) is not None
+            and _is_number(grid.cell(r, amt_head.col).value)]
+
+
+def _detail_row_name(grid: Grid, item_head, amt_head, row: int) -> str:
+    """その行の品名らしい文字（見出しの列から金額の列の手前まで探す）。"""
+    for c in range(item_head.col, amt_head.col):
+        got = grid.cell(row, c)
+        if got is not None and isinstance(got.value, str) and got.value.strip():
+            return got.value.strip()[:14]
+    return f"{row} 行目"
+
+
+def detail_blank_columns(grid: Grid, item_head, amt_head, stop_row: int) -> list:
+    """明細の中で「**他の行は埋めているのに、この行だけ空**」の欄を挙げる。
+
+    ★★ 2026-09-11、未見 51 冊の実測から:
+      小計が `SUMIF(J33:J48, 10%, K33:K48)` で、J34（税率）だけが空だったため
+      その行の 15,000 が丸ごと落ちていた。合計は「正しく計算されて」いる ──
+      **拾われなかっただけ**。
+      ★ 式を辿って SUMIF の条件列を割り出すこともできるが、それは式の書き方に
+        依存する。「他の行が埋めている欄がこの行だけ空」なら、式が何であれ怪しい。
+        こちらの方が言い方として正直で、しかも壊れ方に依らない。
+
+    戻り値: [(行, 見出しの語)]
+    """
+    headers = {}
+    for c in grid.all_cells():
+        if c.row == item_head.row and isinstance(c.value, str) and c.value.strip():
+            headers[c.col] = norm(c.value)
+    rows = _detail_rows(grid, item_head, amt_head, stop_row)
+    if len(rows) < 2:
+        return []
+
+    out = []
+    for col, name in headers.items():
+        if col == item_head.col:
+            continue
+        filled = [r for r in rows if grid.cell(r, col) is not None
+                  and str(grid.cell(r, col).value).strip() not in ("", "None")]
+        # ★ 半分以上の行が埋めている欄だけを見る（備考のような任意欄で騒がない）
+        if len(filled) * 2 <= len(rows) or len(filled) == len(rows):
+            continue
+        for r in rows:
+            if r not in filled:
+                out.append((r, name))
+    return out
+
+
+def detail_amount_sum(grid: Grid, band_row: int | None = None):
+    """明細ブロックの「金額」列を足す。★ 帯とは**別の口**。
+
+    ★★ なぜ要るか（2026-09-11、未見 51 冊の実測）:
+      初版は上部の請求額欄と帯の合計しか見ず、両者が一致すると「確」と言った。
+      だが実物の壊れ方は **明細と帯のあいだ**で起きる ──
+        ・集計範囲の外に明細が追記されている（式は正しいのに合計が足りない）
+        ・税率列の入力漏れで SUMIF がその行を落とす
+        ・数量の入力漏れで金額が 0 になる行
+      どれも上部と帯だけ見ていると**一致していて気づけない**。
+
+    戻り値: (合計, 品名の見出し, 足したセル, 金額の見出し, 明細の終わりの行)
+    """
+    head_item = {norm(x) for x in _DETAIL_HEAD_ITEM}
+    head_amt = {norm(x) for x in _DETAIL_HEAD_AMOUNT}
+    best = None
+    for t in grid.text_cells():
+        if norm(t.value) not in head_item:
+            continue
+        # 同じ行に「金額」の見出しが在るか
+        for c in grid.right_of(t, span=grid.cols):
+            if norm(c.value) in head_amt:
+                best = (t, c)
+                break
+        if best:
+            break
+    if not best:
+        return None, None, (), None, 0
+
+    item_head, amt_head = best
+    stop = band_row if band_row else grid.rows
+    # ★★ 明細は「小計ラベルの行まで」ではなく「**帯が始まる行まで**」（2026-09-11 の実測）。
+    #   construction_bill は小計 C28 の手前に税区分の行（10%対象 C26 / 8%対象 C27）が在り、
+    #   そこまで明細として足すと **区分ごとの消費税額まで明細に混ざる**。
+    #   実測 B24: 明細 117,000 に G26=11,700 が乗って 128,700 ＝ 税込合計と一致してしまい、
+    #   「明細と小計が合わない」という**偽の食い違い**が出た（数が合うので気づきにくい）。
+    for r in range(amt_head.row + 1, stop):
+        if any(norm(c.value) in _BAND_LABELS for c in grid.all_cells()
+               if c.row == r and isinstance(c.value, str)):
+            stop = r
+            break
+
+    cells, blanks = [], 0
+    for r in range(amt_head.row + 1, stop):
+        got = grid.cell(r, amt_head.col)
+        name = grid.cell(r, item_head.col)
+        has_name = name is not None and isinstance(name.value, str) and name.value.strip()
+        if got is not None and _is_number(got.value):
+            cells.append(got)
+            blanks = 0
+        elif has_name:
+            blanks = 0                       # ★ 品名は在るが金額が空 ── 明細は続いている
+        else:
+            blanks += 1
+            if blanks >= 4:                  # ★ 空行 1 つで切らない（実物は 1 行空く）
+                break
+    if not cells:
+        return None, item_head, (), amt_head, stop
+    # ★ 同じアンカーを 2 度足さない（結合の写しで二重計上する）
+    seen, total = set(), 0.0
+    for c in cells:
+        if c.anchor in seen:
+            continue
+        seen.add(c.anchor)
+        total += float(c.value)
+    return total, item_head, tuple(cells), amt_head, stop
+
+
+# ── 依頼された 1 項目ずつの規則 ─────────────────────────────
+def read_addressee(grid: Grid) -> Record:
+    """宛先（請求を受ける側）。
+
+    ★ 癖①への処方 ── 御中/様 の付いたセルを見つけたら:
+        そのセル自身が組織の形をしていれば、敬称を落としたものが名前。
+        そうでなければ（部署名・担当者名だった）、**同じ列の直上で最初に出会う文字**。
+    """
+    evid, rivals = [], []
+    for t in grid.text_cells():
+        raw = str(t.value)
+        if not any(h in raw for h in _HONORIFIC):
+            continue
+        # ★ 名前を作るのは `clean_org_name` 一本（プレースホルダの番人もその中）
+        name, why = clean_org_name(raw)
+        if name:
+            evid.append(Evidence(rule="敬称と同じセル", value=name, at=t.at,
+                                 how=f"{t.at} の「{raw[:18]}」から敬称を除いた"))
+            continue
+        # 敬称のセルは部署か担当者 ── 名前はその上
+        above = _nearest_text_above(grid, t)
+        if above is None:
+            rivals.append((t.at, raw[:24], f"敬称は在るが、{why}／上にも文字がない"))
+            continue
+        name2, why2 = clean_org_name(above.value)
+        if name2:
+            evid.append(Evidence(rule="敬称の直上", value=name2, at=above.at,
+                                 how=f"{t.at} の「{norm(raw)[:12]}」の上、{above.at}"))
+        else:
+            rivals.append((above.at, str(above.value)[:24], why2))
+
+    if not evid:
+        why = "「御中」「様」の付いた宛名が見つかりませんでした"
+        if rivals:
+            why = ("宛先を決められませんでした: "
+                   + "／".join(f"{at} は{note}" for at, _v, note in rivals[:3]))
+        return Record("宛先", (), rivals=tuple(rivals), blank_reason=why)
+    return _record("宛先", evid, rivals)
+
+
+def _nearest_text_above(grid: Grid, cell, span: int = 6):
+    """同じ列を上へ辿って最初に出会う文字セル（空行は跨ぐ）。"""
+    for r in range(cell.row - 1, max(0, cell.row - span - 1), -1):
+        got = grid.cell(r, cell.col)
+        if got is None or got.anchor == cell.anchor:
+            continue
+        if isinstance(got.value, str) and got.value.strip():
+            return got
+    return None
+
+
+def read_issuer(grid: Grid, addressee: Record) -> Record:
+    """請求元（請求を出す側）。
+
+    ★ 癖②③への処方 ── 「〒の上」のような**骨に依存する位置**では決めない。
+      組織の形をした名前をすべて拾い、次で絞る:
+        ① 宛先として採った名前は除く（同じ形の 2 ブロックの片方を消す）
+        ② 登録番号（T+13 桁）が同じ列の近くに在るものを優先する
+           ★ 登録番号は請求を**出す**側にしか付かない
+        ③ それでも複数残るなら、右側／上側に在るものを優先する（実物の版面）
+    """
+    taken = norm(grade_value(addressee) or "")
+
+    cands, dropped, seen = [], [], set()
+    for t in grid.text_cells():
+        if t.anchor in seen:
+            continue
+        raw = str(t.value).strip()
+        if not _looks_like_org(raw):
+            continue
+        if any(h in raw for h in _HONORIFIC):
+            continue                                   # 敬称つきは受け手の側
+        seen.add(t.anchor)
+        # ★ 名前を作るのは `clean_org_name` 一本 ── 宛先の側と同じ関数を通す。
+        #   （片方にだけ番人を書くと、実物の空雛形で片側だけが値を出す）
+        name, why = clean_org_name(raw)
+        if not name:
+            dropped.append((t.at, raw[:26], why))
+            continue
+        if norm(name) == taken and taken:
+            continue                                   # ① 宛先はここでは採らない
+        cands.append((t, name))
+
+    if not cands:
+        why = ("発行元（請求元）の名前が見つかりませんでした"
+               if not dropped else
+               "発行元（請求元）の名前が見つかりませんでした: "
+               + "／".join(f"{at} は{note}" for at, _v, note in dropped))
+        return Record("請求元", (), rivals=tuple(dropped), blank_reason=why)
+
+    with_reg = [(t, n) for t, n in cands if _has_regno_near(grid, t)]
+    evid, rivals = [], []
+    chosen = with_reg or cands
+    if len(chosen) > 1:
+        # ③ 右のブロックほど発行者らしい（実物の版面）── 同点なら上
+        chosen = sorted(chosen, key=lambda x: (-x[0].col, x[0].row))
+    top, name = chosen[0]
+    how = ("登録番号が近くに在る" if with_reg else "組織名で、宛先ではない")
+    evid.append(Evidence(rule="請求元の名前", value=name, at=top.at,
+                         how=f"{top.at} の「{name[:18]}」（{how}）"))
+    for t, n in chosen[1:] + [c for c in cands if c not in chosen]:
+        rivals.append((t.at, n, "採らなかった候補"))
+    return _record("請求元", evid, rivals)
+
+
+def _has_regno_near(grid: Grid, cell, span: int = 3) -> bool:
+    """登録番号（T+13 桁）が同じ列の上下 span 行に在るか。"""
+    for r in range(max(1, cell.row - span), min(grid.rows, cell.row + span) + 1):
+        for c in (cell.col, cell.col + 1):
+            got = grid.cell(r, c)
+            if got is None:
+                continue
+            if _REGNO.match(norm(got.value)):
+                return True
+            if "登録番号" in norm(got.value):
+                return True
+    return False
+
+
+def read_billed_total(grid: Grid, ws_formula=None) -> Record:
+    """請求額（税込の総額）。★ 独立した口を集めて `grade()` に渡す。
+
+    口:
+      ① 上部の「ご請求金額」欄
+      ② 帯の「合計金額」
+      ③ 小計 ＋ 消費税  ← ★ 合計が式でそれを足しているなら**独立ではない**
+    """
+    # ★★ 帯の在り処を「シートの下半分」で決めない（2026-09-11、未見 51 冊で踏んだ）。
+    #   construction_bill は帯が 26〜28 行目に在り、60 行の格子の下半分（30 行目以降）
+    #   から漏れて、**帯そのものを見落としていた**。
+    #   → 位置ではなく**構造**で切る: 明細の見出しより下が帯、より上が表書き。
+    _d_sum0, d_head0, _c0, _a0, _s0 = detail_amount_sum(grid, None)
+    split_row = d_head0.row if d_head0 is not None else max(1, grid.rows // 2)
+    half = split_row
+
+    evid, rivals, excluded = [], [], []
+    #: ★ 読めなかった枠の事情。空欄にするときの理由になる。
+    unreadable: list = []
+
+    for lab, val, note in _labelled_number(grid, _LABEL_BILLED, rows=(1, half)):
+        if note:
+            unreadable.append(note)
+            break
+        evid.append(Evidence(rule="上部の請求額欄", value=val.value, at=val.at,
+                             how=f"{lab.at}「{norm(lab.value)[:12]}」の右 {val.at}"))
+        break
+
+    totals = _labelled_number(grid, _LABEL_TOTAL, rows=(half, grid.rows))
+    total_cell = None
+    for lab, val, note in totals:
+        if note:
+            unreadable.append(note)
+            break
+        total_cell = val
+        evid.append(Evidence(rule="帯の合計", value=val.value, at=val.at,
+                             how=f"{lab.at}「{norm(lab.value)[:12]}」の右 {val.at}"))
+        break
+
+    sub = _labelled_number(grid, _LABEL_SUBTOTAL, rows=(half, grid.rows))
+    tax = _labelled_number(grid, _LABEL_TAX, rows=(half, grid.rows))
+    if sub and tax and not sub[0][2] and not tax[0][2]:
+        s_at, t_at = sub[0][1], tax[0][1]
+        # ★★ 帯には 2 つの形が在る（2026-09-11、税率群で踏んだ）:
+        #   積み上げ型: `小計`→H37 / `消費税`→H38 ── 値が**同じ列**に縦に並ぶ
+        #   表型      : `対象額（税抜）| 消費税` が列見出しで、
+        #               `10%対象 / 8%対象 / 小計` が行 ── 小計の**行**の消費税列を見る
+        #   初版は表型で 10% 区分の税額を小計に足し、偽の食い違いを出した。
+        #   ★ 見分け: 小計の値と消費税の値が違う列なら表型。
+        if t_at.col != s_at.col:
+            same_row = grid.cell(s_at.row, t_at.col)
+            if same_row is not None and _is_number(same_row.value):
+                t_at = same_row
+        got = float(s_at.value) + float(t_at.value)
+        if total_cell is not None and _depends_on(ws_formula, total_cell, (s_at, t_at)):
+            # ★ 合計が小計＋消費税の式そのもの ── 一致して当たり前。数えない。
+            excluded.append((f"{s_at.at}+{t_at.at}", got,
+                             f"{total_cell.at} の式が {s_at.at} と {t_at.at} を"
+                             "足しているので、検算になりません"))
+        else:
+            evid.append(Evidence(rule="小計＋消費税", value=got,
+                                 at=f"{s_at.at}+{t_at.at}",
+                                 how=f"小計 {s_at.at} と消費税 {t_at.at} の和"))
+
+    # ── ★ 掃き出し①: そもそも「請求額」が一意に決まる帳票か ──────
+    # ★ 見つけた欄を**全部**並べる。最初の 1 つだけ引くと、
+    #   「前回請求額」は名指せても「繰越金額」を名指せず、人は何が起きたか分からない。
+    found, seen_mark = [], set()
+    for t in grid.text_cells():
+        raw = str(t.value)
+        for m in _AMBIGUITY_MARKS:
+            if m in raw and m not in seen_mark:
+                seen_mark.add(m)
+                found.append(f"「{norm(raw)[:20]}」（{t.at}）")
+    if found:
+        why = (f"この請求書には {'・'.join(found)} の欄があり、"
+               "合計と実際にお支払いいただく額が違います。"
+               "どちらを請求額とすべきか決められないので、空欄にしました")
+        return Record("請求額", tuple(evid), tuple(rivals), tuple(excluded),
+                      why, False, "", True, why)
+
+    # ── ★ 掃き出し②: 明細ブロックと帯が合っているか ──────────────
+    #   一致は「他の口が黙っている」ことを意味しない。ここで**開きに行く**。
+    swept, swept_how = False, ""
+    band_row = sub[0][0].row if sub else (total_cell.row if total_cell else None)
+    d_sum, d_head, _d_cells, d_amt, d_stop = detail_amount_sum(grid, band_row)
+    if d_sum is not None and sub and not sub[0][2]:
+        s_cell = sub[0][1]
+        if abs(d_sum - float(s_cell.value)) >= 0.005:
+            # ★ 式が正しくても範囲が足りないことがある（集計範囲外の追記・SUMIF の漏れ）。
+            #   式かどうかに関係なく、食い違いは食い違い。
+            gaps = detail_blank_columns(grid, d_head, d_amt, d_stop)
+            # ★ 「合わない」だけでは人は直せない。**どの行の何が空か**まで言う。
+            tail = ("" if not gaps else
+                    "（" + "・".join(f"{r} 行目の「{n}」が空です" for r, n in gaps[:3])
+                    + "。ここが合計から漏れている可能性があります）")
+            why = (f"明細の金額の合計（{d_sum:,.0f}）と小計 {s_cell.at}"
+                   f"（{float(s_cell.value):,.0f}）が合いません{tail}。"
+                   "どちらが正しいか決められないので、請求額は空欄にしました")
+            # ★ 食い違いは `conflict` として**導出に渡す**。理由の文字列にだけ書くと、
+            #   区分は evidences しか見ないので「単・値あり・理由は食い違い」が出る。
+            return Record("請求額", tuple(evid), tuple(rivals), tuple(excluded),
+                          why, False, "", True, why)
+        # ★ 合計が合っていても中身は壊れていることがある（0 を足しても SUM は合う）。
+        bad = detail_row_anomalies(grid, d_head, d_amt, d_stop)
+        if bad:
+            why = ("明細に、金額が正しく計算されていない行があります: "
+                   + "／".join(t for _r, t in bad)
+                   + "。合計を信じてよいか決められないので、請求額は空欄にしました")
+            return Record("請求額", tuple(evid), tuple(rivals), tuple(excluded),
+                          why, False, "", True, why)
+        swept = True
+        swept_how = f"明細 {d_head.at} 以下の合計とも一致（{d_sum:,.0f}）"
+    elif d_sum is None:
+        swept_how = "明細ブロックが見つからず、突き合わせできていません"
+
+    # ★ 枠は埋まっているのに読めなかった ── これは「見つからない」ではない。
+    #   黙って別のセルの数を返すより、読めないと言う方が安い。
+    if unreadable:
+        return Record("請求額", (), rivals=tuple(rivals), excluded=tuple(excluded),
+                      blank_reason="請求額を読み取れませんでした: " + "／".join(unreadable))
+    if not evid:
+        return Record("請求額", (), rivals=tuple(rivals), excluded=tuple(excluded),
+                      blank_reason="請求額の欄も、明細の帯の合計も見つかりませんでした")
+    return _record("請求額", evid, rivals, excluded, swept=swept, swept_how=swept_how)
+
+
+_REF = re.compile(r"\$?([A-Z]{1,3})\$?(\d{1,5})")
+
+
+def _depends_on(ws_formula, cell, sources) -> bool:
+    """`cell` の**式**が `sources` のセルを参照しているか（★ 恒真の検出）。"""
+    if ws_formula is None:
+        return False
+    try:
+        f = ws_formula.cell(row=cell.anchor[0], column=cell.anchor[1]).value
+    except Exception:                                  # noqa: BLE001
+        return False
+    if not isinstance(f, str) or not f.startswith("="):
+        return False
+    refs = {f"{a}{b}" for a, b in _REF.findall(f.upper())}
+    return any(s.at.upper() in refs for s in sources)
+
+
+def _record(field: str, evid: list, rivals: list, excluded: list = (),
+            *, swept: bool = False, swept_how: str = "") -> Record:
+    """`Record` を組む。★ 空欄になるなら**理由を必ず添える**（型が空を許さない）。
+
+    ★ 区分は `grade_of` に聞く ── ここで `Record` を偽造して先読みすると、
+      「区分は 1 箇所からしか作れない」という契約が骨抜きになる。
+    """
+    g = grade_of(evid, swept)
+    if g in GRADES_WITH_VALUE:
+        return Record(field, tuple(evid), tuple(rivals), tuple(excluded), "",
+                      swept, swept_how)
+
+    if g == SPLIT:
+        # ★ 番地だけ並べても人には読めない ── **何の数字か**を書く
+        #   （「E12=109999／L36=109999」では、どこを直せばいいか分からない）。
+        seen, parts = set(), []
+        for e in evid:
+            if e.at in seen:
+                continue
+            seen.add(e.at)
+            parts.append(f"{e.rule} {e.at}＝{e.value}")
+        why = (f"根拠が食い違いました（{'／'.join(parts)}）。どれが正しいか"
+               f"決められないので、{field}は空欄にしました")
+    else:
+        why = f"{field}の手がかりが見つかりませんでした"
+    return Record(field, tuple(evid), tuple(rivals), tuple(excluded), why)
+
+
+# ── 1 冊を読む ────────────────────────────────────────────
+def read_form(ws, ws_formula=None, rows: int = 60, cols: int = 24) -> dict:
+    """1 シートを読んで、項目 → `Record` を返す。★ 区分は `field_record` が導く。"""
+    grid = Grid.read(ws, rows=rows, cols=cols, ws_formula=ws_formula)
+    addressee = read_addressee(grid)
+    return {
+        "宛先": addressee,
+        "請求元": read_issuer(grid, addressee),
+        "請求額": read_billed_total(grid, ws_formula),
+    }

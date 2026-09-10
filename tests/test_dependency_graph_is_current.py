@@ -76,3 +76,30 @@ def test_the_document_states_what_it_cannot_show():
     assert "POSTCONDITIONS" in t, "辞書経由が見えないことの注記が消えた"
     assert "辺が無い" in t and "影響が無い" in t, (
         "「辺が無い＝影響が無い ではない」の注記が消えた")
+
+
+def test_no_relative_imports_inside_the_core():
+    """④ ★ `ailine_core` の中で相対 import を使わない。
+
+    ★★ なぜ番人が要るか（2026-09-11 に実測で踏んだ）:
+      新しいモジュールを `from .field_record import ...` と相対で書いたところ、
+      **図のモジュール数だけが増えて辺が増えなかった**（64→67 で辺は 84 のまま）。
+      `scripts/deps_graph.py` は `ImportFrom.module` が "ailine" で始まる辺だけを
+      拾うので、相対 import は `module="field_record"` になり**辺として消える**。
+      → 図は「一致している」と言いながら、**依存を 2 本隠していた**。
+
+    ★ これは「番人が在っても、その事故の形では鳴らない」の一例。
+      図の一致（①）は通ってしまうので、書き方そのものをここで縛る。
+      ついでに repo 全体の作法（絶対 import）とも揃う。
+    """
+    import ast
+    bad = []
+    for p in sorted((REPO / "src" / "ailine_core").rglob("*.py")):
+        tree = ast.parse(p.read_bytes().decode("utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom) and n.level and n.level > 0:
+                bad.append(f"{p.relative_to(REPO)}:{n.lineno} "
+                           f"（{'.' * n.level}{n.module or ''}）")
+    assert not bad, (
+        "ailine_core で相対 import を使っている ── 依存が図から消えます。"
+        f"絶対 import（from ailine_core.x import y）に直してください: {bad}")
