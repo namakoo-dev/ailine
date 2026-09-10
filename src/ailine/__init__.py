@@ -1908,6 +1908,12 @@ def _structural_advisories(before: dict, after: dict, *, op: str | None = None,
                 wb_gap.close()
         except Exception:
             pass   # 読めない時は黙る（無関係な入力を巻き添えにしない）
+    # ★ 2026-09-10: 新しい行のキー列が空（依頼の主語が落ちた形）。★ 付きなので
+    #   count_suspicious_advisories が拾い、決裁③で ✓→△ に降格する。
+    #   ★ ここ（全 op が通る助言の組み立て）に置くので op ごとの配線漏れが起きない
+    #     ── 上の 1 列目の空欄と同じ線に揃える。
+    if (mk := detect_new_row_missing_key(op, resolved, meta)):
+        lines.append(mk)
     lines.extend(new_sheet_advisories(before, after))
     lines.extend(existing_sheet_replaced_advisory(before, after, op=op, precondition_broken=precondition_broken) + [m for m in [detect_write_target_type_change(before, after, op=op, resolved=resolved, meta=meta, op_write_target=OP_WRITE_TARGET, is_number=_is_number, after_path=after_path)] if m])   # ★ 致命2(W10e) + 挙動変更#1(b)
     return lines
@@ -5539,6 +5545,26 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
         # ★ 同上: 値が空の列は書かない（"None" という文字列を作らない）。
         resolved["values"] = {str(k): v for k, v in vals.items()
                                if v is not None and v != ""}
+        # ★★ 2026-09-10（出荷前の実機テストが落ちて分かった・実測 11 回中 7 回）:
+        #   「5行目に丸山工業の行を作って」に対し、モデルが件数 1・単価 1000・金額 1000 を
+        #   **発明して**書き、`✓` が出ていた。依頼に値の指定はどこにも無い。
+        #   ★ 重いのは 2 次被害の方 ── 発明した値は下の継承の除外集合に入るので、
+        #     **その列の式が入らなくなる**（金額が =B5*C5 でなく直値 1000 になり、
+        #     件数を直しても追随しない）。判定は ailine_core/intent.py に 1 つだけ。
+        #   ★ 落とすのは「依頼文に接地しない値」だけ。落とした列は必ず名指しで出す
+        #     （黙って空にするのは別の嘘になる）。空欄は誤値より安い。
+        _ungrounded = intent_mismatch.values_not_grounded_in_the_request(
+            task, resolved["values"])
+        if _ungrounded:
+            resolved["_dropped_label"] = (
+                "／".join(_ungrounded) + "（依頼に無いので空のままにします）")
+            resolved["values"] = {k: v for k, v in resolved["values"].items()
+                                   if k not in set(_ungrounded)}
+        if not resolved["values"]:
+            return False, resolved, inferred, (
+                "依頼文に入れる値が見当たりません（頼まれていない値は書きません）"
+                " ── 空の行を入れるだけなら「"
+                f"{resolved.get('at')}行目に空行を入れて」と頼めます")
         resolved["_headers"] = [str(h) for h in headers]
         resolved["_values_label"] = "／".join(
             f"{k}={v}" for k, v in resolved["values"].items())
@@ -6414,6 +6440,8 @@ _CONFIRM_FIELDS = {
                      ("行数", "count", None)),
     "ADD_ROW": (("挿入位置", "at", None), ("位置の根拠", "_at_basis", None),
                  ("入れる値", "_values_label", None),
+                 # ★ 2026-09-10: 落とした列も**先に言う**（黙って空にしない）。
+                 ("空のままにする列", "_dropped_label", None),
                  # ★ 2026-09-02: 宣言していないセル（式の列）に書く以上、**先に言う**。
                  #   書いてから知らせるのでは、✓ の意味が広がったことが人に伝わらない。
                  ("式を引き継ぐ列", "_inherit_label", None)),
@@ -7581,6 +7609,51 @@ def duplicate_name_warning(col: str, values) -> str | None:
              f"（1 枚にまとめるなら、雛形の明細行に『{{{{明細:列名}}}}』の印を、"
              f"合計欄に『{{{{合計:金額}}}}』の印を置いてください。"
              f"取引ごとに 1 枚が正しい書類 ── 領収書・納品書 ── ならこのままで大丈夫です）")
+
+
+def detect_new_row_missing_key(op, resolved, meta) -> str | None:
+    """新しく作った行の**キー列（表の 1 列目）が空**なら、その事実を名指しする。
+
+    ★★ なぜ在るか（2026-09-10・出荷前の実機テストから辿って実測 4/4）:
+
+        依頼   「5行目に丸山工業の行を作って 件数3 単価1500」
+        宣言   入れる値:件数=3／単価=1500        ← ★ 丸山工業がどこにも無い
+        実物   5行目 = [None, 3, 1500, '=B5*C5']
+        画面   **✓ 機械検証済み**（⚠ すら出ない）
+
+      「丸山工業の行」に丸山工業が入っていない。請求書なら取引先名の無い行だ。
+
+    ★ なぜ既存の番人が鳴らなかったか ── 三項（依頼・宣言・実体）のうち、宣言と実体は
+      一致しているので事後条件は通る。`residue` は**列名**しか見ないので、値である
+      『丸山工業』は端から対象外（設計どおりの限界）。`detect_first_column_gap` は
+      「走査が止まったか」を見る器官で、2026-09-05 に走査を直したので正しく黙る。
+
+    ★★ なぜ依頼文を読まないか ── 読む側に寄せると「値の残差ゲート」になり、語彙を
+      広げる話になる。この repo は同じ日に **op を足すと近い op から静かに奪う**
+      （列移動を足して 241→233）・**説明を 2 行足すと無関係な列追加が 4/4 壊れる**
+      ことを実測している。だからここは**構造だけ**で判定する ── 依頼文も語彙も見ない。
+      見るのは「行を作ったか」と「1 列目が空か」の 2 つだけ。
+
+    ★ 止めない・直さない・入れ直さない（★ 付きの助言を 1 行出して ✓ を △ に降ろすだけ）。
+      落ちた値を機械が復元することはできない ── モデルの出力に残っていないため
+      （実測: 生成された .bas も 2 列ぶんしか書いていなかった）。
+    ★ 限界: 拾えるのはキー列だけ。3 列目だけが落ちた回は、この器官では見えない。
+    """
+    if op != "ADD_ROW" or not resolved:
+        return None
+    headers = resolved.get("_headers") or []
+    if not headers:
+        return None
+    key = str(headers[0])
+    values = resolved.get("values") or {}
+    if key in {str(k) for k in values}:
+        return None
+    # ★ 式を引き継ぐ列に入っていれば「空のまま」ではない（宣言済みの効果）。
+    if 0 in set(resolved.get("_inherit_cols") or ()):
+        return None
+    return (f"★ 疑わしい: 新しい行の『{key}』が空のままです"
+            f"（入れる値に『{key}』がありません）。"
+            f"依頼文がこの行の名前を言っているなら、それが落ちています")
 
 
 def detect_first_column_gap(ws, header_row: int = 1, look_ahead: int = 200) -> str | None:
