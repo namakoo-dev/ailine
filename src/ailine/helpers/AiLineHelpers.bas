@@ -96,16 +96,20 @@ Sub InsertChart(oDoc As Object, headerRow As Integer, catCol As Integer, valCol 
     Dim oRect As New com.sun.star.awt.Rectangle
     oRect.X = 9000 : oRect.Y = 400 : oRect.Width = 14000 : oRect.Height = 8500
 
-    ' 項目名の列 と 値の列（見出し行を含める＝ラベルになる）の2範囲（非隣接でもよい）
-    Dim oRanges(1) As New com.sun.star.table.CellRangeAddress
+    ' ★★ 値の列**だけ**を addNewByName に渡す（2026-09-11・PENDING-20260910 ①の直し）。
+    '   以前は項目列と値列の 2 範囲を渡し「先頭列＝項目名」に任せていたが、LibreOffice は
+    '   先頭列を**配列の順序でなくシート上で左にある方**で決める。項目列が値列より右だと
+    '   系列名・項目・値の 3 つがそろって反転した（実測: 売上表『金額の棒グラフ』で
+    '   値が $D=月 を指した）。値列は数値なので系列は必ずでき、見出し行が系列名になる。
+    '   項目は下で chart2 API により**役割を明示して**軸に付ける ── 左右に依存しない。
+    '   ★ 実機で確認: 棒/折れ線/円 × 項目が左/右 × 項目が文字/数値 の 12 通りすべてで
+    '     系列名＝値の見出し・項目＝項目列・値＝値列（tests/test_chart_category_side_local.py）。
+    Dim oRanges(0) As New com.sun.star.table.CellRangeAddress
     oRanges(0).Sheet = 0
-    oRanges(0).StartColumn = catCol : oRanges(0).StartRow = headerRow
-    oRanges(0).EndColumn = catCol   : oRanges(0).EndRow = lastRow
-    oRanges(1).Sheet = 0
-    oRanges(1).StartColumn = valCol : oRanges(1).StartRow = headerRow
-    oRanges(1).EndColumn = valCol   : oRanges(1).EndRow = lastRow
-    ' True,True = 先頭行=系列名・先頭列=項目名。既定(addNewByName)は縦棒グラフ。
-    oCharts.addNewByName(sName, oRect, oRanges(), True, True)
+    oRanges(0).StartColumn = valCol : oRanges(0).StartRow = headerRow
+    oRanges(0).EndColumn = valCol   : oRanges(0).EndRow = lastRow
+    ' True,False = 先頭行＝系列名 ／ 先頭列を項目名には**しない**（項目は自分で付ける）
+    oCharts.addNewByName(sName, oRect, oRanges(), True, False)
 
     oChart = oCharts.getByName(sName).getEmbeddedObject()
 
@@ -115,6 +119,24 @@ Sub InsertChart(oDoc As Object, headerRow As Integer, catCol As Integer, valCol 
     ElseIf sKind = "pie" Then
         oChart.setDiagram(oChart.createInstance("com.sun.star.chart.PieDiagram"))
     End If
+
+    ' ── 項目列を chart2 API で軸の目盛りデータに付ける（役割を明示） ──
+    '   ★ 範囲の文字列は AbsoluteName から取る（シート名の引用の癖を自分で書かない）
+    Dim oDP As Object, oCatSeq As Object, oCatLDS As Object
+    Dim oDiag2 As Object, oCoords As Object, oAxis As Object, oScale As Object
+    Dim sCatRange As String
+    sCatRange = oSheet.getCellRangeByPosition(catCol, headerRow + 1, catCol, lastRow).AbsoluteName
+    oDP = oChart.getDataProvider()
+    oCatSeq = oDP.createDataSequenceByRangeRepresentation(sCatRange)
+    oCatSeq.Role = "categories"
+    oCatLDS = CreateUnoService("com.sun.star.chart2.data.LabeledDataSequence")
+    oCatLDS.setValues(oCatSeq)
+    oDiag2 = oChart.getFirstDiagram()
+    oCoords = oDiag2.getCoordinateSystems()
+    oAxis = oCoords(0).getAxisByDimension(0, 0)
+    oScale = oAxis.getScaleData()
+    oScale.Categories = oCatLDS
+    oAxis.setScaleData(oScale)
 
     ' ── styling（見出しから導出。LO native は色/ラベル/タイトル/軸/フォントを honor する） ──
     sCat = oSheet.getCellByPosition(catCol, headerRow).getString()
