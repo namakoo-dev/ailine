@@ -32,6 +32,7 @@ bench/received_invoices/答え_*.json
 bench/received_invoices/lo-profile-mk/
 bench/received_invoices/received_v2/
 bench/received_invoices/答え_received_v2.json
+bench/received_invoices/received_nested/
 bench/received_invoices/lo-profile-adv/
 bench/received_invoices/gov/
 bench/received_invoices/vendors/

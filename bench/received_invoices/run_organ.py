@@ -63,15 +63,19 @@ if __name__ == "__main__":
     ap.add_argument("--floor", type=int, default=60,
                     help="分母の床。★ 空集合に○を付けないため")
     ap.add_argument("--show", type=int, default=40)
+    ap.add_argument("--answer", default=score_v2.ANSWER_FILE,
+                    help="答えの JSON（別の検体の束を測る時に差し替える）")
+    ap.add_argument("--books", default=score_v2.BOOKS_DIR, help="冊の置き場")
     a = ap.parse_args()
+    score_v2.use_bundle(a.answer, a.books)
 
     if a.groups and a.groups != "*":
         score_v2._ONLY_GROUPS = tuple(a.groups.split(","))
     score_v2.MIN_EXPECTATIONS = a.floor
 
     corpus = score_v2.DEFAULT_CORPUS
-    if not (corpus / "答え_received_v2.json").exists():
-        print("★ 検体がありません。先に mk_received_v2.py を走らせてください。")
+    if not (corpus / score_v2.ANSWER_FILE).exists():
+        print(f"★ 検体がありません（{score_v2.ANSWER_FILE}）。先に生成器を走らせてください。")
         sys.exit(2)
 
     books = score_v2.load_books(corpus)

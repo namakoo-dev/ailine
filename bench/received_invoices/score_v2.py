@@ -122,9 +122,21 @@ DEV_GROUPS = ("基礎",)
 
 _ONLY_GROUPS: tuple = ()          #: 空なら全群
 
+#: ★ どの検体の束を測るか（答えのファイル名 と 冊の置き場）。
+#:   初版はこの 2 つを関数の中に直書きしていて、別の束を測るたびに書き換える形だった ──
+#:   それは測るたびに片配線を作るのと同じ。**束は引数にする**（2026-09-11）。
+ANSWER_FILE = "答え_received_v2.json"
+BOOKS_DIR = "received_v2"
+
+
+def use_bundle(answer_file: str, books_dir: str) -> None:
+    """測る束を差し替える。★ 対照と変異は束ごとに通し直すこと。"""
+    global ANSWER_FILE, BOOKS_DIR
+    ANSWER_FILE, BOOKS_DIR = answer_file, books_dir
+
 
 def load_books(corpus: Path) -> list:
-    data = json.loads((corpus / "答え_received_v2.json").read_text(encoding="utf-8"))
+    data = json.loads((corpus / ANSWER_FILE).read_text(encoding="utf-8"))
     out = [b for b in data if b.get("採用")]
     if _ONLY_GROUPS:
         out = [b for b in out if b.get("群") in _ONLY_GROUPS]
@@ -140,7 +152,7 @@ def score(extract, corpus: Path = DEFAULT_CORPUS, verbose: bool = False) -> dict
     n_expect = 0
 
     for b in books:
-        path = corpus / "received_v2" / b["file"]
+        path = corpus / BOOKS_DIR / b["file"]
         try:
             got_all = extract(path) or {}
         except Exception as e:                     # noqa: BLE001 ── 落ちたことも記録する
@@ -360,6 +372,8 @@ def self_test(corpus: Path) -> int:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
+    ap.add_argument("--answer", default=ANSWER_FILE, help="答えの JSON（束を差し替える）")
+    ap.add_argument("--books", default=BOOKS_DIR, help="冊の置き場（束を差し替える）")
     ap.add_argument("--self-test", action="store_true",
                     help="採点器そのものを対照で確かめる（点数を見る前に必ず）")
     ap.add_argument("--show", type=int, default=40)
@@ -368,6 +382,7 @@ if __name__ == "__main__":
     ap.add_argument("--floor", type=int, default=None,
                     help="分母の床を上書き（群を絞った時だけ）")
     a = ap.parse_args()
+    use_bundle(a.answer, a.books)
     if a.groups:
         _ONLY_GROUPS = tuple(a.groups.split(","))
         globals()["_ONLY_GROUPS"] = _ONLY_GROUPS
