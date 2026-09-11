@@ -23,6 +23,7 @@ freeform ゲート18桁）を、`max(len(flag)) + 2` で再現する形にした
 """
 from __future__ import annotations
 
+from ailine_core import field_record
 from ailine_core import route   # ★ 断る前に「別のコマンドで出来る」を見る
 
 from pathlib import Path
@@ -568,4 +569,34 @@ def render_verify_match_report(out_label: str, a_label: str, b_label: str, resul
         elif kind == "extra_key":
             lines.append(f"⚠ {m['key']}: 出力にあるキーが元帳の独立再集計に見当たりません"
                          "（捏造の可能性）")
+    return lines
+
+def render_forms_report(folder_label: str, out_label: str, result: dict) -> list:
+    """`ailine forms` の人向け報告（★ 分母つき・名指し・区分の内訳）。
+
+    ★ 買い手の信用条件をそのまま運ぶ: 何冊中何冊を読めたか（分母）、読めなかった冊の
+      名指し、そして**空欄がいくつでその理由がいくつか**。
+    ★ 成績のバーは置かない（置くと『割』を『単』へ格下げする方へ手が動く・§0g の決裁）。
+    """
+    lines = [f"■ ailine forms（帳票の一覧）  folder={folder_label}"]
+    if result.get("file_written"):
+        lines.append(f"出力先: {out_label}")
+    for f in result.get("excluded", ()) or ():
+        lines.append(f"  （対象外）{f}")
+    for n in result.get("self_excluded", ()) or ():
+        lines.append(f"  （自分の出力 『{n}』 を入力から除外しました）")
+    lines.append(f"{result['denominator']} ファイル中 {result['collected']} 冊を読みました")
+    for f in result.get("unreadable", ()) or ():
+        lines.append(f"  ⚠ {f['name']}: {f['reason']}")
+    grades = result.get("grades") or {}
+    if grades:
+        # ★ 区分の語も意味も field_record が持つ（ここで書き写さない・AST の番人が縛る）。
+        got = "／".join(f"{g} {grades[g]}" for g in field_record.GRADE_ORDER if g in grades)
+        lines.append(f"項目の区分: {got}（{field_record.grade_legend()}）")
+    blanks = result.get("blanks", 0)
+    if blanks:
+        lines.append(f"空欄 {blanks} 件（理由つき {result.get('blanks_with_reason', 0)} 件）"
+                     "── 理由は『検分』シートに 1 件ずつ出しています")
+    if result.get("file_written"):
+        lines.append("（一覧は新しいブックです ── 元の請求書は 1 バイトも変えていません）")
     return lines

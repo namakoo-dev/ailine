@@ -127,6 +127,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_vocab_miss_refusal,   # ★ freeform 最終決定: 単発の語彙外の断り
     render_scan_report,   # ★ M1読み: `ailine scan`
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
+    render_forms_report,   # ★ 帳票の一覧: `ailine forms`
     render_folder_routes,
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
 )
@@ -141,6 +142,8 @@ from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine ver
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
+from ailine_core import form_read   # ★ 帳票を読む器官（DESIGN-20260910 §1・需要①）
+from ailine_core import forms_collect   # ★ 帳票の一覧（`ailine forms`）の並べ方
 # ★ 2026-08-24: 一部は**意図した再輸出**（検体が ailine.sanitize_sheet_name の形で
 #   見ている）。未使用に見えても消さない ── リンタには noqa で伝える。
 from ailine_core.report_per_row import (  # noqa: F401
@@ -16965,6 +16968,121 @@ def cmd_demo(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_forms(a: argparse.Namespace) -> int:
+    """`ailine forms <folder> --out <path>`: 帳票の山から項目を集めて 1 冊 1 行の一覧にする。
+
+       ★★ 需要①（請求書 40 ファイルからの抜き出し）の出口。読む器官は
+       `ailine_core/form_read.read_book`、並べ方は `ailine_core/forms_collect`。
+       この関数が持つのは**配線だけ** ── フォルダの受け入れ・関所・書き出し・報告。
+
+       ★ 凍結した判断（2026-09-11・Namakoo）をそのまま運ぶ:
+         確/単 は値を書く ／ 割/無 は**空欄**にして、理由を必ず検分シートに出す。
+
+       ★ LO は起動しない（読むだけ・openpyxl のみ）。原本は 1 バイトも触らない。
+    """
+    folder = Path(a.folder).resolve()
+    out = Path(a.out).resolve()
+    candidates, excluded = multifile.classify_folder_contents(folder)
+    # ★ 自分の出力を入力に数えない（V6・stack と同じ判定を使う ── 書き写さない）。
+    candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
+
+    collected, unreadable = [], []
+    for p in candidates:
+        try:
+            wb = openpyxl.load_workbook(p, data_only=True)
+            wbf = openpyxl.load_workbook(p, data_only=False)
+        except Exception as e:
+            unreadable.append({"name": p.name, "reason": f"読み込み失敗: {type(e).__name__}"})
+            continue
+        try:
+            collected.append((p.name, form_read.read_book(wb, wb_formula=wbf)))
+        except Exception as e:   # noqa: BLE001 ── 1 冊で止めない（名指しして次へ）
+            unreadable.append({"name": p.name, "reason": f"読めませんでした: {type(e).__name__}"})
+        finally:
+            wb.close()
+            wbf.close()
+
+    # ★ 事後条件: 空欄の数 == 理由の数（G2' の必達をこの経路でも数える）。
+    #   型が禁じているので普通は起きない ── 「型が守っているはず」は検算ではない。
+    n_blank, n_reason, missing = forms_collect.blanks_have_reasons(collected)
+    if missing:
+        print(f"⚠ 事後条件が破れた: 理由の無い空欄 {len(missing)} 件 ── {missing[:5]}")
+        return 5
+
+    rows = [forms_collect.row_for(name, recs) for name, recs in collected]
+    findings = [r for name, recs in collected for r in forms_collect.findings_for(name, recs)]
+    result = {"denominator": len(candidates), "collected": len(collected),
+              "rows_written": len(rows), "grades": forms_collect.tally(collected),
+              "blanks": n_blank, "blanks_with_reason": n_reason,
+              "unreadable": unreadable, "excluded": excluded,
+              "field_grades": forms_collect.grades_per_file(collected),
+              "self_excluded": self_excluded, "findings": findings,
+              "file_written": False}
+
+    if not rows:
+        if a.json:
+            print(json.dumps(result, ensure_ascii=False))
+        else:
+            for ln in render_forms_report(str(folder), str(out), result):
+                print(ln)
+        return 0
+
+    workdir = Path(tempfile.mkdtemp(prefix="ailine_forms_"))
+    try:
+        tmp_out = workdir / out.name
+        wb_out = openpyxl.Workbook()
+        wb_out.properties.creator = forms_collect.CREATOR_MARK   # ★ 書き手の印
+        ws = wb_out.active
+        ws.title = forms_collect.SHEET_NAME
+        ws.append(list(forms_collect.HEADERS))
+        for row in rows:
+            ws.append(row)
+        inspection.bold_row(ws, 1, len(forms_collect.HEADERS))
+        inspection.autosize_columns(ws)
+
+        ws2 = wb_out.create_sheet(forms_collect.INSPECT_SHEET)
+        ws2.append(list(forms_collect.INSPECT_HEADERS))
+        for row in findings:
+            ws2.append(row)
+        inspection.bold_row(ws2, 1, len(forms_collect.INSPECT_HEADERS))
+        inspection.autosize_columns(ws2)
+        wb_out.save(tmp_out)
+
+        # ★ 事後条件: 書いた直後の中身を**別の読み実装**で数える（同じ道具の同じ盲点を避ける）。
+        readback = xml_readback.read_grid(tmp_out)
+        written = len(xml_readback.data_row_numbers(readback, header_row=1))
+        if written != len(rows):
+            print(f"⚠ 事後条件が破れた: 一覧の行数  元 {len(rows)} / 出力 {written}")
+            return 5
+
+        # ★ 関所（stack と同じ線）: 人のファイル / 別コマンドの出力は名指しで止める。
+        if out.exists():
+            mark = multifile_stack.own_output_mark(out)
+            if mark is not None and mark != forms_collect.CREATOR_MARK:
+                if not getattr(a, "overwrite", False):
+                    print(f"⚠ 出力先は ailine の別のコマンドの出力です: {out}")
+                    print(f"（{out.name}: 作成は {mark} です。"
+                          "承知の上なら --overwrite を付けて実行してください）")
+                    return 7
+            elif mark is None and not getattr(a, "overwrite", False):
+                print(f"⚠ 出力先に人のファイルがあります: {out}")
+                print(f"（{out.name} は ailine forms の前回出力ではありません。"
+                      "承知の上で上書きするなら --overwrite を付けて実行してください）")
+                return 7
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tmp_out, out)
+        result["file_written"] = True
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    if a.json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        for ln in render_forms_report(str(folder), str(out), result):
+            print(ln)
+    return 0
+
+
 def cmd_stack(a: argparse.Namespace) -> int:
     """`ailine stack <folder> --out <path>`: M1書き ── 縦積み（UNION ALL）+ 出所列。
        DESIGN-20260821-multifile.md v2 §1(M1書き)・v2.1(単位L)。列挙・照合・合計行の識別は
@@ -17398,6 +17516,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
     st.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     st.set_defaults(func=cmd_stack)
+
+    fm = sub.add_parser("forms", help="フォルダ内の請求書から項目を集めて一覧にする（読むだけ）")
+    fm.add_argument("folder", help="対象フォルダ（直下の .xlsx を処理・.xls/.csv は数えて名指しで断る・サブフォルダは見ない）")
+    fm.add_argument("--out", required=True, help="一覧を書き出すブックのパス")
+    fm.add_argument("--overwrite", action="store_true",
+                    help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
+    fm.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
+    fm.set_defaults(func=cmd_forms)
 
     vf = sub.add_parser("verify", help="stack/extract/match の出力を検算だけ独立に再実行する（読むだけ）")
     vf.add_argument("out", help="ailine が作った出力ブック")

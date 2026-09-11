@@ -18,7 +18,8 @@ from xml.etree import ElementTree as ET
 
 import openpyxl
 
-from ailine_core import inspection, multifile, total_row, xml_readback
+from ailine_core import (forms_collect, inspection, multifile, total_row,
+                          xml_readback)
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 
 PROVENANCE_HEADERS = ("元ファイル", "元行")
@@ -36,7 +37,8 @@ CREATOR_MARK = "ailine stack"
 # 読む側の判定はこの集合で行う（stack・extract・そして P 先行 commit で match を追加）。
 # ★ CSV 検疫接続（2026-08-22）: `ailine csv` の出力を足す。ailine_core/verify.py の
 # _CREATOR_MARKS にも同時に足す（tests/test_stack_e2e.py の同期番人が二重管理のずれを見る）。
-CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv"}
+CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv",
+                 "ailine forms"}
 # ★ M3 P 先行 commit（DESIGN-20260821-multifile.md M3 設計 v2）: match の集約出力
 # （1行=1キー）は末尾2列の出所列署名を構造的に持てない。1枚目シート名+固定見出しで判定する。
 MATCH_SHEET_NAME = "照合"
@@ -172,11 +174,33 @@ def _csv_signature(path) -> bool:
 
 # ★ P 先行 commit（M3 設計 v2）: 署名を「末尾2列」1本槍から kind 別テーブルへ拡張。
 # 印（creator）ごとに列署名の判定関数を引く ── 未知の印は握っていない = 他人扱い（fail closed）。
+def _forms_signature(path) -> bool:
+    """`ailine forms` の列署名 ── 1 枚目が「一覧」で、見出しがその形（2026-09-11）。
+
+    ★ 印（creator）と**両方**そろって初めて自分の出力（fail closed）── 見出しだけが
+      たまたま一致する人のファイルを前回出力と誤認して上書きした事故が過去に在る。
+    """
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return False
+    try:
+        ws = wb.worksheets[0]
+        if ws.title != forms_collect.SHEET_NAME:
+            return False
+        return tuple(multifile.read_row_headers(ws, 1)) == forms_collect.HEADERS
+    except Exception:
+        return False
+    finally:
+        wb.close()
+
+
 KIND_SIGNATURES = {
     "ailine stack": _stack_extract_signature,
     "ailine extract": _stack_extract_signature,
     "ailine match": _match_signature,
     "ailine csv": _csv_signature,
+    "ailine forms": _forms_signature,
 }
 
 

@@ -45,6 +45,23 @@ NONE_FOUND = "無"
 #: 値を出してよい区分。★ 割 と 無 は空欄（凍結した判断）。
 GRADES_WITH_VALUE = (CONFIRMED, SINGLE)
 
+#: 人に見せるときの並び順と意味。★ **区分の語も意味もここにしか書かない**。
+#:   出口（報告・一覧・--json）が自分で「確=裏が取れた」と書き写すと、意味を直したとき
+#:   片方だけ古いまま残る（片配線）。実際 2026-09-11 に `cli_render` が 4 語を
+#:   書き写して、AST の番人に捕まった。
+GRADE_ORDER = (CONFIRMED, SINGLE, SPLIT, NONE_FOUND)
+GRADE_MEANING = {
+    CONFIRMED: "裏が取れた",
+    SINGLE: "裏が無い",
+    SPLIT: "食い違い",
+    NONE_FOUND: "見つからない",
+}
+
+
+def grade_legend() -> str:
+    """「確=裏が取れた・単=裏が無い…」の凡例。★ 出口はこれを呼ぶだけにする。"""
+    return "・".join(f"{g}={GRADE_MEANING[g]}" for g in GRADE_ORDER)
+
 
 @dataclass(frozen=True)
 class Evidence:

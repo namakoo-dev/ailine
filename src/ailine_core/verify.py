@@ -43,7 +43,9 @@ TOLERANCE = total_row.TOLERANCE
 #   同期・tests/test_stack_e2e.py の番人）。独立検算（csv kind 専用の verify）はまだ無い
 #   ── 下の verify_output は creator=="ailine csv" を {"unsupported": ...} で正直に返すだけ
 #   （{"unmarked": True} に混ぜて「他人のファイル」と誤判定しない、が今回配線する範囲）。
-_CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv"}
+#   ★ 帳票の一覧（2026-09-11）: `ailine forms` も同じ理由で足す。
+_CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv",
+                  "ailine forms"}
 
 
 def _find_header_row(data: dict, base_headers: list, max_scan: int = 30):
