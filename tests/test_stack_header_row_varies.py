@@ -149,16 +149,34 @@ def test_the_json_counts_every_file_in_the_denominator(folder, tmp_path):
 
 
 # ── ★ 開示は「黙って別の行を読まない」こと ─────────────────────
-def _run_folder(folder: Path, request: str):
-    """★ `ailine run <フォルダ> "<依頼>"` ── 出力先は道具が決める（--out は無い）。"""
-    return subprocess.run(
-        [sys.executable, "-m", "ailine", "run", str(folder), request],
-        capture_output=True, text=True, timeout=240, encoding="utf-8",
-        errors="replace", cwd=str(REPO))
+sys.path.insert(0, str(REPO / "src"))
+import ailine  # noqa: E402
+
+
+def _run_route(route: str, folder: Path, out: Path, monkeypatch, capsys):
+    """経路ごとに 1 回走らせて、人に見えた文字を返す。
+
+    ★★ `run` は 7B を使わない ── 翻訳は `translate_task` の monkeypatch
+      （tests/test_run_folder.py と同じ作法・製品コードにテスト用の口を彫らない）。
+      ★ ここを subprocess + 実 LLM で書いたら、素の環境（ollama を港 9 に向ける）で
+        落ちた。手元に在るものに依存して CI で落ちる形 ── この repo が何度も踏んだ
+        「居るから見えない」。測りたいのは翻訳の質ではなく**開示の配線**。
+    """
+    if route == "stack":
+        rc = ailine.main(["stack", str(folder), "--out", str(out)])
+    else:
+        monkeypatch.setattr(
+            ailine, "translate_task",
+            lambda model, task, book_meta, temperature=0.1: {
+                "plan": [{"op": "EXTRACT",
+                          "args": {"column": "金額", "cmp": "gte", "value": 1}}]})
+        rc = ailine.main(["run", str(folder), "金額が 1 以上の行を集めて"])
+    return rc, capsys.readouterr().out
 
 
 @pytest.mark.parametrize("route", ["stack", "run"])
-def test_using_a_different_header_row_is_disclosed_on_every_route(folder, tmp_path, route):
+def test_using_a_different_header_row_is_disclosed_on_every_route(
+        folder, tmp_path, monkeypatch, capsys, route):
     """★★ 基準と違う行を見出しとして読んだら、**どの経路でも**そう言うこと。
 
     ★★ なぜ 1 本で 2 経路を縛るか:
@@ -171,20 +189,13 @@ def test_using_a_different_header_row_is_disclosed_on_every_route(folder, tmp_pa
       飾り行の数が冊ごとに違うのは実物では普通だが、**そう言わずに読む**のは別問題。
     """
     out = tmp_path / f"出力_{route}.xlsx"
-    if route == "stack":
-        r = subprocess.run(
-            [sys.executable, "-m", "ailine", "stack", str(folder), "--out", str(out)],
-            capture_output=True, text=True, timeout=180, encoding="utf-8",
-            errors="replace", cwd=str(REPO))
-    else:
-        r = _run_folder(folder, "金額が 0 より大きい行を集めて")
     # ★ skip にしない。skip は番人ではない ── その経路が裸のまま緑に見える。
-    assert r.returncode == 0, (
-        f"★ {route} が落ちた: rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+    rc, text = _run_route(route, folder, out, monkeypatch, capsys)
+    assert rc == 0, f"★ {route} が落ちた: rc={rc}\n{text}"
 
-    assert "見出しは 2 行目" in r.stdout, (
-        f"★ {route}: 基準と違う行を読んだのに黙っている\n{r.stdout}")
-    assert "基準は 1 行目" in r.stdout, f"★ {route}: 基準の行を示していない\n{r.stdout}"
+    assert "見出しは 2 行目" in text, (
+        f"★ {route}: 基準と違う行を読んだのに黙っている\n{text}")
+    assert "基準は 1 行目" in text, f"★ {route}: 基準の行を示していない\n{text}"
 
 
 def test_the_json_names_the_files_that_could_not_be_stacked(folder, tmp_path):
