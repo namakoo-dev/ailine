@@ -479,10 +479,31 @@ def read_issuer(grid: Grid, addressee: Record) -> Record:
 
     ★ 癖②③への処方 ── 「〒の上」のような**骨に依存する位置**では決めない。
       組織の形をした名前をすべて拾い、次で絞る:
-        ① 宛先として採った名前は除く（同じ形の 2 ブロックの片方を消す）
+        ① 宛先の名前を**含む**候補は除く（同じ形の 2 ブロックの片方を消す）
         ② 登録番号（T+13 桁）が同じ列の近くに在るものを優先する
-           ★ 登録番号は請求を**出す**側にしか付かない
-        ③ それでも複数残るなら、右側／上側に在るものを優先する（実物の版面）
+           ★ 登録番号は請求を**出す**側にしか付かない。これは「どちらのブロックが
+             発行者か」という**役割**の証拠であって、名前そのものの裏取りではない
+        ③ 残った候補は**全部そのまま根拠にする** ── 1 つなら 単、値が違う 2 つなら 割。
+           区分の導出（grade_of）が既に知っている仕事なので、ここでは決めない。
+
+    ★★ 2026-09-11（B′）: ③ は以前「右側／上側を優先する」だった。
+      これは実物の版面の**癖**であって根拠ではない ── 当たらない冊では
+      **黙って間違った名前**を出す。実測で何冊がその癖に頼っていたかを測った:
+
+          候補が 1 つだけ      78 冊   ← 癖は一度も走らない
+          癖で決めていた        2 冊   ← T10（宛先の再掲）・T11（宛先が 割 で除けない）
+          候補なし              3 冊
+          シートが決まらない    4 冊
+
+      ① を「完全一致 → 含む」に変えると T10 の競合が構造的に消え、**79 冊が候補 1 つ**に
+      なる（正解を巻き添えで消した冊は 0）。残る T11 は宛先そのものが 割 なので
+      買い手を除けない ── そこは決められないのが正直で、検体も期待を宣言していない。
+      → 癖を消しても失うものが無いことを測ってから消した。
+
+    ★ 正直に残す穴（この検体では測れない）: ① の「含む」は、**社名が入れ子**のときに
+      正解を巻き添えにしうる（宛先「トヨタ自動車」／請求元「トヨタ自動車東日本」）。
+      いまの検体に入れ子の社名は 1 つも無いので、測れていない。
+      ★ 発火条件: 入れ子の社名を持つ検体が入った時、または「請求元が空欄になる」報告が来た時。
     """
     taken = norm(grade_value(addressee) or "")
 
@@ -502,8 +523,10 @@ def read_issuer(grid: Grid, addressee: Record) -> Record:
         if not name:
             dropped.append((t.at, raw[:26], why))
             continue
-        if norm(name) == taken and taken:
-            continue                                   # ① 宛先はここでは採らない
+        # ① 宛先を**含む**候補は採らない（完全一致では飾り付きの再掲がすり抜ける）。
+        #   実測 T10: 『御請求先：ナギ商会株式会社／9 月分』が候補に残っていた。
+        if taken and taken in norm(name):
+            continue
         cands.append((t, name))
 
     if not cands:
@@ -514,17 +537,13 @@ def read_issuer(grid: Grid, addressee: Record) -> Record:
         return Record("請求元", (), rivals=tuple(dropped), blank_reason=why)
 
     with_reg = [(t, n) for t, n in cands if _has_regno_near(grid, t)]
-    evid, rivals = [], []
     chosen = with_reg or cands
-    if len(chosen) > 1:
-        # ③ 右のブロックほど発行者らしい（実物の版面）── 同点なら上
-        chosen = sorted(chosen, key=lambda x: (-x[0].col, x[0].row))
-    top, name = chosen[0]
     how = ("登録番号が近くに在る" if with_reg else "組織名で、宛先ではない")
-    evid.append(Evidence(rule="請求元の名前", value=name, at=top.at,
-                         how=f"{top.at} の「{name[:18]}」（{how}）"))
-    for t, n in chosen[1:] + [c for c in cands if c not in chosen]:
-        rivals.append((t.at, n, "採らなかった候補"))
+    # ③ 残った候補を**全部**根拠にする ── 選ばない。1 つなら 単、値が違えば 割。
+    evid = [Evidence(rule="請求元の名前", value=n, at=t.at,
+                     how=f"{t.at} の「{n[:18]}」（{how}）") for t, n in chosen]
+    rivals = [(t.at, n, "登録番号が近くに無いので採らなかった候補")
+              for t, n in cands if (t, n) not in chosen]
     return _record("請求元", evid, rivals)
 
 

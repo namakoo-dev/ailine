@@ -14,7 +14,8 @@ from __future__ import annotations
 import openpyxl
 import pytest
 
-from ailine_core.field_record import CONFIRMED, NONE_FOUND, SINGLE, SPLIT, grade, value
+from ailine_core.field_record import (CONFIRMED, NONE_FOUND, SINGLE, SPLIT,
+                                       both_sides, describe, grade, value)
 from ailine_core.form_grid import Grid
 from ailine_core.form_read import clean_org_name, read_book, read_form
 
@@ -338,3 +339,58 @@ def test_the_signals_are_of_different_kinds():
     ws, _ = book({"B2": "ナギ商会株式会社　御中", "B4": "経理部　御中", "B6": "総務課　御中"})
     sig = invoice_signals(Grid.read(ws))
     assert len(sig) == 1, f"★ 御中を 3 つ数えて 3 印にした: {sig}"
+
+
+# ── ★ 請求元: 決められないなら決めない（2026-09-11・B′） ──────────
+def test_the_addressee_mentioned_again_elsewhere_is_not_the_issuer():
+    """★★ 別の行に再掲された**宛先**を、請求元として採らないこと。
+
+    ★ 実測（検体 T10）: `D19=御請求先：ナギ商会株式会社／9 月分` が請求元の候補に残り、
+      「右の列を優先」という**版面の癖**だけがそれを退けていた。癖を左優先に変えると
+      この行が請求元として出る ── 検体が**禁止値**と名指ししている値だ。
+    ★ 宛先の除外は「完全一致」では足りない。飾りが付いた再掲を**含んでいたら**除く。
+    """
+    rows = minimal()
+    # ★ 再掲を請求元（G5）より**右**に置く ── 位置の癖（右優先）が外す側に倒れる配置。
+    #   左に置くと癖がたまたま正解を拾って緑になり、**除外を一度も試さない検体**になる。
+    rows["I41"] = "御請求先：ナギ商会株式会社／9 月分"
+    r = read(rows)["請求元"]
+    assert value(r) == "あかね商事株式会社", f"★ 宛先の再掲を請求元にした: {value(r)!r}"
+
+
+def test_two_competing_organisations_are_not_decided_by_which_is_further_right():
+    """★★ 発行元らしい名前が 2 つ残ったら、**位置で決めない**。
+
+    ★ 「右のブロックほど発行者らしい」は実物の版面の癖であって根拠ではない。
+      癖で当てにいくと、当たらない冊で**黙って間違った名前**を出す。
+    ★ 区分の導出（grade_of）は、値の違う根拠が 2 つあれば 割 にする ── 新しい判断は要らない。
+    """
+    rows = minimal()
+    rows["B30"] = "こだま産業株式会社"      # 左に別の組織名（宛先ではない）
+    r = read(rows)["請求元"]
+    assert grade(r) == SPLIT, f"★ 2 つ在るのに片方を選んだ: {value(r)!r}"
+    assert value(r) is None
+    both = {v for _at, v, _how in both_sides(r)}
+    assert both == {"あかね商事株式会社", "こだま産業株式会社"}, both
+    assert "あかね商事株式会社" in r.blank_reason and "こだま産業株式会社" in r.blank_reason
+
+
+def test_a_registration_number_still_decides_between_two_organisations():
+    """★ 登録番号は残す ── あれは「どちらのブロックが発行者か」の**役割**の証拠。
+
+    ★ 名前の裏取り（値の証拠）には使わない ── 登録番号は名前を一言も言っていない。
+      実測（2026-09-11）: 文書の属性を裏取りに使うと 90 冊で「弥生株式会社」を
+      確として出す偽の裏取り装置になった。役割と値を混ぜない線はここで引く。
+    """
+    rows = minimal()
+    rows["B30"] = "こだま産業株式会社"
+    rows["G6"] = "T1234567890123"          # ★ あかね商事の側にだけ登録番号
+    r = read(rows)["請求元"]
+    assert value(r) == "あかね商事株式会社", f"★ 登録番号で絞れていない: {r.blank_reason}"
+    assert "登録番号" in describe(r)
+
+
+def test_a_single_candidate_still_passes():
+    """★ 負の被覆 ── 候補が 1 つなら今までどおり値を出す（断りが広がりすぎない）。"""
+    r = read(minimal())["請求元"]
+    assert grade(r) == SINGLE and value(r) == "あかね商事株式会社"
