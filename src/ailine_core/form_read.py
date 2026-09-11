@@ -52,6 +52,7 @@ from ailine_core.field_record import (GRADES_WITH_VALUE, SPLIT, Evidence,
 from ailine_core.field_record import value as grade_value
 from ailine_core.form_grid import Grid
 from ailine_core.primitives import is_number as _is_number
+from ailine_core.date_compare import parse_date_literal as _parse_date
 
 # ── 語の正規化 ────────────────────────────────────────────
 _SPACE = re.compile(r"[\s　 ]+")
@@ -79,6 +80,14 @@ _LABEL_BILLED = ("ご請求金額", "請求金額", "御請求金額", "ご請�
 _LABEL_SUBTOTAL = ("小計", "小計金額", "税抜金額", "小計（税抜）")
 _LABEL_TAX = ("消費税", "消費税額", "内消費税", "税額")
 _LABEL_TOTAL = ("合計金額", "合計", "総合計", "税込合計", "ご請求金額")
+
+#: 請求日・請求番号のラベル（2026-09-11・束で疑うために要る 4・5 つ目の項目）。
+#:   ★ 事前測定: 請求日のラベルは検体 84/87・入れ子 14/14・実物の雛形 19/20 に在る。
+_LABEL_DATE = ("請求日", "発行日", "請求年月日", "発行年月日", "日付")
+_LABEL_NUMBER = ("請求番号", "請求書番号", "請求書No", "請求書No.", "請求No", "請求No.",
+                 "伝票番号", "管理番号")
+#: 雛形の埋め草として日付欄に残る形（`××年1月1日` など）。日付ではない。
+_DATE_PLACEHOLDER_CHARS = "×〇○□■＊*"
 
 #: 登録番号（インボイス制度）。★ 請求元の側にしか付かない ── 買い手には付かない。
 _REGNO = re.compile(r"^T\d{13}$")
@@ -225,6 +234,92 @@ def _labelled_number(grid: Grid, labels, *, rows=None, skip_rate=True) -> list:
         if v is not None:
             out.append((t, v, note))
     return out
+
+
+def _labelled_text_right(grid: Grid, labels, *, rows=None, span: int = 4) -> list:
+    """ラベルの**右**の最初の中身、または**同じセルにラベルと同居**している中身を返す。
+
+    戻り値: [(ラベルのセル, 値のセル, 生の値)]
+    ★★ 「下」には落ちない（2026-09-11 の事前測定）:
+      請求日：／請求番号：はラベルが縦に積まれ、値は右に在る。右が空のとき下へ落ちると
+      **次のラベル**や**発行者名**を値として拾う（probe で 77 件・58 件が全部それだった）。
+      読めないなら読めないと言う方が安い。
+    """
+    out, seen = [], set()
+    wanted = {norm(x).rstrip("：:") for x in labels}
+    for t in grid.text_cells():
+        if rows and not (rows[0] <= t.row <= rows[1]):
+            continue
+        if t.anchor in seen:
+            continue
+        raw = str(t.value)
+        head = norm(raw).rstrip("：:")
+        glued = None
+        if head not in wanted:
+            # 同居: 「請求日：2026/8/31」── ラベルで始まり、残りが在る
+            for w in wanted:
+                for sep in ("：", ":"):
+                    pre = w + sep
+                    if norm(raw).startswith(pre) and len(norm(raw)) > len(pre):
+                        glued = raw.split(sep, 1)[1].strip()
+                        break
+                if glued is not None:
+                    break
+            if glued is None:
+                continue
+        seen.add(t.anchor)
+        if glued is not None:
+            out.append((t, t, glued))
+            continue
+        for c in grid.right_of(t, span=span):
+            if c.value not in (None, ""):
+                out.append((t, c, c.value))
+                break
+    return out
+
+
+def _looks_like_placeholder_date(raw) -> bool:
+    return isinstance(raw, str) and any(ch in raw for ch in _DATE_PLACEHOLDER_CHARS)
+
+
+def read_issue_date(grid: Grid) -> Record:
+    """請求日。★ ラベルの右か同居だけ。読めない形は値を作らず、何を探したかを言う。"""
+    found = _labelled_text_right(grid, _LABEL_DATE)
+    evid, rivals = [], []
+    for lab, cell, raw in found:
+        if _looks_like_placeholder_date(raw):
+            rivals.append((cell.at, str(raw)[:16], "雛形の埋め草のままで、日付ではありません"))
+            continue
+        d = _parse_date(raw)
+        if d is None:
+            rivals.append((cell.at, str(raw)[:16], "日付として読めません"))
+            continue
+        evid.append(Evidence(rule="請求日の欄", value=d, at=cell.at,
+                             how=f"{lab.at}「{norm(lab.value)[:8]}」の右 {cell.at}"))
+    if not evid:
+        why = ("請求日が見つかりませんでした（『請求日』『発行日』のラベルの右か、"
+               "同じセルに西暦の日付が入っている形だけを読みます）")
+        if rivals:
+            why += ": " + "／".join(f"{at} は{note}" for at, _v, note in rivals)
+        return Record("請求日", (), rivals=tuple(rivals), blank_reason=why)
+    return _record("請求日", evid, rivals)
+
+
+def read_invoice_number(grid: Grid) -> Record:
+    """請求番号。★ ラベルの右か同居だけ（下には落ちない）。在れば強い識別子・無くても止まらない。"""
+    found = _labelled_text_right(grid, _LABEL_NUMBER)
+    evid = []
+    for lab, cell, raw in found:
+        txt = str(raw).strip()
+        if not txt or _looks_like_placeholder_date(txt):
+            continue
+        evid.append(Evidence(rule="請求番号の欄", value=txt, at=cell.at,
+                             how=f"{lab.at}「{norm(lab.value)[:8]}」の右 {cell.at}"))
+    if not evid:
+        return Record("請求番号", (), blank_reason=(
+            "請求番号が見つかりませんでした（『請求番号』『請求書No』のラベルの右か、"
+            "同じセルに番号が入っている形だけを読みます）"))
+    return _record("請求番号", evid, [])
 
 
 #: ★ 「請求額」がどの数字を指すか決められなくなる欄。
@@ -742,6 +837,13 @@ def _record(field: str, evid: list, rivals: list, excluded: list = (),
 
 
 # ── 1 冊を読む ────────────────────────────────────────────
+#: ★ この器官が返す項目。**ここが唯一の一覧**（forms_collect も read_book もこれを読む）。
+#:   2026-09-11: read_book がシート未決/未発見の枝で自前の 3 つ組を持っていて、請求日・請求番号を
+#:   足したとき**記録そのものが無い空欄**が生まれた（一覧は空欄・検分に理由なし）。
+#:   「空欄には必ず理由」を型で守っていても、記録が無ければ型は働かない ── 一覧は 1 箇所に。
+FIELDS = ("宛先", "請求元", "請求額", "請求日", "請求番号")
+
+
 def read_form(ws, ws_formula=None, rows: int = 60, cols: int = 24) -> dict:
     """1 シートを読んで、項目 → `Record` を返す。★ 区分は `field_record` が導く。"""
     grid = Grid.read(ws, rows=rows, cols=cols, ws_formula=ws_formula)
@@ -750,6 +852,8 @@ def read_form(ws, ws_formula=None, rows: int = 60, cols: int = 24) -> dict:
         "宛先": addressee,
         "請求元": read_issuer(grid, addressee),
         "請求額": read_billed_total(grid, ws_formula),
+        "請求日": read_issue_date(grid),
+        "請求番号": read_invoice_number(grid),
     }
 
 
@@ -810,7 +914,7 @@ def read_book(wb, wb_formula=None, rows: int = 60, cols: int = 24) -> dict:
         why = (f"この 1 冊に請求書らしいシートが {len(seen)} 枚あります（{names}）。"
                "どちらの請求書か決められないので、空欄にしました")
         return {f: Record(f, (), (), (), why, False, "", True, why)
-                for f in ("宛先", "請求元", "請求額")}
+                for f in FIELDS}
 
     note = ""
     if seen:
@@ -821,7 +925,7 @@ def read_book(wb, wb_formula=None, rows: int = 60, cols: int = 24) -> dict:
     else:
         why = ("請求書らしいシートが見つかりませんでした（見たシート: "
                + "・".join(looked) + "）")
-        return {f: Record(f, (), (), (), why) for f in ("宛先", "請求元", "請求額")}
+        return {f: Record(f, (), (), (), why) for f in FIELDS}
 
     wsf = None
     if wb_formula is not None and name in wb_formula.sheetnames:

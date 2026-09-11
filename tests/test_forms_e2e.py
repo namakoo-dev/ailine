@@ -34,6 +34,10 @@ def _invoice(path: Path, issuer: str, total: int, *, addressee: str = "ナギ商
     ws["B4"] = "経理部　御中"
     ws["G5"] = issuer
     ws["G6"] = "〒000-0000"
+    ws["G3"] = "請求日："
+    ws["H3"] = "2026/8/31"
+    ws["G4"] = "請求番号："
+    ws["H4"] = f"INV-{total}"
     ws["B11"] = " ご請求金額　"
     ws["C11"] = total
     ws["B15"] = "品番・品名"
@@ -87,7 +91,7 @@ def test_one_row_per_invoice_with_the_fields_filled(folder, tmp_path):
     got = _sheets(out)
     assert got["_creator"] == "ailine forms", "★ 書き手の印が無い（次回 自分の出力と分からない）"
     head, *rows = got["一覧"]
-    assert head == ["元ファイル", "請求元", "宛先", "請求額(税込)"], head
+    assert head == ["元ファイル", "請求元", "宛先", "請求額(税込)", "請求日", "請求番号"], head
     assert len(rows) == 2, rows
     by_file = {r0[0]: r0 for r0 in rows}
     assert by_file["a.xlsx"][1] == "あかね商事株式会社"
@@ -125,7 +129,7 @@ def test_a_book_that_is_not_an_invoice_yields_no_values(folder, tmp_path):
     assert _forms(folder, out).returncode == 0
     got = _sheets(out)
     row = next(r for r in got["一覧"][1:] if r[0] == "統計.xlsx")
-    assert row[1:] == [None, None, None], f"★ 請求書でない冊から値を作った: {row}"
+    assert row[1:] == [None] * 5, f"★ 請求書でない冊から値を作った: {row}"
 
 
 def test_every_blank_has_a_reason_in_the_inspection_sheet(folder, tmp_path):
@@ -147,7 +151,7 @@ def test_every_blank_has_a_reason_in_the_inspection_sheet(folder, tmp_path):
     for row in got["一覧"][1:]:
         for i, v in enumerate(row[1:]):
             if v is None:
-                field = ["請求元", "宛先", "請求額"][i]
+                field = ["請求元", "宛先", "請求額", "請求日", "請求番号"][i]
                 assert (row[0], field) in inspect, f"★ 空欄に理由が無い: {row[0]}/{field}"
     assert blanks >= 3, f"★ 空欄が出ていない（検体が弱い）: {blanks}"
     reasons = [x[3] for x in got["検分"][1:] if (x[0], x[1]) in inspect]
@@ -218,6 +222,20 @@ def test_the_grades_are_still_reachable_for_automation(folder, tmp_path):
     r = _forms(folder, tmp_path / "一覧.xlsx", "--json")
     payload = json.loads(r.stdout.strip().splitlines()[-1])
     fg = payload["field_grades"]
-    assert len(fg) == 2 * 3, fg          # 2 冊 × 3 項目
-    assert {x["field"] for x in fg} == {"請求元", "宛先", "請求額"}
+    assert len(fg) == 2 * 5, fg          # 2 冊 × 5 項目
+    assert {x["field"] for x in fg} == {"請求元", "宛先", "請求額", "請求日", "請求番号"}
     assert all(x["grade"] in ("確", "単", "割", "無") for x in fg), fg
+
+
+def test_a_missing_record_counts_as_a_blank_without_a_reason():
+    """★ 負の被覆: 記録そのものが無い項目は『理由の無い空欄』として数えられること。
+
+    ★ 2026-09-11 に実際に生まれた形 ── read_book の一枝が自前の 3 つ組を持っていて、
+      請求日・請求番号を足したとき記録が無い空欄ができた。型（Record）は記録が無ければ
+      働かない。初版の blanks_have_reasons はこれを continue で飛ばしていて数えなかった。
+    """
+    sys.path.insert(0, str(REPO / "src"))
+    from ailine_core import forms_collect
+    blanks, with_reason, bad = forms_collect.blanks_have_reasons([("x.xlsx", {})])
+    assert blanks == len(forms_collect.FIELDS) and with_reason == 0
+    assert bad and all("記録が無い" in b for b in bad), bad

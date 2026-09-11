@@ -394,3 +394,60 @@ def test_a_single_candidate_still_passes():
     """★ 負の被覆 ── 候補が 1 つなら今までどおり値を出す（断りが広がりすぎない）。"""
     r = read(minimal())["請求元"]
     assert grade(r) == SINGLE and value(r) == "あかね商事株式会社"
+
+
+# ── 請求日・請求番号（2026-09-11・束で疑う前に要る 4・5 つ目の項目） ──────────
+import datetime as _dt
+
+
+def test_issue_date_to_the_right_of_the_label_is_read_as_a_date():
+    """★ `G3=請求日：` の右の値を日付として読む（文字の 3 形 と Excel の日付型）。"""
+    for raw in ("2026/8/31", "2026-08-31", "2026年8月31日", _dt.datetime(2026, 8, 31)):
+        r = read(minimal(G3="請求日：", H3=raw))["請求日"]
+        assert value(r) == _dt.date(2026, 8, 31), f"★ {raw!r} を日付として読めない: {r.blank_reason}"
+
+
+def test_issue_date_glued_to_its_label_in_one_cell():
+    """★ 実物は `請求日：2026/8/31` と 1 セルに同居する形がある。ラベルを剥がしてから読む。"""
+    r = read(minimal(G3="請求日：2026/8/31"))["請求日"]
+    assert value(r) == _dt.date(2026, 8, 31), r.blank_reason
+
+
+def test_a_placeholder_date_is_not_a_date():
+    """★ 雛形の `××年1月1日` は日付ではない ── 値を作らず、理由で『請求日』を名指す。"""
+    r = read(minimal(G3="請求日：", H3="××年1月1日"))["請求日"]
+    assert grade(r) == NONE_FOUND, f"★ placeholder を日付にした: {value(r)!r}"
+    assert "請求日" in r.blank_reason
+    # ★ 区分はパーサだけでも 無 になる（「××年」は読めない）。この判定の役目は**文面** ──
+    #   「日付として読めません」ではなく「雛形の埋め草のまま」と言うこと。ここを要求しないと
+    #   判定を消しても緑のままで、番人が何も見ない（同日 4 回目の「重ねた守り」）。
+    assert "雛形" in r.blank_reason, f"★ 埋め草だと言っていない: {r.blank_reason}"
+
+
+def test_an_empty_date_slot_does_not_fall_through_to_the_cell_below():
+    """★★ 事前測定で踏んだ罠: ラベルは縦に積まれ、値は右。右が空のとき「下」へ落ちると
+       次のラベル（請求番号：）や**発行者名**を日付として拾う（probe で 77 件がそれだった）。
+    """
+    rows = minimal(G3="請求日：")             # 右（H3）は空。下（G4）は次のラベル、G5 は発行者名
+    rows["G4"] = "請求番号："
+    r = read(rows)["請求日"]
+    assert grade(r) == NONE_FOUND, f"★ 下のセルを日付にした: {value(r)!r}"
+    assert "請求日" in r.blank_reason
+
+
+def test_invoice_number_is_read_right_of_its_label_and_never_from_below():
+    """★ 請求番号も同じ線: 右だけ・同居も可・下には落ちない（下は発行者名 G5）。"""
+    r = read(minimal(G4="請求番号：", H4="INV-2026-0831"))["請求番号"]
+    assert value(r) == "INV-2026-0831", r.blank_reason
+    r2 = read(minimal(G4="請求番号：INV-0001"))["請求番号"]
+    assert value(r2) == "INV-0001", r2.blank_reason
+    r3 = read(minimal(G4="請求番号："))["請求番号"]         # 右は空・下は 発行者名
+    assert grade(r3) == NONE_FOUND, f"★ 発行者名を請求番号にした: {value(r3)!r}"
+
+
+def test_missing_date_and_number_are_blank_with_a_reason():
+    """★ ラベルそのものが無い冊 ── 無 ＋ 何を探したかの理由。"""
+    recs = read(minimal())
+    for field in ("請求日", "請求番号"):
+        assert grade(recs[field]) == NONE_FOUND
+        assert field in recs[field].blank_reason, recs[field].blank_reason

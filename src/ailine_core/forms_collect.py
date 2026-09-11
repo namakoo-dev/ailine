@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from ailine_core.field_record import GRADES_WITH_VALUE, describe, grade, value
+from ailine_core.form_read import FIELDS as _ORGAN_FIELDS
 
 #: 書き手の印。★ stack.py の KIND_SIGNATURES に登録して初めて「自分の出力」と分かる
 #:   （印だけでも列だけでも足りない ── 両方そろって自分の出力・fail closed）。
@@ -26,10 +27,11 @@ CREATOR_MARK = "ailine forms"
 
 #: 一覧シートの名前と見出し。★ 署名でもあるので、変えると過去の出力が他人のものになる。
 SHEET_NAME = "一覧"
-HEADERS = ("元ファイル", "請求元", "宛先", "請求額(税込)")
+HEADERS = ("元ファイル", "請求元", "宛先", "請求額(税込)", "請求日", "請求番号")
 
-#: 一覧に載せる項目（見出しの 2 列目以降と 1 対 1）。
-FIELDS = ("請求元", "宛先", "請求額")
+#: 一覧に載せる項目（見出しの 2 列目以降と 1 対 1）。★ 器官の一覧から導く（自前で持たない）。
+FIELDS = tuple(f for f in ("請求元", "宛先", "請求額", "請求日", "請求番号") if f in _ORGAN_FIELDS)
+assert set(FIELDS) == set(_ORGAN_FIELDS), "★ 一覧の項目と器官の項目がずれている"
 
 #: 検分シートに出す見出し。
 INSPECT_SHEET = "検分"
@@ -103,7 +105,13 @@ def blanks_have_reasons(all_records: list) -> tuple:
     for name, records in all_records:
         for field in FIELDS:
             rec = records.get(field)
-            if rec is None or grade(rec) in GRADES_WITH_VALUE:
+            if rec is None:
+                # ★ 記録そのものが無い ＝ 理由の無い空欄（2026-09-11 に実際に生まれた形）。
+                #   初版はここを continue で飛ばしていて、この穴を**数えていなかった**。
+                blanks += 1
+                bad.append(f"{name}/{field}（記録が無い）")
+                continue
+            if grade(rec) in GRADES_WITH_VALUE:
                 continue
             blanks += 1
             if rec.blank_reason.strip():
