@@ -161,6 +161,46 @@ def classify_headers(base_headers: list, other_headers: list):
     return "取れなかった", "; ".join(parts) if parts else "列名が一致しません"
 
 
+#: 見出し行を探す窓（1 起点）。★ 実測: 実物のフォルダの飾り行は 0〜2 行。
+#:   広げすぎると、明細の途中にある小見出しを掴む余地が増えるので小さく取る。
+HEADER_SEARCH_ROWS = 8
+
+
+def find_header_row(ws, base_headers: list, given: int) -> tuple:
+    """この冊**自身**の見出し行を探す。戻り値: (行, status, detail)
+
+    ★★ なぜ要るか（2026-09-11 の実測）:
+      `cmd_stack` は見出し行を**基準 1 冊から 1 回だけ**推定し、その行番号を
+      全ファイルに当てていた。実物のフォルダは同じ様式でも飾り行の数が違う ──
+      部署別 30 冊の見出し行は 1 行目 10 冊 / 2 行目 10 冊 / 3 行目 10 冊 に散っていて、
+      **20 冊が「欠け: 日付, 部署, … ／ 余り: 開発課 経費明細」で積めなかった**。
+      ★ 検体を書いた者が「落とし方」に『基準 1 冊の番地に固定した実装』と
+        名指ししていた罠でもある。
+
+    ★★ 緩めてはいけない線:
+      採用するのは **`classify_headers` が「取れた」と言う行だけ**（基準の見出しが
+      全部そろっている）。部分一致で妥協すると、列が本当に違う冊がどこかの行で
+      たまたま当たって積まれ、「取れなかった冊は名指しで弾く」契約が骨抜きになる。
+    ★ 判定は `classify_headers` 一本を使い回す（ここで比較を書き直さない ──
+      書き直した瞬間、片方だけ直る経路が生える）。
+    """
+    first = read_row_headers(ws, given)
+    status, detail = classify_headers(base_headers, first)
+    if status == "取れた":
+        return given, status, detail
+
+    last = min(int(ws.max_row or given), max(given, HEADER_SEARCH_ROWS))
+    for r in range(1, last + 1):
+        if r == given:
+            continue
+        got = read_row_headers(ws, r)
+        st, dt = classify_headers(base_headers, got)
+        if st == "取れた":
+            return r, st, dt
+    # ★ 見つからない時は**基準の行での理由**を返す（人が読む時に基準と比べられる）
+    return given, status, detail
+
+
 def numeric_value_column(ws, header_row: int, num_cols: int) -> int | None:
     """基準シートで、見出し行の下で最初に数値が現れる列（1起点）を返す。無ければ None。
        ★ 単位L の配線: 基準ファイルで1回だけ決める。呼び出し側がこの列の**列名**を
@@ -301,8 +341,10 @@ def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, h
         return {"name": path.name, "status": "取れなかった", "reason": f"読み込み失敗: {e}"}
     try:
         ws, sheet_fallback = find_matching_sheet(wb, base_sheet_name)
+        # ★ 見出し行はこの冊で探す（2026-09-11・find_header_row に畳んだ）
+        base_row = header_row
+        header_row, status, detail = find_header_row(ws, base_headers, header_row)
         other_headers = read_row_headers(ws, header_row)
-        status, detail = classify_headers(base_headers, other_headers)
         entry = {"name": path.name, "status": status}
         if status == "取れなかった":
             entry["reason"] = detail
@@ -310,6 +352,10 @@ def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, h
             entry["reordered"] = True
         if sheet_fallback:
             entry["sheet_fallback"] = {"wanted": base_sheet_name, "used": ws.title}
+        # ★ 基準と違う行を見出しとして読んだら、呼び出し側が言えるように載せる。
+        #   黙って別の行を読むのは、この repo でいちばん高くつく失敗の形。
+        if status == "取れた" and header_row != base_row:
+            entry["header_row_fallback"] = {"base_row": base_row, "used_row": header_row}
         if status == "取れた" and value_col_name is not None and base_headers:
             label_col = _column_index(other_headers, base_headers[0])
             value_col = _column_index(other_headers, value_col_name)

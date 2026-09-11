@@ -140,6 +140,8 @@ class FileExtractResult:
     excluded: list = field(default_factory=list)
     mismatches: list = field(default_factory=list)
     sheet_fallback: tuple | None = None   # (wanted, used) ── 基準名のシートが無く1枚目へ落ちた時だけ
+    # ★ (基準の行, この冊で使った行) ── 見出しの位置が基準と違った時だけ。黙って読まない。
+    header_row_fallback: tuple | None = None
     findings: list = field(default_factory=list)   # list[inspection.Finding]（M2.5・stack と同じ線）
     # ★ 2026-08-24 第三波 H3: 数値比較から落ちた「数字に見える文字列」の件数と例。
     #   判定には一度も使わない（compare_blocked の docstring）── 開示のためだけ。
@@ -174,8 +176,15 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
     try:
         ws, sheet_fell_back = multifile.find_matching_sheet(wb, base_sheet_name)
         sheet_fallback = (base_sheet_name, ws.title) if sheet_fell_back else None
+        # ★ 見出し行はこの冊で探す（基準 1 冊の行番号に固定しない・2026-09-11）。
+        #   ★ 同じ「固定」が stack / extract_multi / multifile.evaluate_file の
+        #     3 箇所に写し取られていた。直しは 1 関数に畳んで 3 つが呼ぶ形にした。
+        base_row = header_row
+        header_row, status, detail = multifile.find_header_row(
+            ws, base_headers, header_row)
+        header_row_fallback = ((base_row, header_row) if header_row != base_row
+                               and status == "取れた" else None)
         other_headers = multifile.read_row_headers(ws, header_row)
-        status, detail = multifile.classify_headers(base_headers, other_headers)
         if status == "取れなかった":
             not_taken = [inspection.finding(
                 kind=inspection.KIND_NOT_TAKEN, file=path.name, sheet=ws.title,
@@ -183,7 +192,8 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
                 next_step=f"見出しが基準と合いません（{detail}）。この冊は対象外です"
                           "（抽出していません）。")]
             return FileExtractResult(name=path.name, status="取れなかった", reason=detail,
-                                      sheet_fallback=sheet_fallback, findings=not_taken)
+                                      sheet_fallback=sheet_fallback, findings=not_taken,
+                                      header_row_fallback=header_row_fallback)
 
         col_for_base = {bh: multifile._column_index(other_headers, bh) for bh in base_headers}
         max_row = ws.max_row or header_row
@@ -290,6 +300,7 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
                                   excluded=verdict.excluded, mismatches=verdict.mismatches,
                                   sheet_fallback=sheet_fallback, findings=findings,
                                   blocked=blocked, dropped_notes=dropped_notes,
-                                  uncached_in_column=uncached_in_col)
+                                  uncached_in_column=uncached_in_col,
+                                  header_row_fallback=header_row_fallback)
     finally:
         wb.close()

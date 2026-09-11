@@ -237,6 +237,9 @@ class FileStackResult:
     dropped_notes: list = field(default_factory=list)
     col_a_mismatch: tuple | None = None
     sheet_fallback: tuple | None = None   # (wanted, used) ── 基準名のシートが無く1枚目へ落ちた時だけ
+    # ★ (基準の行, この冊で使った行) ── 見出しの位置が基準と違った時だけ。
+    #   黙って別の行を読まない（今日いちばん潰した形）。
+    header_row_fallback: tuple | None = None
     findings: list = field(default_factory=list)   # list[inspection.Finding]（M2.5）
 
 
@@ -257,15 +260,21 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
     try:
         ws, sheet_fell_back = multifile.find_matching_sheet(wb, base_sheet_name)
         sheet_fallback = (base_sheet_name, ws.title) if sheet_fell_back else None
+        # ★ 見出し行は**この冊で**探す（基準 1 冊の行番号に固定しない）。
+        base_row = header_row
+        header_row, status, detail = multifile.find_header_row(
+            ws, base_headers, header_row)
+        header_row_fallback = ((base_row, header_row) if header_row != base_row
+                               and status == "取れた" else None)
         other_headers = multifile.read_row_headers(ws, header_row)
-        status, detail = multifile.classify_headers(base_headers, other_headers)
         if status == "取れなかった":
             not_taken = [inspection.finding(
                 kind=inspection.KIND_NOT_TAKEN, file=path.name, sheet=ws.title,
                 cell=inspection.cell_ref(1, header_row), source_value=None, output_value=None,
                 next_step=f"見出しが基準と合いません（{detail}）。この冊は積んでいません。")]
             return FileStackResult(name=path.name, status="積めなかった", reason=detail,
-                                    sheet_fallback=sheet_fallback, findings=not_taken)
+                                    sheet_fallback=sheet_fallback, findings=not_taken,
+                                    header_row_fallback=header_row_fallback)
         reordered = bool(detail)
 
         # 各 base 列 → このファイル自身の列位置（並べ替えファイルで位置がずれる対策）。
@@ -363,7 +372,8 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
                                 excluded=verdict.excluded, mismatches=verdict.mismatches,
                                 col_a_mismatch=col_a_mismatch, sheet_fallback=sheet_fallback,
                                 findings=findings,
-                                 dropped_notes=dropped_notes)
+                                 dropped_notes=dropped_notes,
+                                 header_row_fallback=header_row_fallback)
     finally:
         wb.close()
 

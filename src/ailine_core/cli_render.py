@@ -391,6 +391,10 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
             lines.append(f"  {f['name']}: 取れた（並べ替え）")
     for f in result.get("sheet_fallbacks", ()):
         lines.append(f"  {f['name']}: シート『{f['wanted']}』が無いので1枚目『{f['used']}』を使いました")
+    # ★ 基準と違う行を見出しとして読んだら言う ── 黙って別の行を読まない（2026-09-11）。
+    for f in result.get("header_row_fallbacks", ()):
+        lines.append(f"  {f['name']}: 見出しは {f['used_row']} 行目にありました"
+                     f"（基準は {f['base_row']} 行目）")
     for entry in result.get("excluded_detail", ()):
         rows_txt = "、".join(f"{r['row']}行目" for r in entry["rows"])
         lines.append(f"  {entry['name']}: 合計行を{len(entry['rows'])}件除外（{rows_txt}）")

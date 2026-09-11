@@ -15359,8 +15359,15 @@ def _stack_json(result: dict) -> dict:
                   for entry in result.get("mismatches", ()) for m in entry["rows"]]
     return {"denominator": result["denominator"], "stacked_files": result["stacked_files"],
             "rows_written": result["rows_written"], "files": result["files"],
+            # ★ 積めなかった冊を名指しで載せる（2026-09-11）。
+            #   人向けの表示（render_stack_report）は名指ししていたのに、--json は
+            #   denominator と stacked_files の**数だけ**で、どの冊かを言えなかった。
+            #   自動化する側は「4 冊中 1 冊」とだけ知らされ、残り 3 冊を聞けない。
+            #   ★ 同じ事実に出口が 2 つあって、片方にだけ名前が載っていた（片配線）。
+            "skipped": result.get("skipped", []),
             "sums": result["sums"], "mismatches": mismatches,
             "sheet_fallbacks": result.get("sheet_fallbacks", []),
+            "header_row_fallbacks": result.get("header_row_fallbacks", []),
             "total_word_warnings": result.get("total_word_warnings", [])}
 
 
@@ -15672,6 +15679,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     # ⑥ ファイルごとの評価（★ 一括検出: 欠陥が出ても止めず全部集める）。
     skipped, files_json, excluded_detail, mismatches = [], [], [], []
     sheet_fallbacks, matched_rows_all = [], []
+    header_row_fallbacks = []
     blocked_total, blocked_samples = 0, []   # ★ 第三波 H3: 数字に見える文字列（開示専用）
     uncached_total = 0                        # ★ 致命③: 条件列の「数式だが値が無い」セル
     extract_dropped = {}   # ★ 2026-08-24: 値として運べない中身（コメント/リンク）
@@ -15685,6 +15693,16 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         if r.sheet_fallback:
             sheet_fallbacks.append({"name": r.name, "wanted": r.sheet_fallback[0],
                                     "used": r.sheet_fallback[1]})
+        # ★ 基準と違う行を見出しとして読んだら、必ず言う（2026-09-11）。
+        #   飾り行の数が冊ごとに違うのは実物では普通だが、**黙って別の行を読む**のは
+        #   この repo でいちばん高くつく失敗の形。
+        #   ★ この集約は cmd_run_folder と cmd_stack の 2 箇所に写し取られている。
+        #     片方だけ直すと片配線になるので、番人（tests/test_stack_header_row_varies.py）
+        #     は 2 つの経路を 1 本の試験で縛っている。
+        if getattr(r, "header_row_fallback", None):
+            header_row_fallbacks.append({"name": r.name,
+                                         "base_row": r.header_row_fallback[0],
+                                         "used_row": r.header_row_fallback[1]})
         if r.status == "取れなかった":
             skipped.append({"name": r.name, "reason": r.reason})
             file_sheet_map.append((r.name, sheet_used, f"取れなかった（{r.reason}）"))
@@ -15820,6 +15838,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
           "contributing_files": contributing_files, "rows_written": total_matched,
           "files": files_json, "skipped": skipped, "self_excluded": self_excluded,
           "sheet_fallbacks": sheet_fallbacks, "excluded_detail": excluded_detail,
+          "header_row_fallbacks": header_row_fallbacks,
           "mismatches": mismatches, "total_word_warnings": total_word_warnings,
           "rebuilt_own_output": rebuilt_own_output,
           "blocked_stringy": ({"count": blocked_total, "samples": blocked_samples[:3]}
@@ -15867,6 +15886,12 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
         say(f"  並べ替えて照合: {len(reordered_files)} 冊（内訳は --json）")
     for f in sheet_fallbacks:
         say(f"  {f['name']}: シート『{f['wanted']}』が無いので1枚目『{f['used']}』を使いました")
+    # ★ 見出しの位置が基準と違った冊を言う（2026-09-11）。
+    #   ★ この経路は render_stack_report を通らず自前で表示している ──
+    #     同じ事実の出口が 2 つあるので、番人は両方の経路を 1 本の試験で縛る。
+    for f in header_row_fallbacks:
+        say(f"  {f['name']}: 見出しは {f['used_row']} 行目にありました"
+            f"（基準は {f['base_row']} 行目）")
     if excluded_detail:
         total_excluded_rows = sum(len(entry["rows"]) for entry in excluded_detail)
         say(f"  合計行 {total_excluded_rows} 行を {len(excluded_detail)} 冊で除外"
@@ -16988,6 +17013,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
 
     skipped, files_json, excluded_detail, mismatches, col_a_warnings = [], [], [], [], []
     sheet_fallbacks = []   # ★ P2 開示: 基準名のシートが無く1枚目へ落ちたファイル
+    header_row_fallbacks = []   # ★ 開示: 見出しが基準と違う行に在った冊（2026-09-11）
     stacked_rows = []   # [(base 列順の値, 元ファイル名, 元行), ...]
     sums_source = {col: 0.0 for col in numeric_cols}
     all_findings = []   # ★ M2.5: 検分シートの所見（inspection.Finding・ファイルごとに ws 側で組立済み）
@@ -17003,6 +17029,16 @@ def cmd_stack(a: argparse.Namespace) -> int:
         if r.sheet_fallback:
             sheet_fallbacks.append({"name": r.name, "wanted": r.sheet_fallback[0],
                                     "used": r.sheet_fallback[1]})
+        # ★ 基準と違う行を見出しとして読んだら、必ず言う（2026-09-11）。
+        #   飾り行の数が冊ごとに違うのは実物では普通だが、**黙って別の行を読む**のは
+        #   この repo でいちばん高くつく失敗の形。
+        #   ★ この集約は cmd_run_folder と cmd_stack の 2 箇所に写し取られている。
+        #     片方だけ直すと片配線になるので、番人（tests/test_stack_header_row_varies.py）
+        #     は 2 つの経路を 1 本の試験で縛っている。
+        if getattr(r, "header_row_fallback", None):
+            header_row_fallbacks.append({"name": r.name,
+                                         "base_row": r.header_row_fallback[0],
+                                         "used_row": r.header_row_fallback[1]})
         if r.status == "積めなかった":
             skipped.append({"name": r.name, "reason": r.reason})
             file_sheet_map.append((r.name, sheet_used, f"取れなかった（{r.reason}）"))
@@ -17142,6 +17178,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
 
     result = {"denominator": denominator, "stacked_files": stacked_files,
               "rows_written": len(stacked_rows), "files": files_json, "skipped": skipped,
+              "header_row_fallbacks": header_row_fallbacks,
               "dropped_notes": dropped_notes_total,
               "sums": sums, "excluded_detail": excluded_detail, "mismatches": mismatches,
               "col_a_warnings": col_a_warnings, "header_drop_warning": header_drop_warning, "unverified_cols": unverified_cols, "sheet_fallbacks": sheet_fallbacks,
