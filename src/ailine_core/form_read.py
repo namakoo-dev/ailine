@@ -530,10 +530,18 @@ def read_issuer(grid: Grid, addressee: Record) -> Record:
         cands.append((t, name))
 
     if not cands:
-        why = ("発行元（請求元）の名前が見つかりませんでした"
-               if not dropped else
-               "発行元（請求元）の名前が見つかりませんでした: "
-               + "／".join(f"{at} は{note}" for at, _v, note in dropped))
+        # ★ 何を探したのかを言う（2026-09-11・入れ子の検体 14 冊の実測から）。
+        #   「見つかりませんでした」だけだと、人は**探し方**を疑えない。実際に落ちたのは
+        #   `ナギ商会`（略称）・`ナギ商店`（屋号）・ブランド名 ── どれも法人格が無いので
+        #   候補にすら上がらなかった。個人事業主と屋号は実務では普通にある。
+        #   ★ 拾いに行く方は測って見送った（§3.7）: 位置や隣接では見出し・住所と
+        #     見分けられず、除外語を足し続けない限り成り立たない。だから
+        #     **できないことを正直に言う**方に倒す。
+        base = ("発行元（請求元）の名前が見つかりませんでした"
+                "（『株式会社』などの法人格が付いた名前だけを探しています ── "
+                "屋号や略称だけの請求書では見つかりません）")
+        why = base if not dropped else (
+            base + ": " + "／".join(f"{at} は{note}" for at, _v, note in dropped))
         return Record("請求元", (), rivals=tuple(dropped), blank_reason=why)
 
     with_reg = [(t, n) for t, n in cands if _has_regno_near(grid, t)]
