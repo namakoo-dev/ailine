@@ -239,3 +239,20 @@ def test_a_missing_record_counts_as_a_blank_without_a_reason():
     blanks, with_reason, bad = forms_collect.blanks_have_reasons([("x.xlsx", {})])
     assert blanks == len(forms_collect.FIELDS) and with_reason == 0
     assert bad and all("記録が無い" in b for b in bad), bad
+
+
+def test_verify_tells_the_truth_about_its_own_forms_output(folder, tmp_path):
+    """★ 穴 A（2026-09-11）: `ailine verify` は forms の出力に自分の印を見つけながら
+    「印がありません」と言っていた。独立の検算が無いのは事実なので、csv と同じく
+    unsupported（対応外）で正直に返す ── unmarked（他人のファイル）に混ぜない。"""
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    from ailine_core import verify as multifile_verify
+    got = multifile_verify.verify_output(out, folder)
+    assert not got.get("unmarked"), "★ 自分の印を『印が無い』と言っている"
+    assert "実装していません" in (got.get("unsupported") or ""), got
+    r = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
+                       capture_output=True, text=True, timeout=180, encoding="utf-8",
+                       errors="replace", cwd=str(REPO))
+    assert r.returncode == 4, r.stdout
+    assert "印がありません" not in r.stdout, r.stdout

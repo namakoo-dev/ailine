@@ -230,6 +230,11 @@ def verify_output(out_path, src_folder) -> dict:
         #   ある）ので、{"unsupported": ...} で正直に区別する。
         return {"unsupported": "CSV 検疫の出力は `ailine csv <元のcsv>` を再実行して"
                                 "確認してください（独立の検算はまだ実装していません）。"}
+    if creator == "ailine forms":
+        # ★ 帳票の一覧（2026-09-11）: 独立の検算はまだ無い。csv と同じ理由で
+        #   {"unmarked": True} に混ぜず、{"unsupported": ...} で正直に区別する。
+        return {"unsupported": "帳票の一覧の独立の検算はまだ実装していません"
+                                "（`ailine forms <フォルダ>` を再実行して 検分 シートを見てください）。"}
     if creator in _CREATOR_MARKS and description:
         try:
             cond = json.loads(description)
