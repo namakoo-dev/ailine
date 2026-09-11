@@ -53,6 +53,7 @@ from ailine_core.field_record import value as grade_value
 from ailine_core.form_grid import Grid
 from ailine_core.primitives import is_number as _is_number
 from ailine_core.date_compare import parse_date_literal as _parse_date
+from ailine_core.date_compare import parse_wareki_literal as _parse_wareki
 
 # ── 語の正規化 ────────────────────────────────────────────
 _SPACE = re.compile(r"[\s　 ]+")
@@ -290,7 +291,9 @@ def read_issue_date(grid: Grid) -> Record:
         if _looks_like_placeholder_date(raw):
             rivals.append((cell.at, str(raw)[:16], "雛形の埋め草のままで、日付ではありません"))
             continue
-        d = _parse_date(raw)
+        # ★ 受ける暦を決めるのはここ（算術は date_compare が 1 つだけ持つ）。
+        #   和暦は帳票に実在する形で、元号は法で決まる閉じた一覧 ── 言い回しの列挙ではない。
+        d = _parse_date(raw) or _parse_wareki(raw)
         if d is None:
             rivals.append((cell.at, str(raw)[:16], "日付として読めません"))
             continue
@@ -298,7 +301,7 @@ def read_issue_date(grid: Grid) -> Record:
                              how=f"{lab.at}「{norm(lab.value)[:8]}」の右 {cell.at}"))
     if not evid:
         why = ("請求日が見つかりませんでした（『請求日』『発行日』のラベルの右か、"
-               "同じセルに西暦の日付が入っている形だけを読みます）")
+               "同じセルに西暦か和暦の日付が入っている形だけを読みます）")
         if rivals:
             why += ": " + "／".join(f"{at} は{note}" for at, _v, note in rivals)
         return Record("請求日", (), rivals=tuple(rivals), blank_reason=why)

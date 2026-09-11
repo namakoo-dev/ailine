@@ -30,13 +30,23 @@ _DATE_RE = re.compile(
     r"^\s*(?P<y>\d{4})\s*[-/.年]\s*(?P<m>\d{1,2})\s*[-/.月]\s*(?P<d>\d{1,2})\s*日?\s*$"
 )
 
+#: 元号と、その元年の前年（元年 = +1 年）。★ **法で決まる閉じた一覧**で、増えるのは
+#:  代替わりの時だけ ── 言い回しの列挙（足し続けないと当たらない形）ではない。
+_ERAS = {"令和": 2018, "平成": 1988, "昭和": 1925, "大正": 1911, "明治": 1867}
+
+_WAREKI_RE = re.compile(
+    r"^\s*(?P<e>" + "|".join(_ERAS) + r")\s*(?P<y>\d{1,2}|元)\s*[-/.年]"
+    r"\s*(?P<m>\d{1,2})\s*[-/.月]\s*(?P<d>\d{1,2})\s*日?\s*$"
+)
+
 
 def parse_date_literal(raw) -> dt.date | None:
     """依頼文から来た値を日付として読む。読めなければ None。
 
     ★ 読まないものを明示する:
       - 年の無い「3/26」── どの年かは機械が決めてよい話ではない
-      - 和暦「令和8年3月26日」── 未対応。黙って誤変換するくらいなら読まない
+      - 和暦「令和8年3月26日」── ここでは読まない。読みたい呼び出し側が
+        `parse_wareki_literal` を**自分で足して**合成する（下の docstring 参照）
       - 数値「100」── 数値は数値のまま（シリアル値として日付に化けさせない）
     """
     if isinstance(raw, dt.datetime):
@@ -51,6 +61,37 @@ def parse_date_literal(raw) -> dt.date | None:
     try:
         return dt.date(int(m.group("y")), int(m.group("m")), int(m.group("d")))
     except ValueError:      # 2026/2/30 のような存在しない日
+        return None
+
+
+def parse_wareki_literal(raw) -> dt.date | None:
+    """和暦の日付**だけ**を読む（令和8年8月31日 → 2026-08-31）。読めなければ None。
+
+    ★★ なぜ `parse_date_literal` に混ぜないか（2026-09-12）: あちらは依頼文の値を読み、
+      列の型判定（`classify_date_column`）にも使われる。和暦を混ぜると **`ailine run` の
+      経路と列の型判定にも黙って波及する** ── 測った範囲（帳票を読む器官）を超える。
+      暦の算術（判定）はここに 1 つだけ置き、**どの暦を受けるかの合成は呼び出し側**に置く。
+
+    ★ 読まないもの:
+      - 「R8.8.31」「H31/4/1」のアルファベット略記 ── 帳票 178 冊で **0 件**（2026-09-12 実測）で、
+        `R8` は品番・部屋番号・セル番地にも見える。★ 発火条件: 実物で出たら、その時に測って足す
+      - 年だけ・月日だけ（元号が付いていても日付にならない）
+
+    ★ 元年は 1 年（令和元年 = 2019）。存在しない日（令和8年2月30日）は None。
+    """
+    if isinstance(raw, (dt.date, dt.datetime)):
+        return None                       # ★ 既に日付 ── ここの仕事ではない（呼び分けを曖昧にしない）
+    if not isinstance(raw, str):
+        return None
+    m = _WAREKI_RE.match(raw)
+    if not m:
+        return None
+    y = 1 if m.group("y") == "元" else int(m.group("y"))
+    if y < 1:
+        return None
+    try:
+        return dt.date(_ERAS[m.group("e")] + y, int(m.group("m")), int(m.group("d")))
+    except ValueError:
         return None
 
 
