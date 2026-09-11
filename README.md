@@ -232,7 +232,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->3879<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
+期待: 全件緑（<!-- TOTAL_TESTS -->3884<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
 ollama）が要るものは `-m "not local"` が自動的に外します。外れた本数は実行結果の
 `deselected` に出ます）。
 ★ 総数は `tests/test_local_test_count.py` が実測と突き合わせています ──
@@ -453,7 +453,7 @@ LLM に聞く場合も座標で聞き、返事を実表で検算します。当�
 この線に沿って、位置・列・値の決定を機械側へ寄せました。効果で測る検体
 （表 7 種 × 基本操作 29 種 × 言い回しの揺れ = <!-- MATRIX_CASES -->245<!-- /MATRIX_CASES --> 件・op 名でなく
 出来上がったファイルで判定）で、86.9% → 94.0% → <!-- MATRIX -->241/245 = 98.4%<!-- /MATRIX -->
-（断り <!-- MATRIX_REFUSED -->3<!-- /MATRIX_REFUSED -->・**失敗 1**）です。
+（断り <!-- MATRIX_REFUSED -->1<!-- /MATRIX_REFUSED -->・**失敗 1**）です。
 ★ 2026-09-07 の測定で**失敗が 1 件出ました**（「机の行と棚の行を交換して」が
 **行追加に化け、行が 4 → 5 に増える**。同じ依頼で 23 回中 22 回は正しく入れ替わるので、
 起きたり起きなかったりします）。落とさずに分母へ残しています ── 外せば「壊していない

@@ -228,6 +228,126 @@ def test_the_matrix_record_still_matches_the_machine():
     rec = _matrix()
     cases, ok = int(m.group(1)), int(m.group(2))
     assert cases == rec["cases"], f"検体の数が変わった: {cases}（記録は {rec['cases']}）"
-    assert abs(ok - rec["intended"]) <= 1, (
-        f"実測 {ok}/{cases}・記録 {rec['intended']}/{cases} ── "
+    center = _tolerance_center(rec)
+    width = int(rec.get("tolerance_width", 1))
+    assert abs(ok - center) <= width, (
+        f"実測 {ok}/{cases}・許容 {center}±{width}（記録の三つ組は "
+        f"{rec['intended']}/{rec['refused']}/{rec['failed']}）── "
         "記録と文書を測り直して直すこと（実測が正）")
+
+    # ★★ 幅は**数の揺れ**だけを吸う。**名前**は吸わせない（2026-09-11）。
+    #   幅を広げた代償は「本物の退行を見逃す」こと。そこを別の軸で埋める ──
+    #   落ちた検体の名前が 1 つでも新顔なら、数が許容内でも赤にする。
+    newcomers = sorted(set(_failed_case_names(r.stdout)) - set(rec.get("known_flaky", ())))
+    assert not newcomers, (
+        f"★ 見たことのない家系が落ちた: {newcomers}（既知は {rec.get('known_flaky')}）── "
+        "数は許容内でも、これは揺れではなく退行の疑い。名前で切り分けること")
+
+
+def _failed_case_names(stdout: str) -> list:
+    """行列の出力から、落ちた検体の**名前**を拾う（`× [売上/chart] …` の形）。
+
+    ★ 数だけ見ていると、幅の中で**中身が入れ替わっても**気づけない。
+      「241 のまま」でも、落ちた家系が別物に変わっていたらそれは退行。
+    """
+    return re.findall(r"^× \[([^\]]+)\]", stdout, flags=re.MULTILINE)
+
+
+def _tolerance_center(rec: dict) -> int:
+    """許容の中心。★ **最後に実測した三つ組とは別の欄**（2026-09-11・Namakoo 決裁）。
+
+    ★★ なぜ分けたか:
+      それまで `intended`（最後の実測の三つ組の 1 つ）が
+      「記録された事実」と「許容の中心」を**兼ねていた**。
+      番人は `意図どおり+断り+失敗=検体数` を要求するので三つ組を継ぎ接ぎできず、
+      中心を動かすには**別の回の三つ組へ丸ごと乗り換える**しかなかった。
+      その結果、最後の回が幅の端だと毎回 push が止まる ──
+      2026-09-07 の俺が「番人の当て方を点±1から実測した幅へ変える提案」を書いて、
+      判断待ちのまま運用していた（観測は 235〜244 の幅 9）。
+
+    ★ Namakoo の決裁（2026-09-11 12:17）:
+      「感覚で申し訳ないが 243 が中央に近い気がする。そこを基準にプラマイ 1 で許容する」
+      → 中心は**人が決める 1 つの数**にして、記録の三つ組とは切り離す。
+
+    ★ 中心そのものにも番人を付ける ── **実際に観測された値でなければならない**
+      （思いつきの数を中心に据えられないようにする）。
+    """
+    center = rec.get("tolerance_center")
+    if center is None:
+        return int(rec["intended"])
+    assert center in rec["observed"], (
+        f"許容の中心 {center} は observed に無い ── "
+        "中心は実際に観測された値から選ぶこと（思いつきの数を据えない）")
+    return int(center)
+
+
+def test_the_tolerance_center_is_a_value_that_was_actually_observed():
+    """★ 許容の中心は**実際に観測された値**でなければならない（速い番人）。
+
+    ★★ なぜ速い側に置くか: 中心を使う判定（②）は実機テスト（13 分）の中にしか無い。
+      中心の置き方を間違えても、33 分の pre-push まで誰も気づかない ──
+      「番人が在っても、その事故の形では鳴らない」を自分で作らないため、
+      **中心の妥当性だけは LLM 抜きで縛る**。
+    """
+    rec = _matrix()
+    center = _tolerance_center(rec)
+    assert center in rec["observed"], center
+    # ★ 中心 ±1 が、直近の観測をちゃんと覆っていること（覆えないなら中心が古い）
+    recent = rec["observed"][-4:]
+    covered = [x for x in recent if abs(x - center) <= 1]
+    assert covered, (
+        f"★ 中心 {center}±1 が直近の観測 {recent} を 1 つも覆えていない ── "
+        "中心が古い（測り直して決め直すこと）")
+
+
+def test_the_name_axis_catches_a_newcomer_even_inside_the_tolerance():
+    """★★ 幅は数の揺れだけを吸う ── **名前**は吸わせない（速い番人）。
+
+    ★ 幅を ±2 にした代償は「本物の退行を見逃す」こと。そこを名前で埋めた:
+      落ちた家系が 1 つでも新顔なら、数が許容内でも赤。
+    ★ 実物の出力の形（`× [売上/chart] …`）で拾えることも一緒に縛る ──
+      正規表現が当たらなくなったら、この番人は**黙って何も見なくなる**。
+    """
+    rec = _matrix()
+    sample = "\n".join([
+        "× [売上/chart] 金額の棒グラフを作って  ── × 値列の参照が『D』列になっている",
+        "× [注文/lookup] 商品表を参照して商品名を埋めて  ── × 検証対象が0件",
+        "合計 245 件: ✓ 243  ？断り 0  × 失敗 2",
+    ]) + "\n"
+    got = _failed_case_names(sample)
+    assert got == ["売上/chart", "注文/lookup"], f"★ 名前が拾えていない: {got}"
+    assert not set(got) - set(rec["known_flaky"]), "★ 既知の家系が台帳から消えた"
+
+    # ★ 新顔が 1 つ混じったら検出できること（負の被覆）
+    with_newcomer = sample + "× [見知らぬ表/unknown_op] 何か  ── ×\n"
+    names = _failed_case_names(with_newcomer)
+    assert set(names) - set(rec["known_flaky"]) == {"見知らぬ表/unknown_op"}
+
+
+def test_the_flaky_ledger_is_a_list_to_shrink():
+    """★ 台帳は縮めるためのもの ── 増え続けるなら幅で誤魔化しているのと同じ。"""
+    rec = _matrix()
+    ledger = rec.get("known_flaky") or []
+    assert ledger, "★ 台帳が空 ── 名前の軸が何も見ていない"
+    assert len(ledger) <= 8, (
+        f"★ 既知の揺れが {len(ledger)} 家系まで増えた: {ledger} ── "
+        "幅と台帳で吸い続けるのをやめて、家系を直すこと")
+    assert all("/" in x for x in ledger), f"★ 『表/op』の形でない名前がある: {ledger}"
+
+
+def test_a_center_that_was_never_observed_is_refused():
+    """★ 負の被覆 ── 思いつきの数を中心に据えられないこと。
+
+    ★ これが無いと、赤くなった時に「中心を動かせば通る」で逃げられる。
+    """
+    rec = dict(_matrix())
+    rec["tolerance_center"] = 9999
+    with pytest.raises(AssertionError, match="observed に無い"):
+        _tolerance_center(rec)
+
+
+def test_without_a_center_the_guard_falls_back_to_the_recorded_triple():
+    """★ 中心の欄が無い記録でも、昔と同じ振る舞いに落ちること（黙って緩まない）。"""
+    rec = dict(_matrix())
+    rec.pop("tolerance_center", None)
+    assert _tolerance_center(rec) == rec["intended"]
