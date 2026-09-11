@@ -309,14 +309,17 @@ def test_the_name_axis_catches_a_newcomer_even_inside_the_tolerance():
       正規表現が当たらなくなったら、この番人は**黙って何も見なくなる**。
     """
     rec = _matrix()
-    sample = "\n".join([
-        "× [売上/chart] 金額の棒グラフを作って  ── × 値列の参照が『D』列になっている",
-        "× [注文/lookup] 商品表を参照して商品名を埋めて  ── × 検証対象が0件",
-        "合計 245 件: ✓ 243  ？断り 0  × 失敗 2",
-    ]) + "\n"
+    known = list(rec["known_flaky"])
+    assert len(known) >= 2, f"★ 台帳が 2 家系未満: {known}"
+    # ★ 見本は**台帳から**組む ── 名前を決め打ちすると、家系を直して台帳から消した瞬間に
+    #   この試験が壊れる（2026-09-11 に売上/chart を消して実際に踏んだ）。
+    #   台帳を縮めることが正しい運用なのだから、試験がそれを罰してはいけない。
+    sample = "\n".join([f"× [{known[0]}] 何かの依頼  ── × 何かの理由",
+                        f"× [{known[1]}] 別の依頼  ── × 別の理由",
+                        "合計 245 件: ✓ 243  ？断り 0  × 失敗 2"]) + "\n"
     got = _failed_case_names(sample)
-    assert got == ["売上/chart", "注文/lookup"], f"★ 名前が拾えていない: {got}"
-    assert not set(got) - set(rec["known_flaky"]), "★ 既知の家系が台帳から消えた"
+    assert got == known[:2], f"★ 名前が拾えていない: {got}"
+    assert not set(got) - set(known), "★ 台帳の名前が既知と判定されない"
 
     # ★ 新顔が 1 つ混じったら検出できること（負の被覆）
     with_newcomer = sample + "× [見知らぬ表/unknown_op] 何か  ── ×\n"
