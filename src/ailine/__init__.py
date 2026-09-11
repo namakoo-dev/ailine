@@ -4263,7 +4263,7 @@ def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, 
                  f"参照表『{resolved['source_sheet']}』の 1 列目がキーになります")
         return False, resolved, inferred, (
             f"転記のキー列と対象列がどちらも『{resolved['key_col']}』になっています。"
-            f"転記は**別の列**を手がかりに引きます（{_hint}）。"
+            f"転記は別の列を手がかりに引きます（{_hint}）。"
             f"どの列で引くかを依頼文に書いてください"
             f"（例:「{_src[0] if _src else 'コード'}で引いて{resolved['target_col']}を転記して」）"
         )
