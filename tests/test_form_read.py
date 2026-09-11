@@ -16,7 +16,7 @@ import pytest
 
 from ailine_core.field_record import CONFIRMED, NONE_FOUND, SINGLE, SPLIT, grade, value
 from ailine_core.form_grid import Grid
-from ailine_core.form_read import clean_org_name, read_form
+from ailine_core.form_read import clean_org_name, read_book, read_form
 
 
 def book(rows: dict, merges=()):
@@ -242,3 +242,99 @@ def test_a_sheet_that_is_not_an_invoice_says_nothing():
     for fld, r in recs.items():
         assert grade(r) == NONE_FOUND, f"★ 請求書でないのに {fld} を答えた: {value(r)!r}"
         assert r.blank_reason, "★ 空欄なのに理由が無い"
+
+
+# ── ★ どのシートが請求書かも自分で決める ────────────────────────
+def workbook(sheets: dict, hidden=()):
+    """{"シート名": {"B3": 値, …}} から 1 冊を組む。"""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for name, rows in sheets.items():
+        ws = wb.create_sheet(title=name)
+        for at, v in rows.items():
+            ws[at] = v
+        if name in hidden:
+            ws.sheet_state = "hidden"
+    return wb
+
+
+def test_the_explanation_sheet_is_not_the_invoice():
+    """★ 1 枚目が『説明』で本体が 2 枚目（実物 12 冊がこの形）。
+
+    ★★ 2026-09-11 まで、どのシートを読むかを**検体の答えから受け取っていた**。
+      つまりこの問題を一度も解かずに満点を出していた ──
+      買い手が持っていない手がかりで測っていた。
+    """
+    wb = workbook({"説明": {"A1": "この雛形の使い方", "A3": "① 社名を入れます"},
+                   "適格請求書": minimal()})
+    r = read_book(wb)["請求額"]
+    assert value(r) == 3300, f"★ 説明シートを読んだ: {r.blank_reason}"
+
+
+def test_two_invoice_sheets_in_one_book_cannot_be_decided():
+    """★ 1 冊に請求書が 2 枚（8 月分・9 月分）── どちらか決められない。"""
+    wb = workbook({"misoca_invoice": minimal(),
+                   "請求書（9月分）": minimal(C11=4400, H39=4400)})
+    for fld, r in read_book(wb).items():
+        assert grade(r) == SPLIT, f"★ {fld}: 2 枚あるのに片方を選んだ"
+        assert "シート" in r.blank_reason, f"★ 理由がシートを名指していない: {r.blank_reason}"
+        assert value(r) is None
+
+
+def test_a_found_conflict_is_never_reported_as_nothing_found():
+    """★★ 食い違いを見つけたのに「何も無い」と言わない。
+
+    ★ 初版は「根拠が 0 個なら 無」と逃げていて、請求書が 2 枚ある冊に対して
+      「手がかりが見つかりません」と報告していた。人は探し方を疑う ── 嘘になる。
+    """
+    from ailine_core.field_record import grade_of
+    assert grade_of((), conflict=True) == SPLIT, (
+        "★ 食い違いを『無』と言った ── 決められないのであって、無いのではない")
+
+
+def test_an_invoice_hidden_behind_an_empty_visible_sheet_is_reported_as_hidden():
+    """★ 本体が非表示で、可視シートは空（実物にあった形）。
+
+    ★ 読んでもよいが、**非表示だったことを人に言う**（黙って隠しシートを読まない）。
+    """
+    wb = workbook({"misoca_invoice": minimal(), "Sheet1": {}},
+                  hidden=("misoca_invoice",))
+    r = read_book(wb)["請求額"]
+    assert value(r) == 3300
+    assert "非表示" in (r.swept_how + r.blank_reason), "★ 隠れていたことを言っていない"
+
+
+def test_a_book_with_no_invoice_sheet_names_what_it_looked_at():
+    """★ どこにも請求書が無いなら、**見たシート名を並べて**空欄にする。"""
+    wb = workbook({"家計調査": {"A1": "家計調査", "A3": "世帯数", "B3": 1234},
+                   "注記": {"A1": "出典"}})
+    for fld, r in read_book(wb).items():
+        assert grade(r) == NONE_FOUND
+        assert "家計調査" in r.blank_reason and "注記" in r.blank_reason, (
+            f"★ 何を見たか言っていない: {r.blank_reason}")
+
+
+def test_a_cover_letter_sheet_is_not_a_second_invoice():
+    """★ 印が 1 つだけのシートを請求書と数えない。
+
+    ★ 送付状には宛名（御中）が在る。そこだけ見て「請求書らしい」と数えると、
+      送付状＋請求書の 1 冊で「請求書が 2 枚あります」と**偽の食い違い**が出る
+      （正しい冊に印が立つ ── 誤報の次に悪い）。
+    ★ 別の種類の印が 2 つ以上そろって初めて「らしい」とする。
+    """
+    wb = workbook({"送付状": {"B2": "ナギ商会株式会社　御中",
+                              "B4": "平素は格別のお引き立てを賜り厚く御礼申し上げます。",
+                              "B6": "下記の書類をお送りいたします。"},
+                   "請求書": minimal()})
+    r = read_book(wb)["請求額"]
+    assert grade(r) != SPLIT, f"★ 送付状を 2 枚目の請求書と数えた: {r.blank_reason}"
+    assert value(r) == 3300
+
+
+def test_the_signals_are_of_different_kinds():
+    """★ 印の数え方そのもの ── 同じ種類を 2 回数えて 2 にしない。"""
+    from ailine_core.form_read import invoice_signals
+    from ailine_core.form_grid import Grid
+    ws, _ = book({"B2": "ナギ商会株式会社　御中", "B4": "経理部　御中", "B6": "総務課　御中"})
+    sig = invoice_signals(Grid.read(ws))
+    assert len(sig) == 1, f"★ 御中を 3 つ数えて 3 印にした: {sig}"

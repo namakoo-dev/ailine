@@ -724,3 +724,90 @@ def read_form(ws, ws_formula=None, rows: int = 60, cols: int = 24) -> dict:
         "請求元": read_issuer(grid, addressee),
         "請求額": read_billed_total(grid, ws_formula),
     }
+
+
+#: 請求書らしさの印。★ どれか 1 つでは足りない（見積書にも合計は在る）。
+def invoice_signals(grid: Grid) -> tuple:
+    """そのシートが請求書らしいと言える**印**を並べる。
+
+    ★ 1 つでは足りない ── 合計だけなら統計表にも在るし、
+      社名だけなら送付状にも在る。**別の種類の印が 2 つ以上**で「らしい」とする。
+    """
+    texts = [norm(c.value) for c in grid.text_cells()]
+    found = []
+    if any(any(h in t for h in _HONORIFIC) for t in texts):
+        found.append("宛名（御中・様）")
+    if any("請求" in t for t in texts):
+        found.append("「請求」の語")
+    band = {lab for lab in ("小計", "消費税", "合計", "合計金額")
+            if any(t == norm(lab) for t in texts)}
+    if len(band) >= 2:
+        found.append("帯（" + "・".join(sorted(band)) + "）")
+    _s, head, _c, _a, _st = detail_amount_sum(grid, None)
+    if head is not None:
+        found.append(f"明細の見出し（{head.at}）")
+    return tuple(found)
+
+
+def read_book(wb, wb_formula=None, rows: int = 60, cols: int = 24) -> dict:
+    """**1 冊**を読む。★ どのシートが請求書かも、ここで自分で決める。
+
+    ★★ なぜ要るか（2026-09-11）:
+      それまでの測定は、どのシートを読むかを**検体の答えから受け取っていた**。
+      つまり「どのシートが請求書か」を一度も解いていないのに満点を出していた
+      ── 買い手が持っていない手がかりで測っていた。
+      実物の 14/87 冊は複数シートで、しかも:
+        ・`説明` シートが 1 枚目で本体が 2 枚目（12 冊）
+        ・1 冊に請求書が 2 枚（8 月分・9 月分）
+        ・本体のシートが**非表示**で、可視シートは空の 1 枚だけ
+
+    決め方:
+      ① 各シートの「請求書らしい印」を数える（別種の印が 2 つ以上で候補）
+      ② 可視の候補が 2 枚以上 → **どちらの請求書か決められない**ので全項目を空欄
+      ③ 可視の候補が 1 枚 → それを読む
+      ④ 可視に候補が無く、非表示に在る → 読むが、**非表示だったことを言う**
+      ⑤ どこにも無い → 全項目を空欄（理由に、見たシート名を並べる）
+    """
+    seen, hidden, looked = [], [], []
+    for name in wb.sheetnames:
+        ws = wb[name]
+        grid = Grid.read(ws, rows=rows, cols=cols)
+        sig = invoice_signals(grid)
+        looked.append(f"「{name}」({len(sig)} 印)")
+        if len(sig) >= 2:
+            (hidden if getattr(ws, "sheet_state", "visible") != "visible"
+             else seen).append((name, sig))
+
+    if len(seen) >= 2:
+        names = "・".join(f"「{n}」" for n, _s in seen)
+        why = (f"この 1 冊に請求書らしいシートが {len(seen)} 枚あります（{names}）。"
+               "どちらの請求書か決められないので、空欄にしました")
+        return {f: Record(f, (), (), (), why, False, "", True, why)
+                for f in ("宛先", "請求元", "請求額")}
+
+    note = ""
+    if seen:
+        name = seen[0][0]
+    elif hidden:
+        name, _sig = hidden[0]
+        note = f"（シート「{name}」は非表示でした）"
+    else:
+        why = ("請求書らしいシートが見つかりませんでした（見たシート: "
+               + "・".join(looked) + "）")
+        return {f: Record(f, (), (), (), why) for f in ("宛先", "請求元", "請求額")}
+
+    wsf = None
+    if wb_formula is not None and name in wb_formula.sheetnames:
+        wsf = wb_formula[name]
+    recs = read_form(wb[name], ws_formula=wsf, rows=rows, cols=cols)
+    if note:
+        recs = {f: _with_note(r, note) for f, r in recs.items()}
+    return recs
+
+
+def _with_note(rec: Record, note: str) -> Record:
+    """人に見せる 1 行に一言足す（区分は変えない）。"""
+    return Record(rec.field, rec.evidences, rec.rivals, rec.excluded,
+                  (rec.blank_reason + note) if rec.blank_reason else "",
+                  rec.swept, (rec.swept_how + note) if rec.swept_how else note,
+                  rec.conflict, rec.conflict_why)

@@ -126,7 +126,11 @@ def grade_of(evidences, swept: bool = False, conflict: bool = False) -> str:
     if conflict:
         # ★ 上部と帯が一致していても、明細と合わないなら値は出せない。
         #   「一致した 2 つ」を根拠に値を出すと、壊れた冊を黙って通す。
-        return SPLIT if sources else NONE_FOUND
+        # ★ 根拠が 0 個でも 割 ── 初版は「根拠が無ければ 無」と逃げていたが、
+        #   **食い違いを見つけたのに「何も無い」と言うのは矛盾**している。
+        #   実測（T32・1 冊に請求書が 2 枚）: 候補が 2 つ在って決められないのに
+        #   「手がかりが見つかりません」と報告していた。人は探し方を疑う ── 嘘になる。
+        return SPLIT
     if not sources:
         return NONE_FOUND
     values = {_key(v) for v in sources.values()}
