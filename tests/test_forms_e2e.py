@@ -256,3 +256,41 @@ def test_verify_tells_the_truth_about_its_own_forms_output(folder, tmp_path):
                        errors="replace", cwd=str(REPO))
     assert r.returncode == 4, r.stdout
     assert "印がありません" not in r.stdout, r.stdout
+
+
+def test_a_duplicated_invoice_shows_up_in_the_bundle_findings(folder, tmp_path):
+    """★★ 需要①の売り物: 1 冊ずつは正常でも、束で見ると『同じ請求書が 2 通』が分かる。"""
+    import shutil
+    shutil.copyfile(folder / "a.xlsx", folder / "a (2).xlsx")
+    out = tmp_path / "一覧.xlsx"
+    r = _forms(folder, out)
+    assert r.returncode == 0, r.stdout
+    got = _sheets(out)
+    head, *rows = got["束の所見"]
+    assert head == ["種類", "関わる冊", "なぜ怪しいか"], head
+    assert len(rows) == 1, rows
+    assert rows[0][0] == "重複" and "a (2).xlsx" in rows[0][1] and "a.xlsx" in rows[0][1], rows
+    assert "重複" in rows[0][2]
+    assert "束で見て怪しいもの 1 件" in r.stdout, r.stdout
+    # ★ 値は作っていない ── 一覧は 3 行、どの値も所見で書き換わっていない
+    assert len(got["一覧"]) == 4
+    assert {x[3] for x in got["一覧"][1:]} == {3300, 5500}
+
+
+def test_a_normal_folder_has_an_empty_bundle_sheet_and_no_warning(folder, tmp_path):
+    """★ 陰性対照 ── 仕込みの無いフォルダで所見を出したらオオカミ少年。"""
+    out = tmp_path / "一覧.xlsx"
+    r = _forms(folder, out)
+    assert r.returncode == 0, r.stdout
+    got = _sheets(out)
+    assert got["束の所見"][1:] == [], got["束の所見"]
+    assert "怪しいもの" not in r.stdout, r.stdout
+
+
+def test_json_carries_the_bundle_findings(folder, tmp_path):
+    import shutil
+    shutil.copyfile(folder / "b.xlsx", folder / "b_copy.xlsx")
+    r = _forms(folder, tmp_path / "一覧.xlsx", "--json")
+    payload = json.loads(r.stdout.strip().splitlines()[-1])
+    assert [s["種類"] for s in payload["suspicions"]] == ["重複"], payload["suspicions"]
+    assert sorted(payload["suspicions"][0]["冊"]) == ["b.xlsx", "b_copy.xlsx"]

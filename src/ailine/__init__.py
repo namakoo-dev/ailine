@@ -17011,13 +17011,15 @@ def cmd_forms(a: argparse.Namespace) -> int:
 
     rows = [forms_collect.row_for(name, recs) for name, recs in collected]
     findings = [r for name, recs in collected for r in forms_collect.findings_for(name, recs)]
+    # ★ 束で見て初めて分かる怪しさ（重複・訂正再発行・年の誤り・桁違い…）── 値は作らない、指さすだけ。
+    suspicions = forms_collect.suspicions_for(collected)
     result = {"denominator": len(candidates), "collected": len(collected),
               "rows_written": len(rows), "grades": forms_collect.tally(collected),
               "blanks": n_blank, "blanks_with_reason": n_reason,
               "unreadable": unreadable, "excluded": excluded,
               "field_grades": forms_collect.grades_per_file(collected),
               "self_excluded": self_excluded, "findings": findings,
-              "file_written": False}
+              "suspicions": suspicions, "file_written": False}
 
     if not rows:
         if a.json:
@@ -17046,6 +17048,13 @@ def cmd_forms(a: argparse.Namespace) -> int:
             ws2.append(row)
         inspection.bold_row(ws2, 1, len(forms_collect.INSPECT_HEADERS))
         inspection.autosize_columns(ws2)
+
+        ws3 = wb_out.create_sheet(forms_collect.SUSPECT_SHEET)
+        ws3.append(list(forms_collect.SUSPECT_HEADERS))
+        for row in forms_collect.suspicion_rows(suspicions):
+            ws3.append(row)
+        inspection.bold_row(ws3, 1, len(forms_collect.SUSPECT_HEADERS))
+        inspection.autosize_columns(ws3)
         wb_out.save(tmp_out)
 
         # ★ 事後条件: 書いた直後の中身を**別の読み実装**で数える（同じ道具の同じ盲点を避ける）。

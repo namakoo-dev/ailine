@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from ailine_core.field_record import GRADES_WITH_VALUE, describe, grade, value
 from ailine_core.form_read import FIELDS as _ORGAN_FIELDS
+from ailine_core import forms_suspect
 
 #: 書き手の印。★ stack.py の KIND_SIGNATURES に登録して初めて「自分の出力」と分かる
 #:   （印だけでも列だけでも足りない ── 両方そろって自分の出力・fail closed）。
@@ -36,6 +37,10 @@ assert set(FIELDS) == set(_ORGAN_FIELDS), "★ 一覧の項目と器官の項目
 #: 検分シートに出す見出し。
 INSPECT_SHEET = "検分"
 INSPECT_HEADERS = ("元ファイル", "項目", "区分", "なぜこうなったか")
+
+#: 束の所見（1 冊ずつは正常でも、束で見ると怪しいもの）を出すシート。
+SUSPECT_SHEET = "束の所見"
+SUSPECT_HEADERS = ("種類", "関わる冊", "なぜ怪しいか")
 
 
 def row_for(name: str, records: dict) -> list:
@@ -119,3 +124,19 @@ def blanks_have_reasons(all_records: list) -> tuple:
             else:
                 bad.append(f"{name}/{field}")
     return blanks, with_reason, bad
+
+
+def suspicions_for(all_records: list) -> list:
+    """束の所見。all_records: [(名前, records), …] → [{"種類", "冊", "理由"}, …]
+
+    ★ 疑う材料は `value()` が出した値**だけ**（割/無 は None ── 読めなかったものを根拠にしない）。
+      値を出す/出さないの線はここでも `field_record` のもの（書き写さない）。
+    """
+    table = {name: {field: value(records[field]) for field in FIELDS if records.get(field) is not None}
+             for name, records in all_records}
+    return forms_suspect.suspect(table)
+
+
+def suspicion_rows(suspicions: list) -> list:
+    """束の所見シートの行（見出しは SUSPECT_HEADERS）。"""
+    return [[s["種類"], "／".join(s["冊"]), s["理由"]] for s in suspicions]

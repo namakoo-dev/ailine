@@ -193,3 +193,15 @@ python bench/received_invoices/score_v2.py --self-test      # ★ 点数を見�
 ★ 実際、この採点器自身に欠陥が 2 つあり、どちらも変異で出た ──
 理由が空の空欄を 134 件「安全」と呼んでいた／
 正解値を指定しない冊（`値: None`）で**正しい抽出を誤報と呼ぶ**ところだった。
+
+## 束の検体（received_bundle・2026-09-11）
+
+1 冊ずつは正常でも束（フォルダ）で見ると怪しいものを仕込んだ検体。答えは**束単位**
+（仕込んだ疑い＝種類・関わる冊・名指しすべき語 ＋ **怪しくない冊**の宣言）。
+
+    python bench/received_invoices/mk_received_bundle.py     # 5 束 51 冊（LO で再計算）
+    python bench/received_invoices/score_bundle.py --self-test
+    python bench/received_invoices/run_bundle.py            # forms_suspect を採点
+
+見出しにする数は 正／★偽の疑い（怪しくない冊を疑った）／取り逃し／不親切。正答率にしない。
+採点器は `ailine_core` を import しない。凍結時の実測は docs/DESIGN-20260910 §4。

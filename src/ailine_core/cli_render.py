@@ -597,6 +597,16 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
     if blanks:
         lines.append(f"空欄 {blanks} 件（理由つき {result.get('blanks_with_reason', 0)} 件）"
                      "── 理由は『検分』シートに 1 件ずつ出しています")
+    sus = result.get("suspicions") or []
+    if sus:
+        kinds: dict = {}
+        for s in sus:
+            kinds[s["種類"]] = kinds.get(s["種類"], 0) + 1
+        lines.append(f"束で見て怪しいもの {len(sus)} 件（"
+                     + "／".join(f"{k} {n}" for k, n in kinds.items())
+                     + "）── 『束の所見』シートに 1 件ずつ出しています")
+        for s in sus[:8]:
+            lines.append(f"  ⚠ {s['種類']}: {'／'.join(s['冊'])}")
     if result.get("file_written"):
         lines.append("（一覧は新しいブックです ── 元の請求書は 1 バイトも変えていません）")
     return lines
