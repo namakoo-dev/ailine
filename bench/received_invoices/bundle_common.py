@@ -55,6 +55,10 @@ def answer_value(field: str, v):
     """書き手は「セルの文字そのもの」を 値 に書いた（v2 の答えは 値=名前・セルの値=生 と分けていた）。
     道具は値を報告する側なので、答えを同じ土俵に下ろす: 宛先の敬称／同居ラベルを剥がす。
     ★ 剥がすのは答えの側だけ。道具の出力には触らない。"""
+    if field == "請求番号" and isinstance(v, (int, float)) and not isinstance(v, bool):
+        # ★ 裸の数値セル（実物 inv21 は請求番号を数値で持つ）。道具は識別子として
+        #   文字で報告する ── 答えを同じ土俵に下ろす（道具の出力には触らない）。
+        return str(int(v)) if float(v).is_integer() else str(v)
     if not isinstance(v, str):
         return v
     t = v.replace("　", " ").strip()

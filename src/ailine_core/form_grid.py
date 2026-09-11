@@ -58,6 +58,7 @@ class Cell:
     at: str                    #: "B13"（★ 結合なら左上の番地）
     anchor: tuple              #: (行, 列) ── 同一性の判定はこれで行う
     from_merge: bool           #: 結合の展開で得た値か（左上そのものなら False）
+    fmt: str = ""              #: 表示形式（number_format）★ ラベルがここに焼き込まれる帳票が在る
 
 
 class Grid:
@@ -122,7 +123,9 @@ class Grid:
                 cells[(r, c)] = Cell(
                     row=r, col=c, value=value,
                     at=column_letter(anchor[1]) + str(anchor[0]),
-                    anchor=anchor, from_merge=from_merge)
+                    anchor=anchor, from_merge=from_merge,
+                    # ★ 表示形式はアンカー（結合なら左上）のものを持つ ── 見えている形はそれ
+                    fmt=str(ws.cell(row=anchor[0], column=anchor[1]).number_format or ""))
         return cls(cells, max_r, max_c, tuple(sorted(set(no_cache))))
 
     # ── 引き方 ──────────────────────────────────────────────

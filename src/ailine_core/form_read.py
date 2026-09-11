@@ -279,13 +279,56 @@ def _labelled_text_right(grid: Grid, labels, *, rows=None, span: int = 4) -> lis
     return out
 
 
+#: 表示形式の中の**引用された文字**（画面に文字として出る所）。
+#:   例: `"請求日： "yyyy\年m\月d\日;@` → `請求日： `
+_FMT_LITERAL = re.compile(r'"([^"]*)"')
+
+
+def format_label(fmt) -> str:
+    """表示形式に焼き込まれた文字だけを取り出す（書式コードは落とす）。
+
+    ★★ なぜ要るか（2026-09-12 の実測）: 実物の雛形には、`請求日` `請求書番号` が
+      **セルの文字ではなく表示形式**に入っているものが在る。画面には
+      「請求日： 2026年6月30日」と見えるのに、セルの文字を読む器官には
+      **ラベルが 1 文字も存在しない**（セルの中身は日付型・裸の数値だけ）。
+      検体 87 冊のうち 13 冊・実物の雛形にも在る形で、珍しい癖ではない。
+    """
+    return "".join(_FMT_LITERAL.findall(str(fmt or "")))
+
+
+def _labelled_by_format(grid: Grid, labels) -> list:
+    """表示形式にラベルが焼き込まれたセル。戻り値: [(ラベルの語, セル)]
+
+    ★ 値はそのセル自身（ラベルの右ではない ── ラベルはセルに貼り付いている）。
+    ★ 拾いすぎの危険は測ってある: ラベル語を含む表示形式は、全 180 冊で
+      日付型／数値のセルにしか付いていなかった（2026-09-12）。
+      それでも値が読めなければ、下の読み手が rivals として理由を残す。
+    """
+    out, seen = [], set()
+    for c in grid.all_cells():
+        if c.anchor in seen or not c.fmt:
+            continue
+        lit = norm(format_label(c.fmt))
+        if not lit:
+            continue
+        for w in labels:
+            if norm(w) in lit:
+                seen.add(c.anchor)
+                out.append((w, c))
+                break
+    return out
+
+
 def _looks_like_placeholder_date(raw) -> bool:
     return isinstance(raw, str) and any(ch in raw for ch in _DATE_PLACEHOLDER_CHARS)
 
 
 def read_issue_date(grid: Grid) -> Record:
     """請求日。★ ラベルの右か同居だけ。読めない形は値を作らず、何を探したかを言う。"""
-    found = _labelled_text_right(grid, _LABEL_DATE)
+    found = [(lab, cell, raw) for lab, cell, raw in _labelled_text_right(grid, _LABEL_DATE)]
+    # ★ ラベルが表示形式に焼き込まれている冊（実物 inv21 の癖）── セルの文字には無い
+    found += [(None, cell, cell.value) for w, cell in _labelled_by_format(grid, _LABEL_DATE)
+              if not any(c.anchor == cell.anchor for _l, c, _r in found)]
     evid, rivals = [], []
     for lab, cell, raw in found:
         if _looks_like_placeholder_date(raw):
@@ -297,8 +340,9 @@ def read_issue_date(grid: Grid) -> Record:
         if d is None:
             rivals.append((cell.at, str(raw)[:16], "日付として読めません"))
             continue
-        evid.append(Evidence(rule="請求日の欄", value=d, at=cell.at,
-                             how=f"{lab.at}「{norm(lab.value)[:8]}」の右 {cell.at}"))
+        how = (f"{lab.at}「{norm(lab.value)[:8]}」の右 {cell.at}" if lab is not None
+               else f"{cell.at}（表示形式に「{norm(format_label(cell.fmt))[:8]}」）")
+        evid.append(Evidence(rule="請求日の欄", value=d, at=cell.at, how=how))
     if not evid:
         why = ("請求日が見つかりませんでした（『請求日』『発行日』のラベルの右か、"
                "同じセルに西暦か和暦の日付が入っている形だけを読みます）")
@@ -310,14 +354,21 @@ def read_issue_date(grid: Grid) -> Record:
 
 def read_invoice_number(grid: Grid) -> Record:
     """請求番号。★ ラベルの右か同居だけ（下には落ちない）。在れば強い識別子・無くても止まらない。"""
-    found = _labelled_text_right(grid, _LABEL_NUMBER)
+    found = [(lab, cell, raw) for lab, cell, raw in _labelled_text_right(grid, _LABEL_NUMBER)]
+    found += [(None, cell, cell.value) for w, cell in _labelled_by_format(grid, _LABEL_NUMBER)
+              if not any(c.anchor == cell.anchor for _l, c, _r in found)]
     evid = []
     for lab, cell, raw in found:
+        # ★ 請求番号は**識別子**であって数ではない（合計しない・先頭 0 を落とさない）ので
+        #   文字として出す。裸の数値セル（実物 inv21）が 20260601.0 に化けないよう均す。
+        if isinstance(raw, float) and raw.is_integer():
+            raw = int(raw)
         txt = str(raw).strip()
         if not txt or _looks_like_placeholder_date(txt):
             continue
-        evid.append(Evidence(rule="請求番号の欄", value=txt, at=cell.at,
-                             how=f"{lab.at}「{norm(lab.value)[:8]}」の右 {cell.at}"))
+        how = (f"{lab.at}「{norm(lab.value)[:8]}」の右 {cell.at}" if lab is not None
+               else f"{cell.at}（表示形式に「{norm(format_label(cell.fmt))[:8]}」）")
+        evid.append(Evidence(rule="請求番号の欄", value=txt, at=cell.at, how=how))
     if not evid:
         return Record("請求番号", (), blank_reason=(
             "請求番号が見つかりませんでした（『請求番号』『請求書No』のラベルの右か、"
