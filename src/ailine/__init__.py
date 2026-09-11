@@ -4244,6 +4244,29 @@ def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, 
         )
     if (err := resolve_in("key_col", resolved["target_sheet"])):
         return False, resolved, inferred, err
+    # ★★ キー列 == 対象列 は転記として意味を成さない（2026-09-11・PENDING-20260910 ②）。
+    #   実測: 「商品表から商品名を注文シートに転記して」で 7B が キー列:商品名／対象列:商品名 を
+    #   返し、**空の列を空の列で引く**ので 1 件も一致せず、文書は無変化のまま
+    #   事後条件が「検証対象が 0 件」と × を出していた（battery の名前の台帳 注文/lookup）。
+    #   × は正しいが、**なぜかを人に教えない**。ここで書く前に断り、原因を名指しする。
+    #   ★ 依頼文も語彙も読まない ── 見るのは「2 つの列名が同じか」だけ
+    #     （detect_new_row_missing_key と同じ、構造だけの判定）。
+    #   ★ 手がかりとして参照表の 1 列目を名指す ── VLookupFromTable は参照表の
+    #     **1 列目をキー**と決め打ちして読む（ヘルパの契約・推測ではない）。
+    #   ★ 数字（× → 断り）が良くなる方向の変更なので、決め手は「親切か」に置いた:
+    #     「検証対象が 0 件」より「キー列と対象列が同じです。参照表の 1 列目は『コード』です」
+    #     の方が、人は次に何を言えばいいか分かる。
+    if str(resolved.get("key_col")) == str(resolved.get("target_col")):
+        _src = list((book_meta.get("headers") or {}).get(resolved["source_sheet"], []))
+        _hint = (f"参照表『{resolved['source_sheet']}』の 1 列目は『{_src[0]}』です ── "
+                 f"ふつうはそれがキー列です" if _src else
+                 f"参照表『{resolved['source_sheet']}』の 1 列目がキーになります")
+        return False, resolved, inferred, (
+            f"転記のキー列と対象列がどちらも『{resolved['key_col']}』になっています。"
+            f"転記は**別の列**を手がかりに引きます（{_hint}）。"
+            f"どの列で引くかを依頼文に書いてください"
+            f"（例:「{_src[0] if _src else 'コード'}で引いて{resolved['target_col']}を転記して」）"
+        )
     return None
 
 

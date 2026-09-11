@@ -3404,14 +3404,18 @@ def test_verify_dsl_args_lookup_fill_existing_target_col_matching_source_value_c
 
 def test_verify_dsl_args_lookup_fill_missing_target_col_digit_reference_still_resolves():
     # 数字表記の推定（従来どおり）は維持する（一意に決まる場合のみ）。
+    # ★ 2026-09-11: 転記先を "0"（＝商品コード＝キー列そのもの）から "1"（数量）へ変えた。
+    #   旧 fixture はキー列に単価を上書きする転記を「通る」と期待していた ── それは
+    #   キー列＝対象列の転記で、いまは書く前に断る（PENDING-20260910 ②）。
+    #   この試験の意図は数字表記の解決なので、キーと衝突しない列で同じ経路を通す（"2" は 1 起点で 数量 に一意・"1" は 0/1 起点の両方に当たって曖昧）。
     meta = {"sheets": ["明細", "単価表"],
             "headers": {"明細": ["商品コード", "数量"], "単価表": ["商品コード", "単価"]}}
     ok, resolved, inferred, err = ailine.verify_dsl_args(
         "LOOKUP_FILL",
-        {"target_sheet": "明細", "target_col": "0", "source_sheet": "単価表", "key_col": "商品コード"},
+        {"target_sheet": "明細", "target_col": "2", "source_sheet": "単価表", "key_col": "商品コード"},
         meta, task="単価表を見て入れて")
-    assert ok is True
-    assert resolved["target_col"] == "商品コード"
+    assert ok is True, err
+    assert resolved["target_col"] == "数量"
     assert "target_col" in inferred
 
 def test_verify_dsl_args_fill_color_unknown_color():
