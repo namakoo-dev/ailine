@@ -46,6 +46,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from ailine_core.field_record import (GRADES_WITH_VALUE, SPLIT, Evidence,
                                       Record, grade_of)
@@ -59,6 +60,13 @@ from ailine_core.date_compare import parse_wareki_literal as _parse_wareki
 _SPACE = re.compile(r"[\s　 ]+")
 
 
+#: 組織の形を表す**合字** ── `㈱`(U+3231) `㈲` `㍿`。NFKC が `(株)` `(有)` `株式会社` に
+#:   ほどき、どれも `_CORP` に既に在る。★ 2026-09-12 の実測: ソフトが生成した実物の請求書が
+#:   `㈱ミライ商事 御中` / `㈱テックコンサルティング` と書いていて、**宛先も請求元も取れなかった**。
+#:   ★ 全体に NFKC をかけない（全角の数字が半角に化けて「金額の欄が文字」の拒否が消える）──
+#:     中黒と同じく**閉じた文字クラス**だけをほどく。合字を含むセルは全群で 2 件（この 1 通のみ）。
+_LIGATURES = re.compile(r"[㈠-㉃㍿]")
+
 #: 見た目がほぼ同じ中黒（見出し `品番•品名` の `•` は U+2022 BULLET・実物に在る）。
 #:   ★★ 2026-09-12 の実測: 器官の一覧は `品番・品名`（U+30FB）で、実物のベンダー雛形には
 #:     `•`(U+2022) が 10 セル・検体 87 冊に 31 セル在った。**NFKC でも寄らない**
@@ -71,11 +79,13 @@ _DOTS = re.compile(r"[•·･‧∙⁃]")
 def norm(s) -> str:
     """照合用に均す。★ 空白（半角・全角・改行）を**全部落とす**（実物の癖⑤）。
 
-    ★ 中黒に見える符号は 1 つに寄せる（上の `_DOTS`）。
+    ★ 中黒に見える符号は 1 つに寄せる（上の `_DOTS`）。組織の形の合字もほどく（`_LIGATURES`）。
     ★★ ここは**照合専用**で、人に出す値はここを通らない（`clean_org_name` は生の行から作る）。
       畳む前後で 87 冊の出す値が 1 つも変わらないことを実測して確かめた。
     """
-    return _DOTS.sub("・", _SPACE.sub("", str(s or "")))
+    t = _LIGATURES.sub(lambda m: unicodedata.normalize("NFKC", m.group(0)),
+                       _SPACE.sub("", str(s or "")))
+    return _DOTS.sub("・", t)
 
 
 #: 会社の形をした名前の語尾／語頭。★ 「これは組織の名前だ」の唯一の手がかり。

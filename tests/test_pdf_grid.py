@@ -242,3 +242,30 @@ def test_the_detail_header_of_that_pdf_is_not_found_and_that_is_recorded():
     grids = [g for _i, g in pdf_grid.grids_of(SOFTWARE_PDF) if len(invoice_signals(g)) >= 2]
     assert len(grids) == 1
     assert detail_amount_sum(grids[0], None)[3] is None
+
+
+CARRIED_PDF = Path(__file__).resolve().parent / "fixtures" / "forms" / "ソフト発行_繰越あり.pdf"
+
+
+def test_corporate_ligatures_are_unfolded_for_matching_but_kept_in_the_value():
+    """★★ 実物（ソフト生成）が `㈱ミライ商事 御中` と書いていて、**宛先も請求元も取れなかった**。
+
+    `㈱`(U+3231) は NFKC が `(株)` に、`㍿`(U+337F) が `株式会社` にほどき、どちらも法人格の
+    一覧に既に在る。★ 全体に NFKC をかけない ── 全角の数字が半角に化けて
+    「金額の欄が文字」の拒否が消える（`_LIGATURES` は閉じた文字クラスだけ）。
+    ★ 値は**原本の文字そのまま**（`㈱ミライ商事`）── 照合だけを均す。
+    """
+    from ailine_core.form_read import norm
+    assert norm("㈱アルファ") == "(株)アルファ"
+    assert norm("㍿テック") == "株式会社テック"
+    assert norm("１，３２０，０００") == "１，３２０，０００"      # ★ 全角の数字は寄せない
+    recs = read_pdf_book(CARRIED_PDF)
+    assert value(recs["宛先"]) == "㈱ミライ商事", value(recs["宛先"])
+    assert value(recs["請求元"]) == "㈱テックコンサルティング", value(recs["請求元"])
+
+
+def test_a_carried_balance_invoice_refuses_to_pick_an_amount():
+    """★ 繰越のある請求書は「合計」と「今回お支払いいただく額」が違う ── 決めない（設計どおり）。"""
+    rec = read_pdf_book(CARRIED_PDF)["請求額"]
+    assert grade(rec) == "割" and value(rec) is None
+    assert "繰越" in rec.blank_reason, rec.blank_reason
