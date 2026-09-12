@@ -203,6 +203,8 @@ Excel の定型作業を自動化したい。でも既存の AI ツールには 
 
 ★ 空欄・分けられない行・表記のゆれは、**こちらで決めずに名指しします**。
 
+★ 出した出力は、あとから `ailine verify` で**独立に検算**できます（呼び方は出力した画面に出ます）。検算は出力を作った規則を再現せず、元のファイルを分母にして「取り逃し・二重・元に無い値」を見ます。
+
 #### AI が担う役割
 
 | 工程 | 担当 |
@@ -247,7 +249,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->4117<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
+期待: 全件緑（<!-- TOTAL_TESTS -->4127<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
 ollama）が要るものは `-m "not local"` が自動的に外します。外れた本数は実行結果の
 `deselected` に出ます）。
 ★ 総数は `tests/test_local_test_count.py` が実測と突き合わせています ──

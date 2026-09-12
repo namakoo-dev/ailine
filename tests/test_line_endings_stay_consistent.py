@@ -40,7 +40,16 @@ ALLOWED_MIXED = {
 
 
 def _index_eol():
-    """(改行の種別, パス) の一覧を git の index から取る。"""
+    """(改行の種別, パス) の一覧を git の index から取る。
+
+    ★★ 2026-09-13: `git ls-files` は**追跡済みのファイルしか見ない**ので、
+      新しく作ったファイルの混在は **commit するまで鳴らなかった**（実測: 新しい試験を
+      1 本足した回、commit 前の全件は緑で、pre-push の素の環境で初めて赤くなった ──
+      混在の原因は `write_text` が LF を CRLF に翻訳した後に heredoc が LF を足したこと）。
+    ★ だから**未追跡（まだ git に入っていない）ファイルも分母に入れる** ── 分母は
+      入力側（これから入るもの）から作る。★ 出ないことを「無いこと」と読まない。
+      （`--cached` を足すのは無意味だった ── それは既定。穴は「index に居ないもの」だった。）
+    """
     r = subprocess.run(["git", "ls-files", "--eol"], cwd=REPO,
                         capture_output=True, text=True)
     if r.returncode != 0:
@@ -52,6 +61,36 @@ def _index_eol():
             continue
         kind = parts[0].split()[0]          # 例: "i/mixed"
         out.append((kind, parts[1].strip()))
+    return out + _untracked_mixed()
+
+
+def _untracked_mixed():
+    """まだ git に入っていないファイルの混在（★ これから入るものも分母に入れる）。
+
+    ★ index を見る上の理由（環境に依らない）はそのまま ── 未追跡のファイルは index に
+      **存在しない**ので、作業ツリーのバイト列を見るしかない。checkout を経ていないので
+      autocrlf の影響も受けない（書いたままが commit される）。
+    ★ バイナリは NUL の有無で外す（拡張子のリテラルを書かない ── 登録簿の番人が居る）。
+    """
+    r = subprocess.run(["git", "-c", "core.quotepath=false", "ls-files",
+                        "--others", "--exclude-standard"], cwd=REPO,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        return []
+    out = []
+    for name in (x.strip() for x in (r.stdout or "").splitlines() if x.strip()):
+        path = REPO / name
+        if not path.is_file():
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in raw:
+            continue
+        crlf = raw.count(b"\r\n")
+        if crlf and (raw.count(b"\n") - crlf):
+            out.append(("i/mixed", name))
     return out
 
 

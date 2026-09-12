@@ -214,6 +214,35 @@ def render_alias_listing(aliases: dict, order: list, aliases_file: Path) -> list
     return lines
 
 
+#: 「後から確かめる呼び方」を出す出力の種類（鍵は書き手の印 creator）。
+#: ★★ 2026-09-13: `ailine verify` が stack/extract/forms/split を支えているのに、
+#:   **出力を作った画面には呼び方が一言も出ていなかった**（grep 0 件）── ① と同じ形で、
+#:   しかも独立の検算を足した当日に同じ穴を開けた。**知られない検算は無い検算**。
+#: ★ csv は独立の検算が無いので**書かない**（案内すると嘘になる）。
+#: ★ 4 種類とも引数の並びは同じ（出力 → 元）なので、文言は 1 本で足りる。
+VERIFY_HINT_KINDS = ("ailine stack", "ailine extract", "ailine forms", "ailine split")
+
+
+def _quoted(label: str) -> str:
+    """空白を含むパスは引用する（そのまま貼って動く形にする）。"""
+    return f'"{label}"' if " " in label or "\u3000" in label else label
+
+
+def verify_hint(creator: str, out_label: str, source_label: str, extra: str = "") -> list:
+    """後から確かめる呼び方を 1 行で返す。支えていない種類には**書かない**。
+
+    ★ 文言はここだけ ── 報告の側で書き写すと、次に種類が増えた時に片配線になる。
+    ★ `extra` は**使い手が渡した条件をそのまま運ぶ**ためのもの（split の `--amount`）。
+      これが無いと、案内した検算が**本人が実行した検算より弱く**なる ── 勧める側が
+      黙って手を抜くことになるので、渡された条件は案内にも出す。
+    """
+    if creator not in VERIFY_HINT_KINDS:
+        return []
+    tail = f" {extra}" if extra else ""
+    return [f"あとから確かめる: ailine verify {_quoted(out_label)} "
+            f"{_quoted(source_label)}{tail}"]
+
+
 # --- 対応操作の一覧（★ 査定 2 本が独立に「無い」と指摘した唯一のもの） ------------------
 
 def render_folder_routes(subcommands, multi) -> list:
@@ -465,6 +494,8 @@ def render_stack_report(folder_label: str, out_label: str, result: dict) -> list
         lines.append(sum_line(col, both, n_excluded))
     if result.get("rebuilt_own_output"):
         lines.append(f"（前回の縦積み出力『{out_label}』を作り直しました）")
+    if result.get("file_written", True):
+        lines += verify_hint("ailine stack", out_label, folder_label)
     return lines
 
 
@@ -652,6 +683,7 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
             lines.append(f"  ⚠ {s['種類']}: {'／'.join(s['冊'])}")
     if result.get("file_written"):
         lines.append("（一覧は新しいブックです ── 元の請求書は 1 バイトも変えていません）")
+        lines += verify_hint("ailine forms", out_label, folder_label)
     return lines
 
 
@@ -721,6 +753,9 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
     if result.get("files_written"):
         lines.append(f"（配った冊 {len(parts)} 件 ＋ 検分 1 件は新しいブックです"
                      " ── 元の表は 1 バイトも変えていません）")
+        amount = result.get("amount")
+        lines += verify_hint("ailine split", out_label, book_label,
+                             f"--amount {_quoted(str(amount))}" if amount else "")
     return lines
 
 
