@@ -354,6 +354,41 @@ def _looks_like_placeholder_date(raw) -> bool:
     return isinstance(raw, str) and any(ch in raw for ch in _DATE_PLACEHOLDER_CHARS)
 
 
+def _labels_with_nothing_right(grid, labels, *, span: int = 4) -> list:
+    """ラベルは在るのに**右が空**のセル（値が読めなかった理由を人に返すため）。
+
+    ★★ なぜ別の器か（2026-09-13 の実測）: 合成検体 87 冊で請求日が空だった 74 冊のうち
+      **61 冊はラベルが在って値が空**だった。なのに理由は「請求日が見つかりませんでした
+      （…ラベルの右か同居だけ）」だけで、**ラベルの在処を言っていなかった**（50 冊）。
+      買い手にとって「うちの請求書に日付が入っていない」と「この道具が読めなかった」は
+      **別の話**で、後者だと思われると道具が疑われる。
+    ★ `_labelled_text_right` は「右が空」を返さない（下に落ちない設計の副作用）。
+      共有の器は**変えない** ── 宛先・請求元も通るので血流が広い。ここは
+      **理由を作る枝だけ**で呼ぶ新しい小さな器にする。
+    ★ 読みの規則は 1 文字も変えない（値は 1 つも増えない）。
+    """
+    wanted = {norm(x).rstrip("：:") for x in labels}
+    out, seen = [], set()
+    for t in grid.text_cells():
+        if t.anchor in seen or norm(str(t.value)).rstrip("：:") not in wanted:
+            continue
+        if any(c.value is not None and str(c.value).strip() for c in grid.right_of(t, span)):
+            continue
+        seen.add(t.anchor)
+        out.append(t)
+    return out
+
+
+def _empty_label_note(grid, labels, field: str) -> str:
+    """「ラベルは在ったが右は空」を 1 文に。★ 無いときは空文字（余計な文を足さない）。"""
+    cells = _labels_with_nothing_right(grid, labels)
+    if not cells:
+        return ""
+    where = "／".join(f"{c.at}「{norm(c.value)[:8]}」" for c in cells[:3])
+    return (f": {where} のラベルは在りましたが、その右は空でした"
+            f" ── この帳票には{field}が入っていないようです")
+
+
 def read_issue_date(grid: Grid) -> Record:
     """請求日。★ ラベルの右か同居だけ。読めない形は値を作らず、何を探したかを言う。"""
     found = [(lab, cell, raw) for lab, cell, raw in _labelled_text_right(grid, _LABEL_DATE)]
@@ -379,6 +414,8 @@ def read_issue_date(grid: Grid) -> Record:
                "同じセルに西暦か和暦の日付が入っている形だけを読みます）")
         if rivals:
             why += ": " + "／".join(f"{at} は{note}" for at, _v, note in rivals)
+        else:
+            why += _empty_label_note(grid, _LABEL_DATE, "請求日")
         return Record("請求日", (), rivals=tuple(rivals), blank_reason=why)
     return _record("請求日", evid, rivals)
 
@@ -408,7 +445,8 @@ def read_invoice_number(grid: Grid) -> Record:
     if not evid:
         return Record("請求番号", (), blank_reason=(
             "請求番号が見つかりませんでした（『請求番号』『請求書No』のラベルの右か、"
-            "同じセルに番号が入っている形だけを読みます）"))
+            "同じセルに番号が入っている形だけを読みます）"
+            + _empty_label_note(grid, _LABEL_NUMBER, "請求番号")))
     return _record("請求番号", evid, [])
 
 

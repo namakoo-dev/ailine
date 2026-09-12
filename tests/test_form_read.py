@@ -506,3 +506,49 @@ def test_a_detail_table_whose_amount_column_is_headed_goukei_is_swept():
     wb2 = openpyxl.Workbook(); ws2 = wb2.active
     ws2["S40"] = "小計"; ws2["V40"] = 15000; ws2["S44"] = "合計"; ws2["V44"] = 16500
     assert detail_amount_sum(Grid.read(ws2), None)[3] is None
+
+
+# ── ★ 「ラベルは在ったが値が空」を名指す（2026-09-13・実測から）──────────────────
+#
+# ★★ なぜ在るか: 合成検体 87 冊で請求日が空だった 74 冊のうち **61 冊はラベルが在って
+#   値が空**だった。それなのに理由は「請求日が見つかりませんでした（…ラベルの右か同居だけ）」
+#   だけで、**ラベルの在処を言っていなかった**（50 冊）。
+#   買い手にとって「うちの請求書に日付が入っていない」と「この道具が読めなかった」は
+#   **別の話**で、後者だと思われると道具そのものが疑われる。
+# ★ 読みの規則は 1 文字も変えていない（値は 1 つも増えない）── 変えたのは理由の文面だけ。
+
+
+@pytest.mark.parametrize("field, label_cell, label, value_cell", [
+    ("請求日", "G3", "請求日：", "H3"),
+    ("請求番号", "G4", "請求番号：", "H4"),
+])
+def test_a_label_with_an_empty_cell_beside_it_is_named(field, label_cell, label, value_cell):
+    """★ 1 本の試験で請求日と請求番号の**両方**を縛る（片配線を塞ぐ）。"""
+    r = read(minimal(**{label_cell: label}))[field]
+    assert grade(r) == NONE_FOUND, f"空のラベルから値を作った: {value(r)!r}"
+    assert label_cell in r.blank_reason, f"★ ラベルの在処を言っていない: {r.blank_reason}"
+    assert "右は空" in r.blank_reason, f"★ 何が空だったかを言っていない: {r.blank_reason}"
+    assert field in r.blank_reason
+
+
+@pytest.mark.parametrize("field", ["請求日", "請求番号"])
+def test_no_label_at_all_gets_no_such_note(field):
+    """★ 陰性対照 ── ラベルが無い冊に「ラベルは在りましたが」と書かない（嘘になる）。"""
+    r = read(minimal())[field]
+    assert grade(r) == NONE_FOUND
+    assert "ラベルは在りました" not in r.blank_reason, r.blank_reason
+
+
+def test_a_placeholder_keeps_its_own_wording():
+    """★ 伏せ字の文面を上書きしない ── 「埋め草のまま」と「右が空」は別の事実。"""
+    r = read(minimal(G3="請求日：", H3="××年1月1日"))["請求日"]
+    assert grade(r) == NONE_FOUND
+    assert "雛形" in r.blank_reason, r.blank_reason
+    assert "右は空" not in r.blank_reason, f"★ 空でもないのに空と言っている: {r.blank_reason}"
+
+
+def test_a_readable_value_gets_no_note_at_all():
+    """★ 値が読めた回に余計な文を足さない（★ 一番外しそうだと凍結した所）。"""
+    r = read(minimal(G3="請求日：", H3="2026/8/31"))["請求日"]
+    assert value(r) == _dt.date(2026, 8, 31)
+    assert "右は空" not in (r.blank_reason or ""), r.blank_reason
