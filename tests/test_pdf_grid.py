@@ -201,3 +201,44 @@ def test_a_pdf_does_not_cry_wolf_about_the_detail_table():
     with pdfplumber.open(str(FIXTURE)) as pdf:
         g = pdf_grid.grid_from_page(pdf.pages[0])
     assert detail_amount_sum(g, None) == (None, None, (), None, 0)
+
+
+# ── ソフトが生成した PDF（2026-09-12・Namakoo 提供・社名は合成）─────────────
+SOFTWARE_PDF = Path(__file__).resolve().parent / "fixtures" / "forms" / "ソフト発行_請求書.pdf"
+
+
+def test_a_software_generated_invoice_pdf_yields_all_five_fields():
+    """★★ 朝は「PDF が読めるかも分からない」所から始まり、ここまで来た記録。
+
+    この検体は **プログラムが生成した PDF**（フォントが Liberation-Sans ＋ Noto-Sans-CJK-JP で
+    Producer が空 ── Excel で作って印刷したものではない）。会計ソフトの出力に近い作りで、
+    中身は記入済み・社名は合成（example.com）なので repo に入れてよい。
+    ★ 2 頁あるが請求書らしい印は 1 頁目だけ 3 つ・2 頁目 1 つ ── 自分で 1 頁目を選ぶ。
+    """
+    import datetime as dt2
+    recs = read_pdf_book(SOFTWARE_PDF)
+    got = {f: value(r) for f, r in recs.items()}
+    assert got == {"宛先": "株式会社ミライ商事",
+                   "請求元": "株式会社テックイノベーション",
+                   "請求額": 407000,
+                   "請求日": dt2.date(2026, 9, 12),
+                   "請求番号": "INV-202609-001"}, got
+    # ★ PDF なので裏取りは名乗らない（D4）── 値は出す
+    assert grade(recs["請求額"]) == "単"
+    assert any("式" in x for x in recs["請求額"].unconfirmable)
+
+
+def test_the_detail_header_of_that_pdf_is_not_found_and_that_is_recorded():
+    """★★ 見つからない ── 見出しが `品名・明細` で、一覧の語と**完全一致しない**。
+
+    ★ 「一覧の語で始まる」に緩める案は測って**却下**した（2026-09-12）:
+      緩めると 18 冊（検体 11・束 7）で**見出し行が別の場所へ移る**（正しい D21/V21 を捨てて
+      A19/O19 を拾う）。得はこの 1 通だけで、PDF は掃き出しを降りているので点数は 1 も動かない。
+      ★ セル数（『合計』で始まるセル 389 件）は指標にならなかった ── 見出し行が動くかを測って決めた。
+    ★ 発火条件: `品名・明細` 型の見出しが**別の出所で 2 件目**出た時、または PDF の列が直って
+      掃き出しを再開する時（そこで初めて得が測れる）。
+    """
+    from ailine_core.form_read import detail_amount_sum, invoice_signals
+    grids = [g for _i, g in pdf_grid.grids_of(SOFTWARE_PDF) if len(invoice_signals(g)) >= 2]
+    assert len(grids) == 1
+    assert detail_amount_sum(grids[0], None)[3] is None
