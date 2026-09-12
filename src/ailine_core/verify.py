@@ -44,8 +44,9 @@ TOLERANCE = total_row.TOLERANCE
 #   ── 下の verify_output は creator=="ailine csv" を {"unsupported": ...} で正直に返すだけ
 #   （{"unmarked": True} に混ぜて「他人のファイル」と誤判定しない、が今回配線する範囲）。
 #   ★ 帳票の一覧（2026-09-11）: `ailine forms` も同じ理由で足す。
+#   ★ 担当者別に分けて配る（2026-09-12・需要⑤）: `ailine split` も同じ理由で足す。
 _CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv",
-                  "ailine forms"}
+                  "ailine forms", "ailine split"}
 
 
 def _find_header_row(data: dict, base_headers: list, max_scan: int = 30):
@@ -235,6 +236,14 @@ def verify_output(out_path, src_folder) -> dict:
         #   {"unmarked": True} に混ぜず、{"unsupported": ...} で正直に区別する。
         return {"unsupported": "帳票の一覧の独立の検算はまだ実装していません"
                                 "（`ailine forms <フォルダ>` を再実行して 検分 シートを見てください）。"}
+    if creator == "ailine split":
+        # ★ 担当者別に分けて配る（2026-09-12）: 独立の検算はまだ無い。csv/forms と同じ理由で
+        #   {"unmarked": True} に混ぜず、{"unsupported": ...} で正直に区別する
+        #   （配る冊は 1 冊では閉じない ── 和の証明は「全部の冊 ＋ 空欄 ＋ 複数担当」で
+        #   初めて閉じるので、出力 1 冊と元フォルダでは検算の形が違う）。
+        return {"unsupported": "分けた冊の独立の検算はまだ実装していません"
+                                "（`ailine split <元の冊> --by <見出し> --out <フォルダ>` を"
+                                "再実行して 検分 の証明を見てください）。"}
     if creator in _CREATOR_MARKS and description:
         try:
             cond = json.loads(description)

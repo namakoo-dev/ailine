@@ -128,6 +128,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_scan_report,   # ★ M1読み: `ailine scan`
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
     render_forms_report,   # ★ 帳票の一覧: `ailine forms`
+    render_split_report,   # ★ 担当者別に分けて配る: `ailine split`
     render_folder_routes,
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
 )
@@ -146,6 +147,7 @@ from ailine_core import form_read   # ★ 帳票を読む器官（DESIGN-2026091
 from ailine_core import pdf_grid
 from ailine_core import filetypes
 from ailine_core import forms_collect   # ★ 帳票の一覧（`ailine forms`）の並べ方
+from ailine_core import split_people   # ★ 担当者別に分けて配る（`ailine split`）の器官
 # ★ 2026-08-24: 一部は**意図した再輸出**（検体が ailine.sanitize_sheet_name の形で
 #   見ている）。未使用に見えても消さない ── リンタには noqa で伝える。
 from ailine_core.report_per_row import (  # noqa: F401
@@ -17364,6 +17366,244 @@ def cmd_stack(a: argparse.Namespace) -> int:
     return stack_exit
 
 
+def _split_postcondition_fail(label: str, expected, actual) -> int:
+    """★ 証明（D5・部分の和＝全体）が破れた時の唯一の出口。出力は 1 件も移さない。
+
+       ★ cmd_stack の `_stack_postcondition_fail` と**分けている**理由: あちらは
+         「元(採用時) / 出力(書いた直後)」の 2 項で、こちらは『どの等式が閉じないか』を
+         そのまま出す（部分が 4 つに散るので 2 項では言い表せない）。文言を共用すると、
+         どちらかの経路で意味の合わない語が出る。
+    """
+    print(f"⚠ 事後条件が破れた: {label}  元(原本) {primitives.fmt_num(expected)} / "
+          f"出力(書いた直後に読み戻した) {primitives.fmt_num(actual)}")
+    print("（配る冊は 1 件も置いていません ── 証明できないものは配りません）")
+    return 5
+
+
+def cmd_split(a: argparse.Namespace) -> int:
+    """`ailine split <一覧.xlsx> --by <見出し> --out <フォルダ>`: 需要⑤ ── 担当者別に分けて配る。
+       設計 docs/DESIGN-20260912-担当者別に分けて配る.md（D1〜D6）。
+
+       ★ 売り物は「分ける」ではなく **分けた結果を代わりに疑う**（§0）── 空欄・表記ゆれ・
+         複数担当・分けない行を名指しし、**部分の和＝全体**を証明する。
+       ★ 配布はフォルダに並べるまで（送信はしない）。原本は 1 バイトも触らない（読むだけ）。
+       ★ 分ける／疑うの判断は ailine_core/split_people.py（純関数）。この関数が持つのは
+         **配線だけ** ── 見出し行の探索・書き出し・関所・証明の読み戻し・報告。
+       ★ 配管は cmd_stack と同じものを**呼ぶ**（書き写さない）: multifile.find_header_row・
+         stack.own_output_headers / own_output_mark（関所・exit 7）・workdir に書いてから移す・
+         xml_readback（openpyxl を経由しない別実装）で読み戻す。
+    """
+    book = Path(a.book).resolve()
+    out_dir = Path(a.out).resolve()
+    amount_header = getattr(a, "amount", None) or None
+    result = {"book": str(book), "out": str(out_dir), "by": a.by, "amount": amount_header,
+              "sheet": None, "header_row": None, "other_sheets": [], "refused": None,
+              "parts": {}, "blank": [], "multi": [], "excluded": [], "lookalike": [],
+              "unparsed": [], "proof": {}, "files_written": []}
+
+    def emit() -> None:
+        """人向け／機械可読の**唯一の出口**（どの経路も同じ事実を出す）。"""
+        if a.json:
+            print(json.dumps(result, ensure_ascii=False))
+        else:
+            for ln in render_split_report(str(book), str(out_dir), result):
+                print(ln)
+
+    if not book.is_file():
+        result["refused"] = f"ファイルが見つかりません: {book}"
+        emit()
+        return 4
+    try:
+        wb = openpyxl.load_workbook(book, data_only=True)
+    except Exception as e:   # noqa: BLE001 ── 名指しして断る（推測で先へ進まない）
+        result["refused"] = f"読み込みに失敗しました（{type(e).__name__}）: {book}"
+        emit()
+        return 4
+    try:
+        if a.sheet and a.sheet not in wb.sheetnames:
+            names = "／".join(f"『{n}』" for n in wb.sheetnames)
+            result["refused"] = f"シート『{a.sheet}』がありません（この冊のシート: {names}）"
+            emit()
+            return 4
+        ws = wb[a.sheet] if a.sheet else wb.worksheets[0]
+        sheet_title = ws.title
+        # ★ 非表示シートも含めて「見なかったシート」を開示する（黙って 1 枚目を読んだことに
+        #   しない ── 09-06 に 2 回踏んだ形の隣の穴。古い表が隠れている冊は実物に在る）。
+        other_sheets = [n for n in wb.sheetnames if n != sheet_title]
+        # ★ 見出し行は 1 行目決め打ちにしない（設計 D1）。まず cmd_stack と同じ器官で
+        #   当たりを付け、`--by` に当たる見出しがその行に無ければ窓の中を探す。
+        scan_end = min(ws.max_row or 1, MAX_ROWS, STRUCT_HEADER_SCAN_ROWS)
+        rows_stats = _row_char_stats(ws, 1, scan_end, 1, min(ws.max_column or 1, MAX_COLS))
+        guess, confident = detect_header_row({"rows": rows_stats})
+        header_row = guess if (confident and guess) else 1
+        if not split_people.matching_columns(multifile.read_row_headers(ws, header_row), a.by):
+            window = min(int(ws.max_row or 1), multifile.HEADER_SEARCH_ROWS)
+            for r in range(1, window + 1):
+                if split_people.matching_columns(multifile.read_row_headers(ws, r), a.by):
+                    header_row = r
+                    break
+        # ★ 行の確定は既存の器官に言わせる（multifile.find_header_row ── 同じ見出しの並びが
+        #   より上の行にも在るなら、そちらが見出し行）。ここで比較を書き直さない。
+        headers = multifile.read_row_headers(ws, header_row)
+        found, status, _detail = multifile.find_header_row(ws, headers, 1)
+        if status == "取れた":
+            header_row = found
+            headers = multifile.read_row_headers(ws, header_row)
+        max_row = ws.max_row or header_row
+        num_cols = max(len(headers), int(ws.max_column or 0))
+        grid_rows = [(header_row, headers)]
+        row_values, row_formats = {}, {}
+        for r in range(header_row + 1, max_row + 1):
+            cells = [ws.cell(row=r, column=c) for c in range(1, num_cols + 1)]
+            row_values[r] = [c.value for c in cells]
+            # ★ 元セルの number_format を運ぶ（cmd_stack と同じ ── 日付が時刻付きで出ない）。
+            row_formats[r] = [c.number_format for c in cells]
+            grid_rows.append((r, row_values[r]))
+        plan = split_people.plan_split(grid_rows, header_row, a.by, amount_header)
+    finally:
+        wb.close()
+
+    result.update({"sheet": sheet_title, "header_row": header_row,
+                   "other_sheets": other_sheets, "refused": plan.refused,
+                   "blank": list(plan.blank), "excluded": list(plan.excluded),
+                   "multi": [[r, v] for r, v in plan.multi],
+                   "lookalike": [list(p) for p in plan.lookalike],
+                   "unparsed": list(plan.unparsed)})
+    if plan.refused:
+        # ★ 決められないなら分けない（D1）── 1 冊も作らず、両方を名指しして人に返す。
+        emit()
+        return 4
+
+    names = split_people.safe_filenames(list(plan.parts),
+                                        reserved=(split_people.REPORT_STEM,))
+    suffix = filetypes.OPENPYXL_READABLE_SUFFIX
+    prov_headers = multifile_stack.own_output_headers(headers)
+    out_headers = list(headers) + list(prov_headers)
+    by_name = headers[plan.by_column - 1]
+    workdir = Path(tempfile.mkdtemp(prefix="ailine_split_"))
+    try:
+        written = {}
+        for value, row_nums in plan.parts.items():
+            tmp = workdir / (names[value] + suffix)
+            wb_out = openpyxl.Workbook()
+            wb_out.properties.creator = split_people.CREATOR_MARK   # ★ 書き手の印
+            # ★ 焼き込む条件（この冊は「誰の分か」）── 読む側は stack.KIND_SIGNATURES。
+            wb_out.properties.description = json.dumps(
+                {"tool": "ailine", "kind": split_people.KIND, "by": by_name, "value": value},
+                ensure_ascii=False)
+            ws_out = wb_out.active
+            ws_out.title = sheet_title
+            ws_out.append(out_headers)
+            for i, r in enumerate(row_nums, start=2):
+                ws_out.append(list(row_values[r]) + [book.name, r])
+                for c, fmt in enumerate(row_formats[r], start=1):
+                    ws_out.cell(row=i, column=c).number_format = fmt
+            inspection.bold_row(ws_out, 1, len(out_headers))
+            inspection.autosize_columns(ws_out)
+            wb_out.save(tmp)
+            wb_out.close()
+            written[value] = tmp
+
+        # ★★ 証明（D5）: 『部分』は**書いた冊を開き直して**数える（openpyxl を経由しない
+        #   別実装 xml_readback）── 自分の書き込みを自分の記憶で数えたら、この検算は恒真。
+        parts_rows = 0
+        parts_amount = 0.0
+        for value, tmp in written.items():
+            data = xml_readback.read_grid(tmp)
+            out_names = xml_readback.header_names(data, header_row=1)
+            row_nums_out = xml_readback.data_row_numbers(data, header_row=1)
+            src_col = len(out_names)          # 出所列の 2 本目（元行）＝最後の列
+            src_rows = []
+            for rr in row_nums_out:
+                v = data["grid"].get((rr, src_col))
+                # ★ 元行が数でない行は「読めなかった」── 落とさずに破れとして扱う
+                #   （出ないことは信号でない ── 黙って除くと帰属の検算が甘くなる）。
+                src_rows.append(int(v) if primitives.is_number(v) else v)
+            if sorted(src_rows, key=str) != sorted(plan.parts[value], key=str):
+                # ★ 行数や Σ が合っても帰属が嘘かもしれない（cmd_stack と同じ線）。
+                return _split_postcondition_fail(f"帰属（{value} の元行）",
+                                                 sorted(plan.parts[value]),
+                                                 sorted(src_rows, key=str))
+            parts_rows += len(row_nums_out)
+            if plan.amount_counted:
+                hits = split_people.matching_columns(out_names, plan.amount_header)
+                if len(hits) != 1:
+                    return _split_postcondition_fail(f"金額の列（{value} の出力）", 1, len(hits))
+                got = 0.0
+                for rr in row_nums_out:
+                    v = data["grid"].get((rr, hits[0]))
+                    if primitives.is_number(v):
+                        got += float(v)
+                parts_amount += got
+                result["parts"][value] = {"rows": src_rows, "amount": got,
+                                          "file": tmp.name}
+            else:
+                result["parts"][value] = {"rows": src_rows, "amount": None, "file": tmp.name}
+
+        proof = {"rows": {"whole": plan.whole_rows, "parts": parts_rows,
+                          "blank": len(plan.blank), "excluded": len(plan.excluded),
+                          "multi": len(plan.multi)},
+                 "amount": {"counted": plan.amount_counted, "whole": plan.whole_amount,
+                            "parts": parts_amount, "blank": plan.blank_amount,
+                            "multi": plan.multi_amount}}
+        broken = split_people.proof_breaks(proof)
+        proof["ok"] = not broken
+        proof["broken"] = broken
+        result["proof"] = proof
+        if broken:
+            result["files_written"] = []
+            emit()
+            return 5
+
+        # ★ 一覧の冊（`_検分`）── 事後条件が通った直後の数字だけを並べる（手書きの ✓ を作らない）。
+        report_tmp = workdir / (split_people.REPORT_STEM + suffix)
+        wb_rep = openpyxl.Workbook()
+        wb_rep.properties.creator = split_people.CREATOR_MARK
+        wb_rep.properties.description = json.dumps(
+            {"tool": "ailine", "kind": split_people.KIND, "by": by_name, "value": None},
+            ensure_ascii=False)
+        ws_rep = wb_rep.active
+        ws_rep.title = split_people.REPORT_SHEET
+        ws_rep.append(list(split_people.REPORT_HEADERS))
+        for row in split_people.report_rows(plan, {v: p.name for v, p in written.items()},
+                                            proof=proof):
+            ws_rep.append(row)
+        inspection.bold_row(ws_rep, 1, len(split_people.REPORT_HEADERS))
+        inspection.autosize_columns(ws_rep)
+        wb_rep.save(report_tmp)
+        wb_rep.close()
+
+        # ★ 関所（cmd_stack / cmd_forms と同じ線）: 配る先に人のファイル／別コマンドの出力が
+        #   在れば名指しで止める。★ 配る先は**フォルダ**なので、これから書く名前だけでなく
+        #   フォルダに在る冊を全部見る（人の資料が混ざったフォルダへ配ると、受け取った人が
+        #   どれが配られた冊かを区別できない）。
+        if out_dir.is_dir():
+            for existing in sorted(out_dir.glob("*" + suffix)):
+                mark = multifile_stack.own_output_mark(existing)
+                if mark == split_people.CREATOR_MARK:
+                    continue
+                if getattr(a, "overwrite", False):
+                    continue
+                if mark is None:
+                    print(f"⚠ 出力先に人のファイルがあります: {existing}")
+                    print(f"（{existing.name} は ailine split の前回出力ではありません。"
+                          "承知の上でこのフォルダへ配るなら --overwrite を付けて実行してください）")
+                else:
+                    print(f"⚠ 出力先は ailine の別のコマンドの出力です: {existing}")
+                    print(f"（{existing.name}: 作成は {mark} です。"
+                          "承知の上なら --overwrite を付けて実行してください）")
+                return 7
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for tmp in list(written.values()) + [report_tmp]:
+            shutil.copy2(tmp, out_dir / tmp.name)
+            result["files_written"].append(tmp.name)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    emit()
+    return 0
+
+
 def cmd_verify(a: argparse.Namespace) -> int:
     """`ailine verify <out.xlsx> <srcfolder>` または `ailine verify <out.xlsx> <元A> <元B>`:
        検算の単独再実行（信用の条件⑥）。stack/extract は出力ブック+元フォルダから、
@@ -17545,6 +17785,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
     fm.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     fm.set_defaults(func=cmd_forms)
+
+    sp = sub.add_parser("split", help="1 冊の一覧を担当者ごとに分けて配る（新ブック N 冊 + 検分）")
+    sp.add_argument("book", help="分ける元の一覧表 (.xlsx) ── 読むだけ（1 バイトも変えません）")
+    sp.add_argument("--by", required=True,
+                    help="担当者の列の見出しの文字（列番号ではありません）"
+                         "── 当たる見出しが 2 つ以上あれば分けずに断ります")
+    sp.add_argument("--out", required=True, help="配る先のフォルダ（値ごとに 1 冊 + _検分.xlsx）")
+    sp.add_argument("--amount", help="金額の列の見出し（指すと金額の和も証明します）")
+    sp.add_argument("--sheet", help="読むシート名（既定は 1 枚目 ── 他のシートは名指しで開示）")
+    sp.add_argument("--overwrite", action="store_true",
+                    help="配る先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
+    sp.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
+    sp.set_defaults(func=cmd_split)
 
     vf = sub.add_parser("verify", help="stack/extract/match の出力を検算だけ独立に再実行する（読むだけ）")
     vf.add_argument("out", help="ailine が作った出力ブック")

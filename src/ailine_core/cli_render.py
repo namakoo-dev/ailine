@@ -620,3 +620,80 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
     if result.get("file_written"):
         lines.append("（一覧は新しいブックです ── 元の請求書は 1 バイトも変えていません）")
     return lines
+
+
+def render_split_report(book_label: str, out_label: str, result: dict) -> list:
+    """`ailine split`（担当者別に分けて配る）の人向け報告（2026-09-12・需要⑤）。
+
+    ★ 分母つき（全体の行が部分にどう散ったか）・名指し（空欄・ゆれ・複数担当・分けない行は
+      行番号で言う）・そして**証明**（部分の和＝全体を、書いた出力から読み戻して確かめた）。
+    ★ 成績のバーは置かない（forms と同じ線 ── 置くと「割合を上げる」方へ手が動く）。
+    ★ ✓ は証明が通った時だけ ── ここで手書きの ✓ を作らない（`proof.ok` が唯一の根拠）。
+    """
+    lines = [f"■ ailine split（担当者別に分けて配る）  book={book_label}  out={out_label}"]
+    if result.get("sheet"):
+        lines.append(f"シート『{result['sheet']}』の {result.get('header_row')} 行目を"
+                     "見出しとして読みました")
+    for name in result.get("other_sheets", ()) or ():
+        lines.append(f"  （見たのはこのシートだけです ── 同じ冊に『{name}』もあります）")
+    if result.get("refused"):
+        lines.append(f"× 分けていません: {result['refused']}")
+        lines.append("（1 冊も作っていません ── 表から決まらないことは、こちらで決めません）")
+        return lines
+
+    parts = result.get("parts") or {}
+    proof = result.get("proof") or {}
+    rows = proof.get("rows") or {}
+    lines.append(f"{rows.get('whole')} 行のうち {rows.get('parts')} 行を {len(parts)} 冊に"
+                 f"配りました（空欄 {rows.get('blank')}／複数担当 {rows.get('multi')}／"
+                 f"分けない行 {rows.get('excluded')}）")
+    for value, part in parts.items():
+        amount = part.get("amount")
+        tail = f"／{_fmt_num(amount)}" if amount is not None else ""
+        lines.append(f"  ・{value}: {len(part.get('rows') or ())} 行{tail}"
+                     f"  → {part.get('file')}")
+    if proof.get("ok"):
+        amount = proof.get("amount") or {}
+        money = ""
+        if amount.get("counted"):
+            money = (f"／金額 {_fmt_num(amount.get('whole'))} ＝ "
+                     f"{_fmt_num(amount.get('parts'))}＋{_fmt_num(amount.get('blank'))}"
+                     f"＋{_fmt_num(amount.get('multi'))}")
+        lines.append(f"✓ 部分の和 ＝ 全体（行 {rows.get('whole')} ＝ {rows.get('parts')}＋"
+                     f"{rows.get('blank')}＋{rows.get('multi')}＋{rows.get('excluded')}"
+                     f"{money}）── 配った冊を開き直して数えた結果です")
+    for line in proof.get("broken", ()) or ():
+        lines.append(f"× 証明が破れました: {line}")
+    if not result.get("amount"):
+        lines.append("金額は数えていません（`--amount <金額の見出し>` を付けると、"
+                     "行数と同じやり方で金額の和も証明します）")
+    blank = result.get("blank") or []
+    if blank:
+        lines.append(f"⚠ 空欄 {len(blank)} 行（{_rows_label(blank)}）"
+                     "── どの冊にも入れていません（空欄は誤配より安いので、こちらで決めません）")
+    for pair in result.get("lookalike", ()) or ():
+        lines.append(f"⚠ 表記ゆれ: 『{pair[0]}』／『{pair[1]}』── 空白や中黒を無視すると"
+                     "同じ文字です。別の冊のままにしています（同じ人だと決めるのは人の仕事です）")
+    for row_num, value in result.get("multi", ()) or ():
+        lines.append(f"⚠ 複数担当: {row_num} 行目『{value}』── どちらの冊に入れるかは"
+                     "表からは決まらないので、どの冊にも入れていません")
+    unparsed = result.get("unparsed") or []
+    if unparsed:
+        lines.append(f"⚠ 金額が文字の行 {len(unparsed)} 行（{_rows_label(unparsed)}）"
+                     "── 和に数えていません（読み替えていません）")
+    excluded = result.get("excluded") or []
+    if excluded:
+        lines.append(f"（分けない行 {len(excluded)} 行: {_rows_label(excluded)}"
+                     " ── 合計・小計・空の行。誰の冊にも入れていません）")
+    if result.get("files_written"):
+        lines.append(f"（配った冊 {len(parts)} 件 ＋ 検分 1 件は新しいブックです"
+                     " ── 元の表は 1 バイトも変えていません）")
+    return lines
+
+
+def _rows_label(rows, show: int = 8) -> str:
+    """行番号の並びを「4, 7, 9 行目」の形に（多い時は件数で締める）。"""
+    nums = [str(r) for r in rows]
+    if len(nums) > show:
+        return f"{', '.join(nums[:show])} 行目 ほか {len(nums) - show} 行"
+    return f"{', '.join(nums)} 行目"

@@ -18,8 +18,8 @@ from xml.etree import ElementTree as ET
 
 import openpyxl
 
-from ailine_core import (forms_collect, inspection, multifile, total_row,
-                          xml_readback)
+from ailine_core import (forms_collect, inspection, multifile, split_people,
+                          total_row, xml_readback)
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 
 PROVENANCE_HEADERS = ("元ファイル", "元行")
@@ -37,8 +37,10 @@ CREATOR_MARK = "ailine stack"
 # 読む側の判定はこの集合で行う（stack・extract・そして P 先行 commit で match を追加）。
 # ★ CSV 検疫接続（2026-08-22）: `ailine csv` の出力を足す。ailine_core/verify.py の
 # _CREATOR_MARKS にも同時に足す（tests/test_stack_e2e.py の同期番人が二重管理のずれを見る）。
+# ★ 担当者別に分けて配る（2026-09-12・需要⑤）: `ailine split` を足す。verify.py の
+# _CREATOR_MARKS にも**同時に**足す（上と同じ理由 ── 片方だけに足すと fail closed が破れる）。
 CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv",
-                 "ailine forms"}
+                 "ailine forms", "ailine split"}
 # ★ M3 P 先行 commit（DESIGN-20260821-multifile.md M3 設計 v2）: match の集約出力
 # （1行=1キー）は末尾2列の出所列署名を構造的に持てない。1枚目シート名+固定見出しで判定する。
 MATCH_SHEET_NAME = "照合"
@@ -195,12 +197,41 @@ def _forms_signature(path) -> bool:
         wb.close()
 
 
+def _split_signature(path) -> bool:
+    """`ailine split` の列署名（2026-09-12・需要⑤）── 出力は 2 種類ある。
+
+    ① 配る冊: 見出し + その人の行 + 出所列 2 本（stack と**同じ形**なので同じ判定を呼ぶ
+       ── ここで末尾 2 列の比較を書き写さない）
+    ② 一覧の冊（`_検分`）: 1 枚目のシート名と見出しで見る（forms と同じ作法 ── 行ごとの
+       出所列を構造的に持てない）
+
+    ★ 印（creator）と**両方**そろって初めて自分の出力（fail closed）── 見出しだけが
+      たまたま一致する人のファイルを前回出力と誤認して上書きした事故が過去に在る。
+    """
+    if _stack_extract_signature(path):
+        return True
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return False
+    try:
+        ws = wb.worksheets[0]
+        if ws.title != split_people.REPORT_SHEET:
+            return False
+        return tuple(multifile.read_row_headers(ws, 1)) == split_people.REPORT_HEADERS
+    except Exception:
+        return False
+    finally:
+        wb.close()
+
+
 KIND_SIGNATURES = {
     "ailine stack": _stack_extract_signature,
     "ailine extract": _stack_extract_signature,
     "ailine match": _match_signature,
     "ailine csv": _csv_signature,
     "ailine forms": _forms_signature,
+    "ailine split": _split_signature,
 }
 
 
