@@ -480,3 +480,29 @@ def test_a_bare_no_label_is_read_but_only_when_the_value_has_a_digit():
     head = read_invoice_number(grid({"A15": "No", "B15": "品目", "C15": "数量", "D15": "金額"}))
     assert grade(head) == "無", (grade(head), value(head))
     assert "番号" in head.blank_reason
+
+
+# ── 行ごとの金額の列が「合計」と名乗る骨（2026-09-12・実物 spread_1/3/5）──────────
+def test_a_detail_table_whose_amount_column_is_headed_goukei_is_swept():
+    """★ 見出し行 `品目 | 数量 | 単位 | 単価 | 合計` を明細として見つけ、合計の列を足す。
+    帯の『合計』とは混ざらない（見出し行は品名側の語を同じ行に持つのが条件）。"""
+    import openpyxl
+    from ailine_core.form_grid import Grid
+    from ailine_core.form_read import detail_amount_sum
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A21"] = "商品コード"; ws["D21"] = "品目"; ws["O21"] = "数量"; ws["Q21"] = "単位"; ws["S21"] = "単価"; ws["V21"] = "合計"
+    ws["D22"] = "保守料"; ws["O22"] = 1; ws["S22"] = 9000; ws["V22"] = 9000
+    ws["D23"] = "部材費"; ws["O23"] = 2; ws["S23"] = 3000; ws["V23"] = 6000
+    ws["S40"] = "小計"; ws["V40"] = 15000
+    ws["S42"] = "消費税"; ws["V42"] = 1500
+    ws["S44"] = "合計"; ws["V44"] = 16500
+    g = Grid.read(ws)
+    total, item_head, cells, amt_head, stop = detail_amount_sum(g, None)
+    assert amt_head is not None and amt_head.at == "V21", amt_head
+    assert total == 15000 and [c.value for c in cells] == [9000, 6000], (total, cells)
+    assert stop == 40, stop          # ★ 帯は小計で止まる（合計の帯の行まで足さない）
+    # ★ 陰性対照: 『合計』が帯にしか無い冊では見出しにならない
+    wb2 = openpyxl.Workbook(); ws2 = wb2.active
+    ws2["S40"] = "小計"; ws2["V40"] = 15000; ws2["S44"] = "合計"; ws2["V44"] = 16500
+    assert detail_amount_sum(Grid.read(ws2), None)[3] is None
