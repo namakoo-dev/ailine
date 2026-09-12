@@ -24,8 +24,19 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "▶ pre-push: 実機テスト(-m local)を走らせます（CI では走らない分）…"
-PYTHONPATH=src python -m pytest tests -q -m local
+# ★★ 2026-09-12: 鍵を通す。実機（LibreOffice）は固定ポート 2002・単一プロファイルなので
+#   2 本同時に走ると 1 本目が資源を握り、2 本目以降は掴めず終了もせず溜まる。
+#   実測: 単独なら soffice は 1 個のまま 84 passed。2 本同時で 49 個・F が 20 件（本物の赤は 0）。
+#   同じ家系を 1 日 4 回踏んだので「気をつける」をやめて手順を機械にした。
+#   ★ 鍵が取れなければ **push を止める**（fail closed ── 上の「走らせられなかった時も止める」と同じ線）。
+PYTHONPATH=src python scripts/machine_lock.py --what "pre-push の実機テスト" --     python -m pytest tests -q -m local
 rc=$?
+if [ $rc -eq 2 ]; then
+    echo "" >&2
+    echo "✗ pre-push: 実機の走行がすでに 1 本あるので止めました（上の名指しを見てください）。" >&2
+    echo "  終わるのを待ってから、もう一度 push してください。" >&2
+    exit 1
+fi
 if [ $rc -ne 0 ]; then
     echo "" >&2
     echo "✗ pre-push: 実機テストが通っていません（exit $rc）。" >&2
