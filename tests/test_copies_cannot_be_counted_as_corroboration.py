@@ -14,6 +14,9 @@
 #     ただし 87 冊で区分が変わる冊は 0 ── **壊れた経路は在るが被害者は居ない**状態だった
 #
 # ★ 「PDF だから」では書かない ── 判定は 1 箇所（`copies_are_indistinguishable`）。
+# ★★ 2026-09-12 に「裏が取れたと名乗れない理由」は真偽値 1 つから**理由の並び**
+#   （`Record.unconfirmable`）へ畳んだ ── 同じ日に二つ目の理由（掃き出していない口）が
+#   出たので、三つ目を足す形（真偽値の増殖）をやめた。
 from __future__ import annotations
 
 import openpyxl
@@ -34,19 +37,20 @@ def _two_agreeing():
 def test_agreeing_sources_earn_the_top_grade_only_when_copies_can_be_told_apart():
     """★ 本番: 掃き出し済みで一致していても、写しを見分けられないなら最上位を出さない。"""
     top = grade_of(_two_agreeing(), swept=True)
-    capped = grade_of(_two_agreeing(), swept=True, copies_indistinguishable=True)
+    capped = grade_of(_two_agreeing(), swept=True, unconfirmable=("式が読めません",))
     assert top in GRADES_WITH_VALUE and capped in GRADES_WITH_VALUE
     assert top != capped, "★ 写しを見分けられないのに同じ区分を出している"
     # ★ 値は変わらない ── 弱くするのは**主張の強さ**だけ（空欄にはしない）
-    for flag in (False, True):
-        r = Record("請求額", _two_agreeing(), swept=True, copies_indistinguishable=flag)
+    for why in ((), ("式が読めません",)):
+        r = Record("請求額", _two_agreeing(), swept=True, unconfirmable=why)
         assert value(r) == 36300
 
 
 def test_the_reason_says_which_of_the_two_doubts_it_is():
     """★ 「裏が取れていない」の理由は 2 種類あり、人の次の手が変わる ── 混ぜない。"""
     swept_not_done = Record("請求額", _two_agreeing(), swept=False)
-    blind = Record("請求額", _two_agreeing(), swept=True, copies_indistinguishable=True)
+    blind = Record("請求額", _two_agreeing(), swept=True,
+                   unconfirmable=("同じ数字の写しかどうかを見分けられません",))
     assert "食い違う数字が無いか" in describe(swept_not_done), describe(swept_not_done)
     assert "写し" in describe(blind), describe(blind)
     assert "食い違う数字が無いか" not in describe(blind), describe(blind)
@@ -54,7 +58,7 @@ def test_the_reason_says_which_of_the_two_doubts_it_is():
 
 def test_a_declared_reason_is_shown_instead_of_the_default():
     r = Record("請求額", _two_agreeing(), swept=True,
-               copies_indistinguishable=True, copies_why="この帳票には式がありません")
+               unconfirmable=("この帳票には式がありません",))
     assert "この帳票には式がありません" in describe(r)
 
 
@@ -66,14 +70,14 @@ def test_a_declared_reason_is_shown_instead_of_the_default():
 def test_it_changes_nothing_outside_the_one_case_it_is_for(evid, kw):
     """★ 陰性対照 ── 出所 1 つ・食い違い・手がかり無し は、この処置で動かない。"""
     assert (grade_of(evid, **kw)
-            == grade_of(evid, copies_indistinguishable=True, **kw))
+            == grade_of(evid, unconfirmable=("理由",), **kw))
 
 
 def test_disagreeing_values_stay_split_even_when_copies_are_blind():
     """★ 写しを見分けられないことを、食い違いを黙らせる口実にしない。"""
     e = (Evidence(rule="上部", value=100, at="A1", how="a"),
          Evidence(rule="帯", value=200, at="B2", how="b"))
-    assert grade_of(e, swept=True, copies_indistinguishable=True) == grade_of(e, swept=True)
+    assert grade_of(e, swept=True, unconfirmable=("理由",)) == grade_of(e, swept=True)
     assert grade_of(e, swept=True) not in GRADES_WITH_VALUE
 
 

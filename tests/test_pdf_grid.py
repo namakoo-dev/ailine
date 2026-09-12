@@ -103,7 +103,7 @@ def test_a_pdf_from_the_product_path_never_claims_corroboration():
     rec = read_pdf_book(FIXTURE)["請求額"]
     assert value(rec) == 33000
     assert grade(rec) == "単", grade(rec)
-    assert rec.copies_indistinguishable and "式" in rec.copies_why
+    assert rec.unconfirmable and any("式" in x for x in rec.unconfirmable)
 
 
 # ── D7: テキスト層が無い ──────────────────────────────────

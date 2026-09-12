@@ -121,7 +121,9 @@ def grid_from_words(words, *, page_no: int = 1,
         v, fmt = recover(t)
         cells[(r, c)] = Cell(row=r, col=c, value=v, at=f"{page_no}頁{r}行{c}列",
                              anchor=(r, c), from_merge=False, fmt=fmt)
-    return Grid(cells, len(tops), max(c for _r, c in cells), ())
+    # ★ 列は座標から組み直したもの ── 表を歩く側に「当てにするな」と申告する（2026-09-12）。
+    return Grid(cells, len(tops), max(c for _r, c in cells), (),
+                columns_reconstructed=True)
 
 
 def grid_from_page(page, *, page_no: int = 1) -> Grid:

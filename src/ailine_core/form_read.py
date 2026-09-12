@@ -59,9 +59,23 @@ from ailine_core.date_compare import parse_wareki_literal as _parse_wareki
 _SPACE = re.compile(r"[\s　 ]+")
 
 
+#: 見た目がほぼ同じ中黒（見出し `品番•品名` の `•` は U+2022 BULLET・実物に在る）。
+#:   ★★ 2026-09-12 の実測: 器官の一覧は `品番・品名`（U+30FB）で、実物のベンダー雛形には
+#:     `•`(U+2022) が 10 セル・検体 87 冊に 31 セル在った。**NFKC でも寄らない**
+#:     （`･`→`・` は寄るのに `•` は寄らない）ため、明細の見出しが 85 冊中 42 冊しか
+#:     見つかっておらず、**明細の掃き出し（いちばん強い番人）が半分の版面で黙っていた**。
+#:   ★ これは言い回しの列挙ではなく**閉じた文字クラス**（同じ字を指す符号が複数ある）。
+_DOTS = re.compile(r"[•·･‧∙⁃]")
+
+
 def norm(s) -> str:
-    """照合用に均す。★ 空白（半角・全角・改行）を**全部落とす**（実物の癖⑤）。"""
-    return _SPACE.sub("", str(s or ""))
+    """照合用に均す。★ 空白（半角・全角・改行）を**全部落とす**（実物の癖⑤）。
+
+    ★ 中黒に見える符号は 1 つに寄せる（上の `_DOTS`）。
+    ★★ ここは**照合専用**で、人に出す値はここを通らない（`clean_org_name` は生の行から作る）。
+      畳む前後で 87 冊の出す値が 1 つも変わらないことを実測して確かめた。
+    """
+    return _DOTS.sub("・", _SPACE.sub("", str(s or "")))
 
 
 #: 会社の形をした名前の語尾／語頭。★ 「これは組織の名前だ」の唯一の手がかり。
@@ -391,7 +405,13 @@ _BAND_LABELS = {norm(x) for x in (
     "小計", "小計金額", "税抜金額", "消費税", "消費税額", "内消費税", "税額",
     "合計", "合計金額", "総合計", "税込合計", "ご請求金額", "請求金額",
     "10%対象", "8%対象", "10％対象", "8％対象", "対象額（税抜）", "税率区分",
-    "値引", "値引き", "備考")}
+    # ★★ `値引`/`値引き` は 2026-09-12 に**外した**（器官の初版が a priori に入れていた語で、
+    #   実測の事件に紐づいていなかった）。帯は 小計/合計/消費税 で開くので、**それより前に
+    #   出る値引きは明細の一部**だ ── 走査は最初の帯の語で止まるため、値引が効くのは
+    #   「最も早い帯の語」の時、つまり明細行として在る時だけだった。
+    #   実測 T15（値引き行 −5,000 の陰性対照）: 明細から落ちて 110,000 になり、小計 105,000 と
+    #   合わない**偽の食い違い**を出していた。どちらに数えても小計に足し合わされる側の行。
+    "備考")}
 
 #: 明細の見出し。★ この行が見つかれば、その下が明細ブロック。
 _DETAIL_HEAD_ITEM = ("品番・品名", "品名", "品目", "内容", "摘要", "件名", "作業内容")
@@ -517,6 +537,14 @@ def detail_amount_sum(grid: Grid, band_row: int | None = None):
 
     戻り値: (合計, 品名の見出し, 足したセル, 金額の見出し, 明細の終わりの行)
     """
+    # ★★ 列を座標から組み直した格子では、この表歩きをしない（2026-09-12 の実測）。
+    #   推定した列の上を歩くと隣の列（単価・数量）を足しうる ── PDF で出た食い違い 39 件の
+    #   うち **34 件が偽**だった（Excel では裏が取れて正しい値が出ている冊）。
+    #   ★ 「空欄は誤値より安い」は「偽の疑いも安い」を意味しない ── オオカミ少年は
+    #     この製品がいちばん避けるもの。掃けないなら掃けないと言って降りる。
+    if grid.columns_reconstructed:
+        return None, None, (), None, 0
+
     head_item = {norm(x) for x in _DETAIL_HEAD_ITEM}
     head_amt = {norm(x) for x in _DETAIL_HEAD_AMOUNT}
     best = None
@@ -863,10 +891,17 @@ def read_billed_total(grid: Grid, ws_formula=None) -> Record:
     if not evid:
         return Record("請求額", (), rivals=tuple(rivals), excluded=tuple(excluded),
                       blank_reason="請求額の欄も、明細の帯の合計も見つかりませんでした")
-    # ★ 掃き出しても、写しを見分けられないなら「裏が取れた」とは言わない（D4）。
+    # ★ 裏取り済みを名乗れない理由を集める（1 箇所）── 写しを見分けられない（D4）と、
+    #   掃き出していない口が在る（G3）。どちらも「一致した」までで止める。
     blind, blind_why = copies_are_indistinguishable(ws_formula)
+    tentative = _record("請求額", evid, rivals, excluded, swept=swept, swept_how=swept_how)
+    unconfirmable = (((blind_why,) if blind else ())
+                     + (("明細の表は列を座標から組み直しているので、明細の合計は"
+                         "当てにできません（掃き出していません）",)
+                        if grid.columns_reconstructed else ())
+                     + unswept_mouths(grid, grade_value(tentative)))
     return _record("請求額", evid, rivals, excluded, swept=swept, swept_how=swept_how,
-                   copies_indistinguishable=blind, copies_why=blind_why)
+                   unconfirmable=unconfirmable)
 
 
 _REF = re.compile(r"\$?([A-Z]{1,3})\$?(\d{1,5})")
@@ -902,20 +937,81 @@ def copies_are_indistinguishable(ws_formula) -> tuple:
                   "写しかを見分けられません（PDF や、式を読み込まずに開いた表）")
 
 
+#: 円でない通貨の印。★ `元` は入れない ── **『請求元』に当たる**（2026-09-12 の実測で誤爆）。
+_FOREIGN_CURRENCY = ("USD", "EUR", "GBP", "CNY", "ドル", "ユーロ", "ポンド", "＄", "$", "€")
+
+#: 帳票名そのものを名乗る**短いセル**。★ 語の有無では測れない ── misoca のフッタに
+#:   「無料のクラウド見積・納品・請求書サービス」が在り、それで数えると偽陽性 29 冊（実測）。
+_KIND_TITLE = re.compile(r"^(見積|納品|領収|受領)(書|明細)?"
+                          r"(ESTIMATE|QUOTATION|DELIVERY|RECEIPT|INVOICE)?$", re.I)
+
+#: 文章の中の金額（`合計金額 121,000 円（税込）をご請求申し上げます`）。
+_NUM_IN_TEXT = re.compile(r"[0-9０-９][0-9０-９,，]{2,}")
+
+
+def _numbers_in_text(text: str) -> list:
+    out = []
+    for m in _NUM_IN_TEXT.finditer(text):
+        body = m.group(0).translate(str.maketrans("０１２３４５６７８９，", "0123456789,"))
+        try:
+            out.append(float(body.replace(",", "")))
+        except ValueError:
+            pass
+    return out
+
+
+def unswept_mouths(grid: Grid, total) -> tuple:
+    """**掃き出していない口**の並び（1 行ずつ）。空でなければ裏取り済みを名乗らない。
+
+    ★★ なぜ要るか（2026-09-12 の実測）: 明細の合計と一致しても、それは
+      **明細という 1 つの口**を掃いただけだ。器官の初版が既に名指ししていた
+      「開いていない第三の口」── 備考の金額の再掲・通貨が円でない・そもそも納品書か
+      見積書か ── は別の口で、どれも「一致しているのに本体と違う」を作る。
+
+    ★ 語の有無ではなく**構造**で測る（実測で偽陽性 0）:
+        通貨    円でない通貨の印が在る（`元` は『請求元』に当たるので見ない）
+        帳票名  **短いセル**が 見積書/納品書/領収書 を名乗る（長い文中の語は見ない）
+        再掲    合計のラベルと金額が同じ文章に同居し、その金額が本体と違う
+
+    ★ これらの冊が長く正しく見えていたのは、一文字の取りこぼし（`品番•品名` の U+2022）が
+      掃き出し自体を壊していたから ── 番人が間違った理由で効いていた。
+    """
+    found = []
+    for c in grid.text_cells():
+        t = norm(c.value)
+        hit = [k for k in _FOREIGN_CURRENCY if k in t]
+        if hit:
+            found.append(f"{c.at} に円でない通貨の印（{hit[0]}）があります")
+            break
+    for c in grid.text_cells():
+        t = norm(c.value)
+        if len(t) <= 12 and _KIND_TITLE.match(t):
+            found.append(f"{c.at} が「{t}」と名乗っています（請求書ではない帳票が混ざっています）")
+            break
+    if isinstance(total, (int, float)):
+        for c in grid.text_cells():
+            t = norm(c.value)
+            if len(t) <= 8 or not any(lbl in t for lbl in _LABEL_TOTAL):
+                continue
+            other = [x for x in _numbers_in_text(t) if abs(x - float(total)) > 0.5]
+            if other:
+                found.append(f"{c.at} に合計の再掲（{other[0]:,.0f}）があり、本体と違います")
+                break
+    return tuple(found)
+
+
 def _record(field: str, evid: list, rivals: list, excluded: list = (),
             *, swept: bool = False, swept_how: str = "",
-            copies_indistinguishable: bool = False, copies_why: str = "") -> Record:
+            unconfirmable: tuple = ()) -> Record:
     """`Record` を組む。★ 空欄になるなら**理由を必ず添える**（型が空を許さない）。
 
     ★ 区分は `grade_of` に聞く ── ここで `Record` を偽造して先読みすると、
       「区分は 1 箇所からしか作れない」という契約が骨抜きになる。
     """
-    g = grade_of(evid, swept, copies_indistinguishable=copies_indistinguishable)
+    g = grade_of(evid, swept, unconfirmable=unconfirmable)
     if g in GRADES_WITH_VALUE:
         return Record(field, tuple(evid), tuple(rivals), tuple(excluded), "",
-                      swept, swept_how,
-                      copies_indistinguishable=copies_indistinguishable,
-                      copies_why=copies_why)
+                      swept, swept_how, unconfirmable=unconfirmable)
 
     if g == SPLIT:
         # ★ 番地だけ並べても人には読めない ── **何の数字か**を書く

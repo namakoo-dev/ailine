@@ -72,13 +72,20 @@ class Grid:
     """
 
     def __init__(self, cells: dict, rows: int, cols: int,
-                 formula_without_cache: tuple = ()):
+                 formula_without_cache: tuple = (), *,
+                 columns_reconstructed: bool = False):
         self._cells = cells
         self.rows = rows
         self.cols = cols
         #: ★ 式が在るのに計算結果が保存されていないマスの番地。
         #:   「値が無い」と混ぜない（黙って 0 にしないため）。
         self.formula_without_cache = formula_without_cache
+        #: ★★ 列が**与えられたもの**か、座標から組み直したものか（2026-09-12）。
+        #:   Excel の列は本物だが、PDF には「列」が無く x 座標から推定する。
+        #:   推定した列の上で明細の表を歩くと、隣の列の値を足しうる ──
+        #:   実測: PDF で出た食い違い 39 件のうち **34 件が偽**（Excel では正しく取れている）。
+        #:   だから格子が自分で申告し、表を歩く側がそれを見て降りる。
+        self.columns_reconstructed = columns_reconstructed
 
     # ── 読み込み ────────────────────────────────────────────
     @classmethod
