@@ -122,3 +122,22 @@ def test_a_pdf_without_a_text_layer_is_named_not_silently_empty(tmp_path):
     with pytest.raises(pdf_grid.NoTextLayer) as ei:
         read_pdf_book(p)
     assert "テキスト層" in str(ei.value) and "OCR" in str(ei.value)
+
+
+# ── 行は垂直の中心で束ねる（2026-09-12・実物 construction_bill）──────────
+def test_a_big_amount_and_its_small_label_share_a_row():
+    """★ `¥ -`（高さ 24pt）は同じ行のラベル（高さ 14pt）より top が 5pt 上に出る。
+    top で束ねると別の行に割れ、ラベルの右が空に見える。中心は 0.1pt しか違わない。"""
+    words = [{"text": "ご請求金額", "x0": 133, "x1": 203, "top": 364.4, "bottom": 378.2},
+             {"text": "¥   -", "x0": 283, "x1": 545, "top": 359.5, "bottom": 383.3}]
+    g = pdf_grid.grid_from_words(words)
+    assert g.rows == 1, [(c.row, c.value) for c in g.all_cells()]
+    assert g.cell(1, 1).value == "ご請求金額" and g.cell(1, 2).value == 0
+
+
+def test_an_accounting_zero_is_recovered_but_a_bare_dash_is_not():
+    """★ `¥   -` は Excel の会計書式が 0 を描いた形。裸の `-` は「該当なし」の文字のまま。"""
+    assert pdf_grid.recover("¥   -") == (0, '¥#,##0;;"-"')
+    assert pdf_grid.recover("￥ -") == (0, '¥#,##0;;"-"')
+    assert pdf_grid.recover("-") == ("-", "")
+    assert pdf_grid.recover("¥-1") == ("¥-1", "")

@@ -54,6 +54,10 @@ def normalize_radicals(text: str) -> str:
     return _RADICALS.sub(lambda m: unicodedata.normalize("NFKC", m.group(0)), text)
 
 
+#: 会計書式の 0 ── Excel の `¥#,##0;;"-"` 系は 0 を「¥   -」と描く（実物 construction_bill）。
+_ACCOUNTING_ZERO = re.compile(r"^[¥￥]\s+-$")
+
+
 def recover(text: str) -> tuple:
     """描かれた文字 → (値, 表示形式)。数でなければ文字のまま返す。
 
@@ -62,6 +66,8 @@ def recover(text: str) -> tuple:
       読んで合計を信じなくなった（Wondershare の雛形）。恐れていた壊し方は測ったら起きなかった
       ── 請求番号はラベルから文字として読み、日付は日付として読むので、裸の数が化けて入る経路が無い。
     """
+    if _ACCOUNTING_ZERO.match(text):
+        return 0, '¥#,##0;;"-"'
     m = _DRAWN_NUMBER.match(text)
     if not m:
         return text, ""
@@ -92,7 +98,11 @@ def grid_from_words(words, *, page_no: int = 1,
     for w in words:
         t = normalize_radicals(str(w["text"])).strip()
         if t:
-            items.append((t, float(w["x0"]), float(w["x1"]), float(w["top"])))
+            # ★ 行は**垂直の中心**で束ねる（2026-09-12 の実測）: 大きな文字の金額
+            #   （`¥ -` 高さ 24pt）は同じ行のラベル（高さ 14pt）より top が 5pt 上・bottom が
+            #   5pt 下に出るが、中心は 0.1pt しか違わない。top で束ねると別の行に割れる。
+            cy = (float(w["top"]) + float(w.get("bottom", w["top"]))) / 2
+            items.append((t, float(w["x0"]), float(w["x1"]), cy))
     if not items:
         return Grid({}, 0, 0, ())
 
