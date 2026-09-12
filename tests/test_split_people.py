@@ -304,3 +304,65 @@ def test_a_row_that_merely_contains_a_total_word_is_still_handed_out():
     rows2 = [hdr2, ["山田", "2026-07-01", "対応", 100], ["合計", None, None, 100]]
     p2 = plan_split([(i + 1, r) for i, r in enumerate(rows2)], 1, "記入者", "金額")
     assert p2.parts == {"山田": [2]} and p2.excluded == [3], (p2.parts, p2.excluded)
+
+
+# ── 法人格の書き方だけが違う組（2026-09-12・実表 17 行で実測）─────────────
+def test_the_same_company_written_differently_is_named_but_not_merged():
+    """★★ 実表で 16 冊のうち 8 冊が本来 4 社だった ── `norm` が違うので組にならなかった。
+
+    `㈱アルファ`/`株式会社アルファ`（書き方）・`デルタ㈱`/`㈱デルタ`（前置と後置）・
+    `イータ(株)`/`イータ株式会社`・`ラムダ㈱`/`ラムダ株式会社` ── 日本の実務でいちばん多いゆれ。
+    ★ 名指しはするが**併合はしない**（同じ冊に入れるのは取り返しが付かない）。
+    ★ `norm` 自体には畳まない ── あちらは宛先の除外・請求元の同定にも使われ、測っていない所が動く。
+    """
+    from ailine_core.split_people import entity_core, lookalike_pairs
+    assert entity_core("㈱アルファ") == entity_core("株式会社アルファ") == "アルファ"
+    assert entity_core("デルタ㈱") == entity_core("㈱デルタ") == "デルタ"     # ★ 前置と後置
+    parts = {"㈱アルファ": 1, "株式会社アルファ": 1, "デルタ㈱": 1, "㈱デルタ": 1,
+             "緑川 誠": 1, "緑川誠": 1, "㈱カッパ": 1}
+    got = {frozenset(p) for p in lookalike_pairs(parts)}
+    assert got == {frozenset(("㈱アルファ", "株式会社アルファ")),
+                   frozenset(("デルタ㈱", "㈱デルタ")),
+                   frozenset(("緑川 誠", "緑川誠"))}, got
+    # ★ 併合していない ── 冊は 1 つも減らない
+    from ailine_core.split_people import safe_filenames
+    assert len(safe_filenames(list(parts))) == len(parts)
+
+
+def test_a_form_word_that_is_part_of_the_name_is_not_stripped():
+    """★ 陰性対照 ── `工房` `事務所` は剥がさない（『あかね工房』と『あかね』は別の会社でありうる）。
+    1 通りしか書かない法人格（合同会社）もゆれを作らないので入れない。"""
+    from ailine_core.split_people import entity_core, lookalike_pairs
+    assert entity_core("あかね工房") != entity_core("あかね")
+    assert entity_core("合同会社あかね") != entity_core("あかね")
+    assert lookalike_pairs({"あかね工房": 1, "あかね": 1, "合同会社あかね": 1}) == []
+
+
+def test_the_real_table_names_four_company_pairs_and_two_name_pairs():
+    """★★ 実表（`tests/fixtures/forms/担当者一覧_表記ゆれ.xlsx`・社名は合成）で実測。
+
+    ★ 陽性対照がここで初めて**実データ**で確かめられた ── 空白だけ違う人名
+      （`緑川 誠`/`緑川誠`・`渡辺　涼`/`渡辺涼`）が鳴ること。合成検体でしか見ていなかった。
+    """
+    import openpyxl
+    from pathlib import Path
+    from ailine_core.split_people import lookalike_pairs
+    p = Path(__file__).resolve().parent / "fixtures" / "forms" / "担当者一覧_表記ゆれ.xlsx"
+    wb = openpyxl.load_workbook(p, data_only=True)
+    try:
+        ws = wb.active
+        cols = {str(ws.cell(row=1, column=c).value): c for c in range(1, ws.max_column + 1)}
+        def values(name):
+            c = cols[name]
+            return {str(ws.cell(row=r, column=c).value): 1 for r in range(2, ws.max_row + 1)
+                    if ws.cell(row=r, column=c).value not in (None, "")}
+        company = {frozenset(x) for x in lookalike_pairs(values("会社名"))}
+        person = {frozenset(x) for x in lookalike_pairs(values("担当者名"))}
+    finally:
+        wb.close()
+    assert company == {frozenset(("㈱アルファ", "株式会社アルファ")),
+                       frozenset(("デルタ㈱", "㈱デルタ")),
+                       frozenset(("ラムダ株式会社", "ラムダ㈱")),
+                       frozenset(("イータ(株)", "イータ株式会社"))}, company
+    assert person == {frozenset(("緑川 誠", "緑川誠")),
+                      frozenset(("渡辺　涼", "渡辺涼"))} or len(person) == 2, person

@@ -131,22 +131,56 @@ def safe_filenames(values: list, reserved=()) -> dict:
     return out
 
 
-def lookalike_pairs(parts: dict) -> list:
-    """norm が同じになる**別の表記**の組（併合はしない・名指しだけ・D4）。
+#: 書き方が**複数ある**法人格だけ（2026-09-12）。`合同会社` のように 1 通りしか書かない語は
+#:   ゆれを作らないので入れない。`工房` `事務所` も入れない ── 剥がすと
+#:   『あかね工房』と『あかね』が同じ会社に見えてしまう（別の会社でありうる）。
+_CORP_FORMS = ("株式会社", "有限会社", "㈱", "㈲", "㍿",
+               "(株)", "（株）", "(有)", "（有）")
 
-    戻り値: [[表記a, 表記b], ...]（現れた順）。3 つ以上が同じ norm に落ちたら
-    その総当たりの組を出す ── 人が見るのは「どれとどれが同じ norm か」だから。
+
+def entity_core(value) -> str:
+    """法人格の書き方を落とした「名前の芯」。★ 併合には使わない ── **名指しの鍵**。
+
+    ★★ 2026-09-12 の実測（実表 17 行）: `㈱アルファ` と `株式会社アルファ`、`デルタ㈱` と
+      `㈱デルタ`（前置と後置）、`イータ(株)` と `イータ株式会社`、`ラムダ㈱` と `ラムダ株式会社` ──
+      **16 冊のうち 8 冊が本来 4 社**だったのに、`norm` が違うので組にならず名指しできなかった。
+      日本の実務でいちばん多いゆれがこれ。
+    ★ `norm` そのものに畳まない: あちらは `_looks_like_org`・宛先の除外・請求元の同定にも使われ、
+      測っていない所まで振る舞いが動く。**ここ（名指しの鍵）だけ**に閉じる。
+    ★ 前置/後置の両方が落ちるので、語順の違いも同じ芯になる。
     """
-    groups: dict = {}
-    for value in parts:
-        groups.setdefault(form_read.norm(value), []).append(value)
-    pairs = []
-    for members in groups.values():
-        if len(members) < 2:
-            continue
-        for i in range(len(members)):
-            for j in range(i + 1, len(members)):
-                pairs.append([members[i], members[j]])
+    t = form_read.norm(value)
+    for form in _CORP_FORMS:
+        t = t.replace(form_head := form, "")            # noqa: F841 ── 前置も後置も落とす
+    return t
+
+
+def lookalike_pairs(parts: dict) -> list:
+    """同じものの**別の表記**の組（併合はしない・名指しだけ・D4）。
+
+    2 つの鍵で束ねる ── どちらで束ねても「別の表記」であることに変わりはない:
+      ① `norm` が同じ（空白・中黒・合字の違い）── 例 `緑川 誠` と `緑川誠`
+      ② 法人格の書き方を落とすと同じ（`entity_core`）── 例 `㈱アルファ` と `株式会社アルファ`
+
+    戻り値: [[表記a, 表記b], ...]（現れた順）。3 つ以上同じ鍵に落ちたら総当たりの組を出す。
+    ★ 名指しは**安全側**の行い ── 別の会社が偶然同じ芯になっても、出るのは ⚠ 1 行で、人が見て捨てられる。
+      併合（同じ冊に入れる）は取り返しが付かないので**しない**。
+    """
+    pairs, seen = [], set()
+    for key in (form_read.norm, entity_core):
+        groups: dict = {}
+        for value in parts:
+            groups.setdefault(key(value), []).append(value)
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            for i in range(len(members)):
+                for j in range(i + 1, len(members)):
+                    mark = frozenset((members[i], members[j]))
+                    if mark in seen:
+                        continue
+                    seen.add(mark)
+                    pairs.append([members[i], members[j]])
     return pairs
 
 
