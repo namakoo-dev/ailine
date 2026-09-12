@@ -863,7 +863,10 @@ def read_billed_total(grid: Grid, ws_formula=None) -> Record:
     if not evid:
         return Record("請求額", (), rivals=tuple(rivals), excluded=tuple(excluded),
                       blank_reason="請求額の欄も、明細の帯の合計も見つかりませんでした")
-    return _record("請求額", evid, rivals, excluded, swept=swept, swept_how=swept_how)
+    # ★ 掃き出しても、写しを見分けられないなら「裏が取れた」とは言わない（D4）。
+    blind, blind_why = copies_are_indistinguishable(ws_formula)
+    return _record("請求額", evid, rivals, excluded, swept=swept, swept_how=swept_how,
+                   copies_indistinguishable=blind, copies_why=blind_why)
 
 
 _REF = re.compile(r"\$?([A-Z]{1,3})\$?(\d{1,5})")
@@ -883,17 +886,36 @@ def _depends_on(ws_formula, cell, sources) -> bool:
     return any(s.at.upper() in refs for s in sources)
 
 
+def copies_are_indistinguishable(ws_formula) -> tuple:
+    """写し合いを見分ける手段が在るか。戻り値: (見分けられない, その 1 行)
+
+    ★★ ここが唯一の判定（2026-09-12）。「PDF だから」ではなく
+      「**式を読めないから**」で書く ── 次の入口（CSV・OCR）でも同じ 1 箇所で決まる。
+
+    ★ なぜ要るか: 「別々の出所が一致した」を根拠に `裏が取れた` と言うには、
+      その 2 つが写し合いでないと言えなければならない。Excel では式（`=合計`）を見て
+      「この欄は帯の写しだ」と分かる（`_depends_on`）。式が読めない入口では言えない。
+    """
+    if ws_formula is not None:
+        return False, ""
+    return True, ("この帳票からは式を読めないので、同じ数字が別々に書かれたものか"
+                  "写しかを見分けられません（PDF や、式を読み込まずに開いた表）")
+
+
 def _record(field: str, evid: list, rivals: list, excluded: list = (),
-            *, swept: bool = False, swept_how: str = "") -> Record:
+            *, swept: bool = False, swept_how: str = "",
+            copies_indistinguishable: bool = False, copies_why: str = "") -> Record:
     """`Record` を組む。★ 空欄になるなら**理由を必ず添える**（型が空を許さない）。
 
     ★ 区分は `grade_of` に聞く ── ここで `Record` を偽造して先読みすると、
       「区分は 1 箇所からしか作れない」という契約が骨抜きになる。
     """
-    g = grade_of(evid, swept)
+    g = grade_of(evid, swept, copies_indistinguishable=copies_indistinguishable)
     if g in GRADES_WITH_VALUE:
         return Record(field, tuple(evid), tuple(rivals), tuple(excluded), "",
-                      swept, swept_how)
+                      swept, swept_how,
+                      copies_indistinguishable=copies_indistinguishable,
+                      copies_why=copies_why)
 
     if g == SPLIT:
         # ★ 番地だけ並べても人には読めない ── **何の数字か**を書く

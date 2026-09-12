@@ -11,7 +11,13 @@ description = "自然言語のタスクを、ローカル LLM が LibreOffice Ba
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
-dependencies = ["openpyxl>=3.1"]
+dependencies = ["openpyxl>=3.1", "pdfplumber>=0.11"]
+#   ★ pdfplumber（2026-09-12・Namakoo 決裁）: 受け取る請求書は PDF が圧倒的に多いので、
+#     PDF を読むのは任意機能ではなく主機能。増える依存は 9 パッケージ・47.5MB
+#     （うち cryptography と pypdfium2 はコンパイル済み ── 普通の pip なら wheel が在る）。
+#     入れる得は 3 つ: PDF を読める／export-pdf の検算が常に効く（今は居ない環境で
+#     ✓ を名乗れない）／Pillow が宣言済みになる（「写真の印は PDF に残る」は Pillow が
+#     在る時だけの真実で、宣言していない以上 買い手の環境では嘘だった）。
 
 [project.urls]
 Homepage = "https://github.com/namakoo-dev/ailine"

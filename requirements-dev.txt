@@ -1,7 +1,12 @@
 # テスト実行に要る依存（バージョンは 2026-08-15 時点で `tests/test_ailine.py` 537 本が
 # 全緑になることを実測して固定。他の版で動かないと確認したわけではない＝壊れたら緩めてよい）。
 openpyxl==3.1.5
+pdfplumber==0.11.9
 pytest==9.0.3
+
+# ★ pdfplumber は 2026-09-12 に **任意→必須** へ昇格した（pyproject に理由）。
+# ここに書くのは scripts/ci_parity.py が「宣言された依存」の正として読むため。
+# pyproject だけに書くと CI の素の環境とずれる（片配線）。
 
 # ★ lxml は敢えて入れない（2026-08-15 の判断）。
 # openpyxl は lxml があればそちらで XML を書き、無ければ ElementTree に落ちる。

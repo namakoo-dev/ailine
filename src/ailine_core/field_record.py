@@ -93,6 +93,8 @@ class Record:
     swept_how: str = ""           #: 何を掃き出したかの 1 行（人に見せる）
     conflict: bool = False        #: ★ 値そのものではない所で食い違いを見つけたか
     conflict_why: str = ""        #: その食い違いの 1 行
+    copies_indistinguishable: bool = False   #: ★ 写し合いを見分ける手段が無い入口か
+    copies_why: str = ""          #: なぜ見分けられないかの 1 行（人に見せる）
 
     def __post_init__(self):
         if grade(self) not in GRADES_WITH_VALUE and not self.blank_reason:
@@ -112,7 +114,8 @@ def _distinct_sources(evidences) -> dict:
     return out
 
 
-def grade_of(evidences, swept: bool = False, conflict: bool = False) -> str:
+def grade_of(evidences, swept: bool = False, conflict: bool = False,
+             copies_indistinguishable: bool = False) -> str:
     """根拠の並びから区分を導く。★ **区分を作るのはここだけ。**
 
     ★ 数えるのは「根拠の個数」ではなく「**別々の出所の個数**」。
@@ -138,6 +141,22 @@ def grade_of(evidences, swept: bool = False, conflict: bool = False) -> str:
       という記録が出ていた。理由の文字列にだけ書いて、導出は `evidences` しか
       見ていなかった（片配線）。
       → 食い違いは散文ではなく**導出への入力**にする。ここに立てば必ず `割` になる。
+
+    ★★ `copies_indistinguishable`（写しを見分ける手段が無い）── 2026-09-12、PDF を測って入れた。
+      「別々の出所」を数える前提は、**その 2 つが写し合いでないと言えること**だ。
+      Excel では式（`=合計`）を見て「この欄は帯の写しだ」と分かるので、写しは 1 つに畳める。
+      手段が無い入口では:
+
+          PDF                   式が存在しない
+          Excel（式のブック無し） 式を読み込んでいない
+
+      どちらも「一致した 2 つ」が同じ事実の 2 度刷りかもしれない。
+      ★ 実測（2026-09-12）: Wondershare の雛形で請求額が **確** を名乗った ──
+        上部の欄と帯の合計は元の Excel なら式で繋がった同じ事実のはずで、裏取りは earned でない。
+      ★ Excel 側でも同じ経路は在る（式を渡さないと B01 の根拠が 2 → 3 に増える）。
+        いまの検体で区分が変わる冊は 0 ── **壊れた経路は在るが被害者は居ない**状態だった。
+      → 真なら**裏が取れた区分は出さない**（言えるのは「一致した」までで、そこで止める）。
+      ★ 「PDF だから」では書かない ── 次の入口（CSV・OCR）でも同じ 1 箇所で決まる形にする。
     """
     sources = _distinct_sources(evidences)
     if conflict:
@@ -155,12 +174,15 @@ def grade_of(evidences, swept: bool = False, conflict: bool = False) -> str:
         return SINGLE
     if len(values) != 1:
         return SPLIT
+    if copies_indistinguishable:
+        # ★ 一致はしている。だが写し合いを見分ける手段が無いので、出所の数を信じられない。
+        return SINGLE
     return CONFIRMED if swept else SINGLE
 
 
 def grade(rec: Record) -> str:
     """記録の区分。★ 導出は `grade_of` 一本（ここでは何も判断しない）。"""
-    return grade_of(rec.evidences, rec.swept, rec.conflict)
+    return grade_of(rec.evidences, rec.swept, rec.conflict, rec.copies_indistinguishable)
 
 
 def value(rec: Record):
@@ -207,9 +229,15 @@ def describe(rec: Record) -> str:
     if g == SINGLE:
         srcs = _distinct_sources(rec.evidences)
         if len(srcs) > 1:
-            # ★ 一致はしているが掃き出していない ── そう言う（黙って 確 にしない）
-            return (f"{len(srcs)} つの根拠が一致（{'／'.join(sorted(srcs))}）── ただし"
-                    "他に食い違う数字が無いかは確かめられていません")
+            # ★ 一致はしているが「裏が取れた」と言えない ── **なぜ言えないか**を分けて出す。
+            #   掃き出していないのか、写しを見分けられないのかで、人の次の手が変わる。
+            if rec.copies_indistinguishable:
+                tail = (rec.copies_why or
+                        "同じ数字の写しかどうかを見分ける手段がないので、"
+                        "根拠の数を信じられません")
+            else:
+                tail = "他に食い違う数字が無いかは確かめられていません"
+            return f"{len(srcs)} つの根拠が一致（{'／'.join(sorted(srcs))}）── ただし{tail}"
         e = rec.evidences[0]
         return f"根拠は 1 つだけ（{e.at}・{e.how}）── 裏が取れていません"
     if g == SPLIT:
