@@ -241,9 +241,11 @@ def verify_output(out_path, src_folder) -> dict:
         #   {"unmarked": True} に混ぜず、{"unsupported": ...} で正直に区別する
         #   （配る冊は 1 冊では閉じない ── 和の証明は「全部の冊 ＋ 空欄 ＋ 複数担当」で
         #   初めて閉じるので、出力 1 冊と元フォルダでは検算の形が違う）。
-        return {"unsupported": "分けた冊の独立の検算はまだ実装していません"
-                                "（`ailine split <元の冊> --by <見出し> --out <フォルダ>` を"
-                                "再実行して 検分 の証明を見てください）。"}
+        # ★ 2026-09-12（③）: 独立の検算は入った。ただし**フォルダで受ける形**なので、
+        #   1 冊だけ渡された今の呼び方では閉じない ── 正しい形を名指しで教える。
+        return {"unsupported": "分けた冊の検算はフォルダで受けます（和は『全部の冊 ＋ 空欄 ＋ "
+                                "複数担当』で初めて閉じるため）: "
+                                "`ailine verify <出力フォルダ> <元の冊> [--amount <見出し>]`"}
     if creator in _CREATOR_MARKS and description:
         try:
             cond = json.loads(description)

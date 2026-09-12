@@ -244,14 +244,19 @@ def test_a_clean_table_raises_no_findings(tmp_path):
 
 
 def test_verify_does_not_pretend_the_mark_is_missing(book, tmp_path):
-    """★ `ailine verify` は split の出力に「印がありません」と言わない（正直に断る）。"""
+    """★ `ailine verify` は split の出力に「印がありません」と言わない（正直に断る）。
+
+    ★ 2026-09-12（③）: 独立の検算が入ったので、断り文は「まだ実装していません」から
+      **通る形の名指し**に変わった ── 1 冊では和が閉じないのでフォルダで受ける。
+      詳しい検算そのものの契約は `tests/test_verify_split.py`。
+    """
     out = tmp_path / "配る"
     assert _split(book, out).returncode == 0
     r = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out / "山田.xlsx"),
                         str(book.parent)], capture_output=True, text=True, timeout=120,
                        encoding="utf-8", errors="replace", cwd=str(REPO))
     assert "印がありません" not in r.stdout, r.stdout
-    assert "実装していません" in r.stdout, r.stdout
+    assert "ailine verify <出力フォルダ> <元の冊>" in r.stdout, r.stdout
 
 
 def test_the_proof_is_counted_from_the_written_books_not_from_memory(book, tmp_path,

@@ -479,6 +479,27 @@ def sum_line(col: str, both: dict, excluded_rows: int = 0) -> str:
     return line
 
 
+def render_split_verify_report(out_label: str, source_label: str, result: dict) -> list:
+    """分けた冊の独立検算の報告（③・2026-09-12）。
+
+    ★ 出すのは**分母つきの事実と名指し**だけ ── 成績のバーは置かない。
+    ★ 破れは件数で終わらせず「どの行のどれが」まで出す（件数だけでは人は動けない）。
+    ★ 金額を測っていない回は、測っていないと**書く**（黙って合格に混ぜない）。
+    """
+    lines = [f"■ ailine verify（分けた冊）  out={out_label}  元={source_label}"]
+    for name, value in (result.get("facts") or {}).items():
+        lines.append(f"  {name}: {value}")
+    breaks = result.get("breaks") or []
+    if not breaks:
+        lines.append("✓ 元の行はすべて『配った』か『配らなかった理由つきで名指し』のどちらかに"
+                     "ちょうど 1 回ありました（値も 1 セルずつ一致）。")
+        return lines
+    lines.append(f"⚠ 破れ {len(breaks)} 件:")
+    for kind, detail in breaks:
+        lines.append(f"   {kind}: {detail}")
+    return lines
+
+
 def render_verify_report(out_label: str, folder_label: str, result: dict) -> list:
     """`ailine verify` の人間向け報告。合格: 両側の数字を並べる／不合格: 列名 + 両側の数字。
        ★ デモ撮影のリハで発覚（2026-08-21）: 最初の不一致（Σ）で打ち切ると、帰属検算が

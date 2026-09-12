@@ -126,6 +126,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     freeform_notice_reason, render_freeform_notice_compact,   # ★ K-1（単発向けの旧 render_freeform_notice は廃止）
     render_vocab_miss_refusal,   # ★ freeform 最終決定: 単発の語彙外の断り
     render_scan_report,   # ★ M1読み: `ailine scan`
+    render_split_verify_report,   # ★ ③: 分けた冊の独立検算の報告
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
     render_forms_report,   # ★ 帳票の一覧: `ailine forms`
     render_split_report,   # ★ 担当者別に分けて配る: `ailine split`
@@ -140,6 +141,7 @@ from ailine_core.prompt_window import describe_the_loss   # ★ 窓に入らな�
 from ailine_core.helper_interface import interfaces_only   # ★ ヘルパは呼び方だけ見せる
 from ailine_core import stack as multifile_stack   # ★ M1書き: 縦積み本体（DESIGN v2 §1 M1書き）
 from ailine_core import verify as multifile_verify   # ★ M1書き: `ailine verify` の検算本体
+from ailine_core import verify_split   # ★ ③: 分けた冊を後から独立に検算する（規則を再現しない）
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
@@ -17621,6 +17623,23 @@ def cmd_verify(a: argparse.Namespace) -> int:
     # ★ 実弾検分（2026-08-21）: 存在しないパスを「印がありません」と誤診していた ──
     #   誤診は次の手を間違わせる（印の問題だと思って原本を疑い始める）。無いなら無いと言う。
     #   従来形（sources 1 個）の元はフォルダ・照合形（2 個）の元はファイル。
+    # ★★ 2026-09-12（③）: 分けた冊は**フォルダ**で受ける ── 和は「全部の冊 ＋ 空欄 ＋
+    #   複数担当」で初めて閉じるので、1 冊と元フォルダでは検算の形が違う（verify.py が
+    #   `unsupported` の理由にそう書いていた）。ここが未配線で、フォルダを渡すと
+    #   「ファイルが見つかりません」と**誤診**していた（誤診は次の手を間違わせる）。
+    if out.is_dir():
+        if len(sources) != 1 or not Path(sources[0]).is_file():
+            print("× 分けた冊の検算は次の形です: "
+                  "ailine verify <出力フォルダ> <元の冊> [--amount <金額の見出し>]")
+            return 4
+        source = Path(sources[0]).resolve()
+        result = verify_split.verify_split_folder(out, source, getattr(a, "amount", None))
+        if result.get("unsupported"):
+            print(f"× {result['unsupported']}")
+            return 4
+        for ln in render_split_verify_report(str(out), str(source), result):
+            print(ln)
+        return 5 if result.get("mismatch") else 0
     if not out.is_file():
         print(f"× ファイルが見つかりません: {out}")
         return 4
@@ -17823,12 +17842,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     sp.set_defaults(func=cmd_split)
 
-    vf = sub.add_parser("verify", help="stack/extract/match の出力を検算だけ独立に再実行する（読むだけ）")
+    vf = sub.add_parser("verify", help="出力の検算だけを独立に再実行する（stack/extract/match/"
+                                       "分けた冊・読むだけ）")
     vf.add_argument("out", help="ailine が作った出力ブック")
     # ★ M3 設計 v2「verify」節: 位置引数を nargs 化し「2個=従来形(出力+元フォルダ) /
     #   3個=照合形(出力+元A+元B)」で分岐する（既存 stack/extract の2引数形は不変）。
     vf.add_argument("sources", nargs="+",
-                    help="元フォルダ（1個・stack/extract）または 元A 元B（2個・照合出力）")
+                    help="元フォルダ（1個・stack/extract）または 元A 元B（2個・照合出力）"
+                         "または 元の冊（1個・out がフォルダのとき＝分けた冊）")
+    vf.add_argument("--amount", default=None,
+                    help="金額の列の見出し（分けた冊の検算で和も確かめる・省略すると"
+                         "「測っていません」と報告します）")
     vf.set_defaults(func=cmd_verify)
 
     h = sub.add_parser("history", help="実行履歴を表示する")

@@ -18,7 +18,7 @@ positional arguments:
     stack               フォルダ内の複数ブックを縦積みする（新ブック + 出所列）
     forms               フォルダ内の請求書から項目を集めて一覧にする（読むだけ）
     split               1 冊の一覧を担当者ごとに分けて配る（新ブック N 冊 + 検分）
-    verify              stack/extract/match の出力を検算だけ独立に再実行する（読むだけ）
+    verify              出力の検算だけを独立に再実行する（stack/extract/match/分けた冊・読むだけ）
     history             実行履歴を表示する
     restore             原本への反映前のバックアップから復元する（ailine undo と同じ）
     undo                原本への反映前のバックアップから復元する（あと何回戻せるかを表示）
