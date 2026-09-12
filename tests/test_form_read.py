@@ -451,3 +451,32 @@ def test_missing_date_and_number_are_blank_with_a_reason():
     for field in ("請求日", "請求番号"):
         assert grade(recs[field]) == NONE_FOUND
         assert field in recs[field].blank_reason, recs[field].blank_reason
+
+
+# ── 請求番号は識別子（2026-09-12・実物の請求書から）──────────────────
+def test_a_bare_no_label_is_read_but_only_when_the_value_has_a_digit():
+    """★★ 実物の請求書はラベルが**素の `No`** だけだった（`F2:No` `G2:<4 桁>`）。
+
+    ★ 足すと明細の見出し（`No 品 目 数 量 …`）の右＝`品目` を拾う危険が在る。
+      **数字を含まないものは識別子ではない**という構造の規則で弾く
+      （実測: いま出している請求番号に数字を含まないものは 0 件）。
+    """
+    import openpyxl
+    from ailine_core.field_record import grade, value
+    from ailine_core.form_grid import Grid
+    from ailine_core.form_read import read_invoice_number
+
+    def grid(rows):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for at, v in rows.items():
+            ws[at] = v
+        return Grid.read(ws)
+
+    ok = read_invoice_number(grid({"F2": "No", "G2": 1234}))
+    assert grade(ok) == "単" and value(ok) == "1234", (grade(ok), value(ok))
+
+    # ★ 明細の見出し ── `No` の右は品目なので採らない
+    head = read_invoice_number(grid({"A15": "No", "B15": "品目", "C15": "数量", "D15": "金額"}))
+    assert grade(head) == "無", (grade(head), value(head))
+    assert "番号" in head.blank_reason

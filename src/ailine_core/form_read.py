@@ -100,7 +100,14 @@ _LABEL_TOTAL = ("合計金額", "合計", "総合計", "税込合計", "ご請�
 #:   ★ 事前測定: 請求日のラベルは検体 84/87・入れ子 14/14・実物の雛形 19/20 に在る。
 _LABEL_DATE = ("請求日", "発行日", "請求年月日", "発行年月日", "日付")
 _LABEL_NUMBER = ("請求番号", "請求書番号", "請求書No", "請求書No.", "請求No", "請求No.",
-                 "伝票番号", "管理番号")
+                 "伝票番号", "管理番号",
+                 # ★★ 2026-09-12: 実物の請求書はラベルが**素の `No`** だけだった。
+                 #   足すと明細の見出し（`No 品 目 数 量 …`）の右＝`品目` を拾う危険が在るが、
+                 #   下の「値に数字を要求する」で弾ける（実測: 実物は 4 桁の数・雛形は `品目`）。
+                 "No", "No.", "NO", "NO.", "№", "Ｎｏ", "Ｎｏ.")
+#: 識別子らしさ ── 数字を 1 つも含まないものは請求番号ではない。
+_HAS_DIGIT = re.compile(r"[0-9０-９]")
+
 #: 雛形の埋め草として日付欄に残る形（`××年1月1日` など）。日付ではない。
 _DATE_PLACEHOLDER_CHARS = "×〇○□■＊*"
 
@@ -379,6 +386,11 @@ def read_invoice_number(grid: Grid) -> Record:
             raw = int(raw)
         txt = str(raw).strip()
         if not txt or _looks_like_placeholder_date(txt):
+            continue
+        # ★★ 請求番号は識別子 ── **数字を含まないものは識別子ではない**（2026-09-12）。
+        #   素の `No` をラベルに足したので、明細の見出しの右（`品目`）を弾く構造の規則が要る。
+        #   実測: いま出している請求番号に数字を含まないものは 0 件（束 51・検体 13・入れ子 2）。
+        if not _HAS_DIGIT.search(txt):
             continue
         how = (f"{lab.at}「{norm(lab.value)[:8]}」の右 {cell.at}" if lab is not None
                else f"{cell.at}（表示形式に「{norm(format_label(cell.fmt))[:8]}」）")
@@ -685,6 +697,7 @@ def read_issuer(grid: Grid, addressee: Record) -> Record:
     taken = norm(grade_value(addressee) or "")
 
     cands, dropped, seen = [], [], set()
+    same_as_addressee: list = []          #: ★ 宛先と同じで捨てた候補（理由に名指しする）
     for t in grid.text_cells():
         if t.anchor in seen:
             continue
@@ -702,7 +715,15 @@ def read_issuer(grid: Grid, addressee: Record) -> Record:
             continue
         # ① 宛先を**含む**候補は採らない（完全一致では飾り付きの再掲がすり抜ける）。
         #   実測 T10: 『御請求先：ナギ商会株式会社／9 月分』が候補に残っていた。
+        #   ★★ 2026-09-12: ここで黙って `continue` していたせいで、**理由が嘘をついていた** ──
+        #     実物の請求書（買い手と売り手に同じ社名が入っている形）で、法人格つきの名前を
+        #     見つけて捨てたのに「『株式会社』などの法人格が付いた名前だけを探しています ──
+        #     屋号や略称だけの請求書では見つかりません」と言っていた。
+        #     人は探し方を疑うが、本当に疑うべきは「宛先と同じ名前と判定された」の方だ。
+        #   → 捨てた候補は**記録して名指しする**（捨てる判断は変えない）。
         if taken and taken in norm(name):
+            same_as_addressee.append((t.at, name, "宛先と同じ名前です（請求元と宛先が"
+                                      "同じ名前に見えるので、どちらが発行元か決められません）"))
             continue
         cands.append((t, name))
 
@@ -714,12 +735,20 @@ def read_issuer(grid: Grid, addressee: Record) -> Record:
         #   ★ 拾いに行く方は測って見送った（§3.7）: 位置や隣接では見出し・住所と
         #     見分けられず、除外語を足し続けない限り成り立たない。だから
         #     **できないことを正直に言う**方に倒す。
+        # ★★ 捨てた候補は**全部**並べる（2026-09-12）── 分岐で片方を押しのけない。
+        #   初版はここを「宛先と同じ」と「雛形のまま」で分岐させ、前者が後者を隠して
+        #   T05（発行者名が `株式会社 〇〇〇`）の名指しを消した ── 同じ形の理由を
+        #   2 通りに書くと、片方が片方を食う。1 本に畳む。
+        discarded = tuple(same_as_addressee) + tuple(dropped)
         base = ("発行元（請求元）の名前が見つかりませんでした"
                 "（『株式会社』などの法人格が付いた名前だけを探しています ── "
                 "屋号や略称だけの請求書では見つかりません）")
-        why = base if not dropped else (
-            base + ": " + "／".join(f"{at} は{note}" for at, _v, note in dropped))
-        return Record("請求元", (), rivals=tuple(dropped), blank_reason=why)
+        if not discarded:
+            return Record("請求元", (), blank_reason=base)
+        why = ("発行元（請求元）を決められませんでした ── 名前の候補は "
+               f"{len(discarded)} 件見つかりましたが、どれも使えませんでした: "
+               + "／".join(f"{at}「{str(v)[:14]}」は{note}" for at, v, note in discarded[:3]))
+        return Record("請求元", (), rivals=discarded, blank_reason=why)
 
     if not taken:
         # ★★ 2026-09-12: 宛先が決まらなかった冊では、**買い手を候補から除けない**。
