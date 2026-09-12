@@ -26,7 +26,7 @@ _AILINE_WORKFILES = frozenset({
 })
 _AILINE_WORKFILE_SUFFIXES = frozenset({".lock", ".jsonl"})
 
-def classify_folder_contents(folder: Path):
+def classify_folder_contents(folder: Path, *, also=()):
     """folder 直下（サブフォルダの中は見ない）を分類する。
        戻り値: (candidates: 名前順の Path リスト, excluded: {"temp": n, "subdirs": n, "csv": n})。
        ★ 分母そのものが検証対象（V7）── ~$ 一時ファイルとサブフォルダは対象外として数える
@@ -57,7 +57,10 @@ def classify_folder_contents(folder: Path):
             excluded["temp"] += 1
             continue
         suffix = item.suffix.lower()
-        if suffix in SCAN_CANDIDATE_SUFFIXES:
+        if suffix in SCAN_CANDIDATE_SUFFIXES or suffix in also:
+            # ★ `also`（2026-09-12）: 帳票の一覧（forms）だけが `.pdf` を候補にする。
+            #   ここに .pdf を直書きすると stack / extract / match / verify の 4 つの呼び出し側が
+            #   PDF をブックとして開こうとする ── 読める入口を持つ側だけが宣言して渡す。
             candidates.append(item)
         elif suffix == CSV_SUFFIX:
             excluded["csv"] += 1

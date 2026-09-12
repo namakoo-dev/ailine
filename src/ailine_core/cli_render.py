@@ -581,8 +581,18 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
     lines = [f"■ ailine forms（帳票の一覧）  folder={folder_label}"]
     if result.get("file_written"):
         lines.append(f"出力先: {out_label}")
-    for f in result.get("excluded", ()) or ():
-        lines.append(f"  （対象外）{f}")
+    exc = result.get("excluded") or {}
+    if isinstance(exc, dict):
+        # ★ 2026-09-12: 初版は dict の**鍵**を「（対象外）temp」と並べていた（毎回 5 行の雑音）。
+        #   件数が 0 でないものだけ、扱えなかった形式は**名前で**出す。
+        for key, label in (("temp", "一時ファイル"), ("subdirs", "サブフォルダ"), ("csv", "CSV")):
+            if exc.get(key):
+                lines.append(f"  （対象外）{label} {exc[key]} 件")
+        for name in exc.get("other_format_names") or ():
+            lines.append(f"  （対象外・扱えない形式）{name}")
+    else:
+        for f in exc:
+            lines.append(f"  （対象外）{f}")
     for n in result.get("self_excluded", ()) or ():
         lines.append(f"  （自分の出力 『{n}』 を入力から除外しました）")
     lines.append(f"{result['denominator']} ファイル中 {result['collected']} 冊を読みました")

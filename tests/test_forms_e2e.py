@@ -294,3 +294,41 @@ def test_json_carries_the_bundle_findings(folder, tmp_path):
     payload = json.loads(r.stdout.strip().splitlines()[-1])
     assert [s["種類"] for s in payload["suspicions"]] == ["重複"], payload["suspicions"]
     assert sorted(payload["suspicions"][0]["冊"]) == ["b.xlsx", "b_copy.xlsx"]
+
+
+# ── PDF（2026-09-12・設計 D7/D9）──────────────────────────────
+FIXTURE_PDF = REPO / "tests" / "fixtures" / "forms" / "あかね商事_2026-08.pdf"
+
+
+def test_a_pdf_in_the_folder_gets_its_own_row_next_to_the_excel_books(folder, tmp_path):
+    """★★ 受け取る請求書は PDF が本流 ── xlsx と pdf が混ざったフォルダで両方が一覧に載る。"""
+    import shutil
+    shutil.copyfile(FIXTURE_PDF, folder / "あかね_pdf.pdf")
+    out = tmp_path / "一覧.xlsx"
+    r = _forms(folder, out)
+    assert r.returncode == 0, r.stdout
+    assert "3 ファイル中 3 冊を読みました" in r.stdout, r.stdout
+    got = _sheets(out)
+    by_file = {row[0]: row for row in got["一覧"][1:]}
+    assert by_file["あかね_pdf.pdf"][1:4] == ["株式会社あかね商事", "ナギ商会株式会社", 33000], by_file
+    assert by_file["あかね_pdf.pdf"][5] == "INV-2026-08-777"
+    # ★ 原本は 1 バイトも触らない（PDF も）
+    assert (folder / "あかね_pdf.pdf").read_bytes() == FIXTURE_PDF.read_bytes()
+
+
+def test_a_scanned_pdf_is_named_as_unreadable_not_counted_as_read(folder, tmp_path):
+    """★ 「読めなかった」と「請求書ではなかった」を混ぜない（D7）── 名指しして分母に残す。"""
+    from test_pdf_grid import empty_page_pdf
+    empty_page_pdf(folder / "スキャン.pdf")
+    r = _forms(folder, tmp_path / "一覧.xlsx", "--json")
+    assert r.returncode == 0, r.stdout
+    payload = json.loads(r.stdout.strip().splitlines()[-1])
+    assert payload["denominator"] == 3 and payload["collected"] == 2, payload
+    assert [u["name"] for u in payload["unreadable"]] == ["スキャン.pdf"], payload["unreadable"]
+    assert "テキスト層" in payload["unreadable"][0]["reason"]
+
+
+def test_the_report_no_longer_lists_the_keys_of_the_excluded_dict(folder, tmp_path):
+    """★ 初版は「（対象外）temp」など dict の鍵を毎回 5 行並べていた。"""
+    r = _forms(folder, tmp_path / "一覧.xlsx")
+    assert "（対象外）temp" not in r.stdout and "（対象外）other_format_names" not in r.stdout, r.stdout

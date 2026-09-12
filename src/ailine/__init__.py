@@ -143,6 +143,8 @@ from ailine_core import xml_readback   # ★ 検算の独立読み実装（openp
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
 from ailine_core import form_read   # ★ 帳票を読む器官（DESIGN-20260910 §1・需要①）
+from ailine_core import pdf_grid
+from ailine_core import filetypes
 from ailine_core import forms_collect   # ★ 帳票の一覧（`ailine forms`）の並べ方
 # ★ 2026-08-24: 一部は**意図した再輸出**（検体が ailine.sanitize_sheet_name の形で
 #   見ている）。未使用に見えても消さない ── リンタには noqa で伝える。
@@ -16982,12 +16984,22 @@ def cmd_forms(a: argparse.Namespace) -> int:
     """
     folder = Path(a.folder).resolve()
     out = Path(a.out).resolve()
-    candidates, excluded = multifile.classify_folder_contents(folder)
+    # ★ 帳票の一覧だけが .pdf を候補にする（受け取る請求書は PDF が本流・2026-09-12 設計 D9）。
+    candidates, excluded = multifile.classify_folder_contents(folder, also=(filetypes.PDF_SUFFIX,))
     # ★ 自分の出力を入力に数えない（V6・stack と同じ判定を使う ── 書き写さない）。
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
 
     collected, unreadable = [], []
     for p in candidates:
+        if p.suffix.lower() == filetypes.PDF_SUFFIX:
+            try:
+                collected.append((p.name, form_read.read_pdf_book(p)))
+            except pdf_grid.NoTextLayer as e:
+                # ★ 「読めなかった」と「請求書ではなかった」を混ぜない（設計 D7）
+                unreadable.append({"name": p.name, "reason": str(e)})
+            except Exception as e:   # noqa: BLE001 ── 1 冊で止めない（名指しして次へ）
+                unreadable.append({"name": p.name, "reason": f"読めませんでした: {type(e).__name__}"})
+            continue
         try:
             wb = openpyxl.load_workbook(p, data_only=True)
             wbf = openpyxl.load_workbook(p, data_only=False)

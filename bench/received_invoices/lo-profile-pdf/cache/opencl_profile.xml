@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<profile>
+ <version>LibreOffice v1</version>
+ <device>
+  <type>opencl</type>
+  <name>NVIDIA GeForce RTX 4060</name>
+  <driver>591.86</driver>
+  <time>18536</time>
+  <errors>false</errors>
+ </device>
+ <device>
+  <type>opencl</type>
+  <name>NVIDIA GeForce RTX 4060</name>
+  <driver>1.1.0</driver>
+  <time>max</time>
+  <errors>false</errors>
+ </device>
+ <device>
+  <type>opencl</type>
+  <name>Microsoft Basic Render Driver</name>
+  <driver>1.1.0</driver>
+  <time>max</time>
+  <errors>false</errors>
+ </device>
+ <device>
+  <type>native</type>
+  <time>2331648</time>
+  <errors>false</errors>
+ </device>
+</profile>

@@ -49,3 +49,7 @@ RUN_SUPPORTED_SUFFIXES = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 # ailine.py の `_cmd_run_body`（run の暗黙前段への早期分岐）・`_unreadable_book_for_match_message`
 # （M3 の誤誘導修正）が使う、CSV 検疫（ailine_core/csv_quarantine.py）の対象拡張子。
 CSV_SUFFIX = ".csv"
+#: 帳票の一覧（forms）だけが候補にする（2026-09-12・受け取る請求書は PDF が本流）。
+#:   ★ SCAN_CANDIDATE_SUFFIXES には入れない ── stack / extract / match / verify は
+#:     PDF をブックとして開けない。読める入口を持つ側だけが `also=` で渡す。
+PDF_SUFFIX = ".pdf"

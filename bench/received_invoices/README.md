@@ -205,3 +205,15 @@ python bench/received_invoices/score_v2.py --self-test      # ★ 点数を見�
 
 見出しにする数は 正／★偽の疑い（怪しくない冊を疑った）／取り逃し／不親切。正答率にしない。
 採点器は `ailine_core` を import しない。凍結時の実測は docs/DESIGN-20260910 §4。
+
+## PDF の検体（received_pdf・2026-09-12）
+
+受け取る請求書は PDF が本流なので、既存の検体を LibreOffice で PDF にして**同じ答え**で採点する。
+設計と凍結時の実測は `docs/DESIGN-20260912-PDFの帳票を読む.md`。
+
+    python bench/received_invoices/mk_pdf_corpus.py [--all]   # Excel → PDF（生成物は gitignore）
+    python bench/received_invoices/score_pdf.py --self-test   # 台帳の冊が今も外れているか
+    python bench/received_invoices/score_pdf.py               # 製品の経路（read_pdf_book）で採点
+
+★ `PDF_CANNOT_CARRY` は「PDF が物理的に持ち得ない情報」の台帳（上限つき・1 件ずつ理由つき）。
+  別枠で数え、正に混ぜず、追いかけない。直っていたら理由ごと消す（`--self-test` が見張る）。

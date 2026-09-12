@@ -941,9 +941,12 @@ def _record(field: str, evid: list, rivals: list, excluded: list = (),
 FIELDS = ("宛先", "請求元", "請求額", "請求日", "請求番号")
 
 
-def read_form(ws, ws_formula=None, rows: int = 60, cols: int = 24) -> dict:
-    """1 シートを読んで、項目 → `Record` を返す。★ 区分は `field_record` が導く。"""
-    grid = Grid.read(ws, rows=rows, cols=cols, ws_formula=ws_formula)
+def read_form_grid(grid: Grid, ws_formula=None) -> dict:
+    """1 つの格子を読んで、項目 → `Record` を返す。★ 区分は `field_record` が導く。
+
+    ★ Excel のシートも PDF のページも、格子になればここは同じ（設計 D1）。
+      `ws_formula` が無い入口（PDF・式を読まずに開いた表）では、請求額の裏取りを名乗らない（D4）。
+    """
     addressee = read_addressee(grid)
     return {
         "宛先": addressee,
@@ -952,6 +955,11 @@ def read_form(ws, ws_formula=None, rows: int = 60, cols: int = 24) -> dict:
         "請求日": read_issue_date(grid),
         "請求番号": read_invoice_number(grid),
     }
+
+
+def read_form(ws, ws_formula=None, rows: int = 60, cols: int = 24) -> dict:
+    """1 シートを読んで、項目 → `Record` を返す。"""
+    return read_form_grid(Grid.read(ws, rows=rows, cols=cols, ws_formula=ws_formula), ws_formula)
 
 
 #: 請求書らしさの印。★ どれか 1 つでは足りない（見積書にも合計は在る）。
@@ -1031,6 +1039,39 @@ def read_book(wb, wb_formula=None, rows: int = 60, cols: int = 24) -> dict:
     if note:
         recs = {f: _with_note(r, note) for f, r in recs.items()}
     return recs
+
+
+def read_pdf_book(path) -> dict:
+    """PDF の **1 冊**を読む。★ どのページが請求書かも、ここで自分で決める（設計 D6）。
+
+    決め方は `read_book`（Excel のシート選び）と同じ線:
+      ① 各ページの「請求書らしい印」を数える（別種の印が 2 つ以上で候補）
+      ② 候補が 2 ページ以上 → **どちらの請求書か決められない**ので全項目を空欄
+      ③ 候補が 1 ページ → それを読む
+      ④ どこにも無い → 全項目を空欄（理由に、見たページを並べる）
+    ★ 答えから受け取る口は作らない（Excel 側で一度やって消した過ち）。
+    ★ 明細が複数ページにまたがる形は**設計していない**（検体に 1 冊も無い・発火条件つき保留）。
+    ★ テキスト層が無ければ `pdf_grid.NoTextLayer` がそのまま上がる ── 「請求書ではなかった」と
+      混ぜない（設計 D7）。呼び出し側は読めなかった冊として名指しする。
+    """
+    from ailine_core import pdf_grid              # ★ pdfplumber の import は pdf_grid に閉じる
+
+    seen, looked = [], []
+    for page_no, grid in pdf_grid.grids_of(path):
+        sig = invoice_signals(grid)
+        looked.append(f"{page_no}頁({len(sig)} 印)")
+        if len(sig) >= 2:
+            seen.append((page_no, grid))
+    if len(seen) >= 2:
+        pages = "・".join(f"{n}頁" for n, _g in seen)
+        why = (f"この 1 冊に請求書らしいページが {len(seen)} 枚あります（{pages}）。"
+               "どちらの請求書か決められないので、空欄にしました")
+        return {f: Record(f, (), (), (), why, False, "", True, why) for f in FIELDS}
+    if not seen:
+        why = ("請求書らしいページが見つかりませんでした（見たページ: "
+               + "・".join(looked) + "）")
+        return {f: Record(f, (), (), (), why) for f in FIELDS}
+    return read_form_grid(seen[0][1], None)
 
 
 def _with_note(rec: Record, note: str) -> Record:
