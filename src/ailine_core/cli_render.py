@@ -216,17 +216,33 @@ def render_alias_listing(aliases: dict, order: list, aliases_file: Path) -> list
 
 # --- 対応操作の一覧（★ 査定 2 本が独立に「無い」と指摘した唯一のもの） ------------------
 
-def render_folder_routes(subcommands) -> list:
+def render_folder_routes(subcommands, multi) -> list:
     """★ 2026-08-24（第三波 S6）: 複数ファイルの入口（棚卸し・縦積み・2冊照合）に
     **たどり着く道が無かった** ── ops の表にも README にも出ておらず、知らなければ
     一生使われない機能だった。表と同じ作法で **argparse の登録簿から生成**する
     （手書きの一覧は必ずずれる）。
 
-    subcommands: [(名前, help 文字列), ...]。表示するのは複数ファイル系だけ。
+    subcommands: [(名前, help 文字列, 引数の形), ...]。
+    multi: 複数ファイルの入口の名前（★ 正は呼び出し側の宣言 `ailine.ROUTE_KIND`）。
+
+    ★★ 2026-09-12: ここは `wanted = ("scan", "stack", "verify")` という**手書きの白名簿**
+      だった。すぐ上に「手書きの一覧は必ずずれる」と書いてあるのに、`forms`（請求書から
+      項目を集める）と `split`（担当者ごとに分けて配る）を出荷してもここに入らず、
+      **ops の一覧にも README にも 1 度も出なかった** ── 完成しているのに買い手が
+      見つけられない。宣言を 1 箇所に集め、登録簿との**等号**を番人が縛る形にした。
     """
-    wanted = ("scan", "stack", "verify")
-    rows = [(n, h, u) for n, h, u in subcommands if n in wanted]
-    if not rows:
+    # ★ この 2 行だけは生成できない（run は位置引数の数で分岐するので argparse の
+    #   登録簿には「フォルダ 1 個」「ブック 2 冊」の区別が無い）。手書きだと明示する。
+    spelled_out = ['  ailine run <folder> "<依頼>"   '
+                   "フォルダ内の全ブックから条件で抜き出す",
+                   '  ailine run <a.xlsx> <b.xlsx> "<依頼>"   '
+                   "2 冊をキーで突き合わせて差額を出す"]
+    # ★ 手書き行が覆っている名前は、生成側から外す ── **その名前は手書き行自身から取る**
+    #   （二つ目の白名簿を作らない）。これを怠ると run が 3 行に増え、生成された
+    #   `<book> <task>`（1 冊の形）が「複数ファイルの入口」として並んでしまう。
+    covered = {line.split()[1] for line in spelled_out}
+    rows = [(n, h, u) for n, h, u in subcommands if n in multi and n not in covered]
+    if not rows and not spelled_out:
         return []
     # ★ 引数の形も argparse に言わせる ── ここを雛形（"<フォルダ>" 決め打ち）で書いたら
     #   即座にずれた（verify はフォルダを取らない）。自分で「手書きはずれる」と書いた
@@ -234,13 +250,7 @@ def render_folder_routes(subcommands) -> list:
     lines = ["", "── 複数のファイルをまとめて扱う ──"]
     for name, help_text, usage in rows:
         lines.append(f"  ailine {name} {usage}".rstrip() + f"   {help_text}")
-    # ★ この 2 行だけは生成できない（run は位置引数の数で分岐するので argparse の
-    #   登録簿には「フォルダ 1 個」「ブック 2 冊」の区別が無い）。手書きだと明示する。
-    lines.append('  ailine run <folder> "<依頼>"   '
-                 "フォルダ内の全ブックから条件で抜き出す")
-    lines.append('  ailine run <a.xlsx> <b.xlsx> "<依頼>"   '
-                 "2 冊をキーで突き合わせて差額を出す")
-    return lines
+    return lines + spelled_out
 
 
 def render_ops_table(op_meta: dict, op_schema: dict, confirm_fields: dict) -> list:

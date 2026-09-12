@@ -60,6 +60,7 @@ value PLAN_CHAIN_CONSUMER_OPS
 value PLAN_CHAIN_WARNING_OPS
 value POSTCONDITIONS
 class Path(*args, **kwargs)
+value ROUTE_KIND
 value RUN_LOCK_FILE
 value RUN_LOCK_STALE_SECONDS
 value RUN_SUPPORTED_SUFFIXES
@@ -652,6 +653,7 @@ def main(argv=None) -> 'int'
 def make_backup(book: 'Path', keep: 'int' = 10, shelf: 'bool' = False) -> 'Path'
 def maybe_show_notice_v2(path: 'Path | None' = None) -> 'bool'
 def mention_overlap_advisory(mentions: 'dict', before: 'dict', after: 'dict', exclude_sheets: 'set | None' = None, exclude_cols: 'set | None' = None) -> 'list'
+def multi_file_routes() -> 'set'
 def name_matches_task(name, task: 'str', others=()) -> 'bool'
 def new_column_name_from_task(task: 'str', headers=None, *, require_position: 'bool' = True) -> 'str | None'
 def new_error_cells(before_path, after_path) -> 'dict'
@@ -708,7 +710,7 @@ def render_choices(choices) -> 'str'
 def render_code_block(header: 'str', code: 'str', step_prefix: 'str' = '') -> 'list'
 def render_example_line(op: 'str | None', label: 'str | None' = None) -> 'str | None'
 def render_excluded_lines(excluded: 'dict') -> 'list'
-def render_folder_routes(subcommands) -> 'list'
+def render_folder_routes(subcommands, multi) -> 'list'
 def render_forms_report(folder_label: 'str', out_label: 'str', result: 'dict') -> 'list'
 def render_freeform_notice_compact(reason: 'str', step_prefix: 'str' = '') -> 'str'
 def render_legacy_note(legacy: 'list') -> 'list'

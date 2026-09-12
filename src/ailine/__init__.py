@@ -11616,6 +11616,7 @@ def cmd_ops(a: argparse.Namespace) -> int:
     for line in render_ops_table(OP_META, OP_SCHEMA, _CONFIRM_FIELDS):
         print(line)
     # ★ 第三波 S6: 複数ファイルの入口も見せる（argparse の登録簿から生成・手書きしない）。
+    #   ★ 2026-09-12: どれが複数ファイルの入口かは ROUTE_KIND が正（白名簿の書き写しをやめた）。
     sub_actions = [ac for ac in build_parser()._actions
                     if isinstance(ac, argparse._SubParsersAction)]
     #   引数の形（位置引数の並び）も argparse 本体から取る ── 雛形で書くとずれる。
@@ -11627,7 +11628,7 @@ def cmd_ops(a: argparse.Namespace) -> int:
                         if not ac.option_strings and ac.dest != "help")
     pairs = [(ch.dest, ch.help or "", _positional_shape(ch.dest))
               for ac in sub_actions for ch in ac._choices_actions]
-    for line in render_folder_routes(pairs):
+    for line in render_folder_routes(pairs, multi_file_routes()):
         print(line)
     return 0
 
@@ -17667,6 +17668,29 @@ def _add_allow_remote(p: argparse.ArgumentParser) -> None:
     p.add_argument(local_only.ALLOW_FLAG, action="store_true",
                    help="手元以外の ollama への送信を承知のうえで許す"
                         "（既定は拒む ── 依頼文と表の中身がその宛先へ出ます）")
+
+
+#: サブコマンドが**複数のファイルを扱う入口**かどうかの宣言（値は "multi" / "single"）。
+#: ★★ 2026-09-12: これは `cli_render.render_folder_routes` の中の手書き白名簿
+#:   `("scan", "stack", "verify")` だった。`forms` と `split` を出荷してもそこに入らず、
+#:   **ops の一覧にも README にも 1 度も出なかった** ── 到達できない機能は無い機能と同じ。
+#: ★ 番人 `tests/test_folder_routes_hygiene.py` が **登録簿との等号**で縛るので、
+#:   新しいサブコマンドを足したら、ここで分類するまで赤くなる（次のずれが構造的に起きない）。
+#: ★ "single" は「複数ファイルをまとめて扱う入口ではない」という意味（1 冊専用とは限らない）。
+ROUTE_KIND = {
+    "run": "multi",            # フォルダ 1 個 / ブック 2 冊 の形がある
+    "scan": "multi", "stack": "multi", "verify": "multi",
+    "forms": "multi", "split": "multi",
+    "stop": "single", "doctor": "single", "ops": "single", "csv": "single",
+    "export-csv": "single", "demo": "single", "export-pdf": "single",
+    "history": "single", "restore": "single", "undo": "single", "redo": "single",
+    "vocab": "single", "alias": "single", "attr": "single",
+}
+
+
+def multi_file_routes() -> set:
+    """複数ファイルの入口の名前。★ 一覧を作る側も引く側も、この 1 つを通す。"""
+    return {name for name, kind in ROUTE_KIND.items() if kind == "multi"}
 
 
 def build_parser() -> argparse.ArgumentParser:
