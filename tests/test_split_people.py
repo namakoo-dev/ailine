@@ -366,3 +366,57 @@ def test_the_real_table_names_four_company_pairs_and_two_name_pairs():
                        frozenset(("イータ(株)", "イータ株式会社"))}, company
     assert person == {frozenset(("緑川 誠", "緑川誠")),
                       frozenset(("渡辺　涼", "渡辺涼"))} or len(person) == 2, person
+
+
+# --- 敬称と異体字（2026-09-13・検体で測って足した）-------------------------------------
+
+def test_an_honorific_at_the_end_does_not_split_one_person_in_two():
+    """★ 検体 S02 の取り逃し ── `佐藤` と `佐藤様` が別人として分かれていた。
+
+    ★ 名指しだけ（併合はしない）。★ 落とすのは**末尾**だけ ── 語の中の敬称は壊さない。
+    """
+    from ailine_core.split_people import lookalike_pairs, matching_core
+    assert matching_core("佐藤様") == matching_core("佐藤") == "佐藤"
+    assert matching_core("あかね商事御中") == "あかね商事"
+    got = {frozenset(p) for p in lookalike_pairs({"佐藤": 1, "佐藤様": 1, "鈴木": 1})}
+    assert got == {frozenset(("佐藤", "佐藤様"))}, got
+
+
+def test_a_character_variant_does_not_split_one_person_in_two():
+    """★ 検体 S03 の取り逃し ── `高橋` と `髙橋`（はしごだか）が別人として分かれていた。"""
+    from ailine_core.split_people import lookalike_pairs, matching_core
+    assert matching_core("髙橋") == matching_core("高橋") == "高橋"
+    got = {frozenset(p) for p in lookalike_pairs({"高橋": 1, "髙橋": 1, "田中": 1})}
+    assert got == {frozenset(("高橋", "髙橋"))}, got
+
+
+def test_both_at_once_is_still_one_pair():
+    """★ 鍵を 1 本に合成した理由 ── 敬称と異体字が**同時に**違う組も拾える。"""
+    from ailine_core.split_people import lookalike_pairs
+    got = {frozenset(p) for p in lookalike_pairs({"髙橋様": 1, "高橋": 1})}
+    assert got == {frozenset(("髙橋様", "高橋"))}, got
+
+
+def test_the_honorific_list_does_not_eat_a_surname():
+    """★★ 陰性対照 ── `氏` は敬称の表に**入れない**（`高氏` を `高` に潰して偽の組を作る）。
+
+    ★ 名指しは安全側だが、安全側でも**偽の組は人の時間を食う**。得より害が大きい語は入れない。
+    """
+    from ailine_core.split_people import HONORIFICS, lookalike_pairs, matching_core
+    assert "氏" not in HONORIFICS
+    assert matching_core("高氏") != matching_core("高")
+    assert lookalike_pairs({"高氏": 1, "高": 1}) == []
+    # ★ 敬称だけの値を空にしない（`様` 1 文字は姓ではないが、潰すと全員と組になる）
+    assert matching_core("様") == "様"
+
+
+def test_reading_differences_are_still_unsolved_and_we_say_so():
+    """★★ `山田` と `ヤマダ` は**この手段では解けない**（読みの辞書が要る）。
+
+    ★ 「見送り」ではなく「解けない理由」を試験に書いておく ── 断定で刻むと、
+      辞書を同梱してよいと決めた日に未来の俺たちがこの穴を拾えない。
+    ★ 発火条件: 辞書（形態素解析の辞書等）の同梱を決めた日／実表で 2 件目が出た日。
+    """
+    from ailine_core.split_people import lookalike_pairs, matching_core
+    assert matching_core("ヤマダ") != matching_core("山田")
+    assert lookalike_pairs({"山田": 1, "ヤマダ": 1}) == []

@@ -155,19 +155,51 @@ def entity_core(value) -> str:
     return t
 
 
+#: 敬称 ── 末尾に付くと同じ人が別人に分かれる語。
+#: ★ `氏` は**入れない** ── `高氏` のような姓を `高` に潰して偽の組を作る（得より害）。
+#: ★ 落とすのは**末尾だけ**（語の中の「様」を壊さない）。
+HONORIFICS = ("御中", "様", "さま", "サマ", "さん", "殿")
+
+#: 異体字 ── 同じ姓の別の字。★ **小さく明示の表**にする（正規化を丸ごと当てると
+#:   関係ない字まで畳んで偽の組が増える）。畳むのは**照合のときだけ**で、原本の文字は触らない。
+VARIANTS = {"髙": "高", "﨑": "崎", "澤": "沢", "邊": "辺", "邉": "辺", "嶋": "島",
+            "齋": "斎", "齊": "斉", "冨": "富", "龍": "竜", "德": "徳", "淸": "清"}
+
+
+def matching_core(value) -> str:
+    """照合のためだけの形 ── 空白を畳み、異体字を畳み、末尾の敬称を落とす。
+
+    ★ 配る先の鍵ではない（束ねる鍵は**原本の文字そのまま**・D2）。ここで作るのは
+      「同じ人の別の書き方かもしれない」を**名指しする**ための鍵だけ。
+    ★ 合成する順: 空白 → 異体字 → 敬称。1 本に畳んでおくと、
+      `髙橋様` と `高橋` のように**両方違う**組も 1 つの鍵で拾える。
+    """
+    text = "".join(VARIANTS.get(ch, ch) for ch in form_read.norm(value))
+    for _ in range(len(HONORIFICS)):
+        for word in HONORIFICS:
+            if len(text) > len(word) and text.endswith(word):
+                text = text[: -len(word)]
+                break
+        else:
+            break
+    return text
+
+
 def lookalike_pairs(parts: dict) -> list:
     """同じものの**別の表記**の組（併合はしない・名指しだけ・D4）。
 
     2 つの鍵で束ねる ── どちらで束ねても「別の表記」であることに変わりはない:
       ① `norm` が同じ（空白・中黒・合字の違い）── 例 `緑川 誠` と `緑川誠`
       ② 法人格の書き方を落とすと同じ（`entity_core`）── 例 `㈱アルファ` と `株式会社アルファ`
+      ③ 異体字を畳み末尾の敬称を落とすと同じ（`matching_core`）── 例 `髙橋` と `高橋`・
+        `佐藤様` と `佐藤`（2026-09-13 に検体で測って足した）
 
     戻り値: [[表記a, 表記b], ...]（現れた順）。3 つ以上同じ鍵に落ちたら総当たりの組を出す。
     ★ 名指しは**安全側**の行い ── 別の会社が偶然同じ芯になっても、出るのは ⚠ 1 行で、人が見て捨てられる。
       併合（同じ冊に入れる）は取り返しが付かないので**しない**。
     """
     pairs, seen = [], set()
-    for key in (form_read.norm, entity_core):
+    for key in (form_read.norm, entity_core, matching_core):
         groups: dict = {}
         for value in parts:
             groups.setdefault(key(value), []).append(value)
