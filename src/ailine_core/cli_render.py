@@ -479,20 +479,22 @@ def sum_line(col: str, both: dict, excluded_rows: int = 0) -> str:
     return line
 
 
-def render_split_verify_report(out_label: str, source_label: str, result: dict) -> list:
-    """分けた冊の独立検算の報告（③・2026-09-12）。
+def render_independent_verify_report(label: str, out_label: str, source_label: str,
+                                    result: dict) -> list:
+    """後からの独立検算の報告（③・2026-09-12）── 分けた冊と帳票の一覧で**同じ器**を使う。
+
+    ★ 2 つ書くと片配線になる（この repo の実測: ⚠ を出す経路が 2 本あって片方だけ直した）。
 
     ★ 出すのは**分母つきの事実と名指し**だけ ── 成績のバーは置かない。
     ★ 破れは件数で終わらせず「どの行のどれが」まで出す（件数だけでは人は動けない）。
     ★ 金額を測っていない回は、測っていないと**書く**（黙って合格に混ぜない）。
     """
-    lines = [f"■ ailine verify（分けた冊）  out={out_label}  元={source_label}"]
+    lines = [f"■ ailine verify（{label}）  out={out_label}  元={source_label}"]
     for name, value in (result.get("facts") or {}).items():
         lines.append(f"  {name}: {value}")
     breaks = result.get("breaks") or []
     if not breaks:
-        lines.append("✓ 元の行はすべて『配った』か『配らなかった理由つきで名指し』のどちらかに"
-                     "ちょうど 1 回ありました（値も 1 セルずつ一致）。")
+        lines.append(f"✓ 破れはありません（上の分母で測りました）── {label}")
         return lines
     lines.append(f"⚠ 破れ {len(breaks)} 件:")
     for kind, detail in breaks:

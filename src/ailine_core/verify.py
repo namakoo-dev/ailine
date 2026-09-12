@@ -28,6 +28,7 @@ from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 import json
 
 from ailine_core import extract_multi, match, total_row, xml_readback
+from ailine_core import verify_forms   # ★ ③: 帳票の一覧の独立検算（抽出の規則を再現しない）
 from ailine_core.primitives import column_index as _column_index
 
 TOLERANCE = total_row.TOLERANCE
@@ -232,10 +233,9 @@ def verify_output(out_path, src_folder) -> dict:
         return {"unsupported": "CSV 検疫の出力は `ailine csv <元のcsv>` を再実行して"
                                 "確認してください（独立の検算はまだ実装していません）。"}
     if creator == "ailine forms":
-        # ★ 帳票の一覧（2026-09-11）: 独立の検算はまだ無い。csv と同じ理由で
-        #   {"unmarked": True} に混ぜず、{"unsupported": ...} で正直に区別する。
-        return {"unsupported": "帳票の一覧の独立の検算はまだ実装していません"
-                                "（`ailine forms <フォルダ>` を再実行して 検分 シートを見てください）。"}
+        # ★ ③（2026-09-13）: 独立の検算が入った。抽出の規則は再現せず、
+        #   「その冊に無い値が載っていないか」「空欄に理由が在るか」「冊が全部載っているか」を測る。
+        return verify_forms.verify_forms_list(out_path, src_folder)
     if creator == "ailine split":
         # ★ 担当者別に分けて配る（2026-09-12）: 独立の検算はまだ無い。csv/forms と同じ理由で
         #   {"unmarked": True} に混ぜず、{"unsupported": ...} で正直に区別する

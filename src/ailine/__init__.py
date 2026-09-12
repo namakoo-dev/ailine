@@ -126,7 +126,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     freeform_notice_reason, render_freeform_notice_compact,   # ★ K-1（単発向けの旧 render_freeform_notice は廃止）
     render_vocab_miss_refusal,   # ★ freeform 最終決定: 単発の語彙外の断り
     render_scan_report,   # ★ M1読み: `ailine scan`
-    render_split_verify_report,   # ★ ③: 分けた冊の独立検算の報告
+    render_independent_verify_report,   # ★ ③: 後からの独立検算の報告（split / forms 共通）
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
     render_forms_report,   # ★ 帳票の一覧: `ailine forms`
     render_split_report,   # ★ 担当者別に分けて配る: `ailine split`
@@ -17637,7 +17637,7 @@ def cmd_verify(a: argparse.Namespace) -> int:
         if result.get("unsupported"):
             print(f"× {result['unsupported']}")
             return 4
-        for ln in render_split_verify_report(str(out), str(source), result):
+        for ln in render_independent_verify_report("分けた冊", str(out), str(source), result):
             print(ln)
         return 5 if result.get("mismatch") else 0
     if not out.is_file():
@@ -17660,6 +17660,12 @@ def cmd_verify(a: argparse.Namespace) -> int:
         if result.get("unsupported"):
             print(f"× {result['unsupported']}")
             return 4
+        # ★ ③（2026-09-13）: 帳票の一覧は「分母つきの事実 ＋ 破れの名指し」で返る
+        #   （stack の形とは違う）ので、器を分ける。判定の線（exit 5）は同じ。
+        if result.get("breaks") is not None:
+            for ln in render_independent_verify_report("帳票の一覧", str(out), str(folder), result):
+                print(ln)
+            return 5 if result.get("mismatch") else 0
         for ln in render_verify_report(str(out), str(folder), result):
             print(ln)
         return 5 if result.get("mismatch") else 0

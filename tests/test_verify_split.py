@@ -76,8 +76,10 @@ def test_a_clean_split_verifies_from_the_files_alone(split_out):
     out, book = split_out
     r = _verify(out, book, "--amount", AMOUNT)
     assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
-    assert "破れ" not in r.stdout, r.stdout
-    assert "ちょうど 1 回" in r.stdout, r.stdout
+    assert "破れはありません" in r.stdout, r.stdout
+    # ★ 「破れ 0」だけでは**何も測っていない 0** と区別が付かない ── 分母が出ていることも縛る。
+    for token in ("元の非空行", "配られた行", "Σ元"):
+        assert token in r.stdout, f"分母が出ていない（{token}）: {r.stdout}"
 
 
 def test_a_lost_row_is_named_with_its_row_number(split_out):
