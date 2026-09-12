@@ -141,3 +141,63 @@ def test_an_accounting_zero_is_recovered_but_a_bare_dash_is_not():
     assert pdf_grid.recover("￥ -") == (0, '¥#,##0;;"-"')
     assert pdf_grid.recover("-") == ("-", "")
     assert pdf_grid.recover("¥-1") == ("¥-1", "")
+
+
+# ── 見出しはどの行にも属さない（2026-09-12・実測の誤報から）──────────
+def test_a_tall_title_spanning_two_rows_does_not_join_either():
+    """★★ 実測の誤報: `請求書番号：` の右が**帳票のタイトル**になり、
+    `請求番号 = 請　求　書` を出した（Wondershare の別レイアウト）。
+
+    タイトル（高さ 43.7pt・57.4〜101.1）は小さい 2 行にまたがり、中心（79.3）が
+    `請求書番号：`（中心 79.6）と 0.3pt しか違わない。
+    ★ 高さの閾値では分けられない ── `¥ -` はラベルの行に入るべきだから。
+      違いは構造: **またぐ行が 1 つなら同じ行・2 つ以上なら見出し**。
+    """
+    words = [
+        {"text": "発行日：", "x0": 91, "x1": 131, "top": 59.7, "bottom": 69.7},
+        {"text": "請　求　書", "x0": 298, "x1": 488, "top": 57.4, "bottom": 101.1},
+        {"text": "請求書番号：", "x0": 71, "x1": 131, "top": 74.6, "bottom": 84.5},
+    ]
+    g = pdf_grid.grid_from_words(words)
+    at = {str(c.value): (c.row, c.col) for c in g.all_cells()}
+    title_row = at["請　求　書"][0]
+    assert title_row != at["請求書番号："][0], at      # ★ 番号のラベルと同じ行にしない
+    assert title_row != at["発行日："][0], at
+    # ★ どの小さい行からも右に見えない（right_of で拾われない）
+    label = g.cell(*at["請求書番号："])
+    assert [c.value for c in g.right_of(label, span=6)] == [], at
+
+
+def test_a_tall_amount_spanning_one_row_still_joins_its_label():
+    """★ 陰性対照 ── またぐ行が 1 つなら同じ行のまま（上の処置で壊さない）。"""
+    words = [{"text": "ご請求金額", "x0": 133, "x1": 203, "top": 364.4, "bottom": 378.2},
+             {"text": "¥   -", "x0": 283, "x1": 545, "top": 359.5, "bottom": 383.3}]
+    g = pdf_grid.grid_from_words(words)
+    assert g.cell(1, 1).value == "ご請求金額" and g.cell(1, 2).value == 0
+
+
+def test_the_grid_declares_that_its_columns_were_reconstructed():
+    """★★ 格子が自分で申告する ── 表を歩く側（明細の掃き出し）はこれを見て降りる。
+
+    ★ 実測: PDF で出た「明細と帯が合いません」39 件のうち **34 件が偽**（Excel では
+      裏が取れて正しい値）。「空欄は誤値より安い」は「偽の疑いも安い」を意味しない。
+    """
+    g = pdf_grid.grid_from_words([{"text": "a", "x0": 1, "x1": 2, "top": 1, "bottom": 2}])
+    assert g.columns_reconstructed is True
+    import openpyxl
+    from ailine_core.form_grid import Grid
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = "a"
+    assert Grid.read(wb.active).columns_reconstructed is False
+
+
+def test_a_pdf_does_not_cry_wolf_about_the_detail_table():
+    """★ 列を組み直した格子では明細の掃き出しをしない（偽の食い違いを出さない）。"""
+    from ailine_core.form_read import detail_amount_sum
+    rec = read_pdf_book(FIXTURE)["請求額"]
+    assert value(rec) == 33000 and grade(rec) == "単"
+    assert any("組み直している" in x for x in rec.unconfirmable), rec.unconfirmable
+    import pdfplumber
+    with pdfplumber.open(str(FIXTURE)) as pdf:
+        g = pdf_grid.grid_from_page(pdf.pages[0])
+    assert detail_amount_sum(g, None) == (None, None, (), None, 0)

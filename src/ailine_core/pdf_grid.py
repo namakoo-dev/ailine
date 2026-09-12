@@ -101,20 +101,33 @@ def grid_from_words(words, *, page_no: int = 1,
             # ★ 行は**垂直の中心**で束ねる（2026-09-12 の実測）: 大きな文字の金額
             #   （`¥ -` 高さ 24pt）は同じ行のラベル（高さ 14pt）より top が 5pt 上・bottom が
             #   5pt 下に出るが、中心は 0.1pt しか違わない。top で束ねると別の行に割れる。
-            cy = (float(w["top"]) + float(w.get("bottom", w["top"]))) / 2
-            items.append((t, float(w["x0"]), float(w["x1"]), cy))
+            top, bot = float(w["top"]), float(w.get("bottom", w["top"]))
+            items.append((t, float(w["x0"]), float(w["x1"]), (top + bot) / 2, top, bot))
     if not items:
         return Grid({}, 0, 0, ())
-
-    tops = _cluster([it[3] for it in items], row_tol)
-    centers = _cluster([(it[1] + it[2]) / 2 for it in items], col_gap)
 
     def nearest(v, xs):
         return min(range(len(xs)), key=lambda i: abs(xs[i] - v))
 
+    # ★★ 見出し（大きい文字）は、どの行にも属さない（2026-09-12 の実測）:
+    #   `請 求 書`（高さ 43.7pt・57.4〜101.1）は **小さい 2 行にまたがり**、中心（79.3）が
+    #   `請求書番号：`（中心 79.6）と 0.3pt しか違わない。中心で束ねると見出しがその行に入り、
+    #   `請求書番号：` の右が見出しになって **タイトルを請求番号として出した**（実測の誤報）。
+    #   ★ 上の `¥ -` はラベルの行に**入るべき**なので、高さの閾値では分けられない。
+    #     違いは構造 ── **またぐ行が 1 つなら同じ行・2 つ以上なら見出し**（閾値を増やさない）。
+    seed = _cluster([it[3] for it in items], row_tol)
+    heads = {i for i, it in enumerate(items)
+             if sum(1 for c in seed if it[4] <= c <= it[5]) >= 2}
+    plain = [it[3] for i, it in enumerate(items) if i not in heads]
+    tops = _cluster(plain, row_tol) if plain else []
+    #: 行の並び ── 小さい文字の行（共有）と、見出しの行（1 つずつ）を中心の順に
+    anchors = sorted([(c, -1) for c in tops] + [(items[i][3], i) for i in sorted(heads)])
+    row_of = {a: n + 1 for n, a in enumerate(anchors)}
+    centers = _cluster([(it[1] + it[2]) / 2 for it in items], col_gap)
+
     cells: dict = {}
-    for t, x0, x1, top in items:
-        r = nearest(top, tops) + 1
+    for i, (t, x0, x1, cy, _t0, _b0) in enumerate(items):
+        r = row_of[(cy, i)] if i in heads else row_of[(tops[nearest(cy, tops)], -1)]
         c = nearest((x0 + x1) / 2, centers) + 1
         while (r, c) in cells:          # 同じマスに 2 語 → 右へ逃がす（つないでも意味が壊れる）
             c += 1
@@ -122,7 +135,7 @@ def grid_from_words(words, *, page_no: int = 1,
         cells[(r, c)] = Cell(row=r, col=c, value=v, at=f"{page_no}頁{r}行{c}列",
                              anchor=(r, c), from_merge=False, fmt=fmt)
     # ★ 列は座標から組み直したもの ── 表を歩く側に「当てにするな」と申告する（2026-09-12）。
-    return Grid(cells, len(tops), max(c for _r, c in cells), (),
+    return Grid(cells, len(anchors), max(c for _r, c in cells), (),
                 columns_reconstructed=True)
 
 
