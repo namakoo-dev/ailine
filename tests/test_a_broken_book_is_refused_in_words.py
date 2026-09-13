@@ -32,6 +32,8 @@ CASES = {
     "accounts":   lambda broken, folder, work: ["accounts", str(broken), "--past", str(work / "過去.xlsx"),
                                                 "--out", str(work / "o.xlsx")],
     "verify":     lambda broken, folder, work: ["verify", str(broken), str(folder)],
+    "accounts-apply": lambda broken, folder, work: ["accounts-apply", str(broken), str(broken),
+                                                    "--out", str(work / "o.xlsx")],
 }
 
 #: 「壊れたブック」が当たらない入口（宣言・理由つき）。

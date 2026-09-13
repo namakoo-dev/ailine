@@ -154,6 +154,7 @@ from ailine_core import filetypes
 from ailine_core import forms_collect   # ★ 帳票の一覧（`ailine forms`）の並べ方
 from ailine_core import split_people   # ★ 担当者別に分けて配る（`ailine split`）の器官
 from ailine_core import accounts_core   # ★ 需要③: 科目を先例から引く器官（純関数）
+from ailine_core import accounts_apply   # ★ 採用の一往復（人が○を付けた行だけ元の仕訳に写す）
 from ailine_core import accounts_read   # ★ 需要③: 仕訳の書き出し（CSV/xlsx）の読み手
 from ailine_core import verify_accounts   # ★ 需要③: 候補の冊を後から独立に検算する
 # ★ 2026-08-24: 一部は**意図した再輸出**（検体が ailine.sanitize_sheet_name の形で
@@ -11585,6 +11586,7 @@ NEEDS_MACHINE = {
     "export-pdf": True,   # PDF は LibreOffice が描く
     "doctor": False, "ops": False, "csv": False, "export-csv": False, "demo": False,
     "scan": False, "stack": False, "forms": False, "split": False, "accounts": False,
+    "accounts-apply": False,
     "verify": False, "history": False, "restore": False, "undo": False, "redo": False,
     "vocab": False, "alias": False, "attr": False,
 }
@@ -17180,6 +17182,11 @@ def cmd_forms(a: argparse.Namespace) -> int:
     #   ★ 1 項目でも取れた冊は残す ── 「読めなかった請求書」を「請求書でない」と混ぜない。
     nothing = set(forms_collect.nothing_found(collected))
     listed = [(name, recs) for name, recs in collected if name not in nothing]
+    # ★ `--month`: その月の冊だけを一覧に。対象外は『対象外』シートに理由つきで残す（捨てない）。
+    month = getattr(a, "month", None)
+    out_of_scope: list = []
+    if month:
+        listed, out_of_scope = forms_collect.split_by_month(listed, month)
     rows = [forms_collect.row_for(name, recs) for name, recs in listed]
     findings = [r for name, recs in collected for r in forms_collect.findings_for(name, recs)]
     # ★ 束で見て初めて分かる怪しさ（重複・訂正再発行・年の誤り・桁違い…）── 値は作らない、指さすだけ。
@@ -17198,6 +17205,10 @@ def cmd_forms(a: argparse.Namespace) -> int:
               "nothing_found": forms_collect.nothing_found(collected),
               # ★ 期間外の混入を内訳で言う（疑いにはしない・B 経理の所見）
               "months": forms_collect.months_of(listed),
+              "month": month,
+              "out_of_scope": [(name, why) for name, _r, why in out_of_scope],
+              "total": (forms_collect.total_row(rows)[forms_collect.HEADERS.index("請求額(税込)")]
+                        if month else None),
               "self_excluded": self_excluded, "findings": findings,
               "suspicions": suspicions, "file_written": False}
 
@@ -17221,9 +17232,21 @@ def cmd_forms(a: argparse.Namespace) -> int:
         ws.append(list(forms_collect.HEADERS))
         for row in rows:
             ws.append(row)
+        if month:
+            # ★ 合計行は forms 自身が足す（値の出た請求額だけ・太字・桁区切り）。
+            ws.append(forms_collect.total_row(rows))
+            inspection.bold_row(ws, ws.max_row, len(forms_collect.HEADERS))
         inspection.bold_row(ws, 1, len(forms_collect.HEADERS))
         inspection.money_columns(ws, forms_collect.money_column_indexes())
         inspection.autosize_columns(ws)
+        if month:
+            ws_o = wb_out.create_sheet(forms_collect.OUT_OF_SCOPE_SHEET)
+            ws_o.append(list(forms_collect.OUT_OF_SCOPE_HEADERS))
+            for name, recs, why in out_of_scope:
+                ws_o.append(forms_collect.row_for(name, recs) + [why])
+            inspection.bold_row(ws_o, 1, len(forms_collect.OUT_OF_SCOPE_HEADERS))
+            inspection.money_columns(ws_o, forms_collect.money_column_indexes())
+            inspection.autosize_columns(ws_o)
 
         ws2 = wb_out.create_sheet(forms_collect.INSPECT_SHEET)
         ws2.append(list(forms_collect.INSPECT_HEADERS))
@@ -17250,8 +17273,9 @@ def cmd_forms(a: argparse.Namespace) -> int:
         # ★ 事後条件: 書いた直後の中身を**別の読み実装**で数える（同じ道具の同じ盲点を避ける）。
         readback = xml_readback.read_grid(tmp_out)
         written = len(xml_readback.data_row_numbers(readback, header_row=1))
-        if written != len(rows):
-            print(f"⚠ 事後条件が破れた: 一覧の行数  元 {len(rows)} / 出力 {written}")
+        expected = len(rows) + (1 if month else 0)          # ★ --month は合計行が 1 行乗る
+        if written != expected:
+            print(f"⚠ 事後条件が破れた: 一覧の行数  元 {expected} / 出力 {written}")
             return 5
 
         # ★ 関所（stack と同じ線）: 人のファイル / 別コマンドの出力は名指しで止める。
@@ -17831,6 +17855,66 @@ def _accounts_past_paths(raw_args) -> tuple:
     return paths, missing
 
 
+def cmd_accounts_apply(a: argparse.Namespace) -> int:
+    """`ailine accounts-apply <候補.xlsx> <今回の仕訳> --out <取込用>`: 採用の一往復を閉じる。
+
+       候補の冊で人が『採用』列に ○ を付けた行だけ、候補の科目を**元の仕訳の借方勘定科目**に写す。
+       列順・文字コード・見出し行・説明行は元のまま。○ の無い行は空のまま（決めない）。
+       ★ 事後条件: 書いた物を別実装で読み戻し、変わったセルが「採用の行の借方勘定科目」だけかを数える。
+    """
+    candidate = input_path.require_file(a.book, what="候補の冊")
+    journal = input_path.require_file(a.journal, what="今回の仕訳")
+    out = Path(a.out).resolve()
+    if out.suffix.lower() != journal.suffix.lower():
+        print(f"× --out は元の仕訳と同じ形式で（元 {journal.suffix} ／ 指定 {out.suffix or '拡張子なし'}）")
+        return 4
+    print(f"■ ailine accounts-apply（採用を元の仕訳に写す）  候補={candidate.name}  元={journal.name}")
+    try:
+        adopted, refusal, seen = accounts_apply.read_adoptions(candidate)
+    except Exception as e:   # noqa: BLE001 ── 例外名は見せない（次の一手を言う）
+        print(f"× {candidate.name}: {input_path.explain_unreadable(e, candidate)}")
+        return EXIT_ENVIRONMENT
+    if refusal:
+        print(f"× {refusal}")
+        return 4
+    book = accounts_read.read_journal(journal)
+    if book.refused:
+        print(f"× {book.refused}")
+        return 4
+    col = book.header_map.get(accounts_core.DEBIT_ACCOUNT)
+    if not col:
+        print(f"× 元の仕訳に『{accounts_core.DEBIT_ACCOUNT}』の列がありません")
+        return 4
+    if out.exists() and not getattr(a, "overwrite", False):
+        mark = multifile_stack.own_output_mark(out)
+        if mark is None:
+            print(f"⚠ 出力先に人のファイルがあります: {out}")
+            print(f"（{out.name} は ailine の出力ではありません。承知の上で上書きするなら --overwrite を付けて実行してください）")
+            return 7
+    workdir = Path(tempfile.mkdtemp(prefix="ailine_apply_"))
+    try:
+        tmp = workdir / out.name
+        if journal.suffix.lower() == filetypes.CSV_SUFFIX:
+            got = accounts_apply.apply_to_csv(journal, adopted, book.encoding or "utf-8-sig", col, tmp)
+        else:
+            got = accounts_apply.apply_to_book(journal, adopted, col, tmp)
+        # ★ 事後条件: 変わったセルは採用の行の借方勘定科目だけ（別実装で読み戻す）。
+        diff = accounts_apply.diff_cells(journal, tmp, book.encoding)
+        stray = [d for d in diff if not (d[0] in adopted and d[1] == col)]
+        if stray:
+            print(f"⚠ 事後条件が破れた: 採用の行以外のセルが {len(stray)} 個変わりました（例: {stray[:3]}）")
+            print("（取込用のファイルは書いていません）")
+            return 5
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tmp, out)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    print(f"採用 {len(adopted)} 行（候補の冊の {seen} 行のうち）── 借方勘定科目に写しました: {out}")
+    print(f"変わったセル {got['changed']} 個（採用の行の『{accounts_core.DEBIT_ACCOUNT}』だけ・ほかは 1 文字も変えていません）")
+    print(f"（元の仕訳 {journal.name} は無変更です。○ の無い行は空のままです ── 決めるのは人）")
+    return 0
+
+
 def cmd_accounts(a: argparse.Namespace) -> int:
     """`ailine accounts <今回> --past <過去…> --out <冊>`: 需要③ ── 経費の勘定科目を先例から引く。
        設計 docs/DESIGN-20260913-経費の勘定科目を先例から引く.md（★ §6 が §2 を置き換える）。
@@ -18180,6 +18264,7 @@ ROUTE_KIND = {
     "run": "multi",            # フォルダ 1 個 / ブック 2 冊 の形がある
     "scan": "multi", "stack": "multi", "verify": "multi",
     "forms": "multi", "split": "multi", "accounts": "multi",
+    "accounts-apply": "multi",   # 候補の冊 ＋ 元の仕訳
     "stop": "single", "doctor": "single", "ops": "single", "csv": "single",
     "export-csv": "single", "demo": "single", "export-pdf": "single",
     "history": "single", "restore": "single", "undo": "single", "redo": "single",
@@ -18202,6 +18287,13 @@ _ARG_JA = (("the following arguments are required:", "必要な指定が足り�
            ("argument ", "指定 "))
 _DEST_JA = {"book": "<ファイル>", "file": "<ファイル>", "folder": "<フォルダ>", "task": "<依頼文>",
             "cmd": "<入口>", "out": "<出力先>", "sources": "<元>"}
+
+
+def _month_arg(text: str) -> str:
+    """`--month` の形（YYYY-MM）── 形の誤りは argparse の番号（2）で断る。"""
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", text or ""):
+        raise argparse.ArgumentTypeError(f"YYYY-MM の形で（例: 2026-09）: {text}")
+    return text
 
 
 class _JapaneseArgumentParser(argparse.ArgumentParser):
@@ -18328,10 +18420,20 @@ def build_parser() -> argparse.ArgumentParser:
     fm = sub.add_parser("forms", help="フォルダ内の請求書から項目を集めて一覧にする（読むだけ）")
     fm.add_argument("folder", help="対象フォルダ（直下の .xlsx と .pdf を読む・.xls/.csv は数えて名指しで断る・サブフォルダは見ない）")
     fm.add_argument("--out", required=True, help="一覧を書き出すブックのパス")
+    fm.add_argument("--month", default=None, metavar="YYYY-MM", type=_month_arg,
+                    help="この月の請求だけを一覧にして末尾に合計行を付ける（別の月・請求日なしは『対象外』シートへ）")
     fm.add_argument("--overwrite", action="store_true",
                     help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
     fm.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     fm.set_defaults(func=cmd_forms)
+
+    aa = sub.add_parser("accounts-apply",
+                        help="候補の冊で『採用』に ○ を付けた行だけ、候補の科目を元の仕訳に写した取込用ファイルを書く")
+    aa.add_argument("book", help="候補の冊（ailine accounts の出力・右端に『採用』列を足して ○ を入れたもの）")
+    aa.add_argument("journal", help="今回の仕訳（ailine accounts に渡した元のファイル・CSV か xlsx）")
+    aa.add_argument("--out", required=True, help="取込用のファイル（元と同じ形式・列順・文字コード）")
+    aa.add_argument("--overwrite", action="store_true", help="出力先に人のファイルがある時の関所を承知で上書きする")
+    aa.set_defaults(func=cmd_accounts_apply)
 
     sp = sub.add_parser("split", help="1 冊の一覧を担当者ごとに分けて配る（新ブック N 冊 + 検分）")
     sp.add_argument("book", help="分ける元の一覧表 (.xlsx) ── 読むだけ（1 バイトも変えません）")

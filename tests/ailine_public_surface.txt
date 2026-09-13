@@ -319,6 +319,7 @@ def _maybe_warn_header_col_mismatch(op: 'str', resolved: 'dict', new_cols: 'list
 def _maybe_warn_target_overwrite(op: 'str', resolved: 'dict', book_meta: 'dict', book_path: 'Path') -> 'str | None'
 def _maybe_warn_write_precondition(op: 'str', before: 'dict', after: 'dict', resolved: 'dict | None' = None)
 def _merged_header_value(ws, row: 'int', col: 'int')
+def _month_arg(text: 'str') -> 'str'
 def _moved_rows_note(disclosures: 'list', why: 'str' = '動いた行の式の結果が変わっています ── 追加/削除した行を参照する合計式なら正当ですが、機械には区別がつきません') -> 'str'
 def _nested_total_reason(values: 'list', sheet_name: 'str', idx: 'int') -> 'str | None'
 def _new_sheets(before: 'dict', after: 'dict') -> 'list'
@@ -550,6 +551,7 @@ def classify_date_column(values) -> 'tuple[str, bool]'
 def classify_slots(slots, *, task: 'str', columns=(), header_row: 'int' = 1, sheets=(), qualifier_signal: 'bool' = False, consumed: 'Consumed | None' = None) -> 'list'
 def classify_subject_provenance(op: 'str', resolved: 'dict', meta: 'dict', task: 'str', a=None) -> 'list'
 def cmd_accounts(a: 'argparse.Namespace') -> 'int'
+def cmd_accounts_apply(a: 'argparse.Namespace') -> 'int'
 def cmd_alias(a: 'argparse.Namespace') -> 'int'
 def cmd_attr(a: 'argparse.Namespace') -> 'int'
 def cmd_demo(a: 'argparse.Namespace') -> 'int'

@@ -59,6 +59,14 @@ SUSPECT_HEADERS = ("種類", "関わる冊", "なぜ怪しいか")
 #: ★★ 2026-09-13（2 回目の買い手役・経理）: 「月末、黒い画面をずっと見ているわけではない（翌朝ブック
 #:   だけ開く）」── 読めなかった冊・載せなかった冊・月の混在が画面にしか無く、ブックに 1 セルも残らなかった。
 SUMMARY_SHEET = "束の要約"
+
+#: `--month` で外した冊を置くシート（一覧と同じ列 ＋ 理由）。
+#: ★★ 2026-09-13（3 回目の買い手役・経理の 1 位）: 「9 月分のフォルダを渡すと、9 月分だけの合計が出た
+#:   一覧が返る」まで 1 本で通ること。別月 4 冊・請求日なしの白紙を自分で除いて合計を頼み、桁区切りを
+#:   直す 4 手が消える。対象外は**捨てない**（このシートに理由つきで残す ── 締めの対象か人が決める）。
+OUT_OF_SCOPE_SHEET = "対象外"
+OUT_OF_SCOPE_HEADERS = HEADERS + ("理由",)
+TOTAL_LABEL = "合計"
 SUMMARY_HEADERS = ("項目", "冊", "内容")
 
 
@@ -114,6 +122,39 @@ def nothing_found(all_records: list) -> list:
                if records.get(field) is not None and value(records[field]) is not None]
         if not got:
             out.append(name)
+    return out
+
+
+def month_key(records: dict):
+    """その冊の請求日の月（`"2026-09"`）。値が無ければ None。"""
+    rec = records.get("請求日")
+    d = value(rec) if rec is not None else None
+    return f"{d.year:04d}-{d.month:02d}" if hasattr(d, "year") and hasattr(d, "month") else None
+
+
+def split_by_month(all_records: list, month: str) -> tuple:
+    """(対象の冊, 対象外の [(名前, records, 理由)]) ── 請求日がその月の冊だけを対象にする。
+
+    ★ 請求日が無い冊は「決められない」ので対象外（黙って合計に入れない）。
+    """
+    kept, left = [], []
+    for name, records in all_records:
+        k = month_key(records)
+        if k == month:
+            kept.append((name, records))
+        elif k is None:
+            left.append((name, records, "請求日が読めないので、対象月かどうか決められません"))
+        else:
+            left.append((name, records, f"別の月の請求です（{k[:4]}年{int(k[5:])}月）"))
+    return kept, left
+
+
+def total_row(rows: list) -> list:
+    """一覧の末尾の合計行（★ 値の出た請求額だけを足す・空欄は足さない）。"""
+    idx = HEADERS.index("請求額(税込)")
+    total = sum(r[idx] for r in rows if isinstance(r[idx], (int, float)) and not isinstance(r[idx], bool))
+    out = [None] * len(HEADERS)
+    out[0], out[idx] = TOTAL_LABEL, total
     return out
 
 

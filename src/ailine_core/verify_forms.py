@@ -160,6 +160,20 @@ def _list_rows(list_path) -> tuple:
     headers = {c: str(v or "").strip() for c, v in (rows.get(head) or {}).items()}
     body = [cells for r, cells in sorted(rows.items()) if head is not None and r > head]
 
+    scoped = set()
+    try:
+        og = xml_readback.read_grid(list_path, forms_collect.OUT_OF_SCOPE_SHEET).get("grid") or {}
+        orows: dict = {}
+        for (r, c), v in og.items():
+            orows.setdefault(r, {})[c] = v
+        ohead = min(orows) if orows else None
+        if ohead is not None:
+            ncol = next((c for c, v in orows[ohead].items()
+                         if str(v or "").strip() == forms_collect.HEADERS[0]), None)
+            scoped = {str(cells.get(ncol) or "").strip() for r, cells in orows.items()
+                      if r != ohead and ncol is not None}
+    except Exception:   # noqa: BLE001 ── 対象外シートが無い冊（--month なし）は空
+        scoped = set()
     insp = xml_readback.read_grid(list_path, forms_collect.INSPECT_SHEET)
     igrid, irows = insp.get("grid") or {}, {}
     for (r, c), v in igrid.items():
@@ -175,7 +189,7 @@ def _list_rows(list_path) -> tuple:
             if r == ihead or None in (f, i, w):
                 continue
             reasons[(str(cells.get(f) or ""), str(cells.get(i) or ""))] = str(cells.get(w) or "")
-    return headers, body, reasons
+    return headers, body, reasons, scoped
 
 
 #: 一覧に人（や `run`）が足す合計行の名前 ── 元ファイルの列にこの語だけが在る行は検算の対象外。
@@ -188,7 +202,7 @@ def verify_forms_list(list_path, folder) -> dict:
     戻り値: {"breaks": [(名前, 名指し)], "facts": {...}, "mismatch": bool} または
             {"unsupported": 理由}。
     """
-    headers, body, reasons = _list_rows(list_path)
+    headers, body, reasons, scoped = _list_rows(list_path)
     if not headers or forms_collect.HEADERS[0] not in headers.values():
         return {"unsupported": f"一覧シート（{forms_collect.SHEET_NAME}）が読めません: {list_path}"}
     name_col = next(c for c, n in headers.items() if n == forms_collect.HEADERS[0])
@@ -235,13 +249,15 @@ def verify_forms_list(list_path, folder) -> dict:
                                f"{name}／{header}: {value!r}"))
 
     explained = {name for name, _item in reasons}
-    left_out = []
+    left_out, out_of_scope = [], []
     for path in candidates(folder):
         if path.name in listed:
             continue
         # ★ こちらでも読めない冊は咎めない（製品が名指しで断った冊を二度叱らない）。
         if source_values(path) is None:
             unreadable.append(path.name)
+        elif path.name in scoped:
+            out_of_scope.append(path.name)      # ★ --month で外した冊（『対象外』シートに理由つき）
         elif path.name in explained:
             # ★ 2026-09-13: 項目が 1 つも取れなかった冊は一覧に載らない（空行が次の道具を殺すため）。
             #   検分に理由が在る冊は「取り逃し」でなく「理由つきで外した冊」── 数えて名指しする。
@@ -258,6 +274,9 @@ def verify_forms_list(list_path, folder) -> dict:
     if left_out:
         facts["一覧に載っていない冊（検分に理由あり）"] = (f"{len(left_out)} 件"
                                                     f"（{', '.join(left_out[:5])}）")
+    if out_of_scope:
+        facts["対象外の冊（--month で外した・『対象外』シートに理由あり）"] = (
+            f"{len(out_of_scope)} 件（{', '.join(out_of_scope[:5])}）")
     if unchecked:
         # ★ 出ないことを合格の証拠にしない ── 確かめられなかったものは名前を出して数える。
         facts["含有を確かめられなかった値"] = (f"{len(unchecked)} 件"

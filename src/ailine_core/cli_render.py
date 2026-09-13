@@ -715,8 +715,17 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
         for field, counts in (result.get("grades_by_field") or {}).items():
             part = "／".join(f"{g} {counts[g]}" for g in field_record.GRADE_ORDER if g in counts)
             lines.append(f"  {field}: {part}")
+    if result.get("month"):
+        left = result.get("out_of_scope") or []
+        other = sum(1 for _n, why in left if why.startswith("別の月"))
+        undated = len(left) - other
+        lines.append(f"対象月 {result['month'][:4]}年{int(result['month'][5:])}月: 一覧 {result.get('rows_written', 0)} 冊"
+                     f"／対象外 {len(left)} 冊（別の月 {other}・請求日なし {undated} ── 『対象外』シートに理由つき）")
+        total = result.get("total")
+        if total is not None:
+            lines.append(f"合計（対象月の請求額・一覧の末尾）: {int(round(total)):,}")
     months = {k: v for k, v in (result.get("months") or {}).items() if k}
-    if len(months) >= 2:
+    if len(months) >= 2 and not result.get("month"):
         # ★★ 2026-09-13（買い手役・経理）: 9 月のフォルダに 5〜8 月が 4 冊（142,000 円）黙って
         #   混ざっていた。疑いにはしない（前月分が遅れて混ざるのは実務で普通）── 内訳を 1 行言う。
         shown = "／".join(f"{k[:4]}年{int(k[5:])}月 {months[k]}" for k in sorted(months))

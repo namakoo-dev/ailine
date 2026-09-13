@@ -45,6 +45,8 @@ CASES = {
     "accounts":   lambda miss, work: ["accounts", str(miss / "x.csv"), "--past", str(miss),
                                       "--out", str(work / "o.xlsx")],
     "verify":     lambda miss, work: ["verify", str(miss / "o.xlsx"), str(miss)],
+    "accounts-apply": lambda miss, work: ["accounts-apply", str(miss / "候補.xlsx"), str(miss / "x.csv"),
+                                          "--out", str(work / "o.csv")],
 }
 
 #: 「無い」が**別の事故**の入口（宣言 ── 理由つき・番人はこの宣言も分母に数える）。
