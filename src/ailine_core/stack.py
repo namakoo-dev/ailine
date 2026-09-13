@@ -39,8 +39,11 @@ CREATOR_MARK = "ailine stack"
 # _CREATOR_MARKS にも同時に足す（tests/test_stack_e2e.py の同期番人が二重管理のずれを見る）。
 # ★ 担当者別に分けて配る（2026-09-12・需要⑤）: `ailine split` を足す。verify.py の
 # _CREATOR_MARKS にも**同時に**足す（上と同じ理由 ── 片方だけに足すと fail closed が破れる）。
+# ★ 経費の勘定科目を先例から引く（2026-09-13・需要③）: `ailine accounts` を足す。
+# verify.py の _CREATOR_MARKS にも**同時に**足す（同じ理由 ── 片方だけに足すと fail closed
+# が破れる。tests/test_stack_e2e.py の同期番人が二重管理のずれを見る）。
 CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv",
-                 "ailine forms", "ailine split"}
+                 "ailine forms", "ailine split", "ailine accounts"}
 # ★ M3 P 先行 commit（DESIGN-20260821-multifile.md M3 設計 v2）: match の集約出力
 # （1行=1キー）は末尾2列の出所列署名を構造的に持てない。1枚目シート名+固定見出しで判定する。
 MATCH_SHEET_NAME = "照合"
@@ -225,6 +228,36 @@ def _split_signature(path) -> bool:
         wb.close()
 
 
+def _accounts_signature(path) -> bool:
+    """`ailine accounts` の列署名（2026-09-13・需要③）── 1 枚目が候補のシートで、
+    足した 4 列（候補の科目・区分・根拠・先例の番地）が末尾に在ること。
+
+    ★ 前半は原本の見出しそのままなので、`forms` / `split` の一覧と同じ作法（シート名 ＋
+      自分が足した列）で見る。★ 印（creator）と**両方**そろって初めて自分の出力
+      （fail closed ── 見出しだけがたまたま一致する人のファイルを前回出力と誤認して
+      上書きした事故が過去に在る）。
+    """
+    # ★ import はここに閉じる（`verify_forms` の pdfplumber と同じ作法）── module の頭で
+    #   import すると `match` → `stack` → `accounts_core` → `match` の輪ができて、
+    #   `ailine` がそもそも読み込めなくなる（実測: AttributeError で起動不能）。
+    from ailine_core import accounts_core
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return False
+    try:
+        ws = wb.worksheets[0]
+        if ws.title != accounts_core.SHEET_NAME:
+            return False
+        headers = multifile.read_row_headers(ws, 1)
+        tail = len(accounts_core.OUTPUT_HEADERS)
+        return tuple(headers[-tail:]) == accounts_core.OUTPUT_HEADERS
+    except Exception:
+        return False
+    finally:
+        wb.close()
+
+
 KIND_SIGNATURES = {
     "ailine stack": _stack_extract_signature,
     "ailine extract": _stack_extract_signature,
@@ -232,6 +265,7 @@ KIND_SIGNATURES = {
     "ailine csv": _csv_signature,
     "ailine forms": _forms_signature,
     "ailine split": _split_signature,
+    "ailine accounts": _accounts_signature,
 }
 
 

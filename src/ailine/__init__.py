@@ -129,6 +129,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_independent_verify_report,   # ★ ③: 後からの独立検算の報告（split / forms 共通）
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
     render_forms_report,   # ★ 帳票の一覧: `ailine forms`
+    render_accounts_report,   # ★ 需要③: `ailine accounts`（科目の候補）
     render_split_report,   # ★ 担当者別に分けて配る: `ailine split`
     render_folder_routes,
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
@@ -150,6 +151,9 @@ from ailine_core import pdf_grid
 from ailine_core import filetypes
 from ailine_core import forms_collect   # ★ 帳票の一覧（`ailine forms`）の並べ方
 from ailine_core import split_people   # ★ 担当者別に分けて配る（`ailine split`）の器官
+from ailine_core import accounts_core   # ★ 需要③: 科目を先例から引く器官（純関数）
+from ailine_core import accounts_read   # ★ 需要③: 仕訳の書き出し（CSV/xlsx）の読み手
+from ailine_core import verify_accounts   # ★ 需要③: 候補の冊を後から独立に検算する
 # ★ 2026-08-24: 一部は**意図した再輸出**（検体が ailine.sanitize_sheet_name の形で
 #   見ている）。未使用に見えても消さない ── リンタには noqa で伝える。
 from ailine_core.report_per_row import (  # noqa: F401
@@ -17607,6 +17611,234 @@ def cmd_split(a: argparse.Namespace) -> int:
     return 0
 
 
+def _accounts_postcondition_fail(label: str, expected, actual) -> int:
+    """★ 書いた冊を読み戻して合わなかった時の唯一の出口。冊は 1 件も置かない。
+
+       ★ `_split_postcondition_fail`（部分の和＝全体）と分けている理由: こちらが測るのは
+         『どの行にどの科目を書いたか』の帰属で、数の等式ではない ── 文言を共用すると
+         どちらかの経路で意味の合わない語が出る。
+    """
+    print(f"⚠ 事後条件が破れた: {label}  算出 {expected} / 出力(書いた直後に読み戻した) {actual}")
+    print("（候補の冊は置いていません ── 読み戻して合わないものは出しません）")
+    return EXIT_WRITE_BLOCKED
+
+
+def _accounts_past_paths(raw_args) -> tuple:
+    """`--past` に渡されたものを冊の並びにする（ファイルでもフォルダでも受ける）。
+
+       戻り値: (冊の並び, 見つからなかったもの) ── フォルダは**直下だけ**（サブフォルダは
+       見ない・`ailine forms` と同じ線）。★ 自分の出力の除外は呼び出し側が
+       `stack.split_own_outputs` を呼ぶ（判定を書き写さない）。
+    """
+    paths, missing = [], []
+    readable = (filetypes.CSV_SUFFIX, filetypes.OPENPYXL_READABLE_SUFFIX)
+    for one in raw_args or ():
+        path = Path(one).resolve()
+        if path.is_dir():
+            paths += [p for p in sorted(path.iterdir())
+                      if p.is_file() and not p.name.startswith("~$")
+                      and p.suffix.lower() in readable]
+        elif path.is_file():
+            paths.append(path)
+        else:
+            missing.append(str(path))
+    return paths, missing
+
+
+def cmd_accounts(a: argparse.Namespace) -> int:
+    """`ailine accounts <今回> --past <過去…> --out <冊>`: 需要③ ── 経費の勘定科目を先例から引く。
+       設計 docs/DESIGN-20260913-経費の勘定科目を先例から引く.md（★ §6 が §2 を置き換える）。
+
+       ★ 出すのは**候補と根拠だけ**（§0）── 原本は 1 バイトも触らず、新しい冊に出す。
+         決めるのは人。埋める版（undo つき）は作らない。
+       ★ 辞書は持たない。根拠は使い手の**先例**（過去の仕訳）だけ ── 会社ごとの流儀と
+         ズレようがない側に倒す。
+       ★ 判断は ailine_core/accounts_core.py（純関数）、読みは accounts_read.py。この関数が
+         持つのは**配線だけ** ── 関所・workdir に書いてから移す・読み戻し・入力の指紋・報告。
+       ★ 配管は cmd_split / cmd_forms と同じものを**呼ぶ**（書き写さない）。
+       ★ LO は起動しない（読むだけ・openpyxl のみ）。
+    """
+    today_path = Path(a.book).resolve()
+    out = Path(a.out).resolve()
+    result = {"today": str(today_path), "out": str(out), "past": [], "past_paths": [],
+              "refused": None, "header_row": None, "encoding": None, "ambiguous": False,
+              "ambiguous_books": [], "keys": list(accounts_core.KEYS), "keys_used": [],
+              "rows": {}, "untouched": [], "lookalike": [], "notes": [], "grades": {},
+              "unreadable": [], "past_rows": 0, "past_precedents": 0,
+              "changed_inputs": [], "原本が変わった": False, "file_written": False}
+
+    def emit() -> None:
+        """人向け／機械可読の**唯一の出口**（どの経路も同じ事実を出す）。"""
+        if a.json:
+            print(json.dumps(result, ensure_ascii=False))
+        else:
+            for ln in render_accounts_report(str(today_path), str(out), result):
+                print(ln)
+
+    if not today_path.is_file():
+        result["refused"] = f"ファイルが見つかりません: {today_path}"
+        emit()
+        return 4
+    past_paths, missing = _accounts_past_paths(getattr(a, "past", None))
+    if missing:
+        result["refused"] = "過去の仕訳が見つかりません: " + "／".join(missing)
+        emit()
+        return 4
+    # ★ 自分の出力を入力に数えない（V6・stack と同じ判定を呼ぶ ── 書き写さない）。
+    past_paths, self_excluded = multifile_stack.split_own_outputs(past_paths)
+    result["unreadable"] += [f"自分の出力『{n}』を入力から除外しました" for n in self_excluded]
+    if not past_paths:
+        result["refused"] = ("過去の仕訳が 1 件もありません（`--past` に渡した先に仕訳の"
+                             "書き出しが見つかりません）── 先例が無ければ何も引けません")
+        emit()
+        return 4
+    same = sorted({p.name for p in past_paths if p == today_path})
+    if same:
+        # ★ 自己先例は『裏が取れた』の最短路（設計 §6.3）── 同じファイルなら断る。
+        result["refused"] = (f"今回の仕訳と過去の仕訳が同じファイルです（{'／'.join(same)}）"
+                             "── 自分を先例に数えると、どの行も裏が取れたことになります")
+        emit()
+        return 4
+
+    today = accounts_read.read_journal(today_path)
+    result.update({"header_row": today.header_row, "encoding": today.encoding,
+                   "ambiguous": today.ambiguous})
+    if today.truncated:
+        result["unreadable"].append(f"{today.name} は {accounts_read.MAX_ROWS} 行で"
+                                    "打ち切りました（それ以降は読んでいません）")
+    if today.refused:
+        result["refused"] = today.refused
+        emit()
+        return 4
+    past_books = []
+    for path in past_paths:
+        book = accounts_read.read_journal(path)
+        if book.refused:
+            result["unreadable"].append(book.refused)
+            continue
+        if book.ambiguous:
+            result["ambiguous_books"].append(book.name)
+        if book.truncated:
+            result["unreadable"].append(f"{book.name} は {accounts_read.MAX_ROWS} 行で"
+                                        "打ち切りました（それ以降は読んでいません）")
+        past_books.append(book)
+    result["past"] = [b.name for b in past_books]
+    result["past_paths"] = [str(p) for p in past_paths]
+    if not past_books:
+        result["refused"] = "過去の仕訳を 1 冊も読めませんでした（上の名指しを見てください）"
+        emit()
+        return 4
+
+    # ★ 入力の指紋（D4「書き込みは 0」を機械にする・設計 §6.3）── 後で前後を比べる。
+    digests = {str(p): _file_digest(p) for p in [today_path] + past_paths}
+    plan = accounts_core.plan_accounts(today.rows, today.header_map,
+                                       accounts_read.past_pool(past_books))
+    rows = accounts_core.candidate_rows(plan)
+    result.update({"keys_used": list(plan.keys_used), "refused": plan.refused,
+                   "untouched": [[r, why] for r, why in plan.untouched],
+                   "lookalike": [[k, one, two] for k, one, two in plan.lookalike],
+                   "notes": list(plan.notes), "past_rows": plan.past_rows,
+                   "past_precedents": plan.past_precedents,
+                   "grades": accounts_core.grade_tally(plan),
+                   "rows": {str(r): {"account": acc, "grade": grade, "reason": why,
+                                     "citations": [list(c) for c in
+                                                   (plan.citations.get(r) or ())]}
+                            for r, acc, grade, why, _cite in rows}})
+    if plan.refused:
+        # ★ 決められないなら何も出さない（全行「無」の静かな成功をしない・設計 §6.3）。
+        emit()
+        return 4
+
+    labels = accounts_core.column_labels(today.headers, today.header_map, today.width,
+                                         reserved=multifile_stack.PROVENANCE_HEADERS)
+    out_headers = (labels + list(multifile_stack.PROVENANCE_HEADERS)
+                   + list(accounts_core.OUTPUT_HEADERS))
+    by_row = {r: (acc, grade, why, cite) for r, acc, grade, why, cite in rows}
+    workdir = Path(tempfile.mkdtemp(prefix="ailine_accounts_"))
+    try:
+        tmp_out = workdir / out.name
+        wb_out = openpyxl.Workbook()
+        wb_out.properties.creator = accounts_core.CREATOR_MARK   # ★ 書き手の印
+        # ★ 焼き込む条件（この冊は何を見て作ったか）── 読む側は stack.KIND_SIGNATURES。
+        wb_out.properties.description = json.dumps(
+            {"tool": "ailine", "kind": accounts_core.KIND, "today": today_path.name,
+             "past": [b.name for b in past_books], "keys": list(plan.keys_used)},
+            ensure_ascii=False)
+        ws = wb_out.active
+        ws.title = accounts_core.SHEET_NAME
+        ws.append(out_headers)
+        for row_num, values in today.rows:
+            acc, grade, why, cite = by_row.get(row_num, (None, None, None, None))
+            padded = [values[i] if i < len(values) else None for i in range(len(labels))]
+            ws.append(padded + [today_path.name, row_num, acc, grade, why, cite])
+        inspection.bold_row(ws, 1, len(out_headers))
+        inspection.autosize_columns(ws)
+
+        ws2 = wb_out.create_sheet(accounts_core.REPORT_SHEET)
+        ws2.append(list(accounts_core.REPORT_HEADERS))
+        for row in accounts_core.inspection_rows(plan):
+            ws2.append(row)
+        inspection.bold_row(ws2, 1, len(accounts_core.REPORT_HEADERS))
+        inspection.autosize_columns(ws2)
+        wb_out.save(tmp_out)
+        wb_out.close()
+
+        # ★★ 事後条件: 書いた直後の中身を**別の読み実装**（xml_readback）で読み戻す ──
+        #   自分の記憶で数えたら検算にならない（cmd_split の証明と同じ線）。
+        data = xml_readback.read_grid(tmp_out, accounts_core.SHEET_NAME)
+        names = xml_readback.header_names(data, header_row=1)
+        written = xml_readback.data_row_numbers(data, header_row=1)
+        if len(written) != len(today.rows):
+            return _accounts_postcondition_fail("候補の冊の行数", len(today.rows), len(written))
+        for wanted in (multifile_stack.PROVENANCE_HEADERS[1], accounts_core.OUTPUT_HEADERS[0]):
+            if wanted not in names:
+                return _accounts_postcondition_fail(f"列の見出し（{wanted}）", wanted, names[-6:])
+        src_col = names.index(multifile_stack.PROVENANCE_HEADERS[1]) + 1
+        acc_col = names.index(accounts_core.OUTPUT_HEADERS[0]) + 1
+        got = {}
+        for rr in written:
+            src = data["grid"].get((rr, src_col))
+            value = data["grid"].get((rr, acc_col))
+            if value is None or not str(value).strip():
+                continue
+            got[int(src) if primitives.is_number(src) else src] = str(value).strip()
+        want = {r: str(acc).strip() for r, acc, _g, _w, _c in rows if acc}
+        if got != want:
+            return _accounts_postcondition_fail("候補の帰属（元行 → 科目）",
+                                                sorted(want.items()), sorted(got.items()))
+
+        # ★ 関所（stack / forms / split と同じ線）: 人のファイル / 別コマンドの出力は
+        #   名指しで止める（--overwrite を承知で付けた時だけ通す）。
+        if out.exists():
+            mark = multifile_stack.own_output_mark(out)
+            if mark is not None and mark != accounts_core.CREATOR_MARK:
+                if not getattr(a, "overwrite", False):
+                    print(f"⚠ 出力先は ailine の別のコマンドの出力です: {out}")
+                    print(f"（{out.name}: 作成は {mark} です。"
+                          "承知の上なら --overwrite を付けて実行してください）")
+                    return 7
+            elif mark is None and not getattr(a, "overwrite", False):
+                print(f"⚠ 出力先に人のファイルがあります: {out}")
+                print(f"（{out.name} は ailine accounts の前回出力ではありません。"
+                      "承知の上で上書きするなら --overwrite を付けて実行してください）")
+                return 7
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tmp_out, out)
+        result["file_written"] = True
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    # ★ 入力の指紋を前後で比べる ── 違えば「読むだけ」が破れている（設計 §6.3）。
+    changed = [Path(p).name for p, digest in digests.items() if _file_digest(Path(p)) != digest]
+    if changed:
+        result["changed_inputs"] = changed
+        result["原本が変わった"] = True
+        emit()
+        return EXIT_WRITE_BLOCKED
+    emit()
+    return 0
+
+
 def cmd_verify(a: argparse.Namespace) -> int:
     """`ailine verify <out.xlsx> <srcfolder>` または `ailine verify <out.xlsx> <元A> <元B>`:
        検算の単独再実行（信用の条件⑥）。stack/extract は出力ブック+元フォルダから、
@@ -17643,6 +17875,25 @@ def cmd_verify(a: argparse.Namespace) -> int:
     if not out.is_file():
         print(f"× ファイルが見つかりません: {out}")
         return 4
+    # ★★ 2026-09-13（需要③）: 科目の候補の冊は「今回の仕訳 ＋ 過去の仕訳…」で受ける
+    #   （先例の番地のセルを読むため）。ここを未配線にすると、元 2 冊の形（照合）へ
+    #   流れて「印がありません」と**誤診**する ── 誤診は次の手を間違わせる。
+    #   ★ 振り分けは**印だけ**で見る（列署名まで見ると、壊れた冊が照合の経路へ落ちる）。
+    if xml_readback.read_core_properties(out)[0] == accounts_core.CREATOR_MARK:
+        if len(sources) < 2 or not all(Path(s).is_file() for s in sources):
+            print("× 科目の候補の冊の検算は次の形です: "
+                  "ailine verify <候補の冊> <今回の仕訳> <過去の仕訳…>")
+            return 4
+        today_src = Path(sources[0]).resolve()
+        past_src = [Path(s).resolve() for s in sources[1:]]
+        result = verify_accounts.verify_accounts_book(out, today_src, past_src)
+        if result.get("unsupported"):
+            print(f"× {result['unsupported']}")
+            return 4
+        for ln in render_independent_verify_report("科目の候補", str(out), str(today_src),
+                                                   result):
+            print(ln)
+        return 5 if result.get("mismatch") else 0
     if len(sources) == 2:
         for s in sources:
             if not Path(s).is_file():
@@ -17705,7 +17956,7 @@ def _add_allow_remote(p: argparse.ArgumentParser) -> None:
 ROUTE_KIND = {
     "run": "multi",            # フォルダ 1 個 / ブック 2 冊 の形がある
     "scan": "multi", "stack": "multi", "verify": "multi",
-    "forms": "multi", "split": "multi",
+    "forms": "multi", "split": "multi", "accounts": "multi",
     "stop": "single", "doctor": "single", "ops": "single", "csv": "single",
     "export-csv": "single", "demo": "single", "export-pdf": "single",
     "history": "single", "restore": "single", "undo": "single", "redo": "single",
@@ -17847,6 +18098,20 @@ def build_parser() -> argparse.ArgumentParser:
                     help="配る先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
     sp.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     sp.set_defaults(func=cmd_split)
+
+    ac = sub.add_parser("accounts",
+                        help="仕訳の借方勘定科目の候補を過去の仕訳（複数・フォルダも可）"
+                             "から引く（読むだけ・決めるのは人）")
+    ac.add_argument("book", help="今回の仕訳（仕訳帳の書き出し）── 読むだけ（1 バイトも変えません）")
+    ac.add_argument("--past", required=True, nargs="+",
+                    help="過去の仕訳（借方勘定科目が埋まったもの）── 複数のファイル、"
+                         "またはフォルダで渡せます")
+    ac.add_argument("--out", required=True,
+                    help="候補を書き出す冊のパス（シート『候補』と『検分』の 2 枚）")
+    ac.add_argument("--overwrite", action="store_true",
+                    help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
+    ac.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
+    ac.set_defaults(func=cmd_accounts)
 
     vf = sub.add_parser("verify", help="出力の検算だけを独立に再実行する（stack/extract/match/"
                                        "分けた冊・読むだけ）")

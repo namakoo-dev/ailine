@@ -172,6 +172,8 @@ value _VOCAB_MISS_KIND_PREFIX
 value _VOCAB_MISS_REASONS
 value _ZENKAKU_DIGITS
 value _ZERO_TARGET_REASON
+def _accounts_past_paths(raw_args) -> 'tuple'
+def _accounts_postcondition_fail(label: 'str', expected, actual) -> 'int'
 def _add_allow_remote(p: 'argparse.ArgumentParser') -> 'None'
 def _announce_format_map_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
 def _announce_lookup_fill_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
@@ -537,6 +539,7 @@ def check_zip_fidelity_loss(original: 'Path', normalized: 'Path') -> 'list'
 def classify_date_column(values) -> 'tuple[str, bool]'
 def classify_slots(slots, *, task: 'str', columns=(), header_row: 'int' = 1, sheets=(), qualifier_signal: 'bool' = False, consumed: 'Consumed | None' = None) -> 'list'
 def classify_subject_provenance(op: 'str', resolved: 'dict', meta: 'dict', task: 'str', a=None) -> 'list'
+def cmd_accounts(a: 'argparse.Namespace') -> 'int'
 def cmd_alias(a: 'argparse.Namespace') -> 'int'
 def cmd_attr(a: 'argparse.Namespace') -> 'int'
 def cmd_demo(a: 'argparse.Namespace') -> 'int'
@@ -697,6 +700,7 @@ def release_run_lock(path: 'Path | None' = None) -> 'None'
 def removal_axis_is_wrong(op: 'str', resolved_args: 'dict', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1) -> 'str | None'
 def removal_reading(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)
 def render_aborted(step_prefix: 'str' = '') -> 'str'
+def render_accounts_report(today_label: 'str', out_label: 'str', result: 'dict') -> 'list'
 def render_alias_listing(aliases: 'dict', order: 'list', aliases_file: 'Path') -> 'list'
 def render_applied_claim(claim: 'Claim', display_name: 'str') -> 'list'
 def render_applied_claim_demoted(claim: 'Claim', display_name: 'str', warning_count: 'int') -> 'list'

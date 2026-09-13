@@ -1,11 +1,11 @@
 usage: ailine [-h]
-              {run,stop,doctor,ops,csv,export-csv,demo,export-pdf,scan,stack,forms,split,verify,history,restore,undo,redo,vocab,alias,attr}
+              {run,stop,doctor,ops,csv,export-csv,demo,export-pdf,scan,stack,forms,split,accounts,verify,history,restore,undo,redo,vocab,alias,attr}
               ...
 
 自然言語 → LibreOffice Basic → 適用 → 検証
 
 positional arguments:
-  {run,stop,doctor,ops,csv,export-csv,demo,export-pdf,scan,stack,forms,split,verify,history,restore,undo,redo,vocab,alias,attr}
+  {run,stop,doctor,ops,csv,export-csv,demo,export-pdf,scan,stack,forms,split,accounts,verify,history,restore,undo,redo,vocab,alias,attr}
     run                 タスクを生成・適用・検証する
     stop                起動した LibreOffice を落とす
     doctor              セットアップを診断する
@@ -18,6 +18,7 @@ positional arguments:
     stack               フォルダ内の複数ブックを縦積みする（新ブック + 出所列）
     forms               フォルダ内の請求書から項目を集めて一覧にする（読むだけ）
     split               1 冊の一覧を担当者ごとに分けて配る（新ブック N 冊 + 検分）
+    accounts            仕訳の借方勘定科目の候補を過去の仕訳（複数・フォルダも可）から引く（読むだけ・決めるのは人）
     verify              出力の検算だけを独立に再実行する（stack/extract/match/分けた冊・読むだけ）
     history             実行履歴を表示する
     restore             原本への反映前のバックアップから復元する（ailine undo と同じ）

@@ -46,8 +46,12 @@ TOLERANCE = total_row.TOLERANCE
 #   （{"unmarked": True} に混ぜて「他人のファイル」と誤判定しない、が今回配線する範囲）。
 #   ★ 帳票の一覧（2026-09-11）: `ailine forms` も同じ理由で足す。
 #   ★ 担当者別に分けて配る（2026-09-12・需要⑤）: `ailine split` も同じ理由で足す。
+#   ★ 経費の勘定科目を先例から引く（2026-09-13・需要③）: `ailine accounts` も同じ理由で
+#   足す（stack.CREATOR_MARKS と**同時に** ── 同期の番人あり）。独立の検算
+#   （ailine_core/verify_accounts.py）は在るが、**過去の冊も要る**ので 1 フォルダ形では
+#   閉じない ── 下の verify_output は通る形を名指しで返す。
 _CREATOR_MARKS = {"ailine stack", "ailine extract", "ailine match", "ailine csv",
-                  "ailine forms", "ailine split"}
+                  "ailine forms", "ailine split", "ailine accounts"}
 
 
 def _find_header_row(data: dict, base_headers: list, max_scan: int = 30):
@@ -246,6 +250,13 @@ def verify_output(out_path, src_folder) -> dict:
         return {"unsupported": "分けた冊の検算はフォルダで受けます（和は『全部の冊 ＋ 空欄 ＋ "
                                 "複数担当』で初めて閉じるため）: "
                                 "`ailine verify <出力フォルダ> <元の冊> [--amount <見出し>]`"}
+    if creator == "ailine accounts":
+        # ★ 需要③（2026-09-13）: 独立の検算は在る（verify_accounts）が、測るのに
+        #   **今回の仕訳と過去の仕訳**が要る（番地のセルを読むため）。元フォルダ 1 個の
+        #   形では閉じないので、{"unmarked": True} に混ぜず通る形を名指しする。
+        return {"unsupported": "科目の候補の冊の検算は、今回の仕訳と過去の仕訳を渡して"
+                                "受けます（先例の番地のセルを読むため）: "
+                                "`ailine verify <候補の冊> <今回の仕訳> <過去の仕訳…>`"}
     if creator in _CREATOR_MARKS and description:
         try:
             cond = json.loads(description)

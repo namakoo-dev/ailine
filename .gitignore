@@ -45,3 +45,5 @@ bench/received_invoices/received_pdf/
 
 bench/split_people/split_books/
 bench/split_people/答え_split.json
+bench/accounts/accounts_books/
+bench/accounts/答え_accounts.json

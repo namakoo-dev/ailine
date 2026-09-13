@@ -219,8 +219,12 @@ def render_alias_listing(aliases: dict, order: list, aliases_file: Path) -> list
 #:   **出力を作った画面には呼び方が一言も出ていなかった**（grep 0 件）── ① と同じ形で、
 #:   しかも独立の検算を足した当日に同じ穴を開けた。**知られない検算は無い検算**。
 #: ★ csv は独立の検算が無いので**書かない**（案内すると嘘になる）。
-#: ★ 4 種類とも引数の並びは同じ（出力 → 元）なので、文言は 1 本で足りる。
-VERIFY_HINT_KINDS = ("ailine stack", "ailine extract", "ailine forms", "ailine split")
+#: ★ どれも引数の並びは同じ（出力 → 元）なので、文言は 1 本で足りる。
+#: ★ 2026-09-13（需要③）: `ailine accounts` は独立の検算（`verify_accounts`）を持って
+#:   出たので足す ── 持っていないものを足すと案内が嘘になり、持っているのに足さないと
+#:   「知られない検算は無い検算」になる。
+VERIFY_HINT_KINDS = ("ailine stack", "ailine extract", "ailine forms", "ailine split",
+                     "ailine accounts")
 
 
 def _quoted(label: str) -> str:
@@ -765,3 +769,70 @@ def _rows_label(rows, show: int = 8) -> str:
     if len(nums) > show:
         return f"{', '.join(nums[:show])} 行目 ほか {len(nums) - show} 行"
     return f"{', '.join(nums)} 行目"
+
+
+def render_accounts_report(today_label: str, out_label: str, result: dict) -> list:
+    """`ailine accounts`（経費の勘定科目を先例から引く）の人向け報告（需要③・2026-09-13）。
+
+    ★ 分母つき（候補を出す行が何行で、そのうち何行に候補が出たか）・名指し（空欄の理由・
+      表記ゆれ・触らない行は行番号で言う）。
+    ★ 成績のバーは置かない（forms / split と同じ線 ── 置くと「割合を上げる」方へ手が動き、
+      割 を 単 へ格下げしたくなる）。
+    ★ 区分の語と意味は `field_record` から引く（ここで書き写さない ── AST の番人が縛る）。
+    """
+    lines = [f"■ ailine accounts（経費の勘定科目を先例から引く）  今回={today_label}"]
+    for name in result.get("past") or ():
+        lines.append(f"  過去の仕訳: {name}")
+    for f in result.get("unreadable") or ():
+        lines.append(f"  ⚠ {f}")
+    if result.get("header_row"):
+        lines.append(f"見出しは {result['header_row']} 行目として読みました")
+    elif result.get("refused") is None:
+        lines.append("見出しの行はありません（列の位置で読みました ── 弥生の形）")
+    if result.get("encoding"):
+        tail = ("・★ UTF-8 でも cp932 でも復号できる冊です（UTF-8 として読みました ── "
+                "文字化けが見えたら元のソフトの書き出し設定を確かめてください）"
+                if result.get("ambiguous") else "")
+        lines.append(f"文字コード: {result['encoding']}{tail}")
+    if result.get("refused"):
+        lines.append(f"× 候補を出していません: {result['refused']}")
+        lines.append("（冊は作っていません ── 表から決まらないことは、こちらで決めません）")
+        return lines
+
+    rows = result.get("rows") or {}
+    valued = [r for r, v in rows.items() if (v or {}).get("account")]
+    lines.append(f"候補を出す行 {len(rows)} 行のうち {len(valued)} 行に科目の候補が出ました"
+                 f"（触らない行 {len(result.get('untouched') or ())}／"
+                 f"過去の行 {result.get('past_rows', 0)}・うち借方が埋まった行 "
+                 f"{result.get('past_precedents', 0)}）")
+    grades = result.get("grades") or {}
+    if grades:
+        got = "／".join(f"{g} {grades[g]}" for g in field_record.GRADE_ORDER if g in grades)
+        lines.append(f"区分: {got}（{field_record.grade_legend()}）")
+    blanks = [r for r, v in rows.items() if not (v or {}).get("account")]
+    if blanks:
+        lines.append(f"⚠ 空欄 {len(blanks)} 行（{_rows_label(sorted(blanks, key=int))}）"
+                     "── 理由は『検分』シートに 1 行ずつ出しています"
+                     "（空欄は誤値より安いので、こちらで決めません）")
+    for key, first, second in result.get("lookalike") or ():
+        lines.append(f"⚠ 表記ゆれ: {key} 『{first}』／『{second}』── 畳むと同じ文字です。"
+                     "別の鍵のままにしています（同じものだと決めるのは人の仕事です）")
+    for name in result.get("ambiguous_books") or ():
+        lines.append(f"⚠ {name}: UTF-8 でも cp932 でも復号できる冊です"
+                     "（UTF-8 として読みました ── 文字化けが見えたら書き出し設定を確かめて）")
+    for note in result.get("notes") or ():
+        lines.append(f"（{note}）")
+    if result.get("原本が変わった"):
+        # ★ 読むだけの約束が破れた（入力の指紋が前後で違う）── 黙って合格に混ぜない。
+        lines.append("⚠ 入力の指紋が前後で違います: "
+                     + "／".join(result.get("changed_inputs") or ())
+                     + "（読むだけのはずの入力が変わりました ── 出した候補は信じないでください）")
+    if result.get("file_written"):
+        lines.append(f"出力先: {out_label}")
+        lines.append("（候補の冊は新しいブックです ── 今回の仕訳も過去の仕訳も "
+                     "1 バイトも変えていません）")
+        past = " ".join(_quoted(str(p)) for p in result.get("past_paths") or ())
+        lines += verify_hint("ailine accounts", out_label, today_label, past)
+    else:
+        lines.append("（冊は作っていません）")
+    return lines
