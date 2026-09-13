@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.2.6](https://github.com/namakoo-dev/ailine/compare/v0.2.5...v0.2.6) - 2026-09-13
+
 ## [v0.2.5](https://github.com/namakoo-dev/ailine/compare/v0.2.4...v0.2.5) - 2026-09-10
 
 **★ この版は道具の挙動を 1 つも変えていません。**（`src/` の変更 **0 ファイル**）
