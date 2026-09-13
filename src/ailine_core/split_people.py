@@ -76,6 +76,7 @@ class SplitPlan:
     lookalike: list = field(default_factory=list)
     refused: str | None = None
     unparsed: list = field(default_factory=list)
+    by_note: str = ""            #: 列の選び方を人に言う 1 行（完全一致で絞った時だけ）
     blank_amount: float = 0.0
     multi_amount: float = 0.0
     whole_rows: int = 0
@@ -122,6 +123,10 @@ def safe_filenames(values: list, reserved=()) -> dict:
         for ch in _UNSAFE_IN_NAME:
             base = base.replace(ch, _NAME_REPLACEMENT)
         base = base.strip() or _NAME_REPLACEMENT
+        # ★ 2026-09-13（2 回目の買い手役・事務職）: `--by 元ファイル` で分けると値が `04月.xlsx` なので
+        #   冊名が `04月.xlsx.xlsx` になった。拡張子で終わる値は、その拡張子を落として名前にする。
+        if base.lower().endswith((".xlsx", ".xlsm", ".xls", ".pdf", ".csv")):
+            base = base.rsplit(".", 1)[0] or _NAME_REPLACEMENT
         name, n = base, 2
         while name in taken:
             name = f"{base}_{n}"
@@ -243,19 +248,22 @@ def proof_breaks(proof: dict) -> list:
     return broken
 
 
-def _refusal(headers: list, wanted, hits: list, what: str) -> str:
+def _refusal(headers: list, wanted, hits: list, what: str, *, exact_available: bool = False) -> str:
     """分けない理由の文（★ 見た見出しを並べる・当たった見出しは両方名指しする・D1）。"""
     seen = "／".join(f"『{h}』" for h in headers if str(h).strip()) or "（見出しが読めません）"
     if not hits:
         return (f"{what}の見出し『{wanted}』に当たる列がありません。"
                 f"見た見出し: {seen}")
     names = "／".join(f"『{headers[i - 1]}』" for i in hits)
-    return (f"{what}の見出し『{wanted}』に当たる列が {len(hits)} つあります（{names}）"
-            f"── どちらで分けるかは表からは決まりません。見出しの文字で 1 つに指してください"
+    tail = ("（打った文字とそのまま一致する見出しが 1 つあります ── その列でよければ `--exact` を"
+            "付けてください。列番号では指せません）" if exact_available else
             "（両方とも同じ文字なら、元の表で片方の見出しを変えてから ── 列番号では指せません）")
+    return (f"{what}の見出し『{wanted}』に当たる列が {len(hits)} つあります（{names}）"
+            f"── どちらで分けるかは表からは決まりません。見出しの文字で 1 つに指してください" + tail)
 
 
-def plan_split(grid_rows, header_row: int, by_header, amount_header=None) -> SplitPlan:
+def plan_split(grid_rows, header_row: int, by_header, amount_header=None, *,
+               exact: bool = False) -> SplitPlan:
     """1 冊の行の並びから「どう分けるか」と「何を疑うか」を決める（値は作らない）。
 
     grid_rows: [(行番号, [その行の値, ...]), ...]。行番号 `header_row` の要素は
@@ -266,10 +274,24 @@ def plan_split(grid_rows, header_row: int, by_header, amount_header=None) -> Spl
     rows = {int(r): list(vals or []) for r, vals in grid_rows}
     headers = list(rows.get(header_row) or [])
     hits = matching_columns(headers, by_header)
+    by_note = ""
+    literal = [i for i in hits if form_read.norm(headers[i - 1]) == form_read.norm(by_header)]
+    if len(hits) > 1 and exact and len(literal) == 1:
+        # ★★ 2026-09-13（2 回目の買い手役・会計）: 『担当者』と『営業担当者』が並ぶ表で `--by 担当者` が
+        #   「2 つあります」で止まり、案内は「元の表で片方の見出しを変えてから」── 顧問先から受け取った
+        #   表の見出しは変えられない。
+        #   ★ 設計 D1（既定では完全一致で絞らない ── 『担当』が『営業担当』と同居する表を黙って片方で
+        #     分けるのが最悪の形）は**そのまま**。人が `--exact` で「打った文字とそのまま一致する見出しを
+        #     使う」と明示した時だけ絞り、何を採ったか・何も当たっていたかを 1 行で言う（黙らない）。
+        others = "／".join(f"『{headers[i - 1]}』" for i in hits if i != literal[0])
+        by_note = (f"『{headers[literal[0] - 1]}』の列で分けました（{others} も当たりますが、"
+                   "--exact の指定どおり、打った文字とそのまま一致する方を採りました）")
+        hits = literal
     if len(hits) != 1:
         return SplitPlan(header_row=header_row, by_header=str(by_header), headers=headers,
                          amount_header=amount_header,
-                         refused=_refusal(headers, by_header, hits, "担当者"))
+                         refused=_refusal(headers, by_header, hits, "担当者",
+                                          exact_available=(len(literal) == 1)))
     by_column = hits[0]
 
     amount_column = None
@@ -362,7 +384,7 @@ def plan_split(grid_rows, header_row: int, by_header, amount_header=None) -> Spl
                      headers=headers, parts=parts, part_amounts=part_amounts,
                      blank=blank, blank_notes=blank_notes, multi=multi,
                      excluded=excluded, excluded_notes=excluded_notes,
-                     lookalike=lookalike_pairs(parts), unparsed=unparsed,
+                     lookalike=lookalike_pairs(parts), unparsed=unparsed, by_note=by_note,
                      blank_amount=blank_amount, multi_amount=multi_amount,
                      whole_rows=whole_rows, whole_amount=whole_amount)
 

@@ -178,6 +178,10 @@ def _list_rows(list_path) -> tuple:
     return headers, body, reasons
 
 
+#: 一覧に人（や `run`）が足す合計行の名前 ── 元ファイルの列にこの語だけが在る行は検算の対象外。
+_TOTAL_ROW_NAMES = frozenset({"合計", "小計", "総合計", "合計金額", "計"})
+
+
 def verify_forms_list(list_path, folder) -> dict:
     """一覧をフォルダの帳票と突き合わせる。
 
@@ -190,17 +194,24 @@ def verify_forms_list(list_path, folder) -> dict:
     name_col = next(c for c, n in headers.items() if n == forms_collect.HEADERS[0])
 
     breaks, unreadable, unchecked, checked = [], [], [], 0
+    total_rows: list = []
     listed = {}
     for cells in body:
         name = str(cells.get(name_col) or "").strip()
         if not name:
             breaks.append(("★ 出所の名前が空の行がある", "（元ファイルの列）"))
             continue
-        listed[name] = cells
         source = folder / name
         if not source.is_file():
+            if name in _TOTAL_ROW_NAMES:
+                # ★ 2026-09-13（2 回目の買い手役・経理）: `run` で足した合計行を「★ 出所のファイルが
+                #   無い: 合計」と**破れ**に数えていた ── 言っていることは正しいが、人は一覧が壊れたと
+                #   思って上司に出すのをためらう。合計行は検算の対象外として名指しする。
+                total_rows.append(name)
+                continue
             breaks.append(("★ 出所のファイルが無い", name))
             continue
+        listed[name] = cells
         values = source_values(source)
         if values is None:
             unreadable.append(name)
@@ -240,6 +251,8 @@ def verify_forms_list(list_path, folder) -> dict:
 
     facts = {"一覧の行": len(listed), "フォルダの帳票": len(candidates(folder)),
              "含有を確かめた値": checked, "検分の理由": len(reasons)}
+    if total_rows:
+        facts["合計行（検算の対象外）"] = f"{len(total_rows)} 行（{', '.join(total_rows[:3])}）"
     if unreadable:
         facts["こちらでも読めなかった冊"] = f"{len(unreadable)} 件（{', '.join(unreadable[:5])}）"
     if left_out:
@@ -251,6 +264,12 @@ def verify_forms_list(list_path, folder) -> dict:
                                               f"（{', '.join(unchecked[:5])}）"
                                               " ── 元の書き方が西暦でないため")
     out = {"breaks": breaks, "facts": facts, "mismatch": bool(breaks)}
+    if unreadable:
+        # ★★ 2026-09-13（2 回目の買い手役・経理）: 受領した請求書 1 枚が読めずに一覧から落ちているのに
+        #   「こちらでも読めなかった冊 1 件」を事実に出したうえで ✓ 破れはありません・exit 0 だった。
+        #   「✓ を見た時点で読むのをやめる」── 完全でない一覧に ✓ を付けない（破れとも違う）。
+        out["incomplete"] = (f"読めなかった冊が {len(unreadable)} 冊あります（{', '.join(unreadable[:5])}）"
+                             "── 一覧は完全ではありません（受領した帳票がその分だけ載っていません）")
     if checked == 0:
         # ★★ 空虚な合格の禁止（2026-09-13・買い手の初見 B8）: 一覧に値が 1 つも無い束
         #   （請求書でない冊が並んでいる等）で「含有を確かめた値 0」のまま ✓ を出していた。

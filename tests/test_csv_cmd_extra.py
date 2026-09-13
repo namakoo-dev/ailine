@@ -222,17 +222,21 @@ def test_stack_reports_csv_count_and_excludes_from_stacking(tmp_path, monkeypatc
     assert "1 ファイル中 1 積んだ" in out, out
 
 
-def test_stack_self_excludes_own_csv_output(tmp_path, monkeypatch, capsys):
-    """own 印つき csv 出力（.xlsx）は V6 の自己参照除外の対象（種類を問わず ailine 産は除外）。"""
+def test_stack_treats_its_own_csv_output_as_an_input(tmp_path, monkeypatch, capsys):
+    """★ 2026-09-13（2 回目の買い手役・事務職が離脱した所）: 初版は「種類を問わず ailine 産は除外」で、
+    検疫した CSV（`ailine csv` の .xlsx）まで入力から外していた。「CSV が届く → csv → stack」という
+    毎月の入口で 0 冊になり、断りが「csv で xlsx にできます」と循環した。
+    ★ 結果（縦積み・一覧・分けた冊）は二重計上を防ぐため外す。検疫は**入力への変換**なので外さない。"""
     _isolate(monkeypatch, tmp_path)
     csv_path = _write_csv(tmp_path, "元.csv", "a,b\n1,2\n")
     rc0, _ = _run_main(["csv", str(csv_path)], capsys)
     assert rc0 == 0
     wb = openpyxl.Workbook()
-    wb.active.append(["c", "d"])
+    wb.active.append(["a", "b"])
     wb.active.append([9, 9])
     wb.save(tmp_path / "本命.xlsx")
     out_path = tmp_path / "stacked.xlsx"
     rc, out = _run_main(["stack", str(tmp_path), "--out", str(out_path)], capsys)
     assert rc == 0, out
-    assert "元" in out and "除外しました" in out, out
+    assert "2 ファイル中 2 積んだ" in out, out
+    assert "除外しました" not in out, out

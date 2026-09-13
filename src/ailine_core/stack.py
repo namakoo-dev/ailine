@@ -469,8 +469,17 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
         wb.close()
 
 
+#: ailine が作るが**入力になる**冊の印 ── 検疫した CSV（`ailine csv`）。
+#: ★★ 2026-09-13（2 回目の買い手役・事務職が離脱した所）: 「CSV が届く → `ailine csv` で xlsx に →
+#:   `stack`」という毎月の入口で、検疫の出力が「自分の出力」として**全部**入力から外れ、
+#:   0 冊になり、断りが「`ailine csv` で xlsx にできます」と**循環**していた。
+#:   結果（縦積み・一覧・分けた冊…）は二重計上を防ぐため外す。**検疫は入力への変換**なので外さない。
+INPUT_MARKS = frozenset({"ailine csv"})
+
+
 def split_own_outputs(candidates):
-    """入力候補から **ailine 産の出力**を外し、(残った候補, 外した名前) を返す。
+    """入力候補から **ailine 産の結果**を外し、(残った候補, 外した名前) を返す。
+    ★ 検疫した CSV（`INPUT_MARKS`）は外さない ── それは入力そのもの。
 
     ★ 2026-08-24（第三波 S1）: この 5 行が cmd_stack と cmd_run_folder に**書き写されて**
     いて、cmd_scan にだけ無かった。実測: 2 冊照合の出力が入力フォルダに残ったまま
@@ -480,7 +489,8 @@ def split_own_outputs(candidates):
     """
     kept, excluded_names = [], []
     for path in candidates:
-        if is_own_output(path):
+        # ★ 判定の入口は `is_own_output` のまま（試験がそこを差し替える）── 種類だけ印で分ける。
+        if is_own_output(path) and own_output_mark(path) not in INPUT_MARKS:
             excluded_names.append(path.name)
         else:
             kept.append(path)

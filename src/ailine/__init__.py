@@ -15442,7 +15442,8 @@ def cmd_scan(a: argparse.Namespace) -> int:
     #   棚卸しの分母に数えて「取れなかった」と ⚠ で名指ししていた（stack/run には在った）。
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     if not candidates:
-        print(multifile.nothing_to_read(folder, excluded, what="棚卸しできるブック（.xlsx）"))
+        print(multifile.nothing_to_read(folder, excluded, what="棚卸しできるブック（.xlsx）",
+                                        self_excluded=self_excluded))
         return EXIT_ENVIRONMENT
     base_path, base_wb = multifile.open_base_workbook(candidates)
     base_headers, base_sheet, header_row, value_col_name = [], None, 1, None
@@ -17085,7 +17086,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
     # ★ 自分の出力を入力に数えない（V6・stack と同じ判定を使う ── 書き写さない）。
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     if not candidates:
-        print(multifile.nothing_to_read(folder, excluded, what="請求書（.xlsx / .pdf）"))
+        print(multifile.nothing_to_read(folder, excluded, what="請求書（.xlsx / .pdf）",
+                                        self_excluded=self_excluded))
         return EXIT_ENVIRONMENT
 
     collected, unreadable = [], []
@@ -17132,6 +17134,7 @@ def cmd_forms(a: argparse.Namespace) -> int:
     suspicions = forms_collect.suspicions_for(collected)
     result = {"denominator": len(candidates), "collected": len(collected),
               "rows_written": len(rows), "grades": forms_collect.tally(collected),
+              "grades_by_field": forms_collect.tally_by_field(collected),
               "blanks": n_blank, "blanks_with_reason": n_reason,
               "unreadable": unreadable, "excluded": excluded,
               "field_grades": forms_collect.grades_per_file(collected),
@@ -17179,6 +17182,13 @@ def cmd_forms(a: argparse.Namespace) -> int:
             ws3.append(row)
         inspection.bold_row(ws3, 1, len(forms_collect.SUSPECT_HEADERS))
         inspection.autosize_columns(ws3)
+        # ★ 束の要約 ── 画面に出た事実（読めなかった冊・載せなかった冊・月の混在）をブックにも残す。
+        ws4 = wb_out.create_sheet(forms_collect.SUMMARY_SHEET)
+        ws4.append(list(forms_collect.SUMMARY_HEADERS))
+        for row in forms_collect.summary_rows(result, collected):
+            ws4.append(row)
+        inspection.bold_row(ws4, 1, len(forms_collect.SUMMARY_HEADERS))
+        inspection.autosize_columns(ws4)
         wb_out.save(tmp_out)
 
         # ★ 事後条件: 書いた直後の中身を**別の読み実装**で数える（同じ道具の同じ盲点を避ける）。
@@ -17234,7 +17244,8 @@ def cmd_stack(a: argparse.Namespace) -> int:
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     denominator = len(candidates)
     if not candidates:
-        print(multifile.nothing_to_read(folder, excluded, what="積めるブック（.xlsx）"))
+        print(multifile.nothing_to_read(folder, excluded, what="積めるブック（.xlsx）",
+                                        self_excluded=self_excluded))
         return EXIT_ENVIRONMENT
 
     base_path, base_wb = multifile.open_base_workbook(candidates)
@@ -17575,7 +17586,8 @@ def cmd_split(a: argparse.Namespace) -> int:
             # ★ 元セルの number_format を運ぶ（cmd_stack と同じ ── 日付が時刻付きで出ない）。
             row_formats[r] = [c.number_format for c in cells]
             grid_rows.append((r, row_values[r]))
-        plan = split_people.plan_split(grid_rows, header_row, a.by, amount_header)
+        plan = split_people.plan_split(grid_rows, header_row, a.by, amount_header,
+                                       exact=bool(getattr(a, "exact", False)))
     finally:
         wb.close()
 
@@ -17596,6 +17608,8 @@ def cmd_split(a: argparse.Namespace) -> int:
     prov_headers = multifile_stack.own_output_headers(headers)
     out_headers = list(headers) + list(prov_headers)
     by_name = headers[plan.by_column - 1]
+    result["by_column_name"] = by_name           # ★ 実際に使った見出し（画面で言う）
+    result["by_note"] = plan.by_note
     workdir = Path(tempfile.mkdtemp(prefix="ailine_split_"))
     try:
         written = {}
@@ -17825,6 +17839,18 @@ def cmd_accounts(a: argparse.Namespace) -> int:
         emit()
         return 4
     past_books = []
+    # ★★ 2026-09-13（2 回目の買い手役・会計）: `仕訳帳_原本.csv` と `仕訳帳_原本 - コピー.csv`（中身が
+    #   同じ）を過去に渡すと、根拠の件数が黙って倍になった（「過去 2 件すべて」→「4 件すべて」）。
+    #   区分は 単 のままだが、人が採否に読む数字が膨れる。同じ中身は 1 本に数えて名指しする。
+    seen_digest: dict = {}
+    for path in list(past_paths):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest in seen_digest:
+            result["unreadable"].append(f"『{path.name}』は『{seen_digest[digest]}』と中身が同じなので"
+                                        " 1 本に数えました（コピーを 2 度先例にしません）")
+            past_paths.remove(path)
+            continue
+        seen_digest[digest] = path.name
     for path in past_paths:
         book = accounts_read.read_journal(path)
         if book.refused:
@@ -17967,7 +17993,7 @@ def _independent_verify_exit(result: dict) -> int:
     """
     if result.get("mismatch"):
         return 5
-    if result.get("vacuous"):
+    if result.get("vacuous") or result.get("incomplete"):
         return 4
     return 0
 
@@ -18242,7 +18268,7 @@ def build_parser() -> argparse.ArgumentParser:
     st.set_defaults(func=cmd_stack)
 
     fm = sub.add_parser("forms", help="フォルダ内の請求書から項目を集めて一覧にする（読むだけ）")
-    fm.add_argument("folder", help="対象フォルダ（直下の .xlsx を処理・.xls/.csv は数えて名指しで断る・サブフォルダは見ない）")
+    fm.add_argument("folder", help="対象フォルダ（直下の .xlsx と .pdf を読む・.xls/.csv は数えて名指しで断る・サブフォルダは見ない）")
     fm.add_argument("--out", required=True, help="一覧を書き出すブックのパス")
     fm.add_argument("--overwrite", action="store_true",
                     help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
@@ -18256,6 +18282,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "── 当たる見出しが 2 つ以上あれば分けずに断ります")
     sp.add_argument("--out", required=True, help="配る先のフォルダ（値ごとに 1 冊 + _検分.xlsx）")
     sp.add_argument("--amount", help="金額の列の見出し（指すと金額の和も証明します）")
+    sp.add_argument("--exact", action="store_true",
+                    help="見出しが 2 つ当たるとき、打った文字とそのまま一致する 1 つで分ける"
+                         "（『担当者』と『営業担当者』が並ぶ表・何を採ったかは画面で言います）")
     sp.add_argument("--sheet", help="読むシート名（既定は 1 枚目 ── 他のシートは名指しで開示）")
     sp.add_argument("--overwrite", action="store_true",
                     help="配る先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")

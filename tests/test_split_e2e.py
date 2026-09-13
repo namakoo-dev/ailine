@@ -176,9 +176,9 @@ def test_two_matching_headers_refuse_and_write_nothing(tmp_path):
     r = _split(book, out, by="担当")
     assert r.returncode == 4, f"分けてしまった: {r.stdout}"
     assert "担当" in r.stdout and "営業担当" in r.stdout, r.stdout
-    # ★ 2026-09-13（買い手役・会計）: 見出しが**両方とも同じ文字**だと「見出しの文字で 1 つに」は
-    #   従えない指示 ── 元の表で片方の見出しを変える、まで言う。
-    assert "元の表で片方の見出しを変えて" in r.stdout, r.stdout
+    # ★ 2026-09-13（買い手役・会計）: 「見出しの文字で 1 つに」だけでは従えない ── 次の一手を言う。
+    #   『担当』は『担当』の列にそのまま一致するので `--exact` を案内する（同じ文字が 2 列なら元の表を変える）。
+    assert "--exact" in r.stdout, r.stdout
     assert not out.exists() or not list(out.glob("*.xlsx")), "1 冊も作らないはず"
 
 
@@ -321,3 +321,19 @@ def test_overwriting_its_own_previous_books_is_said_out_loud(book, tmp_path):
     assert r.returncode == 0, r.stdout
     assert "前回の自分の出力" in r.stdout and "上書きしました" in r.stdout, r.stdout
     assert "残っています" not in r.stdout, r.stdout          # ★ 全部書き直したなら残留は無い
+
+
+def test_the_stale_warning_comes_before_the_check_mark(book, tmp_path):
+    """★ 2 回目の買い手役: ✓ を読んで安心する向きに作用する ── 一番危ない ⚠ は ✓ より前に。"""
+    first = tmp_path / "前回"
+    assert _split(book, first).returncode == 0
+    out = tmp_path / "配る"
+    out.mkdir()
+    import shutil
+    shutil.copy2(next(p for p in first.glob("*.xlsx") if not p.name.startswith("_")),
+                 out / "退職者.xlsx")
+    r = _split(book, out)
+    lines = r.stdout.splitlines()
+    warn = next(i for i, ln in enumerate(lines) if ln.startswith("⚠ 配る先に前回の冊"))
+    ok = next(i for i, ln in enumerate(lines) if ln.startswith("✓"))
+    assert warn < ok, r.stdout

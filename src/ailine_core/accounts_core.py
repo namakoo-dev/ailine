@@ -409,7 +409,13 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
     """
     keys_used = tuple(k for k in KEYS if header_map.get(k))
     absent = [k for k in KEYS if k not in keys_used]
-    notes = [CREDIT_NOTE, SWEEP_LIMIT,
+    # ★ 2026-09-13（買い手役・会計・2 回とも）: 貸方取引先の列が無い弥生の冊でも定型文が
+    #   「貸方取引先だけは鍵に入れています」と言い、次の行の「その列は無い」と**同じシートで食い違って**
+    #   いた。文は見たものに合わせる（無い鍵のことは言わない）。
+    credit_note = (CREDIT_NOTE if "貸方取引先" in keys_used
+                   else CREDIT_NOTE.replace("（貸方取引先だけは鍵に入れています）",
+                                            "（この冊には貸方取引先の列が無いので、貸方は鍵に入っていません）"))
+    notes = [credit_note, SWEEP_LIMIT,
              ("鍵にした列: " + ("／".join(f"『{k}』" for k in keys_used) if keys_used
                                 else "（1 本もありません）"))]
     if absent:

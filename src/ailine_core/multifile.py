@@ -43,7 +43,8 @@ def unreadable_reason(path: Path) -> str:
     return "読み込み失敗"
 
 
-def nothing_to_read(folder: Path, excluded: dict, *, what: str = "読める帳票") -> str:
+def nothing_to_read(folder: Path, excluded: dict, *, what: str = "読める帳票",
+                    self_excluded=()) -> str:
     """フォルダに読める冊が 1 冊も無いときの断り（★ 成功に見せない）。
 
     ★★ 2026-09-13（買い手役 3 体のうち 2 体）: 空のフォルダ／サブフォルダしか無いフォルダで
@@ -51,6 +52,13 @@ def nothing_to_read(folder: Path, excluded: dict, *, what: str = "読める帳�
       フォルダを選び間違えた人が気づけない。「文書が無い」は 9（ENGINEERING.md の表）。
     """
     lines = [f"× {folder} に{what}が 1 冊もありません"]
+    if self_excluded:
+        # ★★ 2026-09-13（2 回目の買い手役・事務職が離脱した所）: 0 冊の回＝一番要る回に
+        #   「自分の出力を除外しました」が出ず、「CSV を xlsx に」と循環する案内だけが出ていた。
+        names = "／".join(str(n) for n in list(self_excluded)[:5])
+        more = f" ほか {len(self_excluded) - 5} 冊" if len(self_excluded) > 5 else ""
+        lines.append(f"  ・ailine が作った冊 {len(self_excluded)} 冊は入力に数えていません: {names}{more}"
+                     "（縦積み・一覧・分けた冊などの**結果**は、もう一度の入力にしません）")
     if excluded.get("subdirs"):
         lines.append(f"  ・サブフォルダが {excluded['subdirs']} 件ありますが、中は見ていません"
                      " ── 中のフォルダを直接指定してください")

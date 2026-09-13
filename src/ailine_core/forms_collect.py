@@ -55,6 +55,12 @@ def money_column_indexes() -> tuple:
 SUSPECT_SHEET = "束の所見"
 SUSPECT_HEADERS = ("種類", "関わる冊", "なぜ怪しいか")
 
+#: 束の要約（画面に出た事実を、ブックだけ開く人のために残す）シート。
+#: ★★ 2026-09-13（2 回目の買い手役・経理）: 「月末、黒い画面をずっと見ているわけではない（翌朝ブック
+#:   だけ開く）」── 読めなかった冊・載せなかった冊・月の混在が画面にしか無く、ブックに 1 セルも残らなかった。
+SUMMARY_SHEET = "束の要約"
+SUMMARY_HEADERS = ("項目", "冊", "内容")
+
 
 def row_for(name: str, records: dict) -> list:
     """1 冊ぶんの一覧の行。★ 何を出すかは `value()` **だけ**が決める。
@@ -111,6 +117,29 @@ def nothing_found(all_records: list) -> list:
     return out
 
 
+def summary_rows(result: dict, all_records: list) -> list:
+    """束の要約シートの行（見出しは SUMMARY_HEADERS）── 画面の報告と同じ事実を同じ順で。"""
+    rows = [["読んだ冊", "", f"{result.get('denominator', 0)} ファイル中 {result.get('collected', 0)} 冊"]]
+    for u in result.get("unreadable") or ():
+        rows.append(["読めなかった冊", u.get("name", ""), u.get("reason", "")])
+    for name in result.get("nothing_found") or ():
+        rows.append(["一覧に載せていない冊", name, "項目が 1 つも取れませんでした（請求書でない冊の可能性）── 理由は『検分』に"])
+    for name in result.get("self_excluded") or ():
+        rows.append(["入力に数えなかった冊", name, "ailine の前回の出力です"])
+    by_month: dict = {}
+    for name, records in all_records:
+        rec = records.get("請求日")
+        d = value(rec) if rec is not None else None
+        key = f"{d.year:04d}年{d.month}月" if hasattr(d, "year") and hasattr(d, "month") else "請求日なし"
+        by_month.setdefault(key, []).append(name)
+    if len([k for k in by_month if k != "請求日なし"]) >= 2:
+        for key in sorted(by_month):
+            rows.append(["請求日の月", "／".join(by_month[key]), f"{key}: {len(by_month[key])} 冊"])
+    sus = result.get("suspicions") or ()
+    rows.append(["束の所見", "", f"{len(sus)} 件（『束の所見』シート）"])
+    return rows
+
+
 def months_of(all_records: list) -> dict:
     """請求日の**月ごとの冊数**（`"2026-09"` → 15）。日付の無い冊は `""` に数える。
 
@@ -136,6 +165,24 @@ def grades_per_file(all_records: list) -> list:
     """
     return [{"file": name, "field": field, "grade": grade(records[field])}
             for name, records in all_records for field in FIELDS if records.get(field) is not None]
+
+
+def tally_by_field(all_records: list) -> dict:
+    """項目ごとの区分の件数 {項目: {区分: n}}（★ 集計の 1 行に溶かさない）。
+
+    ★★ 2026-09-13（2 回目の買い手役・経理）: 「確 20／単 88／無 12」の 1 行では、確 20 が**全部
+      請求額**で「Excel 20 冊は金額の裏が取れ・PDF 3 冊は根拠 1 つ」という一番知りたい事実が
+      消えていた。項目ごとに言えば、買い手は PDF 3 枚だけ電卓を叩けば済む。
+    """
+    out: dict = {}
+    for _name, records in all_records:
+        for field in FIELDS:
+            rec = records.get(field)
+            if rec is None:
+                continue
+            g = grade(rec)
+            out.setdefault(field, {})[g] = out.setdefault(field, {}).get(g, 0) + 1
+    return out
 
 
 def tally(all_records: list) -> dict:

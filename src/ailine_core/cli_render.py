@@ -543,6 +543,11 @@ def render_independent_verify_report(label: str, out_label: str, source_label: s
         lines.append(f"△ {label}: {vacuous}"
                      " ── 合格でも不合格でもありません（測るものがありませんでした）")
         return lines
+    incomplete = result.get("incomplete")
+    if incomplete and not breaks:
+        # ★ 測った範囲に破れは無いが、測れなかった冊が在る ── ✓ の顔をしない。
+        lines.append(f"△ {label}: {incomplete} ── 測った範囲に破れはありません")
+        return lines
     if not breaks:
         lines.append(f"✓ 破れはありません（上の分母で測りました）── {label}")
         return lines
@@ -696,6 +701,10 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
         # ★ 区分の語も意味も field_record が持つ（ここで書き写さない・AST の番人が縛る）。
         got = "／".join(f"{g} {grades[g]}" for g in field_record.GRADE_ORDER if g in grades)
         lines.append(f"項目の区分: {got}（{field_record.grade_legend()}）")
+        # ★ 項目ごとの内訳 ── 「確 20」が全部請求額だと分かる形（2 回目の買い手役・経理）。
+        for field, counts in (result.get("grades_by_field") or {}).items():
+            part = "／".join(f"{g} {counts[g]}" for g in field_record.GRADE_ORDER if g in counts)
+            lines.append(f"  {field}: {part}")
     months = {k: v for k, v in (result.get("months") or {}).items() if k}
     if len(months) >= 2:
         # ★★ 2026-09-13（買い手役・経理）: 9 月のフォルダに 5〜8 月が 4 冊（142,000 円）黙って
@@ -737,6 +746,11 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
     ★ ✓ は証明が通った時だけ ── ここで手書きの ✓ を作らない（`proof.ok` が唯一の根拠）。
     """
     lines = [f"■ ailine split（担当者別に分けて配る）  book={book_label}  out={out_label}"]
+    if result.get("by_note"):
+        lines.append(f"  {result['by_note']}")
+    elif result.get("by_column_name"):
+        # ★ 2 回目の買い手役（会計）: 「実際に使った見出しがどれかを画面が言わない」── 曖昧でなくても言う。
+        lines.append(f"  『{result['by_column_name']}』の列で分けました")
     if result.get("sheet"):
         lines.append(f"シート『{result['sheet']}』の {result.get('header_row')} 行目を"
                      "見出しとして読みました")
@@ -758,6 +772,17 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
         tail = f"／{_fmt_num(amount)}" if amount is not None else ""
         lines.append(f"  ・{value}: {len(part.get('rows') or ())} 行{tail}"
                      f"  → {part.get('file')}")
+    # ★ 残留と上書きは ✓ より**前**に出す（2026-09-13・2 回目の買い手役: 「✓ を読んで安心する向きに
+    #   作用する」── 一番危ない瞬間（添付する直前）の ⚠ が ✓ の後ろに埋もれていた）。
+    if result.get("overwrote_own"):
+        own = result["overwrote_own"]
+        more = f" ほか {len(own) - 3} 冊" if len(own) > 3 else ""
+        lines.append(f"（前回の自分の出力 {len(own)} 冊を上書きしました: " + "／".join(own[:3]) + more + "）")
+    if result.get("stale_own"):
+        lines.append(f"⚠ 配る先に前回の冊が {len(result['stale_own'])} 冊残っています: "
+                     + "／".join(result["stale_own"][:5])
+                     + " ── 今回は書いていません。消すか別のフォルダへ配ってください"
+                     "（このまま zip にすると古い冊が混ざります）")
     unparsed = result.get("unparsed") or []
     if proof.get("ok"):
         amount = proof.get("amount") or {}
@@ -801,15 +826,6 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
     if excluded:
         lines.append(f"（分けない行 {len(excluded)} 行: {_rows_label(excluded)}"
                      " ── 合計・小計・空の行。誰の冊にも入れていません）")
-    if result.get("overwrote_own"):
-        own = result["overwrote_own"]
-        more = f" ほか {len(own) - 3} 冊" if len(own) > 3 else ""
-        lines.append(f"（前回の自分の出力 {len(own)} 冊を上書きしました: " + "／".join(own[:3]) + more + "）")
-    if result.get("stale_own"):
-        lines.append(f"⚠ 配る先に前回の冊が {len(result['stale_own'])} 冊残っています: "
-                     + "／".join(result["stale_own"][:5])
-                     + " ── 今回は書いていません。消すか別のフォルダへ配ってください"
-                     "（このまま zip にすると古い冊が混ざります）")
     if result.get("files_written"):
         lines.append(f"（配った冊 {len(parts)} 件 ＋ 検分 1 件は新しいブックです"
                      " ── 元の表は 1 バイトも変えていません）")

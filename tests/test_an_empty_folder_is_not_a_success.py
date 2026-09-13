@@ -107,3 +107,49 @@ def test_an_unknown_flag_and_a_missing_command_are_explained_in_japanese(tmp_pat
     r = _run(["forms", "x", "--out", "y", "--dry-run"], tmp_path)
     assert r.returncode == 2 and "知らない指定があります: --dry-run" in r.stderr, r.stderr
     assert "ailine ops" in r.stderr, r.stderr
+
+
+# --- 検疫した CSV は入力（2026-09-13・2 回目の買い手役・事務職が離脱した所）------------------
+#
+# ★★ 「CSV が届く → `ailine csv` で xlsx に → `stack`」という毎月の入口で、検疫の出力が「自分の出力」
+#   として全部入力から外れて 0 冊になり、断りが「`ailine csv` で xlsx にできます」と**循環**した。
+#   結果（縦積み・一覧・分けた冊…）は二重計上を防ぐため外す。検疫は入力への変換なので外さない。
+
+
+def _quarantined(tmp_path, name, rows):
+    src = tmp_path / f"{name}.csv"
+    src.write_text("\n".join(",".join(map(str, r)) for r in rows) + "\n", encoding="utf-8-sig")
+    r = _run(["csv", str(src)], tmp_path)
+    assert r.returncode == 0, r.stdout
+    out = tmp_path / f"{name}.xlsx"
+    assert out.exists(), r.stdout
+    return out
+
+
+def test_books_made_by_ailine_csv_are_inputs_not_outputs(tmp_path):
+    folder = tmp_path / "受領"
+    folder.mkdir()
+    for name in ("4月", "5月"):
+        book = _quarantined(tmp_path, name, [["商品", "売上"], ["a", 100], ["b", 200]])
+        book.replace(folder / book.name)
+    r = _run(["stack", str(folder), "--out", str(tmp_path / "縦積み.xlsx")], tmp_path)
+    assert r.returncode == 0, r.stdout
+    assert "2 ファイル中 2 積んだ" in r.stdout, r.stdout
+    assert "1 冊もありません" not in r.stdout
+
+
+def test_a_folder_of_ailine_results_names_them_instead_of_circular_advice(tmp_path):
+    """★ 結果しか無いフォルダ ── 「CSV を xlsx に」でなく「この冊は結果なので数えない」と言う。"""
+    folder = tmp_path / "受領"
+    folder.mkdir()
+    (folder / "4月.csv").write_text("商品,売上\na,100\n", encoding="utf-8-sig")
+    r = _run(["csv", str(folder / "4月.csv")], tmp_path)
+    assert r.returncode == 0, r.stdout
+    r = _run(["stack", str(folder), "--out", str(tmp_path / "縦積み.xlsx")], tmp_path)
+    assert r.returncode == 0, r.stdout
+    stale = tmp_path / "受領2"
+    stale.mkdir()
+    (tmp_path / "縦積み.xlsx").replace(stale / "前回の縦積み.xlsx")
+    r = _run(["stack", str(stale), "--out", str(tmp_path / "x.xlsx")], tmp_path)
+    assert r.returncode == MISSING_INPUT_EXIT, (r.returncode, r.stdout)
+    assert "ailine が作った冊 1 冊は入力に数えていません: 前回の縦積み.xlsx" in r.stdout, r.stdout
