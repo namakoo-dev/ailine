@@ -107,6 +107,25 @@ def money_columns(ws, columns, first_row: int = 2) -> int:
     return touched
 
 
+def reading_aids(ws, *, wrap_headers=(), freeze: str = "A2") -> None:
+    """人が**読む**ためのシートの支度 ── 見出しの固定・オートフィルタ・長い文の折り返し。
+
+    ★★ 2026-09-13（買い手役・会計・2 回とも）: 根拠が 1 セル最大 665 字・折り返し無し・列幅 60・
+      フィルタ無し・枠固定無しで、「根拠を読んで判断する」のが売りなのに読む姿勢を自分で作る形だった。
+    ★ 値は 1 文字も変えない（表示の支度だけ）。
+    """
+    from openpyxl.styles import Alignment
+    if ws.max_row < 1:
+        return
+    ws.freeze_panes = freeze
+    ws.auto_filter.ref = ws.dimensions
+    wanted = {str(h) for h in wrap_headers}
+    for col in range(1, (ws.max_column or 0) + 1):
+        if str(ws.cell(row=1, column=col).value) in wanted:
+            for row in range(2, (ws.max_row or 1) + 1):
+                ws.cell(row=row, column=col).alignment = Alignment(wrap_text=True, vertical="top")
+
+
 def bold_row(ws, row_idx: int, num_cols: int) -> None:
     """見出し行を太字に（UX 磨き③・自分のブックなので書式適用可）。"""
     for c in range(1, num_cols + 1):

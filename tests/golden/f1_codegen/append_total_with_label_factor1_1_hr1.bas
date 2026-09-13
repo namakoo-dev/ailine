@@ -13,4 +13,5 @@ Sub Run(oDoc As Object)
     totalRow = lastRow + 1
     oSheet.getCellByPosition(0, totalRow).setString("税込合計")
     oSheet.getCellByPosition(3, totalRow).setFormula("=SUM(" & "D" & 2 & ":INDEX(" & "D" & ":" & "D" & ";ROW()-1))" & "*1.1")
+    oSheet.getCellByPosition(3, totalRow).NumberFormat = oSheet.getCellByPosition(3, totalRow - 1).NumberFormat
 End Sub

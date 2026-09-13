@@ -257,6 +257,7 @@ def _confirm_overwrite_or_gate(a: 'argparse.Namespace', warn_overwrite: 'str | N
 def _console_entry() -> 'int'
 def _count_cf_and_dv(wb) -> 'tuple'
 def _csv_kind_label(cls) -> 'str'
+def _csv_output_edited_since(out: 'Path')
 def _csv_record_label(parsed, raw_idx: 'int', header_offset: 'int') -> 'str'
 def _data_row_count(before: 'dict', sheet: 'str', key_col: 'int') -> 'int'
 class _date_cls(?)

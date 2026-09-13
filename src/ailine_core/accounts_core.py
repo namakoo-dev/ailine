@@ -108,7 +108,9 @@ SHEET_NAME = "候補"
 #: 候補のシートに足す列（今回の行の右へ並べる）。
 OUTPUT_HEADERS = ("候補の科目", "区分", "根拠", "先例の番地")
 REPORT_SHEET = "検分"
-REPORT_HEADERS = ("種類", "行", "件数", "内容")
+#: ★ 「行」は**元ファイルの物理行**（説明行を含む）── 候補シートの行とは説明行の分だけずれる
+#:   （2026-09-13・買い手役・会計）。見出しでそう言う。
+REPORT_HEADERS = ("種類", "元ファイルの行", "件数", "内容")
 
 #: 検分の「種類」。★ `空欄の理由` だけが分母に入る（候補が出なかった**候補行**）──
 #:   `触らない行` は借方が埋まっている／継続行なので、そもそも分母の外（設計 §6.5 の 2）。
@@ -398,6 +400,14 @@ def reason_of(record) -> str:
     return "／".join(dict.fromkeys(parts))
 
 
+def _amount_present(v) -> bool:
+    """借方金額が「在る」か ── 数にして 0 でなければ在る。数に見えない文字（`10,000円`）も在る。"""
+    m = money_value(v)
+    if isinstance(m, (int, float)) and not isinstance(m, bool):
+        return m != 0
+    return bool(form_read.norm(v))
+
+
 def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> AccountsPlan:
     """今回の行（データ行だけ）と過去の行から、候補と名指しを決める（値は作らない）。
 
@@ -436,7 +446,11 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
         amount = cell(values, header_map.get(DEBIT_AMOUNT))
         # ★ 候補を出すのは「借方勘定科目が空 かつ 借方金額が在る」行だけ（設計 §6.2）。
         #   継続行（借方が丸ごと空）と埋まっている行は触らず、番号と理由を控える。
-        if form_read.norm(account) or not form_read.norm(amount):
+        # ★★ 2026-09-13（3 回目の買い手役・会計）: CSV の継続行は借方金額が**文字の '0'** で、
+        #   「在る」と数えて候補行にし、偽の「無」を作っていた（xlsx の数値 0 は触らない行）。
+        #   同じ仕訳が CSV だと 13 行・xlsx だと 12 行 ── 数が入力の形に依っていた。金額の在否は
+        #   `money_value` で数にしてから見る（0 は無い・数に見えない文字は在るとして隠さない）。
+        if form_read.norm(account) or not _amount_present(amount):
             untouched.append((row_num, _why_untouched(values, header_map)))
             continue
         record, cites, hit_count = _record_for(values, header_map, keys_used, index)
@@ -495,7 +509,9 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
             continue
         shown = str(raw).strip()
         found = index[key].get(ident) or []
-        looked.append(f"{key}『{shown}』{'は過去に 1 件もありません' if not found else ''}".rstrip())
+        # ★ 2026-09-13（3 回目の買い手役・会計）: 「貸方取引先『アスクル』は過去に 1 件もありません」が
+        #   帳簿にアスクルが 3 件在るのと矛盾して読めた（借方取引先の列には在る）。**列**の話だと言う。
+        looked.append(f"{key}の列に『{shown}』{'は過去に 1 件もありません' if not found else ''}".rstrip())
         if not found:
             continue
         hit_count += len(found)

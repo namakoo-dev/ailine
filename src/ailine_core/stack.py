@@ -476,6 +476,12 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
 #:   結果（縦積み・一覧・分けた冊…）は二重計上を防ぐため外す。**検疫は入力への変換**なので外さない。
 INPUT_MARKS = frozenset({"ailine csv"})
 
+#: `ailine run` が × で止まった回に残す作業結果の名前（`<stem>.out.xlsx`）。★ 単一ブック経路の .out には
+#: 印が付かない（実測・2026-08-26）ので**名前**で見る。
+#: ★★ 2026-09-13（3 回目の買い手役・事務職の致命）: 前月の `.out.xlsx` が翌月の縦積みに 1 冊として積まれ、
+#:   同じ月が 2 回・Σ 38 → 53（39% 過大）で、verify も「元 53／出力 53」と揃って見せた。
+WORK_RESULT_SUFFIX = ".out.xlsx"
+
 
 def split_own_outputs(candidates):
     """入力候補から **ailine 産の結果**を外し、(残った候補, 外した名前) を返す。
@@ -490,7 +496,9 @@ def split_own_outputs(candidates):
     kept, excluded_names = [], []
     for path in candidates:
         # ★ 判定の入口は `is_own_output` のまま（試験がそこを差し替える）── 種類だけ印で分ける。
-        if is_own_output(path) and own_output_mark(path) not in INPUT_MARKS:
+        if path.name.lower().endswith(WORK_RESULT_SUFFIX):
+            excluded_names.append(path.name)                 # ★ 作業結果（印は無い・名前で見る）
+        elif is_own_output(path) and own_output_mark(path) not in INPUT_MARKS:
             excluded_names.append(path.name)
         else:
             kept.append(path)

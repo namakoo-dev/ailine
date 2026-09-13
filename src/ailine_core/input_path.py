@@ -75,6 +75,11 @@ def explain_unreadable(exc: BaseException, path) -> str:
     name = type(exc).__name__
     suffix = Path(path).suffix.lower()
     old = "（旧形式の .xls）" if suffix == ".xls" else f"（{suffix or '拡張子なし'}）"
+    if suffix == ".csv":
+        # ★ 2026-09-13（3 回目の買い手役・会計）: split が CSV を「保存し直して」と断る一方で、
+        #   同じ道具の `ailine csv` が変換できる ── 自分の入口を案内する。
+        return ("この入口は CSV を直接は受け取りません ── `ailine csv <ファイル>` で xlsx にすると"
+                "（0 落ちを守って・原本は無変更）そのまま渡せます")
     for kind, text in _UNREADABLE:
         if kind == name or kind in str(exc):
             return text.format(old=old)

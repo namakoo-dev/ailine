@@ -12,4 +12,5 @@ Sub Run(oDoc As Object)
     If lastRow < 1 Then Exit Sub
     totalRow = lastRow + 1
     oSheet.getCellByPosition(0, totalRow).setFormula("=SUM(" & "A" & 2 & ":INDEX(" & "A" & ":" & "A" & ";ROW()-1))" & "")
+    oSheet.getCellByPosition(0, totalRow).NumberFormat = oSheet.getCellByPosition(0, totalRow - 1).NumberFormat
 End Sub

@@ -30,7 +30,7 @@
 |---|---|
 | repo 全体 | 2026-08-10 起点・200 commit 超 |
 | 課題期間にやったこと | ① 外部の目による盲検レビュー 5 面 → 出た致命 10 件を全件処置 ② 表の基本操作（行の追加・削除／列の削除／1 セル書換） ③ 評価者が触れる GUI ④ 自分で GUI を触って出た欠陥 13 件の処置（8/31） |
-| 課題期間にやらなかったこと | 新機能の拡張。単一ファイル（<!-- MAIN_FILE_LINES -->18403<!-- /MAIN_FILE_LINES --> 行）の分割は**着手済み** ── 44% を `ailine_core/` へ出し、判定の段は op ごとに割り終えました（理由と残りは「4. 判断・制約・学び」） |
+| 課題期間にやらなかったこと | 新機能の拡張。単一ファイル（<!-- MAIN_FILE_LINES -->18461<!-- /MAIN_FILE_LINES --> 行）の分割は**着手済み** ── 44% を `ailine_core/` へ出し、判定の段は op ごとに割り終えました（理由と残りは「4. 判断・制約・学び」） |
 
 土台が既存であることを踏まえて読んでいただくために、何を今週やったかは
 `git log --since=2026-08-26 --until=2026-09-03 --oneline` で追える形にしてあります（9/3 以降の commit は課題期間の外での継続です）。
@@ -196,7 +196,7 @@ Excel の定型作業を自動化したい。でも既存の AI ツールには 
 |---|---|
 | `ailine scan <フォルダ>` | 中のブックを棚卸しする（書き込みゼロ） |
 | `ailine stack <フォルダ> --out 縦積み.xlsx` | 縦積みして 1 冊にする（出所の列 `元ファイル`／`元行` が付きます） |
-| `ailine forms <フォルダ> --out 一覧.xlsx` | 請求書から項目を集めて一覧にする（読むだけ・PDF も読みます） |
+| `ailine forms <フォルダ> --out 一覧.xlsx` | 請求書から項目を集めて一覧にする（読むだけ・PDF も読みます）── 締めの手順は [docs/月末の締めのやり方.md](docs/月末の締めのやり方.md) |
 | `ailine split <ブック> --by 担当者 --out 配る/` | 一覧を担当者ごとに分けて配る（新ブック N 冊 + 検分） |
 | `ailine accounts <仕訳> --past <過去の仕訳> --out 候補.xlsx` | 経費の勘定科目の候補を過去の仕訳（複数・フォルダも可）から引く（読むだけ・決めるのは人） |
 | `ailine verify <出力> <元>` | 出力の検算だけを独立に再実行する（読むだけ） |
@@ -269,7 +269,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->4293<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
+期待: 全件緑（<!-- TOTAL_TESTS -->4307<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
 ollama）が要るものは `-m "not local"` が自動的に外します。外れた本数は実行結果の
 `deselected` に出ます）。
 ★ 総数は `tests/test_local_test_count.py` が実測と突き合わせています ──
@@ -576,6 +576,11 @@ pip install -e .
 # 2) 文書に適用する土台（別 repo・MIT）
 git clone https://github.com/namakoo-dev/basrun ../basrun
 ```
+
+★ **git を使わない人へ**（2026-09-13・買い手役の初見で「自分ひとりでは起動できない」と言われた所）:
+GitHub のページ右上の「Code → Download ZIP」で取り、展開したフォルダで `pip install -e .` を打つと
+`ailine` と打てるようになります（`pip` は Python に付いています）。月末の締めだけなら LibreOffice も
+ollama も要りません ── 手順は [docs/月末の締めのやり方.md](docs/月末の締めのやり方.md)（A4 1 枚）。
 
 CLI だけ使う場合は、タグを固定して入れることもできます（GUI とデモ検体は付きません）:
 

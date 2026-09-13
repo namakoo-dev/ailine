@@ -235,9 +235,15 @@ VERIFY_HINT_KINDS = ("ailine stack", "ailine extract", "ailine forms", "ailine s
                      "ailine accounts")
 
 
+#: 端末（PowerShell / bash）がそのまま貼ると食う文字 ── 空白のほかに括弧・記号。
+#: ★ 2026-09-13（3 回目の買い手役・会計）: `--amount 金額(円)` が引用なしで案内され、貼ると `円` を
+#:   コマンドとして実行しようとして落ちた。唯一案内している検算の手順が貼れなかった。
+_NEEDS_QUOTE = set(" \u3000()（）&|;<>^$`'")
+
+
 def _quoted(label: str) -> str:
-    """空白を含むパスは引用する（そのまま貼って動く形にする）。"""
-    return f'"{label}"' if " " in label or "\u3000" in label else label
+    """空白や記号を含む引数は引用する（そのまま貼って動く形にする）。"""
+    return f'"{label}"' if any(ch in _NEEDS_QUOTE for ch in label) else label
 
 
 def verify_hint(creator: str, out_label: str, source_label: str, extra: str = "") -> list:
@@ -630,6 +636,10 @@ def render_verify_report(out_label: str, folder_label: str, result: dict) -> lis
             #   「mismatches は非空なのに ⚠ が1行も出ない」黙る不合格を起こさない
             #   （生データを出すので、少なくとも exit 非0 の理由がゼロにはならない）。
             lines.append(f"⚠ 不明な種類の不一致（kind={kind}）: {m}")
+    if not mismatches and not mismatch:
+        # ★ 2026-09-13（買い手役 3 回とも）: 数字が並ぶだけで合否の語が無く、他の画面と違って
+        #   自分で見比べることになっていた。測って破れが無かった時だけ ✓（元と出力の両側から数えた）。
+        lines.append("✓ 一致 ── 行数と Σ を元と出力の両側から数えた結果です")
     return lines
 
 
@@ -715,8 +725,10 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
         lines.append(f"請求日の月が {len(months)} つ混ざっています: {shown}{tail}"
                      "（別の月の請求が入っています ── 締めの対象か確認）")
     blanks = result.get("blanks", 0)
-    if blanks:
-        lines.append(f"空欄 {blanks} 件（理由つき {result.get('blanks_with_reason', 0)} 件）"
+    left_out = result.get("blanks_left_out", 0)
+    if blanks or left_out:
+        tail = (f"＋ 一覧に載せていない冊の {left_out} 項目（検分にだけ）" if left_out else "")
+        lines.append(f"一覧の空欄 {blanks} 件{tail}"
                      "── 理由は『検分』シートに 1 件ずつ出しています")
     sus = result.get("suspicions") or []
     if sus:
@@ -873,6 +885,11 @@ def render_accounts_report(today_label: str, out_label: str, result: dict) -> li
 
     rows = result.get("rows") or {}
     valued = [r for r, v in rows.items() if (v or {}).get("account")]
+    if not rows:
+        # ★ 2026-09-13（3 回目の買い手役・会計）: 借方勘定科目が全部埋まった冊（期間違いの書き出し）で
+        #   「0 行のうち 0 行」exit 0 ── 手掛かりが括弧の中だけだった。主役の 1 行で言う。
+        lines.append("× 候補を出す行がありません ── 借方勘定科目が全部埋まっています"
+                     "（書き出す期間を間違えていませんか。理由は『検分』シートに 1 行ずつ）")
     lines.append(f"候補を出す行 {len(rows)} 行のうち {len(valued)} 行に科目の候補が出ました"
                  f"（触らない行 {len(result.get('untouched') or ())}／"
                  f"過去の行 {result.get('past_rows', 0)}・うち借方が埋まった行 "

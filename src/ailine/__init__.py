@@ -6966,6 +6966,10 @@ def _codegen_append_total(*, op, resolved_args, book_meta, use_formula, headers,
     body += (f'    oSheet.getCellByPosition({col_idx}, totalRow).setFormula('
              f'"=SUM(" & "{col_letter}" & {start_excel_row} & ":INDEX(" & "{col_letter}" & '
              f'":" & "{col_letter}" & ";ROW()-1))" & "{factor_tail}")\n')
+    # ★ 2026-09-13（買い手役 2 回とも）: 合計のセルだけ `General` で、上の #,##0 の列の下に
+    #   `1719200` が来ていた ── 上司に出す紙で一番目が行く 1 マス。表示形式は 1 つ上の行から写す。
+    body += (f'    oSheet.getCellByPosition({col_idx}, totalRow).NumberFormat = '
+             f'oSheet.getCellByPosition({col_idx}, totalRow - 1).NumberFormat\n')
     return wrap(body)
 
 
@@ -16307,6 +16311,31 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
     return 0
 
 
+def _csv_output_edited_since(out: Path):
+    """検疫の前回出力が、書いた後に変えられているか。True=変えられた／False=俺が置いたまま／None=記録なし。
+
+    ★★ 2026-09-13（3 回目の買い手役・事務職の致命）: `9月売上.xlsx` を `run` で育てた後、隣の
+      `9月売上.csv` を指し直したら、同じ CSV から作った前回出力と判定されて**黙って上書き**され、
+      `undo` でも戻らなかった（金額の列が消えた）。同じ原本から作った印が在っても、その後の
+      作業が乗っていれば作り直してよい根拠は無い ── 指紋で見る。
+    """
+    try:
+        target = str(out.resolve())
+        for entry in read_history(max_n=HISTORY_RECALL_MAX):
+            if not isinstance(entry, dict) or entry.get("path") != "csv":
+                continue
+            recorded = entry.get("out")
+            if not (recorded and str(Path(recorded).resolve()) == target):
+                continue
+            stamped = entry.get("out_sha")
+            if stamped is None:
+                return None
+            return stamped != _file_digest(out)
+    except Exception:   # noqa: BLE001 ── 履歴が読めない回は「記録なし」（下で従来どおり）
+        return None
+    return None
+
+
 def _own_csv_output_status(path: Path, source_sha256: str) -> tuple:
     """path が①ailine 産か（mark）②CSV 検疫の自分の前回出力で、かつ元 CSV の sha256 が
        今回と完全一致するか（same_source）を返す（_own_extract_output_status と同じ線・
@@ -16562,6 +16591,8 @@ def cmd_run_csv(a: argparse.Namespace) -> int:
         mark, same_source = _own_csv_output_status(out, evaluation.sha256)
         if not (mark == csv_quarantine.CREATOR_MARK and same_source):
             return _refuse_output_conflict(out, mark)
+        if _csv_output_edited_since(out):
+            return _refuse_edited_output(out)
     write_result, compare_result = _write_csv_output(evaluation, out)
     if not compare_result.ok:
         for ln in _render_csv_transfer_failure(csv_path, out, evaluation, write_result, compare_result):
@@ -16593,6 +16624,9 @@ def _record_csv_conversion_history(csv_path: Path, out_path: Path, ok: bool) -> 
             "error_detail": None,
             "changes": [],
             "out": str(out_path),
+            # ★ 出力の指紋（2026-09-13・3 回目の買い手役の致命）── 次に同じ CSV を指された時、
+            #   この xlsx が**そのあと人や run に変えられていないか**を見分けるため（extract と同じ線）。
+            "out_sha": _file_digest(out_path) if out_path.exists() else None,
             "path": "csv",
             "command": None,
             "postcondition": None,
@@ -16622,6 +16656,9 @@ def _cmd_run_csv_prestage(a: argparse.Namespace) -> int:
         mark, same_source = _own_csv_output_status(out, evaluation.sha256)
         if not (mark == csv_quarantine.CREATOR_MARK and same_source):
             return _refuse_output_conflict(out, mark)
+        if _csv_output_edited_since(out):
+            # ★ 同じ CSV から作った自分の出力でも、そのあと作業が乗っていれば消さない。
+            return _refuse_edited_output(out)
     write_result, compare_result = _write_csv_output(evaluation, out)
     warn_count = len(evaluation.warnings) + len(write_result.removed_control_chars)
     if warn_count or not compare_result.ok:
@@ -16709,13 +16746,27 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
         print(f"× 未対応の文字コード: {a.encoding}（utf-8 / cp932 のみ対応）")
         return 3
 
+    # ★ 2026-09-13（3 回目の買い手役・事務職）: `--sheet` が必須なのにシート名の一覧が出ず、
+    #   4 回当て推量した。1 枚だけならそれを使い、複数なら名前を並べて断る（当てさせない）。
+    try:
+        _names = openpyxl.load_workbook(book_path, read_only=True).sheetnames
+    except Exception as e:   # noqa: BLE001
+        print(f"× {book_path.name}: {input_path.explain_unreadable(e, book_path)}")
+        return 1
+    if not a.sheet:
+        if len(_names) == 1:
+            a.sheet = _names[0]
+            print(f"（シートは 1 枚なので『{a.sheet}』を書き出します）")
+        else:
+            print(f"× どのシートを書き出すか `--sheet` で指してください（ある: {chr(12289).join(_names)}）")
+            return 1
     try:
         grid = csv_export.read_source(book_path, a.sheet)
     except Exception as e:
         print(f"× {book_path.name}: {input_path.explain_unreadable(e, book_path)}")
         return 1
     if grid.sheet_fallback:
-        print(f"× シート『{a.sheet}』がありません")
+        print(f"× シート『{a.sheet}』がありません（ある: {chr(12289).join(_names)}）")
         return 1
 
     out_path, refuse = _export_csv_out_path(a, book_path)
@@ -17128,20 +17179,25 @@ def cmd_forms(a: argparse.Namespace) -> int:
     #   一覧には載せない。検分には 5 項目ぶんの理由が残る・画面では名指しする（分母は動かさない）。
     #   ★ 1 項目でも取れた冊は残す ── 「読めなかった請求書」を「請求書でない」と混ぜない。
     nothing = set(forms_collect.nothing_found(collected))
-    rows = [forms_collect.row_for(name, recs) for name, recs in collected if name not in nothing]
+    listed = [(name, recs) for name, recs in collected if name not in nothing]
+    rows = [forms_collect.row_for(name, recs) for name, recs in listed]
     findings = [r for name, recs in collected for r in forms_collect.findings_for(name, recs)]
     # ★ 束で見て初めて分かる怪しさ（重複・訂正再発行・年の誤り・桁違い…）── 値は作らない、指さすだけ。
     suspicions = forms_collect.suspicions_for(collected)
     result = {"denominator": len(candidates), "collected": len(collected),
-              "rows_written": len(rows), "grades": forms_collect.tally(collected),
-              "grades_by_field": forms_collect.tally_by_field(collected),
-              "blanks": n_blank, "blanks_with_reason": n_reason,
+              # ★★ 2026-09-13（3 回目の買い手役・経理）: 画面の「空欄 16 件」「無 16」が、一覧に載せていない
+              #   冊の 5 項目を含んでいた（一覧の実物は 11）── §13 で一覧から外した時、画面の集計を一緒に
+              #   直していなかった（片配線）。集計は**一覧の実物**（listed）から。載せていない冊は別に言う。
+              "rows_written": len(rows), "grades": forms_collect.tally(listed),
+              "grades_by_field": forms_collect.tally_by_field(listed),
+              "blanks": forms_collect.blanks_have_reasons(listed)[0], "blanks_with_reason": n_reason,
+              "blanks_left_out": n_blank - forms_collect.blanks_have_reasons(listed)[0],
               "unreadable": unreadable, "excluded": excluded,
               "field_grades": forms_collect.grades_per_file(collected),
               # ★ 請求書でない冊の徴候（B7）── 一覧からは外さない・名指しするだけ。
               "nothing_found": forms_collect.nothing_found(collected),
               # ★ 期間外の混入を内訳で言う（疑いにはしない・B 経理の所見）
-              "months": forms_collect.months_of(collected),
+              "months": forms_collect.months_of(listed),
               "self_excluded": self_excluded, "findings": findings,
               "suspicions": suspicions, "file_written": False}
 
@@ -17917,6 +17973,7 @@ def cmd_accounts(a: argparse.Namespace) -> int:
             ws.append(padded + [today_path.name, row_num, acc, grade, why, cite])
         inspection.bold_row(ws, 1, len(out_headers))
         inspection.autosize_columns(ws)
+        inspection.reading_aids(ws, wrap_headers=("根拠",))   # ★ 根拠を読む姿勢を先に作る
 
         ws2 = wb_out.create_sheet(accounts_core.REPORT_SHEET)
         ws2.append(list(accounts_core.REPORT_HEADERS))
@@ -18231,7 +18288,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ec = sub.add_parser("export-csv", help="xlsx のシートを CSV へ書き出す（検疫の逆方向・0落ちを作らない）")
     ec.add_argument("book", help="対象の .xlsx ファイル")
-    ec.add_argument("--sheet", required=True, help="書き出すシート名")
+    ec.add_argument("--sheet", default=None,
+                    help="書き出すシート名（省略すると 1 枚だけのブックはそのシート・複数なら名前を並べて断る）")
     ec.add_argument("--encoding", default=None,
                     help="出力の文字コード（既定 utf-8・BOM付き。会計ソフト向けに cp932 も選べる）")
     ec.add_argument("--out", default=None, help="出力先の .csv（既定 同名 .csv）")
