@@ -42,6 +42,21 @@ def render_code_block(header: str, code: str, step_prefix: str = "") -> list:
 
 # --- 「続けるには以下のいずれかを指定して」再試行案内（忠実度/上書き/自由生成の3ゲート） --
 
+#: 生成した .bas を**出さなかった**ときの 1 行。
+#: ★★ 2026-09-13（買い手役 3 体・4 回）: 毎回 15〜20 行の Basic が画面を埋め、肝心の `✓` が下へ
+#:   押し流されていた（「読めないし読む必要も無いのに画面の半分がこれ」）。★ 既定で畳む。
+#:   ★ 自由生成（AI が直接書いた .bas）は**畳まない** ── y/N を聞く前に人が見る物だから。
+BASIC_HIDDEN = ("（生成した .bas は出していません ── ルール変換（LLM 不使用）で作りました。"
+                "見るなら `--show-basic`。何をしたかは下の「変更点」と検証で確かめられます）")
+
+
+def render_basic_block(header: str, code: str, step_prefix: str = "", show: bool = False) -> list:
+    """生成コードのブロック（`show` なら本体・既定は 1 行の断り）。★ 判断はここ 1 箇所。"""
+    if show:
+        return render_code_block(header, code, step_prefix)
+    return [f"{step_prefix}{BASIC_HIDDEN}"]
+
+
 def render_retry_options(step_prefix: str, options: list) -> list:
     """options: [(flag, 説明), ...]。フラグ列は同ブロック内の最長 flag + 2桁の空白幅で
        右側の説明を揃える（3ゲートとも手書きの揃え幅がこの計算と一致することを実測で
@@ -840,6 +855,10 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
     for row_num, value in result.get("multi", ()) or ():
         lines.append(f"⚠ 複数担当: {row_num} 行目『{value}』── どちらの冊に入れるかは"
                      "表からは決まらないので、どの冊にも入れていません")
+    check = result.get("total_row_check")
+    if check:
+        # ★ 合っていても言う（出ないことを信号にしない）── 会計事務所が締めの根拠に使う 1 行。
+        lines.append(check)
     if unparsed:
         lines.append(f"⚠ 金額が文字の行 {len(unparsed)} 行（{_rows_label(unparsed)}）"
                      "── 和に数えていません（読み替えていません）")

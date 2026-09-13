@@ -16,6 +16,7 @@ _DEFAULTS = dict(
     dry=False, json=False, timeout=180.0, ask=False, copy=False, values=False,
     header_row=None, accept_loss=False, overwrite=False, allow_freeform=False,
     keep_backups=None, sheet=None,   # ★ 挙動変更#2: --sheet（build_parser() に追加）
+    show_basic=False,   # ★ 2026-09-14: .bas は既定で畳む（生成コードを見る試験はこれを立てる）
 )
 
 
@@ -45,6 +46,8 @@ def run_argv(book, task, **overrides):
     argv += ["--temperature", str(cfg["temperature"])]
     if cfg["dry"]:
         argv.append("--dry")
+    if cfg["show_basic"]:
+        argv.append("--show-basic")
     if cfg["json"]:
         argv.append("--json")
     argv += ["--timeout", str(cfg["timeout"])]

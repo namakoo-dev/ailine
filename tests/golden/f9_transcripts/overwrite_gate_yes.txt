@@ -3,26 +3,7 @@
 ■ ailine（DSL 経路）  model=qwen2.5-coder:7b  book=b.xlsx
 解釈: 操作:計算列 演算対象:数量 と 単価 演算子:* 対象列:金額
 ★ 対象列『金額』には既存の値が 2 件あります（上書きします）
-
-─ 生成した .bas（ルール変換・LLM不使用）───────────────
-Option VBASupport 1
-Option Explicit
-
-Sub Run(oDoc As Object)
-    Dim oSheet As Object, lastRow As Long, i As Long
-    oSheet = oDoc.Sheets.getByIndex(0)
-    lastRow = 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
-    If lastRow < 1 Then Exit Sub
-    For i = 1 To lastRow
-        oSheet.getCellByPosition(3, i).setValue(oSheet.getCellByPosition(1, i).getValue() * oSheet.getCellByPosition(2, i).getValue())
-    Next i
-End Sub
-
-──────────────────────────────────────────
+（生成した .bas は出していません ── ルール変換（LLM 不使用）で作りました。見るなら `--show-basic`。何をしたかは下の「変更点」と検証で確かめられます）
 
 変更点:
 ＊セル値変更: Sheet

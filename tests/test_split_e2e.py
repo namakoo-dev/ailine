@@ -337,3 +337,33 @@ def test_the_stale_warning_comes_before_the_check_mark(book, tmp_path):
     warn = next(i for i, ln in enumerate(lines) if ln.startswith("⚠ 配る先に前回の冊"))
     ok = next(i for i, ln in enumerate(lines) if ln.startswith("✓"))
     assert warn < ok, r.stdout
+
+
+# --- 元の表の合計行と明細の和（2026-09-14・会計役の MISSING #3）------------------------------
+#
+# ★★ 合計行は「分けない行」として除外していたが、その値が明細の和と合っているかを言わなかった。
+#   10 月分の一覧に 9 月の合計が持ち越されていても何も出ない ── 静かに壊れる側。
+
+
+def test_the_original_total_row_is_reconciled_on_screen(book, tmp_path):
+    """★ 合っていても言う（締めの根拠に使う 1 行）。"""
+    r = _split(book, tmp_path / "配る", "--amount", "金額")
+    assert r.returncode == 0, r.stdout
+    assert "（元の表の合計行" in r.stdout and "明細の和が一致）" in r.stdout, r.stdout
+
+
+def test_a_stale_total_row_is_named_with_the_difference(book, tmp_path):
+    """★ 元の表の合計が古い（前月の持ち越し）回 ── 差を名指しする。分けた冊は明細のとおり。"""
+    wb = openpyxl.load_workbook(book)
+    ws = wb.active
+    heads = {str(c.value): c.column for c in ws[2]}
+    row = [None] * ws.max_column
+    row[0] = "合計"
+    row[heads["金額"] - 1] = 999999
+    ws.append(row)
+    wb.save(book)
+    wb.close()
+    r = _split(book, tmp_path / "配る", "--amount", "金額")
+    assert r.returncode == 0, r.stdout
+    assert "⚠ 元の表の合計行" in r.stdout and "合いません" in r.stdout, r.stdout
+    assert "分けた冊は明細のとおりです" in r.stdout, r.stdout

@@ -4026,12 +4026,23 @@ def test_check_sort_excludes_non_numeric_rows_and_still_passes(tmp_path):
     assert "3 行を検証" in reason
     assert "数値でない 1 行は対象外" in reason
 
-def test_check_sort_fails_when_all_rows_non_numeric(tmp_path):
+def test_check_sort_of_a_text_column_is_not_a_failure_but_never_claims_the_order(tmp_path):
+    """★ 2026-09-14（買い手役・事務職）: 「取引先の五十音順に並べ替えて」が**必ず** × だった
+    （数値列しか検証できず 0 件 → fail）。事務でいちばん普通の並べ替えができない。
+    ★ だが Python で五十音を決めない（LibreOffice の照合順と食い違う ── 物差しの歪み）。
+      確かめるのは「行が壊れていない」と「同じ値が固まっている」まで。順序は確かめていないと言う。"""
     p = _book(tmp_path, [["商品", "備考"], ["a", "x"], ["b", "y"]])
     status, reason = ailine.check_sort(p, {"col": "備考", "order": "desc"})
-    assert status == "fail"
-    assert "検証対象が0件" in reason
-    assert "数値でない 2 行は対象外" in reason
+    assert status == "warn", (status, reason)
+    assert "並び順そのものは確かめていません" in reason, reason
+    assert "検証対象が0件" not in reason
+
+
+def test_check_sort_still_fails_when_the_column_is_empty(tmp_path):
+    """★ 陰性対照 ── 値が 1 つも無い列は今までどおり fail（空虚な合格を作らない）。"""
+    p = _book(tmp_path, [["商品", "備考"], ["a", None], ["b", None]])
+    status, reason = ailine.check_sort(p, {"col": "備考", "order": "desc"})
+    assert status == "fail" and "検証対象が0件" in reason, (status, reason)
 
 # --- ★ W10f 項目1: check_sort も同型（対象列を式ビューから読むと全行『数値でない』
 #   扱いになる）。SORT は全行をまたぐ検証なので、キャッシュ欠落は部分採点せず fail で
@@ -4300,7 +4311,9 @@ def test_cmd_run_dsl_dry_shows_confirmation_and_code_without_applying(tmp_path, 
     captured = capsys.readouterr()
     assert rc == 0
     assert "解釈: 操作:並べ替え 対象:金額 順:降順" in captured.out
-    assert "Call SortByColumn" in captured.out
+    # ★ 2026-09-14: .bas は既定で畳む（`--show-basic` で出す）── 画面は人が読む物だけ
+    assert "生成した .bas は出していません" in captured.out
+    assert "Call SortByColumn" not in captured.out
     assert '"path": "dsl"' in captured.out
 
 def test_cmd_run_dsl_postcondition_failure_returns_1(tmp_path, monkeypatch, capsys):
@@ -6640,7 +6653,7 @@ def test_cmd_run_dsl_insert_rows_dry_shows_confirm_line(tmp_path, monkeypatch, c
     argv = run_argv(
         book=str(book), task="2行目の前に1行挿入して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=True, copy=False, json=False, timeout=180.0, ask=False, values=False)
+        dry=True, show_basic=True, copy=False, json=False, timeout=180.0, ask=False, values=False)
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0
@@ -6656,7 +6669,7 @@ def test_cmd_run_dsl_pivot_dry_shows_caveat(tmp_path, monkeypatch, capsys):
     argv = run_argv(
         book=str(book), task="部門ごとにピボットテーブルで集計して", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
-        dry=True, copy=False, json=False, timeout=180.0, ask=False, values=False)
+        dry=True, show_basic=True, copy=False, json=False, timeout=180.0, ask=False, values=False)
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 0

@@ -1,6 +1,7 @@
-usage: ailine run [-h] [--model MODEL] [--refs REFS] [--helpers HELPERS]
-                  [--repair REPAIR] [--temperature TEMPERATURE] [--dry]
-                  [--op OP] [--inplace] [--json] [--timeout TIMEOUT] [--ask]
+usage: ailine run [-h] [--show-basic] [--model MODEL] [--refs REFS]
+                  [--helpers HELPERS] [--repair REPAIR]
+                  [--temperature TEMPERATURE] [--dry] [--op OP] [--inplace]
+                  [--json] [--timeout TIMEOUT] [--ask]
                   [--keep-backups KEEP_BACKUPS] [--values]
                   [--header-row HEADER_ROW] [--sheet SHEET] [--accept-loss]
                   [--copy] [--overwrite] [--allow-freeform]
@@ -13,6 +14,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --show-basic          生成した .bas（LibreOffice Basic）を画面に出す（既定は出さない）
   --model MODEL         ollama モデル (既定 qwen2.5-coder:7b)
   --refs REFS           参照ライブラリのディレクトリ (既定 ./refs)
   --helpers HELPERS     検証済みヘルパのディレクトリ (既定 ./helpers)

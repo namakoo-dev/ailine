@@ -118,7 +118,7 @@ from ailine_core.dsl_step import (   # ★ C7: 単発 DSL / 複合計画の DSL 
 )
 from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手書きしていた表示の純関数化
     render_excluded_lines,
-    render_code_block, render_retry_options, render_aborted, render_run_header,
+    render_code_block, render_basic_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_legacy_note,
     render_restore_done, render_vocab_add_result, render_vocab_listing,
     render_alias_listing,   # ★ W10 便A: `ailine alias list`
@@ -13850,7 +13850,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
     # ★ W8a 項目5: 「決定論」はユーザー向け文字列から排除（内部名・関数名は不変）。
-    for ln in render_code_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
+    for ln in render_basic_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code,
+                                 show=bool(getattr(a, "show_basic", False))):
         print(ln)
 
     # ★ 段1: interpretation/provenance は1箇所（build_interpretation）で組む
@@ -14053,7 +14054,8 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
 
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
-    for ln in render_code_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
+    for ln in render_basic_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code,
+                                 show=bool(getattr(a, "show_basic", False))):
         print(ln)
 
     interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
@@ -14222,7 +14224,8 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
 
     code = codegen_dsl(op, resolved, book_meta, use_formula=use_formula)
     (workdir / "dsl_attempt.bas").write_text(code, encoding="utf-8")
-    for ln in render_code_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code):
+    for ln in render_basic_block("\n─ 生成した .bas（ルール変換・LLM不使用）───────────────", code,
+                                 show=bool(getattr(a, "show_basic", False))):
         print(ln)
 
     interpretation, provenance = build_interpretation(op, resolved, inferred, confirm.verdicts, [book.name])
@@ -17676,7 +17679,9 @@ def cmd_split(a: argparse.Namespace) -> int:
                    "blank": list(plan.blank), "excluded": list(plan.excluded),
                    "multi": [[r, v] for r, v in plan.multi],
                    "lookalike": [list(p) for p in plan.lookalike],
-                   "unparsed": list(plan.unparsed)})
+                   "unparsed": list(plan.unparsed),
+                   # ★ 元の表の合計行と明細の和の突き合わせ（器は split_people ── 1 箇所）
+                   "total_row_check": split_people.total_row_check(plan)})
     if plan.refused:
         # ★ 決められないなら分けない（D1）── 1 冊も作らず、両方を名指しして人に返す。
         emit()
@@ -18313,6 +18318,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("run", help="タスクを生成・適用・検証する")
     r.add_argument("book", help="対象の文書 (.xlsx) またはフォルダ")
+    r.add_argument("--show-basic", action="store_true",
+                   help="生成した .bas（LibreOffice Basic）を画面に出す（既定は出さない）")
     # ★ M3 P: task は nargs="+" で受ける（2冊照合 `ailine run A.xlsx B.xlsx "依頼"` の
     #   2冊目パス+依頼文を同じ位置引数列で拾うため）。1冊経路では従来どおり要素数1の
     #   リストになり、_cmd_run_body の冒頭で通常の文字列へ畳み戻す（下流は全部 str のまま）。

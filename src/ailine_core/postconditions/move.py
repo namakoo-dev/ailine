@@ -179,6 +179,14 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
         return "fail", (f"並び順の検証対象に式はあるがキャッシュ値が無く検証できない行が "
                          f"{uncached} 件あり、順序を検証できません"
                          f"（LibreOffice を通していない可能性）{note}")
+    if len(vals) == 0 and len([v for v in raw_vals if str(v or "").strip()]) >= 2:
+        # ★★ 2026-09-14（買い手役・事務職の「重い1」）: 「取引先の五十音順に並べ替えて」が**必ず** ×
+        #   だった（数値列しか検証できず、文字列は全部『対象外』→ 0 件 → fail）。事務でいちばん普通の
+        #   並べ替えができない。★ だが **Python で五十音を決めない** ── LibreOffice の照合順と
+        #   Python の既定（コードポイント順）は違い、濁点・半角・漢字で食い違う（物差しの歪み）。
+        #   確かめられるのは「行が壊れていない」と「同じ値が固まっている」まで ── そこまでを確かめ、
+        #   **順序そのものは確かめていないと言う**（✓ は名乗らない・△ で通す）。
+        return _text_sort_verdict(source_book, after_rows, raw_vals, args, header_row, phys_cols)
     if len(vals) == 0:
         return "fail", _ZERO_TARGET_REASON + note
     if len(vals) == 1:
@@ -200,6 +208,37 @@ def check_sort(path: Path, args: dict, header_row: int = 1, use_formula: bool = 
     if torn:
         return "fail", torn
     return "pass", f"{len(vals)} 行を検証（{'昇順' if asc else '降順'}）{note}"
+
+def _text_sort_verdict(source_book, after_rows: list, raw_vals: list, args: dict,
+                       header_row: int, phys_cols: int) -> tuple:
+    """文字の列を並べ替えた回の判定（★ 順序は LibreOffice に任せ、確かめた分だけを言う）。
+
+    確かめるのは 2 つ:
+      ① 行そのものが壊れていない（前後の多重集合が一致・`_sort_rows_lost_their_identity`）
+      ② 同じ値が**固まっている**（並べ替えが走ったなら、等しい値は隣り合う）
+    ★ ①が破れたら fail（行の付け替えは最悪の事故）。②が破れたら fail（走っていない徴候）。
+    ★ 両方通っても **pass にしない** ── 順序（五十音・辞書順）は確かめていないから。
+    """
+    torn = _sort_rows_lost_their_identity(source_book, after_rows, args, header_row, phys_cols)
+    if torn:
+        return "fail", torn
+    texts = [str(v).strip() for v in raw_vals if str(v or "").strip()]
+    seen, last, scattered = set(), None, []
+    for t in texts:
+        if t != last:
+            if t in seen:
+                scattered.append(t)
+            seen.add(t)
+            last = t
+    if scattered:
+        return "fail", (f"列『{args['col']}』は並べ替えた後も同じ値が離れて現れます"
+                        f"（{'／'.join(f'『{s}』' for s in scattered[:3])}）"
+                        "── 並べ替えが走っていない可能性があります")
+    checked = "行の中身は 1 行も変わっていません" if source_book else "同じ値は固まっています"
+    return "warn", (f"文字の列『{args['col']}』を並べ替えました（{len(texts)} 行）。{checked}。"
+                    "★ 並び順そのものは確かめていません ── 五十音や辞書の順は LibreOffice の"
+                    "照合に任せており、こちらで同じ順を作ると食い違うためです（数字の列なら順序まで確かめます）")
+
 
 def _sort_rows_lost_their_identity(source_book, after_rows: list, args: dict,
                                     header_row: int, phys_cols: int) -> str | None:

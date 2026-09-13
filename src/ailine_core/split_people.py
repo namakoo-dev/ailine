@@ -59,6 +59,7 @@ class SplitPlan:
     lookalike:  [[表記a, 表記b], ...] norm が同じになる別の文字（併合はしない・D4）
     refused:    分けなかった理由（担当者の見出しが 0 個 or 2 個以上・D1）。None なら分けた
     unparsed:   金額が文字（`10,000円`）で数えられなかった行（読み替えない・D5）
+    total_rows: [(行番号, 金額)] 元の表の合計行で金額が読めたもの（★ 明細の和と突き合わせる材料）
     whole_rows / whole_amount: 証明の『全体』（原本から数えた分母・D5）
     """
     header_row: int
@@ -76,6 +77,7 @@ class SplitPlan:
     lookalike: list = field(default_factory=list)
     refused: str | None = None
     unparsed: list = field(default_factory=list)
+    total_rows: list = field(default_factory=list)
     by_note: str = ""            #: 列の選び方を人に言う 1 行（完全一致で絞った時だけ）
     blank_amount: float = 0.0
     multi_amount: float = 0.0
@@ -308,7 +310,7 @@ def plan_split(grid_rows, header_row: int, by_header, amount_header=None, *,
     parts: dict = {}
     part_amounts: dict = {}
     blank, blank_notes, multi = [], [], []
-    excluded, excluded_notes, unparsed = [], [], []
+    excluded, excluded_notes, unparsed, total_rows = [], [], [], []
     whole_rows = 0
     whole_amount = 0.0
     blank_amount = 0.0
@@ -340,6 +342,12 @@ def plan_split(grid_rows, header_row: int, by_header, amount_header=None, *,
         if word:
             excluded.append(row_num)
             excluded_notes.append((row_num, word))
+            # ★★ 2026-09-13（3 回目の買い手役・会計の MISSING #3「事務所がいちばん欲しい 1 行」）:
+            #   元の表の合計行は黙って除外するだけで、**その値が明細の和と合っているか**を言わなかった。
+            #   10 月分の冊に 9 月の合計 111,880 が持ち越されていても何も出ない ── 静かに壊れる側。
+            #   ここでは数を控えるだけ（比べるのは報告の側・器は 1 箇所）。
+            if counted:
+                total_rows.append((row_num, float(amount_value)))
             continue
         if len(filled) == 1:
             # ★ 分けない行②（D2『備考』・『担当者列が空で金額列だけが在る行』）: 明細の行は
@@ -385,8 +393,34 @@ def plan_split(grid_rows, header_row: int, by_header, amount_header=None, *,
                      blank=blank, blank_notes=blank_notes, multi=multi,
                      excluded=excluded, excluded_notes=excluded_notes,
                      lookalike=lookalike_pairs(parts), unparsed=unparsed, by_note=by_note,
+                     total_rows=total_rows,
                      blank_amount=blank_amount, multi_amount=multi_amount,
                      whole_rows=whole_rows, whole_amount=whole_amount)
+
+
+def total_row_check(plan) -> str | None:
+    """元の表の合計行と、明細の和（配った＋空欄＋複数担当）を突き合わせる 1 行。
+
+    戻り値: 人に見せる 1 行（合っていても言う）／合計行が無い・金額を数えていないなら None。
+    ★★ 2026-09-13（3 回目の買い手役・会計）: 「10 月分の合計行は 111,880（9 月の持ち越し）で和は 94,720。
+      黙って除外されるだけで『合計行の値が合いません』とは言われない ── 会計事務所がいちばん欲しい 1 行」。
+    ★ 破れ（exit 5）にはしない ── 分けた結果は正しく、狂っているのは**元の表**。名指しして人に返す。
+    ★ 金額が文字で数えられなかった行が在る回は「合わない」を言わない（分母が欠けている・出ない
+      ことを信号にしない）。
+    """
+    if not plan.total_rows or plan.amount_column is None:
+        return None
+    if plan.unparsed:
+        rows = "／".join(str(r) for r, _v in plan.total_rows)
+        return (f"（元の表の合計行 {rows} 行目とは突き合わせていません ── 金額が文字の行が"
+                f"{len(plan.unparsed)} 行あって明細の和が欠けています）")
+    total = sum(v for _r, v in plan.total_rows)
+    rows = "／".join(str(r) for r, _v in plan.total_rows)
+    if abs(total - plan.whole_amount) <= total_row.TOLERANCE:
+        return f"（元の表の合計行 {rows} 行目（{total:,.0f}）と明細の和が一致）"
+    return (f"⚠ 元の表の合計行 {rows} 行目（{total:,.0f}）が明細の和（{plan.whole_amount:,.0f}）と"
+            f"合いません（差 {total - plan.whole_amount:,.0f}）── 元の表の合計が古いか、"
+            "明細に足し漏れがあります。分けた冊は明細のとおりです")
 
 
 def _first_text(values: list) -> str:
