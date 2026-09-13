@@ -17022,7 +17022,7 @@ def cmd_demo(a: argparse.Namespace) -> int:
         if all(any(name.startswith(p) for p in MACHINE_CHECKS) for name, _h in missing):
             print()
             print(f"{MACHINE_FREE_NOTE}:")
-            print(f"  ailine forms <請求書のフォルダ> --out 一覧.xlsx")
+            print("  ailine forms <請求書のフォルダ> --out 一覧.xlsx")
             print("  → 出来た一覧は `ailine verify <一覧.xlsx> <フォルダ>` で確かめられます")
         return 0
     print("次にこれを打ってみてください:")
