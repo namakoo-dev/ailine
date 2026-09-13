@@ -644,3 +644,14 @@ def test_verify_never_fails_silently(tmp_path):
     if v.returncode != 0:
         assert "⚠" in v.stdout and ("合計" in v.stdout), \
             f"exit {v.returncode} なのに理由が 1 行も無い（黙る不合格）:\n{v.stdout}"
+
+
+def test_overwriting_its_own_previous_output_is_said_out_loud(tmp_path):
+    """★ 2026-09-13（買い手役 2/3）: 前回の自分の出力は無言で作り直されていた。"""
+    folder = tmp_path / "受領"
+    _book(folder / "a.xlsx", ["商品", "金額"], [["a", 100]])
+    _book(folder / "b.xlsx", ["商品", "金額"], [["b", 200]])
+    out = tmp_path / "縦積み.xlsx"
+    assert "上書きします" not in _stack(folder, out).stdout
+    r = _stack(folder, out)
+    assert r.returncode == 0 and "前回の自分の出力 縦積み.xlsx を上書きします" in r.stdout, r.stdout

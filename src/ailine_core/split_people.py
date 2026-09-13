@@ -251,7 +251,8 @@ def _refusal(headers: list, wanted, hits: list, what: str) -> str:
                 f"見た見出し: {seen}")
     names = "／".join(f"『{headers[i - 1]}』" for i in hits)
     return (f"{what}の見出し『{wanted}』に当たる列が {len(hits)} つあります（{names}）"
-            f"── どちらで分けるかは表からは決まりません。見出しの文字で 1 つに指してください")
+            f"── どちらで分けるかは表からは決まりません。見出しの文字で 1 つに指してください"
+            "（両方とも同じ文字なら、元の表で片方の見出しを変えてから ── 列番号では指せません）")
 
 
 def plan_split(grid_rows, header_row: int, by_header, amount_header=None) -> SplitPlan:

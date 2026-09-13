@@ -559,3 +559,11 @@ def test_the_ordinary_band_is_unchanged(tmp_path):
     assert _forms(folder, out).returncode == 0
     amount, reasons = _amount_and_grade(out)
     assert amount == 110000 and reasons == [], (amount, reasons)
+
+
+def test_overwriting_its_own_previous_output_is_said_out_loud(folder, tmp_path):
+    """★ 2026-09-13（買い手役 2/3）: 2 回目の実行が 1 回目と一字も変わらず、上書きしたとも言わなかった。"""
+    out = tmp_path / "一覧.xlsx"
+    assert "上書きします" not in _forms(folder, out).stdout
+    r = _forms(folder, out)
+    assert r.returncode == 0 and "前回の自分の出力 一覧.xlsx を上書きします" in r.stdout, r.stdout

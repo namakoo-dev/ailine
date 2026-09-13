@@ -176,6 +176,9 @@ def test_two_matching_headers_refuse_and_write_nothing(tmp_path):
     r = _split(book, out, by="担当")
     assert r.returncode == 4, f"分けてしまった: {r.stdout}"
     assert "担当" in r.stdout and "営業担当" in r.stdout, r.stdout
+    # ★ 2026-09-13（買い手役・会計）: 見出しが**両方とも同じ文字**だと「見出しの文字で 1 つに」は
+    #   従えない指示 ── 元の表で片方の見出しを変える、まで言う。
+    assert "元の表で片方の見出しを変えて" in r.stdout, r.stdout
     assert not out.exists() or not list(out.glob("*.xlsx")), "1 冊も作らないはず"
 
 
@@ -286,3 +289,35 @@ def test_the_proof_is_counted_from_the_written_books_not_from_memory(book, tmp_p
     assert ailine.cmd_split(args) == 5, "★ 読み戻しが嘘をついても通った（記憶で数えている）"
     assert not out.exists() or not list(out.glob("*.xlsx")), \
         "★ 証明できていないのに配った"
+
+
+# --- 配る先の残留と、上書きした冊（2026-09-13・買い手役の初見・会計）-----------------------
+#
+# ★★ 名前のゆれを直して同じ配る先へ配り直したら、前回の冊が残ったまま画面は ✓ と「配った冊 1 件」。
+#   zip で送ると本人は 3 冊（古い切り方 2 冊）を受け取る。split の ✓ は「自分が書いた冊」の
+#   保証で「配るフォルダ」の保証ではない ── 残留も上書きも名指しする。
+
+
+def test_a_stale_book_left_in_the_folder_is_named(book, tmp_path):
+    # ★ 前回の自分の冊は、本物の split の出力を別名で置く（印の中身を書き写さない）
+    first = tmp_path / "前回"
+    assert _split(book, first).returncode == 0
+    out = tmp_path / "配る"
+    out.mkdir()
+    import shutil
+    shutil.copy2(next(p for p in first.glob("*.xlsx") if not p.name.startswith("_")),
+                 out / "退職者.xlsx")
+    r = _split(book, out)
+    assert r.returncode == 0, r.stdout
+    assert "⚠ 配る先に前回の冊が 1 冊残っています: 退職者.xlsx" in r.stdout, r.stdout
+    assert "zip" in r.stdout, r.stdout
+
+
+def test_overwriting_its_own_previous_books_is_said_out_loud(book, tmp_path):
+    out = tmp_path / "配る"
+    first = _split(book, out)
+    assert first.returncode == 0 and "上書きしました" not in first.stdout, first.stdout
+    r = _split(book, out)
+    assert r.returncode == 0, r.stdout
+    assert "前回の自分の出力" in r.stdout and "上書きしました" in r.stdout, r.stdout
+    assert "残っています" not in r.stdout, r.stdout          # ★ 全部書き直したなら残留は無い

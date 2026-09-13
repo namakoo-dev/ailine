@@ -129,6 +129,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_independent_verify_report,   # ★ ③: 後からの独立検算の報告（split / forms 共通）
     render_stack_report, render_verify_report,   # ★ M1書き: `ailine stack` / `ailine verify`
     render_forms_report,   # ★ 帳票の一覧: `ailine forms`
+    OVERWRITE_OWN,   # ★ 自分の前回出力を上書きするときの 1 行（無言にしない）
     render_accounts_report,   # ★ 需要③: `ailine accounts`（科目の候補）
     render_split_report,   # ★ 担当者別に分けて配る: `ailine split`
     render_folder_routes,
@@ -15440,6 +15441,9 @@ def cmd_scan(a: argparse.Namespace) -> int:
     # ★ 2026-08-24 第三波 S1: scan にだけこの配線が無く、自分の出力（2冊照合の結果等）を
     #   棚卸しの分母に数えて「取れなかった」と ⚠ で名指ししていた（stack/run には在った）。
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
+    if not candidates:
+        print(multifile.nothing_to_read(folder, excluded, what="棚卸しできるブック（.xlsx）"))
+        return EXIT_ENVIRONMENT
     base_path, base_wb = multifile.open_base_workbook(candidates)
     base_headers, base_sheet, header_row, value_col_name = [], None, 1, None
     if base_wb is not None:
@@ -17077,6 +17081,9 @@ def cmd_forms(a: argparse.Namespace) -> int:
     candidates, excluded = multifile.classify_folder_contents(folder, also=(filetypes.PDF_SUFFIX,))
     # ★ 自分の出力を入力に数えない（V6・stack と同じ判定を使う ── 書き写さない）。
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
+    if not candidates:
+        print(multifile.nothing_to_read(folder, excluded, what="請求書（.xlsx / .pdf）"))
+        return EXIT_ENVIRONMENT
 
     collected, unreadable = [], []
     for p in candidates:
@@ -17179,6 +17186,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
         # ★ 関所（stack と同じ線）: 人のファイル / 別コマンドの出力は名指しで止める。
         if out.exists():
             mark = multifile_stack.own_output_mark(out)
+            if mark == forms_collect.CREATOR_MARK:
+                print(OVERWRITE_OWN.format(name=out.name))
             if mark is not None and mark != forms_collect.CREATOR_MARK:
                 if not getattr(a, "overwrite", False):
                     print(f"⚠ 出力先は ailine の別のコマンドの出力です: {out}")
@@ -17219,6 +17228,9 @@ def cmd_stack(a: argparse.Namespace) -> int:
     #   入力から除外 + 開示。判定は marks 集合（is_own_output）── 印が違っても ailine 産なら除外。
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     denominator = len(candidates)
+    if not candidates:
+        print(multifile.nothing_to_read(folder, excluded, what="積めるブック（.xlsx）"))
+        return EXIT_ENVIRONMENT
 
     base_path, base_wb = multifile.open_base_workbook(candidates)
     if base_path is None:
@@ -17421,6 +17433,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
             mark = multifile_stack.own_output_mark(out)
             if mark == multifile_stack.CREATOR_MARK:
                 rebuilt_own_output = True
+                print(OVERWRITE_OWN.format(name=out.name))
             elif mark is not None:
                 if not getattr(a, "overwrite", False):
                     print(f"⚠ 出力先は ailine の別のコマンドの出力です: {out}")
@@ -17497,7 +17510,8 @@ def cmd_split(a: argparse.Namespace) -> int:
     result = {"book": str(book), "out": str(out_dir), "by": a.by, "amount": amount_header,
               "sheet": None, "header_row": None, "other_sheets": [], "refused": None,
               "parts": {}, "blank": [], "multi": [], "excluded": [], "lookalike": [],
-              "unparsed": [], "proof": {}, "files_written": []}
+              "unparsed": [], "proof": {}, "files_written": [],
+              "overwrote_own": [], "stale_own": []}
 
     def emit() -> None:
         """人向け／機械可読の**唯一の出口**（どの経路も同じ事実を出す）。"""
@@ -17691,9 +17705,16 @@ def cmd_split(a: argparse.Namespace) -> int:
                           "承知の上なら --overwrite を付けて実行してください）")
                 return 7
         out_dir.mkdir(parents=True, exist_ok=True)
+        # ★ 2026-09-13（買い手役の初見・会計）: 配り直すと前回の冊が残り、画面は ✓ と「配った冊 1 件」
+        #   だけだった ── zip で送ると本人は 3 冊（古い切り方 2 冊）を受け取る。split の ✓ は
+        #   「自分が書いた冊」の保証で「配るフォルダ」の保証ではない ── 残留は名指しする。
+        before = {p.name for p in out_dir.glob("*" + suffix)
+                  if multifile_stack.own_output_mark(p) == split_people.CREATOR_MARK}
         for tmp in list(written.values()) + [report_tmp]:
             shutil.copy2(tmp, out_dir / tmp.name)
             result["files_written"].append(tmp.name)
+        result["overwrote_own"] = sorted(before & set(result["files_written"]))
+        result["stale_own"] = sorted(before - set(result["files_written"]))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -17782,7 +17803,9 @@ def cmd_accounts(a: argparse.Namespace) -> int:
     if same:
         # ★ 自己先例は『裏が取れた』の最短路（設計 §6.3）── 同じファイルなら断る。
         result["refused"] = (f"今回の仕訳と過去の仕訳が同じファイルです（{'／'.join(same)}）"
-                             "── 自分を先例に数えると、どの行も裏が取れたことになります")
+                             "── 自分を先例に数えると、どの行も裏が取れたことになります"
+                             "（過去のフォルダに今回のファイルが入っているなら、今回のファイルを"
+                             "フォルダの外に出すか、過去の冊を 1 つずつ --past に並べてください）")
         emit()
         return 4
 
@@ -17901,6 +17924,8 @@ def cmd_accounts(a: argparse.Namespace) -> int:
         #   名指しで止める（--overwrite を承知で付けた時だけ通す）。
         if out.exists():
             mark = multifile_stack.own_output_mark(out)
+            if mark == accounts_core.CREATOR_MARK:
+                print(OVERWRITE_OWN.format(name=out.name))
             if mark is not None and mark != accounts_core.CREATOR_MARK:
                 if not getattr(a, "overwrite", False):
                     print(f"⚠ 出力先は ailine の別のコマンドの出力です: {out}")
@@ -18079,8 +18104,31 @@ def multi_file_routes() -> set:
     return {name for name, kind in ROUTE_KIND.items() if kind == "multi"}
 
 
+#: argparse の英語を人の言葉に（★ 2026-09-13・買い手役 2/3: 「引数を間違えた時だけ英語」）。
+#:   終了コードは 2 のまま（表の契約）。入口（サブパーサ）にも同じ型が使われる（parser_class の既定）。
+_ARG_JA = (("the following arguments are required:", "必要な指定が足りません:"),
+           ("unrecognized arguments:", "知らない指定があります:"),
+           ("invalid choice:", "無い入口です:"),
+           ("expected one argument", "値が要ります"),
+           ("expected at least one argument", "値が 1 つ以上要ります"),
+           ("argument ", "指定 "))
+_DEST_JA = {"book": "<ファイル>", "file": "<ファイル>", "folder": "<フォルダ>", "task": "<依頼文>",
+            "cmd": "<入口>", "out": "<出力先>", "sources": "<元>"}
+
+
+class _JapaneseArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        text = message
+        for en, ja in _ARG_JA:
+            text = text.replace(en, ja)
+        for dest, ja in _DEST_JA.items():
+            text = re.sub(rf"(?<![\w-]){dest}(?![\w-])", ja, text)
+        self.print_usage(sys.stderr)
+        self.exit(2, f"× {text}\n  → 使い方は `{self.prog} -h`・入口の一覧は `ailine ops`\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="ailine", description="自然言語 → LibreOffice Basic → 適用 → 検証")
+    ap = _JapaneseArgumentParser(prog="ailine", description="自然言語 → LibreOffice Basic → 適用 → 検証")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="タスクを生成・適用・検証する")

@@ -227,6 +227,10 @@ def render_alias_listing(aliases: dict, order: list, aliases_file: Path) -> list
 #: 黙って切ると「これで全部」に読める（2026-09-13・買い手の初回体験の B3）。
 SUSPECT_SHOWN = 8
 
+#: 自分の前回出力を上書きするときの 1 行（★ 無言にしない ── 買い手役 2/3 が「上書きしたとも
+#: 言わない」と言った。人のファイルは関所で止まる・自分の出力は通るが、通ることは言う）。
+OVERWRITE_OWN = "（前回の自分の出力 {name} を上書きします）"
+
 VERIFY_HINT_KINDS = ("ailine stack", "ailine extract", "ailine forms", "ailine split",
                      "ailine accounts")
 
@@ -788,6 +792,15 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
     if excluded:
         lines.append(f"（分けない行 {len(excluded)} 行: {_rows_label(excluded)}"
                      " ── 合計・小計・空の行。誰の冊にも入れていません）")
+    if result.get("overwrote_own"):
+        own = result["overwrote_own"]
+        more = f" ほか {len(own) - 3} 冊" if len(own) > 3 else ""
+        lines.append(f"（前回の自分の出力 {len(own)} 冊を上書きしました: " + "／".join(own[:3]) + more + "）")
+    if result.get("stale_own"):
+        lines.append(f"⚠ 配る先に前回の冊が {len(result['stale_own'])} 冊残っています: "
+                     + "／".join(result["stale_own"][:5])
+                     + " ── 今回は書いていません。消すか別のフォルダへ配ってください"
+                     "（このまま zip にすると古い冊が混ざります）")
     if result.get("files_written"):
         lines.append(f"（配った冊 {len(parts)} 件 ＋ 検分 1 件は新しいブックです"
                      " ── 元の表は 1 バイトも変えていません）")

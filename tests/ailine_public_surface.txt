@@ -59,6 +59,7 @@ value OP_SCHEMA
 value OP_SUBJECT_SLOTS
 value OP_WRITE_TARGET
 value OUT_OF_SCOPE_TERMS
+value OVERWRITE_OWN
 value PIVOT_CAVEAT
 value PLAN_CHAIN_CONSUMER_OPS
 value PLAN_CHAIN_WARNING_OPS
@@ -104,6 +105,7 @@ value _ANCHOR_BEFORE
 value _ANCHOR_BOTTOM
 value _ANCHOR_TOP
 value _APPEND_TOTAL_FORMULA_RE
+value _ARG_JA
 value _BACKUP_TS_RE
 value _BACKUP_TS_SEQ_RE
 value _BASIC_COMMENT_LINE_RE
@@ -123,6 +125,7 @@ value _COL_TAIL
 value _CONFIRM_FIELDS
 value _CSV_REASON_LABELS
 class _CsvEvaluation(error: 'str' = None, sha256: 'str' = None, encoding: 'object' = None, parsed: 'object' = None, classifications: 'list' = None, warnings: 'list' = None) -> None
+value _DEST_JA
 value _DOCTOR_BUSINESS_NOTES
 value _ENDSUB_RE
 value _EXCEPT_WORDS
@@ -142,6 +145,7 @@ value _HEADER_WORD_RE
 value _HELPER_CALL_RE
 value _HELPER_SUB_DECL_RE
 value _HELPER_SWEEP_THRESHOLD
+class _JapaneseArgumentParser(prog=None, usage=None, description=None, epilog=None, parents=[], formatter_class=<class 'argparse.HelpFormatter'>, prefix_chars='-', fromfile_prefix_chars=None, argument_default=None, conflict_handler='error', add_help=True, allow_abbrev=True, exit_on_error=True)
 value _LEFT_WORDS
 value _MOVED_ROWS_WHY
 value _NEW_COL_MAKE_TAILS

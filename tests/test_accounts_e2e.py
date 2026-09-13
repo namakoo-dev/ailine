@@ -244,6 +244,8 @@ def test_the_same_file_on_both_sides_is_refused(books, tmp_path):
     out = tmp_path / "候補.xlsx"
     r = _accounts(today, today, out)
     assert r.returncode == 4, f"同じファイルを先例にした: {r.stdout}"
+    # ★ 2026-09-13（買い手役・会計）: 仕訳を 1 つのフォルダに入れる事務所は必ず踏む ── 次の一手を言う。
+    assert "今回のファイルをフォルダの外に出す" in r.stdout, r.stdout
     assert today.name in r.stdout
     assert not out.exists(), "断ったのに冊を作っている"
 
@@ -356,3 +358,12 @@ def test_the_amount_columns_are_written_as_numbers_not_text(books, tmp_path):
     numbers = [v for v in cells if isinstance(v, (int, float))]
     assert len(numbers) >= 3 and all(not isinstance(v, str) for v in cells if v not in (None, "")), cells
     wb.close()
+
+
+def test_overwriting_its_own_previous_output_is_said_out_loud(books, tmp_path):
+    """★ 2026-09-13（買い手役 2/3）: 前回の自分の出力は無言で上書きされていた。"""
+    today, past = books
+    out = tmp_path / "候補.xlsx"
+    assert "上書きします" not in _accounts(today, past, out).stdout
+    r = _accounts(today, past, out)
+    assert r.returncode == 0 and "前回の自分の出力 候補.xlsx を上書きします" in r.stdout, r.stdout

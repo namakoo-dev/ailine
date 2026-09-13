@@ -43,6 +43,27 @@ def unreadable_reason(path: Path) -> str:
     return "読み込み失敗"
 
 
+def nothing_to_read(folder: Path, excluded: dict, *, what: str = "読める帳票") -> str:
+    """フォルダに読める冊が 1 冊も無いときの断り（★ 成功に見せない）。
+
+    ★★ 2026-09-13（買い手役 3 体のうち 2 体）: 空のフォルダ／サブフォルダしか無いフォルダで
+      `0 ファイル中 0 冊を読みました`・exit 0・ファイルを作らず、作らなかったとも言わなかった。
+      フォルダを選び間違えた人が気づけない。「文書が無い」は 9（ENGINEERING.md の表）。
+    """
+    lines = [f"× {folder} に{what}が 1 冊もありません"]
+    if excluded.get("subdirs"):
+        lines.append(f"  ・サブフォルダが {excluded['subdirs']} 件ありますが、中は見ていません"
+                     " ── 中のフォルダを直接指定してください")
+    if excluded.get("csv"):
+        lines.append(f"  ・CSV が {excluded['csv']} 件あります ── `ailine csv <ファイル>` で 1 本ずつ xlsx にできます")
+    for name in excluded.get("other_format_names") or ():
+        lines.append(f"  ・{name} は扱えない形式です（.xlsx として保存し直すと扱えます）")
+    if excluded.get("temp"):
+        lines.append(f"  ・Excel の一時ファイル（~$…）{excluded['temp']} 件は数えていません")
+    lines.append("  → ファイルは作っていません")
+    return "\n".join(lines)
+
+
 def classify_folder_contents(folder: Path, *, also=()):
     """folder 直下（サブフォルダの中は見ない）を分類する。
        戻り値: (candidates: 名前順の Path リスト, excluded: {"temp": n, "subdirs": n, "csv": n})。
