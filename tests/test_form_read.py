@@ -182,6 +182,31 @@ def test_a_row_whose_quantity_is_missing_is_caught_even_when_the_sum_agrees():
     assert "数量" in r.blank_reason, f"★ 何が悪いか言っていない: {r.blank_reason}"
 
 
+def test_a_pre_tax_total_above_the_tax_inclusive_total_does_not_win():
+    """★★★ 2026-09-13（買い手役 3 体の初見）: `合計(税抜) → 消費税 → 税込合計` と上から並ぶ
+    普通の帯で、初版は**最初の一致**（税抜）を請求額(税込)に入れていた ── 割にもならず ⚠ も出ず、
+    verify は ✓。静かに 10% 少ない金額。決め手は語の順でなく**算術**（税抜 ＋ 消費税 ＝ 税込）。"""
+    r = read(minimal(E37="合計", E39="税込合計"))["請求額"]
+    assert value(r) == 3300, f"税抜が入った: {value(r)}"
+    assert grade(r) == CONFIRMED, grade(r)
+    assert any("税抜" in e.how for e in r.evidences), [e.how for e in r.evidences]
+
+
+def test_two_different_totals_without_a_tax_row_cannot_be_decided():
+    """★ 算術で決まらなければ値を出さない ── 両方の番地と金額を名指しする（割）。"""
+    r = read(minimal(E37="合計", E38=None, G38=None, H38=None, E39="税込合計"))["請求額"]
+    assert grade(r) == SPLIT, grade(r)
+    assert value(r) is None
+    assert "H37" in r.blank_reason and "H39" in r.blank_reason, r.blank_reason
+    assert "3,000" in r.blank_reason and "3,300" in r.blank_reason, r.blank_reason
+
+
+def test_two_totals_with_the_same_value_are_one_fact():
+    """★ 陰性対照 ── 合計金額とご請求金額が同値なら 1 つの事実の写し（割にしない）。"""
+    r = read(minimal(E39="合計金額", E40="ご請求金額", H40=3300))["請求額"]
+    assert value(r) == 3300 and grade(r) == CONFIRMED, (value(r), grade(r))
+
+
 def test_a_carried_forward_block_makes_the_amount_undecidable():
     """★ 繰越請求・源泉徴収がある帳票では、合計は**振り込む額ではない**。
 

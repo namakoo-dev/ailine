@@ -879,18 +879,48 @@ def read_billed_total(grid: Grid, ws_formula=None) -> Record:
         break
 
     totals = _labelled_number(grid, _LABEL_TOTAL, rows=(half, grid.rows))
+    tax = _labelled_number(grid, _LABEL_TAX, rows=(half, grid.rows))
     total_cell = None
+    band = []                                    # 帯の合計の候補（番地で畳む）
     for lab, val, note in totals:
         if note:
             unreadable.append(note)
             break
+        if all(v.at != val.at for _l, v in band):
+            band.append((lab, val))
+    # ★★ 2026-09-13（買い手役 3 体の初見・事務職が自作の請求書 5 枚で踏んだ）:
+    #   初版は**最初の一致で break** していた。日本の請求書は `合計(税抜) → 消費税 → 税込合計`
+    #   の順に**上から**並ぶので、一番上＝税抜を「請求額(税込)」に入れ、2 つ目を根拠に数えない
+    #   ので割にもならず、⚠ も出ず、verify は ✓ を出した ── **静かに 10% 少ない金額**。
+    #   決め手は語の順でなく**算術**（`_tax_inclusive_total`）。決まらなければ割。
+    chosen, pretax, band_why = _tax_inclusive_total(band, tax)
+    if chosen is not None:
+        lab, val = chosen
         total_cell = val
+        note_pre = ""
+        if pretax is not None:
+            p_lab, p_val = pretax
+            note_pre = (f"（「{norm(p_lab.value)[:12]}」{p_val.at}＝{float(p_val.value):,.0f} は"
+                        f"税抜: ＋消費税 {float(tax[0][1].value):,.0f} で一致）")
+            excluded.append((p_val.at, p_val.value,
+                             f"「{norm(p_lab.value)[:12]}」は税抜の合計（{val.at} ＝ "
+                             f"{p_val.at} ＋ 消費税）なので、請求額(税込)には採りません"))
         evid.append(Evidence(rule="帯の合計", value=val.value, at=val.at,
-                             how=f"{lab.at}「{norm(lab.value)[:12]}」の右 {val.at}"))
-        break
+                             how=f"{lab.at}「{norm(lab.value)[:12]}」の右 {val.at}{note_pre}"))
 
     sub = _labelled_number(grid, _LABEL_SUBTOTAL, rows=(half, grid.rows))
-    tax = _labelled_number(grid, _LABEL_TAX, rows=(half, grid.rows))
+    if pretax is not None and not sub and tax and not tax[0][2]:
+        # ★ 小計の行が無く「合計(税抜)」が小計の役をしている帳票 ── 小計＋消費税 と同じ線で
+        #   **税抜合計＋消費税** を独立の根拠に数える（税込合計が式でそれを足しているなら恒真・除外）。
+        p_at, t_at = pretax[1], tax[0][1]
+        got = float(p_at.value) + float(t_at.value)
+        if _depends_on(ws_formula, total_cell, (p_at, t_at)):
+            excluded.append((f"{p_at.at}+{t_at.at}", got,
+                             f"{total_cell.at} の式が {p_at.at} と {t_at.at} を"
+                             "足しているので、検算になりません"))
+        else:
+            evid.append(Evidence(rule="税抜合計＋消費税", value=got, at=f"{p_at.at}+{t_at.at}",
+                                 how=f"税抜の合計 {p_at.at} と消費税 {t_at.at} の和"))
     if sub and tax and not sub[0][2] and not tax[0][2]:
         s_at, t_at = sub[0][1], tax[0][1]
         # ★★ 帯には 2 つの形が在る（2026-09-11、税率群で踏んだ）:
@@ -930,10 +960,18 @@ def read_billed_total(grid: Grid, ws_formula=None) -> Record:
                "どちらを請求額とすべきか決められないので、空欄にしました")
         return Record("請求額", tuple(evid), tuple(rivals), tuple(excluded),
                       why, False, "", True, why)
+    if band_why:
+        # ★ 帯に値の違う合計が並び、算術で税込が決まらない ── 値を出さず両方を名指しする。
+        return Record("請求額", tuple(evid), tuple(rivals), tuple(excluded),
+                      band_why, False, "", True, band_why)
 
     # ── ★ 掃き出し②: 明細ブロックと帯が合っているか ──────────────
     #   一致は「他の口が黙っている」ことを意味しない。ここで**開きに行く**。
     swept, swept_how = False, ""
+    # ★ 小計の行が無く「合計(税抜)」が小計の役をしている帳票では、その行を小計として掃き出す
+    #   （税込合計と明細を直接は比べられない ── 税抜の口と比べる）。
+    if not sub and pretax is not None:
+        sub = [(pretax[0], pretax[1], "")]
     band_row = sub[0][0].row if sub else (total_cell.row if total_cell else None)
     d_sum, d_head, _d_cells, d_amt, d_stop = detail_amount_sum(grid, band_row)
     if d_sum is not None and sub and not sub[0][2]:
@@ -985,6 +1023,40 @@ def read_billed_total(grid: Grid, ws_formula=None) -> Record:
                      + unswept_mouths(grid, grade_value(tentative)))
     return _record("請求額", evid, rivals, excluded, swept=swept, swept_how=swept_how,
                    unconfirmable=unconfirmable)
+
+
+def _tax_inclusive_total(band: list, tax: list) -> tuple:
+    """帯に値の違う合計が 2 つ以上あるとき、どれが**税込**かを算術で決める。
+
+    band: [(ラベルのセル, 値のセル)]（番地で畳んだ帯の合計の候補）
+    tax:  `_labelled_number(_LABEL_TAX)` の戻り値
+    戻り値: (採る (lab, val) or None, 税抜と分かった (lab, val) or None, 決められない理由 or "")
+
+    ★ 語の優先順位で決めない（「税込合計」と書いてあっても税抜の冊は実在しうる）──
+      **小さい方 ＋ 消費税 ＝ 大きい方** の対が**ちょうど 1 組**のときだけ大きい方を税込と呼ぶ。
+      消費税の欄が無い／対が 0 か 2 組以上 → 決められない（割・両方を名指し）。
+    ★ 同じ値の候補（合計金額とご請求金額が同値）は 1 つの事実の写しなので群にまとめる。
+    """
+    if not band:
+        return None, None, ""
+    groups: dict = {}
+    for lab, val in band:
+        groups.setdefault(round(float(val.value), 2), []).append((lab, val))
+    if len(groups) == 1:
+        return band[0], None, ""
+    named = "／".join(f"「{norm(l.value)[:12]}」の右 {v.at}＝{float(v.value):,.0f}"
+                      for l, v in band)
+    head = f"帯に値の違う合計が {len(groups)} つあります（{named}）"
+    if not tax or tax[0][2]:
+        return None, None, (head + "── 消費税の欄が読めず、どちらが税込か決められないので、"
+                            "請求額は空欄にしました")
+    x = float(tax[0][1].value)
+    pairs = [(a, b) for a in groups for b in groups if a != b and abs(a + x - b) < 0.005]
+    if len(pairs) != 1:
+        return None, None, (head + f"── 消費税 {x:,.0f} を足してもどれが税込か決まらないので、"
+                            "請求額は空欄にしました")
+    a, b = pairs[0]
+    return groups[b][0], groups[a][0], ""
 
 
 _REF = re.compile(r"\$?([A-Z]{1,3})\$?(\d{1,5})")

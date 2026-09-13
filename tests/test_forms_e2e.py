@@ -437,3 +437,85 @@ def test_verify_still_passes_a_list_that_has_values(folder, tmp_path):
                        cwd=str(REPO), capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=300)
     assert v.returncode == 0 and "✓" in v.stdout, f"exit={v.returncode} / {v.stdout}"
+
+
+# --- 税込の取り違え（2026-09-13・買い手役 3 体の初見 ── 事務職が自作の請求書 5 枚で踏んだ）------
+#
+# ★★★ `合計(税抜) → 消費税 → 税込合計` と**上から**並ぶ普通の請求書で、`請求額(税込)` に
+#   **税抜**が入り、割にもならず、⚠ も出ず、verify は ✓ を出した（静かに 10% 少ない金額）。
+#   真因は帯の合計の語に優先順位が無く**最初の一致で止めていた**こと。決め手は語でなく算術。
+
+
+def _invoice_with_band(path: Path, band: list, *, issuer="株式会社さくら商会") -> Path:
+    """帯の並びを外から指定できる最小の請求書（明細 1 行 100,000）。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "請求書"
+    ws["B2"] = "請求書"
+    ws["B3"] = "ナギ商会株式会社"
+    ws["B4"] = "経理部　御中"
+    ws["G3"] = "請求日："
+    ws["H3"] = "2026/8/31"
+    ws["G4"] = "請求番号："
+    ws["H4"] = "T-02"
+    ws["G5"] = issuer
+    ws["B15"] = "品名"
+    ws["E15"] = "数量"
+    ws["G15"] = "単価"
+    ws["H15"] = "金額"
+    ws["B16"] = "作業一式"
+    ws["E16"] = 1
+    ws["G16"] = 100000
+    ws["H16"] = 100000
+    for i, (label, value) in enumerate(band):
+        ws[f"E{37 + i}"] = label
+        ws[f"H{37 + i}"] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    wb.close()
+    return path
+
+
+def _amount_and_grade(out: Path) -> tuple:
+    wb = openpyxl.load_workbook(out)
+    amount = [c.value for c in list(wb["一覧"].iter_rows(min_row=2, max_row=2))[0]][3]
+    reasons = [r for r in wb["検分"].iter_rows(min_row=2, values_only=True) if r[1] == "請求額"]
+    wb.close()
+    return amount, reasons
+
+
+def test_the_tax_inclusive_total_wins_over_the_pre_tax_total(tmp_path):
+    """★★★ 合計(税抜)が税込合計より**上**に在っても、税込の方を採る（算術で決める）。"""
+    folder = tmp_path / "受領"
+    _invoice_with_band(folder / "B_合計と税込合計.xlsx",
+                       [("合計", 100000), ("消費税", 10000), ("税込合計", 110000)])
+    out = tmp_path / "一覧.xlsx"
+    r = _forms(folder, out)
+    assert r.returncode == 0, r.stdout
+    amount, reasons = _amount_and_grade(out)
+    assert amount == 110000, f"税抜が入った: {amount}"
+    assert reasons == [], reasons
+
+
+def test_two_different_totals_without_a_tax_row_are_a_split_not_a_value(tmp_path):
+    """★ 算術で決まらないなら値を出さない（割）── 両方の番地と金額を名指しする。"""
+    folder = tmp_path / "受領"
+    _invoice_with_band(folder / "B2_消費税なし.xlsx", [("合計", 100000), ("税込合計", 110000)])
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    amount, reasons = _amount_and_grade(out)
+    assert amount is None, f"決められないのに値を出した: {amount}"
+    assert len(reasons) == 1 and reasons[0][2] == "割", reasons
+    why = reasons[0][3]
+    assert "H37" in why and "100,000" in why and "H38" in why and "110,000" in why, why
+
+
+def test_the_ordinary_band_is_unchanged(tmp_path):
+    """★ 陰性対照 ── 小計／消費税／税込合計 の普通の帯は今までどおり 110,000。"""
+    folder = tmp_path / "受領"
+    _invoice_with_band(folder / "A_小計と税込合計.xlsx",
+                       [("小計", 100000), ("消費税", 10000), ("税込合計", 110000)])
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    amount, reasons = _amount_and_grade(out)
+    assert amount == 110000 and reasons == [], (amount, reasons)
