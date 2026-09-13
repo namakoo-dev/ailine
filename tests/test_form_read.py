@@ -552,3 +552,24 @@ def test_a_readable_value_gets_no_note_at_all():
     r = read(minimal(G3="請求日：", H3="2026/8/31"))["請求日"]
     assert value(r) == _dt.date(2026, 8, 31)
     assert "右は空" not in (r.blank_reason or ""), r.blank_reason
+
+
+# --- 値は原本のまま（★ 仮置き・2026-09-13・発火条件つき）--------------------------------
+
+def test_the_value_keeps_the_original_spacing():
+    """★ 均等割り付けの空白を詰めない ── 値は原本の文字そのまま。
+
+    理由（Namakoo・2026-09-13）: 一覧は眺める画面ではなく、**原本と突き合わせるために
+      印刷される**書類。こちらで詰めると、印刷した一覧と手元の請求書が文字として一致せず、
+      照合する人が「別の会社か？」と迷う ── 読みやすさのために道具の一番の仕事を壊す。
+    ★★ ただし**仮置き**（Namakoo:「見にくければ詰めるのも手としてはアリ」）。
+      この番人の役目は詰めるのを**禁じること**ではなく、詰めたときに
+      **黙って挙動だけ変わらない**ようにすること。詰める判断をした日は、この試験を
+      **理由ごと**書き換える。発火条件は `docs/なぜこの形か.md`。
+    ★ 照合のときだけ畳むのは別の話（`norm` / `entity_core` / `matching_core`）── 値は触らない。
+    """
+    recs = read(minimal(B3="㈱　デ　ル　タ"))
+    assert value(recs["宛先"]) == "㈱　デ　ル　タ", f"★ 値を詰めた: {value(recs['宛先'])!r}"
+    # ★ 2 つの線が同居していることを 1 本で見せる（値は原本・照合は畳む）
+    from ailine_core.form_read import norm as _norm
+    assert _norm("㈱　デ　ル　タ") == _norm("㈱デルタ"), "★ 照合側まで原本のままになっている"

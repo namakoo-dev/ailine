@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import statistics
+import unicodedata
 from itertools import combinations
 
 #: 所見の種類（★ 語はここにしか書かない）。
@@ -42,6 +43,36 @@ YEAR_OFF_MONTHS = 6
 
 def _norm(s) -> str:
     return "".join(str(s).split()) if s is not None else ""
+
+
+#: ハイフンに見える文字（★ 実物の請求番号に混ざる）。`ー` は**長音符** ── かな入力のまま
+#: `-` を打つ、実務で一番多い打ち間違い。
+_HYPHEN_LIKE = re.compile(r"[ー—–‐‑‒–—―−－~〜]")
+
+
+def number_key(value) -> str:
+    """請求番号を**照合するときだけ**の形に畳む（★ 値は原本のまま・畳んだ形は出さない）。
+
+    ★★ なぜ要るか（2026-09-13・Namakoo 提供の検体で実測）: 実物の請求番号が
+      `ＩＮＶー０９ー９９９`（全角英数 ＋ 長音符）だった。同じ請求書が PDF と Excel で 2 通
+      来て、片方が `INV-09-999` と書かれていると、**重複が 1 件も鳴らなかった**
+      （書き方を揃えると鳴る）。二重払いは取り逃しの中で一番高くつく。
+    ★ `form_read.norm` は畳まない ── あちらは NFKC を閉じた文字クラスにだけ当てる設計で、
+      **全角は「文字で入っていた」証拠**なので消さない。だから照合用の鍵をここに 1 本置く。
+    ★ 畳んで一致しても**原本が違えば必ず名指しする**（`SPELLING_NOTE`）── 併合はしない。
+      `split` の `matching_core` と同じ線。
+    """
+    text = unicodedata.normalize("NFKC", str(value if value is not None else ""))
+    return _HYPHEN_LIKE.sub("-", "".join(text.split())).upper()
+
+
+#: 畳んだ形は同じだが原本が違うときに添える 1 行（人が「同じ番号の別の書き方」と分かるように）。
+SPELLING_NOTE = "（★ 請求番号の書き方が違います: {a} / {b} ── 全角・半角や長音符の違い）"
+
+
+def _number_note(na, nb) -> str:
+    """原本が違うときだけ 1 行返す（同じなら空 ── 余計な文を足さない）。"""
+    return SPELLING_NOTE.format(a=na, b=nb) if str(na) != str(nb) else ""
 
 
 def _date(v):
@@ -99,12 +130,17 @@ def suspect(books: dict) -> list:
             continue
         if _norm(fa.get("請求元")) != _norm(fb.get("請求元")):
             continue
-        same_keys = []
+        same_keys, note = [], ""
         for k in ("請求日", "請求番号"):
             va, vb = fa.get(k), fb.get(k)
             if va is None or vb is None:
                 continue
-            if (_date(va) or _norm(va)) != (_date(vb) or _norm(vb)):
+            # ★ 請求番号は**畳んだ鍵**で比べる（全角・長音符の違いで重複を取り逃さない）。
+            if k == "請求番号":
+                if number_key(va) != number_key(vb):
+                    break
+                note = _number_note(va, vb)
+            elif (_date(va) or _norm(va)) != (_date(vb) or _norm(vb)):
                 break
             same_keys.append(k)
         else:
@@ -112,7 +148,7 @@ def suspect(books: dict) -> list:
                 paired.add(frozenset((a, b)))
                 emit(DUPLICATE, (a, b),
                      f"「{a}」と「{b}」は {'・'.join(same_keys)}・金額（{_yen(fa['請求額'])}）が"
-                     f"同じ ── 同じ請求書が 2 通ある（重複）疑い")
+                     f"同じ ── 同じ請求書が 2 通ある（重複）疑い{note}")
 
     # ── 取引先ごとの疑い ──
     for vendor, names in _groups_by_vendor(books).items():
@@ -140,11 +176,12 @@ def suspect(books: dict) -> list:
             if frozenset((a, b)) in paired:
                 continue
             na, nb = books[a].get("請求番号"), books[b].get("請求番号")
-            if not na or not nb or _norm(na) != _norm(nb):
+            if not na or not nb or number_key(na) != number_key(nb):
                 continue
             paired.add(frozenset((a, b)))
             emit(NUMBER_CLASH, (a, b),
                  f"「{a}」と「{b}」は請求番号（{na}）が重なる（同じ番号が 2 通・重複した番号）"
+                 f"{_number_note(na, nb)}"
                  f"のに内容が違う ── 番号の付け間違いか、片方が別の請求か確認")
 
         # 1 冊だけ年が離れている → 年の誤り

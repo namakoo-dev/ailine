@@ -136,3 +136,75 @@ def test_the_kinds_are_the_only_words_the_findings_use():
     t["蓮見工業株式会社_2026-07.xlsx"]["請求額"] = 231000
     for s in fs.suspect(t):
         assert s["種類"] in fs.KINDS and s["冊"] and s["理由"].strip()
+
+
+# --- 請求番号の書き方の違いで重複を取り逃さない（2026-09-13・実物の検体から）------------
+#
+# ★★ なぜ在るか: Namakoo 提供の実物の形式の請求書で、請求番号が
+#   `ＩＮＶー０９ー９９９`（全角英数 ＋ **長音符**）だった。原文がそうで、器官は忠実に読んでいる
+#   ── かな入力のまま `-` を打つ、実務で一番多い打ち間違い。
+#   同じ請求書が PDF と Excel で 2 通来て片方が `INV-09-999` だと、**重複が 1 件も鳴らなかった**。
+#   ★ 二重払いは取り逃しの中で一番高くつく。
+# ★ 値は原本のまま（全角は「文字で入っていた」証拠）。畳むのは**照合の鍵だけ**で、
+#   畳んで一致しても原本が違えば**必ず名指しする**（併合はしない ── split の lookalike と同じ線）。
+
+_SAME = {"請求元": "ラムダ株式会社", "宛先": "㈱デルタ", "請求額": 330000, "請求日": "2026-09-13"}
+
+
+# ★ 既存の `_kinds(found)`（結果のリストを受ける）と**同名にしない** ── 上書きすると
+#   古い試験 6 本が道連れで落ちた（実測）。この段の器は books を受けるので名前を分ける。
+def _kinds_of(books):
+    """★ 既存の `_kinds(found)` は（種類, 冊）の組を返す。ここで欲しいのは種類だけ
+    ── 形を取り違えて 2 本赤くした（製品は正しく鳴っていた・実測）。"""
+    return [s["種類"] for s in fs.suspect(books)]
+
+
+def _why_of(books, kind):
+    return next(s["理由"] for s in fs.suspect(books) if s["種類"] == kind)
+
+
+def test_a_fullwidth_number_does_not_hide_a_duplicate():
+    """★★ 全角＋長音符と半角＋ハイフンが同じ番号だと分かる（取り逃さない）。"""
+    books = {"A.pdf": {**_SAME, "請求番号": "ＩＮＶー０９ー９９９"},
+             "B.xlsx": {**_SAME, "請求番号": "INV-09-999"}}
+    assert fs.DUPLICATE in _kinds_of(books), _kinds_of(books)
+
+
+def test_the_two_spellings_are_named_so_a_person_can_judge():
+    """★ 畳んだことを黙らない ── 原本の両方を見せる（人が「別物だ」と捨てられる形）。"""
+    books = {"A.pdf": {**_SAME, "請求番号": "ＩＮＶー０９ー９９９"},
+             "B.xlsx": {**_SAME, "請求番号": "INV-09-999"}}
+    why = _why_of(books, fs.DUPLICATE)
+    assert "ＩＮＶー０９ー９９９" in why and "INV-09-999" in why, why
+    assert "書き方が違います" in why, why
+
+
+def test_the_same_spelling_gets_no_extra_sentence():
+    """★ 陰性対照 ── 書き方が同じなら余計な 1 行を足さない。"""
+    books = {"A.pdf": {**_SAME, "請求番号": "INV-09-999"},
+             "B.xlsx": {**_SAME, "請求番号": "INV-09-999"}}
+    assert "書き方が違います" not in _why_of(books, fs.DUPLICATE)
+
+
+def test_a_genuinely_different_number_still_does_not_fire():
+    """★★ 陰性対照（偽の重複を作らない）── 末尾が 1 違うだけの別の請求書は鳴らさない。"""
+    books = {"A.pdf": {**_SAME, "請求番号": "INV-09-999"},
+             "B.xlsx": {**_SAME, "請求番号": "INV-09-998"}}
+    assert fs.DUPLICATE not in _kinds_of(books), _kinds_of(books)
+
+
+def test_a_number_that_really_contains_a_prolonged_mark_is_named_not_merged():
+    """★ 一番外しそうだと凍結した所 ── 長音符を畳むと、**本当に長音符が入った番号**が
+    別の番号と当たりうる。当たっても**原本を両方見せる**ので、人が捨てられる。"""
+    books = {"A.pdf": {**_SAME, "請求番号": "ＮＯー１"},
+             "B.xlsx": {**_SAME, "請求番号": "NO-1"}}
+    assert fs.DUPLICATE in _kinds_of(books)
+    why = _why_of(books, fs.DUPLICATE)
+    assert "ＮＯー１" in why and "NO-1" in why, why
+
+
+def test_the_folded_key_never_becomes_the_value():
+    """★★ 畳むのは照合のときだけ ── 値（原本）は 1 文字も変えない。"""
+    assert fs.number_key("ＩＮＶー０９ー９９９") == "INV-09-999"
+    assert fs.number_key("INV-09-999") == "INV-09-999"
+    assert fs.number_key("INV-09-998") != fs.number_key("INV-09-999")
