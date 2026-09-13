@@ -12,6 +12,7 @@ from pathlib import Path
 
 import openpyxl
 
+from ailine_core import input_path
 from ailine_core.filetypes import CSV_SUFFIX, OPENPYXL_READABLE_SUFFIX, SCAN_CANDIDATE_SUFFIXES
 from ailine_core.primitives import column_index as _column_index
 
@@ -44,6 +45,10 @@ def classify_folder_contents(folder: Path, *, also=()):
        ★ 根は 1 つ ── **分母を「処理できたもの」から作っていた**。分母は
        **フォルダに実際に在るもの**から作る。処理できなかったものは 0 件ではなく
        **名前つきの件数**として分母に残す。"""
+    # ★ フォルダを受け取る**唯一の入口**（2026-09-13・B2）: 打ち間違いはここで名指しして断る。
+    #   以前はそのまま `iterdir()` に落ちて **Python のトレースバック**が出ていた（scan/stack/forms
+    #   の 3 経路で実測）── 買い手には「道具が壊れた」に読める。番号と文面は input_path が持つ。
+    folder = input_path.require_folder(folder)
     candidates = []
     excluded = {"temp": 0, "subdirs": 0, "csv": 0, "other_format": 0,
                  "other_format_names": []}

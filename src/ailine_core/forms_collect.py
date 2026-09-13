@@ -38,6 +38,19 @@ assert set(FIELDS) == set(_ORGAN_FIELDS), "★ 一覧の項目と器官の項目
 INSPECT_SHEET = "検分"
 INSPECT_HEADERS = ("元ファイル", "項目", "区分", "なぜこうなったか")
 
+#: 一覧の中で**金額**の列（3 桁区切りで見せる ── C8）。
+#: ★ 列番号は手書きしない（`money_columns()` が `HEADERS` から導く ── 並びを変えても追う）。
+MONEY_HEADERS = ("請求額(税込)",)
+
+
+def money_column_indexes() -> tuple:
+    """金額の列の 1 始まりの番号（`HEADERS` の並びから導く）。
+
+    ★ `inspection.money_columns`（書式を**付ける**器）と名前を分ける ── 同名だと
+      「同名だが実装が違う」台帳に載る（`tests/test_duplicate_definitions_ledger.py`）。
+    """
+    return tuple(HEADERS.index(h) + 1 for h in MONEY_HEADERS)
+
 #: 束の所見（1 冊ずつは正常でも、束で見ると怪しいもの）を出すシート。
 SUSPECT_SHEET = "束の所見"
 SUSPECT_HEADERS = ("種類", "関わる冊", "なぜ怪しいか")
@@ -75,6 +88,27 @@ def findings_for(name: str, records: dict) -> list:
             continue
         rows.append([name, field, grade(rec), describe(rec)])
     return rows
+
+
+def nothing_found(all_records: list) -> list:
+    """**1 項目も値が出なかった冊**の名前（★ 請求書でない冊が混ざっている徴候）。
+
+    ★★ なぜ在るか（2026-09-13・買い手の初見 B7）: 送付状・稟議書のような請求書でない冊が
+      受領フォルダに混ざると、一覧に**全列が空の行**として並び、画面には何も出なかった。
+      買い手には「請求書なのに読めなかった」と区別が付かない ── 次の一手が正反対になる
+      （読めない冊は直す・請求書でない冊は放っておく）。
+    ★ PDF 側には同じ線が先に在った（設計 D7「読めなかった」と「請求書ではなかった」を
+      混ぜない）── xlsx 側が未配線だった（この repo の片配線の形・開発手法 §13）。
+    ★ ここでは**一覧から外さない**（分母を動かさない）── 名指しして人に言うだけ。
+      外すかどうかは実物の分布を見てから決める（設計 §10 の発火条件つき保留）。
+    """
+    out = []
+    for name, records in all_records:
+        got = [field for field in FIELDS
+               if records.get(field) is not None and value(records[field]) is not None]
+        if not got:
+            out.append(name)
+    return out
 
 
 def grades_per_file(all_records: list) -> list:

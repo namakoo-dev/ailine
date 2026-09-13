@@ -337,3 +337,103 @@ def test_the_report_no_longer_lists_the_keys_of_the_excluded_dict(folder, tmp_pa
     """★ 初版は「（対象外）temp」など dict の鍵を毎回 5 行並べていた。"""
     r = _forms(folder, tmp_path / "一覧.xlsx")
     assert "（対象外）temp" not in r.stdout and "（対象外）other_format_names" not in r.stdout, r.stdout
+
+
+# --- 経理の目で読める形（2026-09-13・買い手の初見 C8 / C9）------------------------
+#
+# ★★ 金額が `General` で `40000` と出ていた ── 経理は 3 桁区切りでないと目で検算しない
+#   （1 桁の見落としがそのまま支払いになる）。★ 値は数値のまま・見え方だけ変える。
+
+
+def test_the_amount_column_is_readable_as_money(folder, tmp_path):
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    wb = openpyxl.load_workbook(out)
+    ws = wb["一覧"]
+    col = [i + 1 for i, h in enumerate(next(ws.iter_rows(max_row=1, values_only=True)))
+           if h == "請求額(税込)"][0]
+    money = [ws.cell(row=r, column=col) for r in range(2, ws.max_row + 1)]
+    assert len(money) == 2, f"分母（金額のセル）が変わった: {len(money)}"
+    for cell in money:
+        assert isinstance(cell.value, (int, float)), f"数値でなくなった: {cell.value!r}"
+    assert {c.number_format for c in money} == {"#,##0"}, {c.number_format for c in money}
+    # ★ 日付は openpyxl 既定の書式が付く（ここを一緒に壊していないことも見る）
+    dcol = [i + 1 for i, h in enumerate(next(ws.iter_rows(max_row=1, values_only=True)))
+            if h == "請求日"][0]
+    assert "yy" in ws.cell(row=2, column=dcol).number_format, ws.cell(row=2, column=dcol).number_format
+    wb.close()
+
+
+def test_no_sheet_shows_empty_brackets(folder, tmp_path):
+    """★ 空の括弧（`（）`）は「何か出すつもりで失敗した」に読める ── どのシートにも出さない。
+    ★ 分母を言う: 3 枚のシートの**全文字列セル**を見ている（0 件を見て緑にしない）。"""
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    got = _sheets(out)
+    texts = [v for name, rows in got.items() if name != "_creator"
+             for row in rows for v in row if isinstance(v, str)]
+    assert len(texts) >= 12, f"文字列セルが {len(texts)} 個しか無い（分母が痩せている）"
+    bad = [t for t in texts if "（）" in t or "「」" in t or "（ ）" in t]
+    assert not bad, bad
+
+
+# --- 請求書でない冊と、空虚な合格（2026-09-13・買い手の初見 B7 / B8）---------------
+#
+# ★★ 送付状・稟議書を受領フォルダに混ぜたら、一覧に**全列が空の行**が並ぶだけで画面には
+#   何も出ず、そのあと `ailine verify` が「含有を確かめた値 0 件」で **✓ 破れはありません**
+#   と出した（実測）。0 件照合で合格を名乗るのは、この repo が何度も潰してきた形。
+
+
+def _not_an_invoice(path: Path, title: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = title
+    ws["A1"] = title
+    ws["A3"] = "ナギ商会株式会社 御中"
+    ws["A5"] = "下記のとおりご連絡します"
+    wb.save(path)
+    wb.close()
+    return path
+
+
+def test_a_book_that_is_not_an_invoice_is_named_on_screen(tmp_path):
+    """★ 「読めなかった」と「請求書ではなかった」を混ぜない（設計 D7 と同じ線）。"""
+    folder = tmp_path / "受領"
+    _not_an_invoice(folder / "送付状.xlsx", "送付状")
+    _not_an_invoice(folder / "稟議書.xlsx", "稟議書")
+    r = _forms(folder, tmp_path / "一覧.xlsx")
+    assert r.returncode == 0, r.stdout
+    assert "項目が 1 つも取れなかった冊 2 件" in r.stdout, r.stdout
+    assert "送付状.xlsx" in r.stdout and "稟議書.xlsx" in r.stdout, r.stdout
+
+
+def test_a_normal_folder_does_not_claim_anything_was_unreadable(folder, tmp_path):
+    """★ 陰性対照 ── 普通の請求書で「1 つも取れなかった」と言ったらオオカミ少年。"""
+    r = _forms(folder, tmp_path / "一覧.xlsx")
+    assert "項目が 1 つも取れなかった冊" not in r.stdout, r.stdout
+
+
+def test_verify_does_not_pass_a_list_with_no_values(tmp_path):
+    """★★ 空虚な合格の禁止 ── 測るものが 0 件なら ✓ を出さず、exit 4（合格でも不合格でもない）。"""
+    folder = tmp_path / "受領"
+    _not_an_invoice(folder / "送付状.xlsx", "送付状")
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
+                       cwd=str(REPO), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    assert "含有を確かめた値: 0" in v.stdout, v.stdout
+    assert "✓" not in v.stdout, f"0 件照合で合格を名乗った: {v.stdout}"
+    assert "合格でも不合格でもありません" in v.stdout, v.stdout
+    assert v.returncode == 4, f"exit={v.returncode} / {v.stdout}"
+
+
+def test_verify_still_passes_a_list_that_has_values(folder, tmp_path):
+    """★ 陰性対照 ── 値が在る一覧では今までどおり ✓（exit 0）。"""
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
+                       cwd=str(REPO), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    assert v.returncode == 0 and "✓" in v.stdout, f"exit={v.returncode} / {v.stdout}"

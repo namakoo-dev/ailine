@@ -209,3 +209,27 @@ def test_describe_says_something_specific_for_every_grade():
     assert len(set(texts)) == 4, f"★ 説明が区分ごとに違わない: {texts}"
     for t in texts[:3]:
         assert any(c.isdigit() for c in t), f"★ 番地も値も含まない説明: {t}"
+
+
+# ── 空の括弧を出さない（2026-09-13・買い手の初見 C9）────────────────────────
+#
+# ★★ 実測: `conflict=True` で**根拠が 0 個**の「割」（読む側が「どちらとも決められない」と
+#   宣言した形 ── 前回請求額と繰越が並ぶ冊・請求書らしい頁が 2 枚ある冊）で、検分シートに
+#   「根拠が食い違いました（）── …」と**空の括弧**が出ていた（検体 6 行で再現）。
+#   空の括弧は「何か出すつもりだったのに失敗した」に読める ── 買い手は道具を疑う。
+
+
+def test_a_split_without_sides_does_not_print_empty_brackets():
+    r = Record("請求額", (), conflict=True, swept=True,
+               blank_reason="この 1 冊に請求書らしいページが 2 枚あります（1頁・2頁）")
+    assert grade(r) == SPLIT, "宣言された割（根拠 0 個）── ここが変わったら上の前提が崩れる"
+    text = describe(r)
+    assert "（）" not in text and "「」" not in text, text
+    assert r.blank_reason in text, text
+
+
+def test_a_split_with_sides_still_shows_both_numbers():
+    """★ 陰性対照 ── 括弧を消したのではなく、**中身が在るときだけ**出す。"""
+    r = rec("請求額", (ev("C11", 3300), ev("H39", 3301)), blank_reason="1 円ずれています")
+    text = describe(r)
+    assert "（C11=3300／H39=3301）" in text or "（H39=3301／C11=3300）" in text, text

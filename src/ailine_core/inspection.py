@@ -84,6 +84,29 @@ def autosize_columns(ws, min_width: int = _COL_WIDTH_MIN, max_width: int = _COL_
         ws.column_dimensions[get_column_letter(col)].width = max(min_width, min(max_width, w + padding))
 
 
+#: 金額の表示形式。★★ 2026-09-13（買い手の初見 C8）: 一覧の金額が `General` で
+#:   `40000` と出ていた ── **経理は 3 桁区切りでないと目で検算しない**（1 桁の見落としが
+#:   そのまま支払いになる）。値は数値のまま・見え方だけ変える（検算は値を読むので無影響）。
+#: ★ 書式コードはここにしか書かない（出口ごとに書き写すと片方だけ古くなる）。
+MONEY_FORMAT = "#,##0"
+
+
+def money_columns(ws, columns, first_row: int = 2) -> int:
+    """金額の列に 3 桁区切りを付ける（★ 数値のセルだけ ── 文字は触らない）。
+
+    戻り値: 書式を付けたセルの数（★ 0 件だったことが呼び出し側から見える）。
+    """
+    touched = 0
+    for col in columns:
+        for row in range(first_row, (ws.max_row or first_row) + 1):
+            cell = ws.cell(row=row, column=col)
+            if isinstance(cell.value, bool) or not isinstance(cell.value, (int, float)):
+                continue
+            cell.number_format = MONEY_FORMAT
+            touched += 1
+    return touched
+
+
 def bold_row(ws, row_idx: int, num_cols: int) -> None:
     """見出し行を太字に（UX 磨き③・自分のブックなので書式適用可）。"""
     for c in range(1, num_cols + 1):

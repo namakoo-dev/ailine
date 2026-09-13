@@ -241,4 +241,12 @@ def verify_forms_list(list_path, folder) -> dict:
         facts["含有を確かめられなかった値"] = (f"{len(unchecked)} 件"
                                               f"（{', '.join(unchecked[:5])}）"
                                               " ── 元の書き方が西暦でないため")
-    return {"breaks": breaks, "facts": facts, "mismatch": bool(breaks)}
+    out = {"breaks": breaks, "facts": facts, "mismatch": bool(breaks)}
+    if checked == 0:
+        # ★★ 空虚な合格の禁止（2026-09-13・買い手の初見 B8）: 一覧に値が 1 つも無い束
+        #   （請求書でない冊が並んでいる等）で「含有を確かめた値 0」のまま ✓ を出していた。
+        #   0 件照合で合格を名乗るのは、この repo が何度も潰してきた形
+        #   （`verify` の「印がありません」と同じ線）── **合格でも不合格でもない**と言う。
+        out["vacuous"] = ("含有を確かめた値が 0 件です（一覧に値が 1 つもありません ── "
+                          "請求書でない冊が並んでいる可能性）")
+    return out

@@ -115,12 +115,15 @@ def test_verify_match_is_read_only_on_all_three(tmp_path, capsys):
 
 def test_missing_out_file_says_not_found_not_unmarked(tmp_path, capsys):
     """★ 実弾検分（2026-08-21 16:5x）: 存在しない出力パスに「印がありません」と誤診した。
-       無いなら無いと言う（誤診は次の手を間違わせる）。exit は 4 のまま。"""
+       無いなら無いと言う（誤診は次の手を間違わせる）。
+       ★ 2026-09-13: 番号は 4 → **9**（`ENGINEERING.md` の表・打ち間違いの出口を 1 本に
+         畳んだ）。4 は「在るものの中身から決まらない」に残す ── 自動化が
+         「パスを打ち間違えた」と「中身が決まらない」を見分けられるようにするため。"""
     a = tmp_path / "a.xlsx"
     b = tmp_path / "b.xlsx"
     _book(a, "入金明細", NYUKIN_HDRS, [(datetime.date(2026, 7, 1), "甲社", 1, "")])
     _book(b, "請求一覧", SEIKYU_HDRS, [(datetime.date(2026, 7, 1), "甲社", 1, "x")])
     p = _verify(tmp_path / "居ない.xlsx", a, b)
-    assert p.returncode == 4
+    assert p.returncode == 9
     assert "見つかりません" in p.stdout, f"誤診（印がありません）:\n{p.stdout}"
     assert "印がありません" not in p.stdout

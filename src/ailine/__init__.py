@@ -137,6 +137,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
 from ailine_core.filetypes import (BOOKLIKE_SUFFIXES, CSV_SUFFIX,
                                    OPENPYXL_PROBEABLE_SUFFIXES,
                                    RUN_SUPPORTED_SUFFIXES)   # ★ 拡張子判定の登録簿
+from ailine_core import input_path   # ★ 入力のパスを受け取る唯一の入口（無ければ名指しで断る）
 from ailine_core import multifile   # ★ M1読み: 多ファイル棚卸し（DESIGN-20260821-multifile.md）
 from ailine_core.prompt_window import describe_the_loss   # ★ 窓に入らなかった分を捕まえる
 from ailine_core.helper_interface import interfaces_only   # ★ ヘルパは呼び方だけ見せる
@@ -12422,9 +12423,7 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
         return _cmd_run_csv_prestage(a)
     maybe_show_notice_v2()   # ★ W10a 項目2: 既定変更の一度きり告知（run の一番最初）
 
-    book = Path(a.book).resolve()
-    if not book.exists():
-        exit_environment(f"文書が無い: {book}")
+    book = input_path.require_file(a.book)
 
     # ★ 形式の関所は**ロックより先**（扱えない形式に「Excel で開いています」と
     #   言うと、心当たりが的外れになる）。★ run の入口だけ ── undo には掛けない。
@@ -16522,10 +16521,7 @@ def cmd_run_csv(a: argparse.Namespace) -> int:
        DESIGN-20260821-multifile.md「CSV 検疫 設計 v2」・REVIEW-20260822-csv-architect.md。
        ★ normalize_book/basrun_apply のどちらも呼ばない（LO の CSV インポートが 0 落ちの
        発生源・実測 0123→123 ── この経路は LO に一切触れない・構造の番人）。"""
-    csv_path = Path(a.file).resolve()
-    if not csv_path.exists():
-        print(f"文書が無い: {csv_path}")
-        return 1
+    csv_path = input_path.require_file(a.file, what="CSV ファイル")
     evaluation = _evaluate_csv(csv_path)
     if evaluation.error:
         print(f"× {evaluation.error}")
@@ -16676,10 +16672,7 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
        明示入口（DESIGN-20260824-format-map.md「CSV_EXPORT の憲法」）。★ csv_quarantine
        （CSV→xlsx の検疫）の逆方向 ── 書いた CSV を読み戻して元シートと突き合わせ、
        1セルも変えずに書いたことを主張する前に必ず検算する。LLM は使わない（0秒起動）。"""
-    book_path = Path(a.book).resolve()
-    if not book_path.exists():
-        print(f"文書が無い: {book_path}")
-        return 1
+    book_path = input_path.require_file(a.book)
     enc = csv_export.resolve_encoding(a.encoding)
     if enc is None:
         print(f"× 未対応の文字コード: {a.encoding}（utf-8 / cp932 のみ対応）")
@@ -16871,10 +16864,7 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
 
        ★ 主張の形は export-csv と同じ ── 出した後に**読み戻して**確かめてから ✓ を言う。
          読み戻しの道具（pdfplumber）が居ない環境では PDF は作るが ✓ を名乗らない。"""
-    book_path = Path(a.book).resolve()
-    if not book_path.exists():
-        print(f"文書が無い: {book_path}")
-        return 1
+    book_path = input_path.require_file(a.book)
     try:
         wb = openpyxl.load_workbook(book_path, data_only=True)
     except Exception as e:
@@ -17103,6 +17093,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
               "blanks": n_blank, "blanks_with_reason": n_reason,
               "unreadable": unreadable, "excluded": excluded,
               "field_grades": forms_collect.grades_per_file(collected),
+              # ★ 請求書でない冊の徴候（B7）── 一覧からは外さない・名指しするだけ。
+              "nothing_found": forms_collect.nothing_found(collected),
               "self_excluded": self_excluded, "findings": findings,
               "suspicions": suspicions, "file_written": False}
 
@@ -17125,6 +17117,7 @@ def cmd_forms(a: argparse.Namespace) -> int:
         for row in rows:
             ws.append(row)
         inspection.bold_row(ws, 1, len(forms_collect.HEADERS))
+        inspection.money_columns(ws, forms_collect.money_column_indexes())
         inspection.autosize_columns(ws)
 
         ws2 = wb_out.create_sheet(forms_collect.INSPECT_SHEET)
@@ -17480,10 +17473,9 @@ def cmd_split(a: argparse.Namespace) -> int:
             for ln in render_split_report(str(book), str(out_dir), result):
                 print(ln)
 
-    if not book.is_file():
-        result["refused"] = f"ファイルが見つかりません: {book}"
-        emit()
-        return 4
+    # ★ 「無い」は関所（4）ではなく**前提が無い**（9）── 打ち間違いの出口は 1 本
+    #   （`input_path` が文面も番号も持つ・心当たりまで言う）。
+    input_path.require_file(book)
     try:
         wb = openpyxl.load_workbook(book, data_only=True)
     except Exception as e:   # noqa: BLE001 ── 名指しして断る（推測で先へ進まない）
@@ -17739,15 +17731,11 @@ def cmd_accounts(a: argparse.Namespace) -> int:
             for ln in render_accounts_report(str(today_path), str(out), result):
                 print(ln)
 
-    if not today_path.is_file():
-        result["refused"] = f"ファイルが見つかりません: {today_path}"
-        emit()
-        return 4
+    # ★ 「無い」の出口は 1 本（`input_path` ── 文面・心当たり・番号 9 を持つ）。
+    input_path.require_file(today_path, what="今回の仕訳")
     past_paths, missing = _accounts_past_paths(getattr(a, "past", None))
     if missing:
-        result["refused"] = "過去の仕訳が見つかりません: " + "／".join(missing)
-        emit()
-        return 4
+        input_path.require_file(missing[0], what="過去の仕訳")
     # ★ 自分の出力を入力に数えない（V6・stack と同じ判定を呼ぶ ── 書き写さない）。
     past_paths, self_excluded = multifile_stack.split_own_outputs(past_paths)
     result["unreadable"] += [f"自分の出力『{n}』を入力から除外しました" for n in self_excluded]
@@ -17903,6 +17891,19 @@ def cmd_accounts(a: argparse.Namespace) -> int:
     return 0
 
 
+def _independent_verify_exit(result: dict) -> int:
+    """後からの独立検算（分けた冊・科目の候補・帳票の一覧）の終了コードを**1 箇所**で決める。
+
+       5 破れがあった ／ 4 測るものが無かった（空虚な合格を名乗らない）／ 0 測って破れ無し。
+       ★ 3 経路が `5 if mismatch else 0` を書き写していた ── 片配線の足場（開発手法 §13）。
+    """
+    if result.get("mismatch"):
+        return 5
+    if result.get("vacuous"):
+        return 4
+    return 0
+
+
 def cmd_verify(a: argparse.Namespace) -> int:
     """`ailine verify <out.xlsx> <srcfolder>` または `ailine verify <out.xlsx> <元A> <元B>`:
        検算の単独再実行（信用の条件⑥）。stack/extract は出力ブック+元フォルダから、
@@ -17935,10 +17936,10 @@ def cmd_verify(a: argparse.Namespace) -> int:
             return 4
         for ln in render_independent_verify_report("分けた冊", str(out), str(source), result):
             print(ln)
-        return 5 if result.get("mismatch") else 0
+        return _independent_verify_exit(result)
     if not out.is_file():
         print(f"× ファイルが見つかりません: {out}")
-        return 4
+        return input_path.MISSING_INPUT_EXIT
     # ★★ 2026-09-13（需要③）: 科目の候補の冊は「今回の仕訳 ＋ 過去の仕訳…」で受ける
     #   （先例の番地のセルを読むため）。ここを未配線にすると、元 2 冊の形（照合）へ
     #   流れて「印がありません」と**誤診**する ── 誤診は次の手を間違わせる。
@@ -17957,15 +17958,15 @@ def cmd_verify(a: argparse.Namespace) -> int:
         for ln in render_independent_verify_report("科目の候補", str(out), str(today_src),
                                                    result):
             print(ln)
-        return 5 if result.get("mismatch") else 0
+        return _independent_verify_exit(result)
     if len(sources) == 2:
         for s in sources:
             if not Path(s).is_file():
                 print(f"× ファイルが見つかりません: {Path(s).resolve()}")
-                return 4
+                return input_path.MISSING_INPUT_EXIT
     elif len(sources) == 1 and not Path(sources[0]).is_dir():
         print(f"× フォルダが見つかりません: {Path(sources[0]).resolve()}")
-        return 4
+        return input_path.MISSING_INPUT_EXIT
     if len(sources) == 1:
         folder = Path(sources[0]).resolve()
         result = multifile_verify.verify_output(out, folder)
@@ -17980,10 +17981,10 @@ def cmd_verify(a: argparse.Namespace) -> int:
         if result.get("breaks") is not None:
             for ln in render_independent_verify_report("帳票の一覧", str(out), str(folder), result):
                 print(ln)
-            return 5 if result.get("mismatch") else 0
+            return _independent_verify_exit(result)
         for ln in render_verify_report(str(out), str(folder), result):
             print(ln)
-        return 5 if result.get("mismatch") else 0
+        return _independent_verify_exit(result)
     if len(sources) == 2:
         book_a = Path(sources[0]).resolve()
         book_b = Path(sources[1]).resolve()
@@ -18255,7 +18256,13 @@ def main(argv=None) -> int:
     ALLOW_REMOTE_MODEL = bool(getattr(a, "allow_remote_model", False))
     if ALLOW_REMOTE_MODEL and not local_only.host_is_local(OLLAMA):
         print(local_only.render_remote_notice(OLLAMA))
-    return a.func(a)
+    try:
+        return a.func(a)
+    except input_path.MissingInput as e:
+        # ★★ 打ち間違いの出口は**ここだけ**（2026-09-13・B2）── 経路ごとに番号を決めると、
+        #   同じ事故に 4 通りの返事が出る（実測でそうなっていた）。文面は input_path が持つ。
+        print(str(e), file=sys.stderr)
+        return input_path.MISSING_INPUT_EXIT
 
 
 if __name__ == "__main__":

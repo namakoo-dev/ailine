@@ -2466,15 +2466,17 @@ def test_cmd_run_releases_lock_even_on_early_sys_exit(tmp_path, monkeypatch):
     # ★ W10a: maybe_show_notice_v2 は既定で HISTORY_FILE.parent を使うため、
     #   実ファイル汚染を避けるにはこちらを monkeypatch する。
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
-    # book が無い場合は sys.exit() する経路（SystemExit）。それでも lock は解放されること。
+    # book が無い場合は早く抜ける経路。それでも lock は解放されること。
+    # ★ 2026-09-13: 「入力が無い」の出口を 1 本に畳んだ（`ailine_core/input_path.py`）ので、
+    #   main は SystemExit でなく**番号 9 を返す**（ENGINEERING.md の表）。試験の主眼は
+    #   「早く抜けても lock を残さない」で、そこは変わっていない。
     lock_path = tmp_path / "run.lock"
     monkeypatch.setattr(ailine, "RUN_LOCK_FILE", lock_path)
     argv = run_argv(
         book=str(tmp_path / "nope.xlsx"), task="何かして", model="qwen2.5-coder:7b",
         refs=None, helpers=None, repair=0, temperature=0.2,
         dry=True, inplace=False, json=False, timeout=180.0, ask=False)
-    with pytest.raises(SystemExit):
-        ailine.main(argv)
+    assert ailine.main(argv) == 9
     assert not lock_path.exists()
 
 

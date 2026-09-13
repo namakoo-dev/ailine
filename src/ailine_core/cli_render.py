@@ -532,6 +532,13 @@ def render_independent_verify_report(label: str, out_label: str, source_label: s
     for name, value in (result.get("facts") or {}).items():
         lines.append(f"  {name}: {value}")
     breaks = result.get("breaks") or []
+    vacuous = result.get("vacuous")
+    if vacuous and not breaks:
+        # ★★ 0 件照合で ✓ を出さない（空虚な合格の禁止・2026-09-13 B8）。
+        #   ✓ は「測って破れが無かった」の印で、「測るものが無かった」の印ではない。
+        lines.append(f"△ {label}: {vacuous}"
+                     " ── 合格でも不合格でもありません（測るものがありませんでした）")
+        return lines
     if not breaks:
         lines.append(f"✓ 破れはありません（上の分母で測りました）── {label}")
         return lines
@@ -670,6 +677,16 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
     lines.append(f"{result['denominator']} ファイル中 {result['collected']} 冊を読みました")
     for f in result.get("unreadable", ()) or ():
         lines.append(f"  ⚠ {f['name']}: {f['reason']}")
+    nothing = result.get("nothing_found") or ()
+    if nothing:
+        # ★★ 2026-09-13（買い手の初見 B7）: 送付状・稟議書のような請求書でない冊は、
+        #   一覧に**全列が空の行**として並ぶだけで、画面には何も出ていなかった。
+        #   「読めなかった」と「請求書ではなかった」で、人の次の一手は正反対になる。
+        shown = "／".join(str(n) for n in nothing[:5])
+        more = f" ほか {len(nothing) - 5} 件" if len(nothing) > 5 else ""
+        lines.append(f"  ⚠ 項目が 1 つも取れなかった冊 {len(nothing)} 件: {shown}{more}"
+                     "（送付状・稟議書など請求書でない冊が混ざっているかもしれません"
+                     " ── 一覧では空の行になります）")
     grades = result.get("grades") or {}
     if grades:
         # ★ 区分の語も意味も field_record が持つ（ここで書き写さない・AST の番人が縛る）。

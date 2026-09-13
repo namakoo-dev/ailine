@@ -251,6 +251,13 @@ def describe(rec: Record) -> str:
         e = rec.evidences[0]
         return f"根拠は 1 つだけ（{e.at}・{e.how}）── 裏が取れていません"
     if g == SPLIT:
-        parts = "／".join(f"{at}={v}" for at, v, _ in both_sides(rec))
+        sides = both_sides(rec)
+        if not sides:
+            # ★ 2026-09-13（買い手の初見・C9）: 番地の対が無い「割」（読む側が
+            #   「どちらとも決められない」と宣言した形 ── 前回請求額と繰越が並ぶ冊・
+            #   請求書らしい頁が 2 枚ある冊）で **「（）」と空の括弧**を出していた。
+            #   空の括弧は「何か出すつもりだったのに失敗した」に見える。理由文が全部を言う。
+            return f"どちらとも決められません ── 値は出しません: {rec.blank_reason}"
+        parts = "／".join(f"{at}={v}" for at, v, _ in sides)
         return f"根拠が食い違いました（{parts}）── 値は出しません: {rec.blank_reason}"
     return f"根拠が見つかりません: {rec.blank_reason}"
