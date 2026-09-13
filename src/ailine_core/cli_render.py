@@ -745,16 +745,27 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
         tail = f"／{_fmt_num(amount)}" if amount is not None else ""
         lines.append(f"  ・{value}: {len(part.get('rows') or ())} 行{tail}"
                      f"  → {part.get('file')}")
+    unparsed = result.get("unparsed") or []
     if proof.get("ok"):
         amount = proof.get("amount") or {}
-        money = ""
-        if amount.get("counted"):
+        money, money_note = "", ""
+        # ★★ 2026-09-13（買い手役の初見）: 金額が全部文字の冊で「金額 0 ＝ 0＋0＋0」に ✓ が
+        #   付いた ── 測っていない回と合格の回が同じ顔（空虚な合格・verify_forms と同型）。
+        #   数えられた金額が 1 行も無いなら、✓ の中に金額を書かず、別の行で「証明していない」と言う。
+        if amount.get("counted") and not (unparsed and not amount.get("whole")):
             money = (f"／金額 {_fmt_num(amount.get('whole'))} ＝ "
                      f"{_fmt_num(amount.get('parts'))}＋{_fmt_num(amount.get('blank'))}"
                      f"＋{_fmt_num(amount.get('multi'))}")
+            if unparsed:
+                money += f"（金額が文字の {len(unparsed)} 行を除く）"
+        elif amount.get("counted"):
+            money_note = (f"△ 金額は証明していません ── 数えられた金額が 1 行もありません"
+                          f"（金額が文字の行 {len(unparsed)} 行）")
         lines.append(f"✓ 部分の和 ＝ 全体（行 {rows.get('whole')} ＝ {rows.get('parts')}＋"
                      f"{rows.get('blank')}＋{rows.get('multi')}＋{rows.get('excluded')}"
                      f"{money}）── 配った冊を開き直して数えた結果です")
+        if money_note:
+            lines.append(money_note)
     for line in proof.get("broken", ()) or ():
         lines.append(f"× 証明が破れました: {line}")
     if not result.get("amount"):
@@ -770,7 +781,6 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
     for row_num, value in result.get("multi", ()) or ():
         lines.append(f"⚠ 複数担当: {row_num} 行目『{value}』── どちらの冊に入れるかは"
                      "表からは決まらないので、どの冊にも入れていません")
-    unparsed = result.get("unparsed") or []
     if unparsed:
         lines.append(f"⚠ 金額が文字の行 {len(unparsed)} 行（{_rows_label(unparsed)}）"
                      "── 和に数えていません（読み替えていません）")

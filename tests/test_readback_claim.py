@@ -244,7 +244,7 @@ def test_single_success_claim_names_the_original_and_is_rederivable(tmp_path, mo
     assert rc == 0
     named = _assert_claim_is_independently_rederivable(out, _candidates(book))
     assert named == book.name, "既定（原本直接適用）なのに ✓ が原本を名指ししていない"
-    assert "（もとに戻す: ailine undo）" in out
+    assert '（もとに戻す: ailine undo "' in out
     # ★ undo の案内と ✓ の重複整理: 「反映しました」型の別バナーはもう出ない。
     assert out.count("ailine undo") == 1
 

@@ -7041,7 +7041,7 @@ def test_cmd_run_dsl_overwrite_gate_bypassed_with_overwrite_flag(tmp_path, monke
     assert rc == 0
     # ★ C9: 反映の ✓ は「原本を読み戻して確かめた」1行に統合された。
     assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
-    assert "（もとに戻す: ailine undo）" in captured.out
+    assert '（もとに戻す: ailine undo "' in captured.out
 
 def test_cmd_run_dsl_overwrite_gate_bypassed_with_copy_flag(tmp_path, monkeypatch, capsys):
     book = _overwrite_book(tmp_path)
@@ -7076,7 +7076,7 @@ def test_cmd_run_dsl_overwrite_gate_interactive_yes_applies(tmp_path, monkeypatc
     assert rc == 0
     # ★ C9: 反映の ✓ は「原本を読み戻して確かめた」1行に統合された。
     assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
-    assert "（もとに戻す: ailine undo）" in captured.out
+    assert '（もとに戻す: ailine undo "' in captured.out
 
 def test_cmd_run_dsl_overwrite_gate_interactive_no_aborts(tmp_path, monkeypatch, capsys):
     book = _overwrite_book(tmp_path)
@@ -7189,7 +7189,7 @@ def test_cmd_run_dsl_lookup_fill_overwrite_gate_bypassed_with_overwrite_flag(tmp
     assert rc == 0
     # ★ C9: 反映の ✓ は「原本を読み戻して確かめた」1行に統合された。
     assert "は機械検証済みの内容です（適用後に読み戻して確認: " in captured.out
-    assert "（もとに戻す: ailine undo）" in captured.out
+    assert '（もとに戻す: ailine undo "' in captured.out
 
 def test_cmd_run_dsl_lookup_fill_missing_column_does_not_corrupt_unrelated_column(tmp_path, monkeypatch, capsys):
     # ★ W10c 致命2 の通し確認（査定の再現そのもの）: 明細シートに『単価』列がまだ無い状態

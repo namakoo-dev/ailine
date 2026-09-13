@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 import openpyxl
 
+from ailine_core import input_path
 from ailine_core import accounts_core, csv_quarantine, filetypes
 
 #: 1 冊から読む行数の上限（★ 仕訳帳は長い ── 打ち切ったら打ち切ったと言う）。
@@ -98,7 +99,7 @@ def read_journal(path) -> JournalBook:
                            refused=f"文字コードが決められません（{path.name}）: {e}")
     except Exception as e:   # noqa: BLE001 ── 名指しして断る（1 冊で止めない側は呼び出し元）
         return JournalBook(name=path.name, path=str(path),
-                           refused=f"読み込みに失敗しました（{type(e).__name__}）: {path.name}")
+                           refused=f"{path.name}: {input_path.explain_unreadable(e, path)}")
 
     header_row, headers, header_map, refusal = \
         accounts_core.resolve_accounts_columns(raw_rows)

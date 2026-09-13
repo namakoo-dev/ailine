@@ -18,6 +18,7 @@ from xml.etree import ElementTree as ET
 
 import openpyxl
 
+from ailine_core import input_path
 from ailine_core import (forms_collect, inspection, multifile, split_people,
                           total_row, xml_readback)
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
@@ -345,7 +346,8 @@ def evaluate_and_stack(path, base_headers: list, base_sheet_name, header_row: in
     try:
         wb = openpyxl.load_workbook(path, data_only=True)
     except Exception as e:
-        return FileStackResult(name=path.name, status="積めなかった", reason=f"読み込み失敗: {e}")
+        return FileStackResult(name=path.name, status="積めなかった",
+                               reason=input_path.explain_unreadable(e, path))
     try:
         ws, sheet_fell_back = multifile.find_matching_sheet(wb, base_sheet_name)
         sheet_fallback = (base_sheet_name, ws.title) if sheet_fell_back else None

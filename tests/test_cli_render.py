@@ -15,7 +15,7 @@ from ailine_core import cli_render
 from ailine_core.cli_render import (
     render_code_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
-    render_forms_report,
+    render_forms_report, render_split_report,
 )
 
 
@@ -151,3 +151,33 @@ def test_forms_report_does_not_say_it_cut_off_when_it_did_not():
     """★ 陰性対照 ── ちょうど収まる件数で「ほか」を言ったら嘘。"""
     lines = render_forms_report("受領", "一覧.xlsx", _forms_result(cli_render.SUSPECT_SHOWN))
     assert not any("ほか" in ln for ln in lines), lines
+
+
+# --- render_split_report: 金額が全部文字なら ✓ の中に金額を書かない（2026-09-13・買い手役の初見）--
+#
+# ★★ 候補の冊（金額が文字）を split したら `✓ …／金額 0 ＝ 0＋0＋0` が出た ── 測っていない回と
+#   合格の回が同じ顔（空虚な合格・forms の verify と同型）。
+
+
+def _split_result(unparsed, whole):
+    return {"by": "部門", "amount": "金額", "parts": [], "blank": [], "multi": [], "excluded": [],
+            "unparsed": unparsed, "files_written": True,
+            "proof": {"ok": True, "rows": {"whole": 10, "parts": 9, "blank": 1, "multi": 0,
+                                           "excluded": 0},
+                      "amount": {"counted": 10, "whole": whole, "parts": whole, "blank": 0,
+                                 "multi": 0}}}
+
+
+def test_split_report_does_not_prove_money_it_could_not_count():
+    lines = render_split_report("候補.xlsx", "配る", _split_result(list(range(2, 11)), 0))
+    ok = [ln for ln in lines if ln.startswith("✓")]
+    assert len(ok) == 1 and "金額" not in ok[0], ok
+    assert any(ln.startswith("△ 金額は証明していません") for ln in lines), lines
+
+
+def test_split_report_still_proves_money_when_it_counted_it():
+    """★ 陰性対照 ── 数えられた回は今までどおり ✓ の中に金額の恒等式。"""
+    lines = render_split_report("一覧.xlsx", "配る", _split_result([], 143878))
+    ok = [ln for ln in lines if ln.startswith("✓")]
+    assert len(ok) == 1 and "金額 143878 ＝" in ok[0], ok
+    assert not any(ln.startswith("△") for ln in lines), lines

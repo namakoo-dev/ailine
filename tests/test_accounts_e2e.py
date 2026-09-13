@@ -339,3 +339,20 @@ def test_the_route_is_declared_and_reachable():
     r = _run("ops")
     assert r.returncode == 0
     assert "ailine accounts" in r.stdout, r.stdout
+
+
+def test_the_amount_columns_are_written_as_numbers_not_text(books, tmp_path):
+    """★★ 2026-09-13（買い手役の初見）: CSV 入力の候補の冊で `借方金額(円)` が `'13750'`（文字）
+    だった ── Excel で足せず、split では「金額 0 ＝ 0＋0＋0」に ✓。`ailine csv` は数にする（片配線）。"""
+    today, past = books
+    out = tmp_path / "候補.xlsx"
+    assert _accounts(today, past, out).returncode == 0
+    wb = openpyxl.load_workbook(out)
+    ws = wb.worksheets[0]
+    heads = [c.value for c in ws[1]]
+    money = [i for i, h in enumerate(heads) if "金額" in str(h)]
+    assert money, heads
+    cells = [ws.cell(row=r, column=i + 1).value for r in range(2, ws.max_row + 1) for i in money]
+    numbers = [v for v in cells if isinstance(v, (int, float))]
+    assert len(numbers) >= 3 and all(not isinstance(v, str) for v in cells if v not in (None, "")), cells
+    wb.close()

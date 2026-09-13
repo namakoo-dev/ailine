@@ -10804,6 +10804,27 @@ def _cmd_undo_body(a: argparse.Namespace, book: Path) -> int:
 # ★ W8b: 安全器官（既定の反転は次コミット。今回は原本を直接書く危険を減らす下ごしらえ）
 # ---------------------------------------------------------------------------
 
+def refuse_if_run_cannot_open(book: Path) -> int | None:
+    """`ailine run` の対象が**在るのに開けない**なら、触る前に人の言葉で断る。
+
+    ★★ 2026-09-13（買い手役 3 体の初見・事務職が離脱を宣言した所）: 拡張子は合っていても
+      中身が Excel でないファイル（テキストを .xlsx に改名・落としかけ）で、LibreOffice に渡した
+      後に**英語のトレースバック 30 行**（`zipfile.BadZipFile`）が出ていた。1 つ前の `.xls` は
+      日本語で完璧に案内していたのに。文面は `input_path.explain_unreadable` が 1 箇所で持つ
+      （forms / scan / stack / verify と同じ言い方）。
+    ★ 形式の関所（`refuse_if_run_cannot_handle`）とは分ける ── あちらは拡張子だけを見る純関数で、
+      空のファイルでも「扱える形式」と答えるのが陰性対照（断りを広げすぎない）。
+    ★ 在るかどうかは `input_path.require_file` が先に見ている。undo には掛けない（命綱）。
+    """
+    try:
+        openpyxl.load_workbook(book, read_only=True).close()
+    except Exception as e:   # noqa: BLE001 ── どの例外でも、生の名前は見せない
+        print(f"× {book.name}: {input_path.explain_unreadable(e, book)}")
+        print("  → 原本は触っていません")
+        return EXIT_ENVIRONMENT
+    return None
+
+
 def refuse_if_run_cannot_handle(book: Path) -> int | None:
     """`ailine run` が扱えない形式なら、**触る前に**人の言葉で断る。
 
@@ -12224,7 +12245,9 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             print(_untouched_original_line(book, out_book))
             result["out"] = str(out_book)
             return False
-        final, trailer = book, "（もとに戻す: ailine undo）"
+        # ★ 2026-09-13（買い手役の初見）: `ailine undo` だけ打つと `required: book` の英語で
+        #   落ちる ── 一番慌てている瞬間に出る唯一の英語だった。**そのまま打てる形**で出す。
+        final, trailer = book, f'（もとに戻す: ailine undo "{book}"）'
         result["out"] = str(book)
     else:
         final, trailer = out_book, f"（原本 {book.name} は変更していません）"
@@ -12430,6 +12453,9 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
     unusable = refuse_if_run_cannot_handle(book)
     if unusable is not None:
         return unusable
+    unopenable = refuse_if_run_cannot_open(book)
+    if unopenable is not None:
+        return unopenable
 
     blocked = refuse_if_locked(book)
     if blocked is not None:
@@ -15655,7 +15681,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
             print(json.dumps({"out": None, "condition": None, "multifile": {
                 "denominator": denominator, "matched_files": 0, "contributing_files": 0,
                 "rows_written": 0, "files": [], "skipped": [
-                    {"name": p.name, "reason": "旧形式(.xls)または読み込み失敗"} for p in candidates],
+                    {"name": p.name, "reason": multifile.unreadable_reason(p)} for p in candidates],
                 "self_excluded": self_excluded, "sheet_fallbacks": [], "excluded_detail": [],
                 "mismatches": [], "rebuilt_own_output": False}}, ensure_ascii=False))
         return 0
@@ -16681,7 +16707,7 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
     try:
         grid = csv_export.read_source(book_path, a.sheet)
     except Exception as e:
-        print(f"× 読み込みに失敗しました: {e}")
+        print(f"× {book_path.name}: {input_path.explain_unreadable(e, book_path)}")
         return 1
     if grid.sheet_fallback:
         print(f"× シート『{a.sheet}』がありません")
@@ -16868,7 +16894,7 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
     try:
         wb = openpyxl.load_workbook(book_path, data_only=True)
     except Exception as e:
-        print(f"× 読み込みに失敗しました: {e}")
+        print(f"× {book_path.name}: {input_path.explain_unreadable(e, book_path)}")
         return 1
     sheet = a.sheet or wb.sheetnames[0]
     if sheet not in wb.sheetnames:
@@ -17066,8 +17092,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
         try:
             wb = openpyxl.load_workbook(p, data_only=True)
             wbf = openpyxl.load_workbook(p, data_only=False)
-        except Exception as e:
-            unreadable.append({"name": p.name, "reason": f"読み込み失敗: {type(e).__name__}"})
+        except Exception as e:   # noqa: BLE001 ── 例外名を生で見せない（次の一手を言う）
+            unreadable.append({"name": p.name, "reason": input_path.explain_unreadable(e, p)})
             continue
         try:
             collected.append((p.name, form_read.read_book(wb, wb_formula=wbf)))
@@ -17189,7 +17215,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
     base_path, base_wb = multifile.open_base_workbook(candidates)
     if base_path is None:
         result = {"denominator": denominator, "stacked_files": 0, "rows_written": 0,
-                  "files": [], "skipped": [{"name": p.name, "reason": "旧形式(.xls)または読み込み失敗"}
+                  "files": [], "skipped": [{"name": p.name, "reason": multifile.unreadable_reason(p)}
                                             for p in candidates],
                   "sums": {}, "excluded_detail": [], "mismatches": [], "col_a_warnings": [],
                   "sheet_fallbacks": [], "self_excluded": self_excluded, "rebuilt_own_output": False,
@@ -17479,7 +17505,7 @@ def cmd_split(a: argparse.Namespace) -> int:
     try:
         wb = openpyxl.load_workbook(book, data_only=True)
     except Exception as e:   # noqa: BLE001 ── 名指しして断る（推測で先へ進まない）
-        result["refused"] = f"読み込みに失敗しました（{type(e).__name__}）: {book}"
+        result["refused"] = f"{book.name}: {input_path.explain_unreadable(e, book)}"
         emit()
         return 4
     try:
@@ -17819,7 +17845,11 @@ def cmd_accounts(a: argparse.Namespace) -> int:
         ws = wb_out.active
         ws.title = accounts_core.SHEET_NAME
         ws.append(out_headers)
+        # ★ 金額の列は数で書く（CSV は全部が文字 ── `ailine csv` と同じ線・他の列は触らない）。
+        money_cols = {i for i, h in enumerate(labels) if "金額" in str(h)}
         for row_num, values in today.rows:
+            values = [accounts_core.money_value(v) if i in money_cols else v
+                      for i, v in enumerate(values)]
             acc, grade, why, cite = by_row.get(row_num, (None, None, None, None))
             padded = [values[i] if i < len(values) else None for i in range(len(labels))]
             ws.append(padded + [today_path.name, row_num, acc, grade, why, cite])
@@ -17940,6 +17970,13 @@ def cmd_verify(a: argparse.Namespace) -> int:
     if not out.is_file():
         print(f"× ファイルが見つかりません: {out}")
         return input_path.MISSING_INPUT_EXIT
+    try:
+        # ★ 2026-09-13: 壊れた冊を渡すと印が読めず「ailine の印がありません」と**誤診**していた
+        #   （誤診は次の手を間違わせる ── 人は原本を疑い始める）。開けないなら開けないと言う。
+        openpyxl.load_workbook(out, read_only=True).close()
+    except Exception as e:   # noqa: BLE001
+        print(f"× {out.name}: {input_path.explain_unreadable(e, out)}")
+        return EXIT_ENVIRONMENT
     # ★★ 2026-09-13（需要③）: 科目の候補の冊は「今回の仕訳 ＋ 過去の仕訳…」で受ける
     #   （先例の番地のセルを読むため）。ここを未配線にすると、元 2 冊の形（照合）へ
     #   流れて「印がありません」と**誤診**する ── 誤診は次の手を間違わせる。

@@ -498,3 +498,14 @@ def test_two_keys_disagreeing_is_still_split():
          _row("2", "2026/03/10", "会議費", "", "乙商店", "3000", memo="打合せ")])
     assert _grade(plan, 2) == field_record.SPLIT
     assert _value(plan, 2) is None
+
+
+def test_the_last_precedent_is_not_called_the_newest():
+    """★ 2026-09-13（買い手役の初見）: `R08/08/25` が在るのに「最新 R08/07/25」と出た ── 日付を
+    読まないと決めたのに「最新」と呼ぶのは、同じ文で開示していても画面の主語が嘘。"""
+    past = [_row("1", "2026/08/25", "地代家賃", "駐車場", "丙パーキング", "8000", memo="8月分"),
+            _row("2", "2026/07/25", "地代家賃", "駐車場", "丙パーキング", "8000", memo="7月分")]
+    plan = _plan([_row("11", "2026/09/25", "", "駐車場", "丙パーキング", "8000", memo="9月分")], past)
+    reason = accounts_core.reason_of(plan.records[2])
+    assert "最新" not in reason, reason
+    assert "並びで最後の先例 2026/07/25" in reason, reason

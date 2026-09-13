@@ -665,6 +665,9 @@ def test_transcript_golden(tmp_path, monkeypatch, capsys, name):
     #   repo の絶対パスを含み、golden に生成マシンのパス（C:\Dev\ailine）が焼き込まれて
     #   CI（D:\a\ailine\ailine）で必ず不一致になった。repo root を <REPO> に正規化する。
     out = out.replace(str(Path(__file__).resolve().parent.parent), "<REPO>")
+    # ★ 2026-09-13: 「もとに戻す: ailine undo "<冊のパス>"」が**そのまま打てる形**（絶対パス）に
+    #   なったので、実行ごとに変わる tmp のパスを伏せる（撮りたいのは案内の形）。
+    out = out.replace(str(tmp_path), "<TMP>")
     # rc をトランスクリプトの先頭に埋め込む（終了コードの回帰もこの1ファイルで拾える）。
     text = f"[exit code: {rc}]\n{out}"
     assert_golden_text(F9_DIR / f"{name}.txt", text, label=name)

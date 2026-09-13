@@ -54,6 +54,34 @@ def require_folder(path) -> Path:
     return folder
 
 
+#: 「開けない」を人の言葉にする（★ 例外の**型名**で分ける ── openpyxl を import しない）。
+#: ★★ 2026-09-13（買い手役 3 体の初見・事務職が離脱を宣言した所）: 中身がテキストなのに
+#:   拡張子だけ .xlsx のファイルで `run` が**英語のトレースバック 30 行**（BadZipFile）を出し、
+#:   `forms` は「読み込み失敗: BadZipFile」と例外名を生で見せていた。1 つ前の `.xls` では
+#:   日本語で完璧に案内していたのに ── 「無い」の門（上）の隣に「開けない」の門が無かった。
+_UNREADABLE = (
+    ("BadZipFile", "中身が Excel の形ではありません（拡張子だけ .xlsx になっている・"
+                   "ダウンロードが途中で切れた・パスワード付き、など）"
+                   "── Excel か LibreOffice で開いて .xlsx として保存し直してください"),
+    ("InvalidFileException", "この形式は開けません{old}"
+                             "── Excel か LibreOffice で .xlsx として保存し直してください"),
+    ("PermissionError", "開けません（別のプログラムが使っている・読み取りの権限が無い）"
+                        "── Excel で開いていれば閉じてください"),
+)
+
+
+def explain_unreadable(exc: BaseException, path) -> str:
+    """開けなかった理由を、次の一手つきの 1 文にする（★ 例外名は出さない）。"""
+    name = type(exc).__name__
+    suffix = Path(path).suffix.lower()
+    old = "（旧形式の .xls）" if suffix == ".xls" else f"（{suffix or '拡張子なし'}）"
+    for kind, text in _UNREADABLE:
+        if kind == name or kind in str(exc):
+            return text.format(old=old)
+    return ("読めません（壊れているかもしれません）"
+            "── Excel か LibreOffice で開いて保存し直すと直ることがあります")
+
+
 def require_file(path, *, what: str = "文書") -> Path:
     """ファイルとして受け取れることを確かめて返す（無い／フォルダだった → 断る）。"""
     target = Path(path).resolve()

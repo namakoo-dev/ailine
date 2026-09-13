@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 import openpyxl
 
+from ailine_core import input_path
 from ailine_core import compare_blocked, inspection, multifile, total_row, xml_readback
 from ailine_core.filetypes import OPENPYXL_READABLE_SUFFIX
 from ailine_core.primitives import is_number as _is_number
@@ -172,7 +173,8 @@ def evaluate_and_extract(path, base_headers: list, base_sheet_name, header_row: 
     try:
         wb = openpyxl.load_workbook(path, data_only=True)
     except Exception as e:
-        return FileExtractResult(name=path.name, status="取れなかった", reason=f"読み込み失敗: {e}")
+        return FileExtractResult(name=path.name, status="取れなかった",
+                                 reason=input_path.explain_unreadable(e, path))
     try:
         ws, sheet_fell_back = multifile.find_matching_sheet(wb, base_sheet_name)
         sheet_fallback = (base_sheet_name, ws.title) if sheet_fell_back else None

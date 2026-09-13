@@ -53,6 +53,26 @@ SLIP_NO = "取引No"
 #:   当たらなければ見た見出しを並べて断る（設計 §6.2）。
 #: ★ freee は別名が数個増えるだけで、**測る対象には入れない**（一次資料が 403 で読めず、
 #:   推測した列名で検体を書けば測るのは推測の再現になる・設計 §6.2）。
+_MONEY_TEXT = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+
+def money_value(v):
+    """金額の列の文字を数にする（★ CSV は全部が文字 ── `ailine csv` の検疫と同じ線）。
+
+    ★★ 2026-09-13（買い手役の初見）: 候補の冊の `借方金額(円)` が `'13750'`（文字）で書かれ、
+      Excel で足せず、その冊を `split` に掛けると「金額 0 ＝ 0＋0＋0」に ✓ が付いた。
+      同じ道具の `ailine csv` は数にする ── 片配線だった。
+    ★ 桁区切り・円記号は外す。数に見えなければ**そのまま**（読み替えない・D5）。
+    ★ 金額の列にしか掛けない（取引No の先頭 0 を落とさない）。
+    """
+    if not isinstance(v, str):
+        return v
+    s = v.strip().replace(",", "").replace("，", "").lstrip("¥￥").rstrip("円").strip()
+    if _MONEY_TEXT.fullmatch(s):
+        return float(s) if "." in s else int(s)
+    return v
+
+
 COLUMN_ALIASES = {
     DEBIT_ACCOUNT: ("借方勘定科目",),
     DEBIT_AMOUNT: ("借方金額(円)", "借方金額（円）", "借方金額"),
@@ -480,13 +500,15 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
             same = next(iter(by_account.values()))
             last = same[-1]
             account = str(same[0][0]).strip()
-            # ★ 「最新」は**読んだ並びの最後**（日付は読まないと決めたので、日付として
-            #   比べていない ── 根拠文にそう書く）。1 件のときは「すべて」と言わない。
+            # ★ 「最新」とは**呼ばない**（2026-09-13・買い手役の初見）: 弥生は伝票 No. 順で出ることが
+            #   あり、読んだ並びの最後が最新とは限らない。実際 `R08/08/25` が在るのに
+            #   「最新 R08/07/25」と出た ── 同じ文で「日付は読んでいません」と開示していても、
+            #   画面の主語が嘘なら嘘。「読んだ並びで最後の先例」と、そのままを言う。
             how = (f"{key}『{shown}』の先例は 1 件（{account}・{last[3]}・"
                    f"{last[1]} {last[2]} 行目）") if len(same) == 1 else (
                 f"{key}『{shown}』は過去 {len(same)} 件すべて {account}"
-                f"（最新 {last[3]}・{last[1]} {last[2]} 行目／"
-                "最新は読んだ並びの最後です ── 日付は読んでいません）")
+                f"（読んだ並びで最後の先例 {last[3]}・{last[1]} {last[2]} 行目"
+                " ── 日付順には並べていません）")
             evidences.append(field_record.Evidence(rule=key, value=account, at=key, how=how))
             cites.append((key, last[1], last[2]))
         else:
@@ -506,7 +528,7 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
             for same in by_account.values():
                 last = same[-1]
                 parts.append(f"{str(same[0][0]).strip()} {len(same)} 件"
-                             f"（最新 {last[3]}・{last[1]} {last[2]} 行目）")
+                             f"（並びで最後の先例 {last[3]}・{last[1]} {last[2]} 行目）")
             split_keys.append(key)
             conflict_lines.append(f"{key}『{shown}』の内訳: " + "／".join(parts)
                                   + "（この鍵は出所に数えていません）")

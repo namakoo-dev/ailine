@@ -702,6 +702,7 @@ def reference_drift_warning(book_meta: 'dict', sheet: 'str | None', *, row_lo: '
 def refuse_if_locked(book: 'Path') -> 'int | None'
 def refuse_if_output_is_someone_elses(book: 'Path') -> 'int | None'
 def refuse_if_run_cannot_handle(book: 'Path') -> 'int | None'
+def refuse_if_run_cannot_open(book: 'Path') -> 'int | None'
 def release_run_lock(path: 'Path | None' = None) -> 'None'
 def removal_axis_is_wrong(op: 'str', resolved_args: 'dict', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1) -> 'str | None'
 def removal_reading(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)

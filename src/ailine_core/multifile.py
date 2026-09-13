@@ -27,6 +27,22 @@ _AILINE_WORKFILES = frozenset({
 })
 _AILINE_WORKFILE_SUFFIXES = frozenset({".lock", ".jsonl"})
 
+def unreadable_reason(path: Path) -> str:
+    """1 冊が「なぜ開けないか」を人の言葉で（★ 基準の冊が 1 つも取れなかった経路で使う）。
+
+    ★ 2026-09-13（買い手役の初見）: `stack`/`run <フォルダ>` は基準が取れないと全冊を
+      「旧形式(.xls)または読み込み失敗」と**一律**に言っていた ── 中身がテキストの .xlsx も、
+      本当の .xls も同じ文で、人は次の一手を選べない。理由は 1 冊ずつ、翻訳器（input_path）で。
+    """
+    if path.suffix.lower() != OPENPYXL_READABLE_SUFFIX:
+        return f"旧形式({path.suffix.lower()})"
+    try:
+        openpyxl.load_workbook(path, read_only=True).close()
+    except Exception as e:   # noqa: BLE001 ── 例外名は見せない（次の一手を言う）
+        return input_path.explain_unreadable(e, path)
+    return "読み込み失敗"
+
+
 def classify_folder_contents(folder: Path, *, also=()):
     """folder 直下（サブフォルダの中は見ない）を分類する。
        戻り値: (candidates: 名前順の Path リスト, excluded: {"temp": n, "subdirs": n, "csv": n})。
@@ -346,7 +362,8 @@ def evaluate_file(path: Path, base_headers: list, base_sheet_name: str | None, h
     try:
         wb = openpyxl.load_workbook(path, data_only=True)
     except Exception as e:
-        return {"name": path.name, "status": "取れなかった", "reason": f"読み込み失敗: {e}"}
+        return {"name": path.name, "status": "取れなかった",
+                "reason": input_path.explain_unreadable(e, path)}
     try:
         ws, sheet_fallback = find_matching_sheet(wb, base_sheet_name)
         # ★ 見出し行はこの冊で探す（2026-09-11・find_header_row に畳んだ）
