@@ -298,3 +298,28 @@ def test_the_same_number_is_never_called_a_double_payment():
     books = {"A.xlsx": _book("福井興業株式会社", (2026, 6, 30), "F-1201", 61000),
              "B.xlsx": _book("福井興業株式会社", (2026, 7, 2), "F-1201", 61000)}
     assert fs.DOUBLE_PAY not in _kinds_of(books), _kinds_of(books)
+
+
+# --- 請求額が 0 の冊（2026-09-13・買い手役の初見・経理）------------------------------------
+#
+# ★★ 白紙の雛形（明細 0 行・すべて ¥0）が請求額 0 の行として一覧に載り、合計にそのまま入った。
+#   値は原本のまま（0 と書いてある・規則を知らない側の検体 6 冊が「値 0 が正」と宣言している）──
+#   黙らせるのは束の所見の仕事。
+
+
+def test_a_zero_amount_is_named_even_for_a_lone_book():
+    books = {"白紙.pdf": _book("あかね商事株式会社", (2026, 9, 1), None, 0)}
+    found = fs.suspect(books)
+    assert _kinds(found) == {(fs.ZERO_AMOUNT, ("白紙.pdf",))}, found
+    assert "0" in found[0]["理由"] and "白紙" in found[0]["理由"], found[0]["理由"]
+
+
+def test_a_zero_amount_is_named_when_the_vendor_is_unreadable():
+    """★ 取引先が読めない冊は取引先ごとの照合から外れるが、0 は 1 冊で分かる。"""
+    books = {"白紙.pdf": _book(None, None, None, 0)}
+    assert fs.ZERO_AMOUNT in _kinds_of(books)
+
+
+def test_a_normal_amount_is_not_called_zero():
+    assert fs.ZERO_AMOUNT not in _kinds_of(_normal())
+    assert fs.suspect(_normal()) == []

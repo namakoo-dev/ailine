@@ -567,3 +567,30 @@ def test_overwriting_its_own_previous_output_is_said_out_loud(folder, tmp_path):
     assert "上書きします" not in _forms(folder, out).stdout
     r = _forms(folder, out)
     assert r.returncode == 0 and "前回の自分の出力 一覧.xlsx を上書きします" in r.stdout, r.stdout
+
+
+# --- 期間外の混入を内訳で言う（2026-09-13・買い手役の初見・経理）------------------------------
+#
+# ★ 「9月受領分」に 5〜8 月が 4 冊（142,000 円）黙って混ざっていた。疑いにはしない（前月分が遅れて
+#   混ざるのは実務で普通・検体の設計 §9.2）── 月ごとの冊数を 1 行言う。
+
+
+def _redate(path: Path, text: str) -> None:
+    wb = openpyxl.load_workbook(path)
+    wb.active["H3"] = text
+    wb.save(path)
+    wb.close()
+
+
+def test_mixed_months_are_counted_out_loud(folder, tmp_path):
+    _redate(folder / "b.xlsx", "2026/5/31")
+    r = _forms(folder, tmp_path / "一覧.xlsx")
+    assert r.returncode == 0, r.stdout
+    assert "請求日の月が 2 つ混ざっています: 2026年5月 1／2026年8月 1" in r.stdout, r.stdout
+    assert "束で見て怪しいもの" not in r.stdout, "★ 月の違いを疑いにした（商慣行）"
+
+
+def test_a_single_month_says_nothing_about_months(folder, tmp_path):
+    """★ 陰性対照 ── 同じ月だけなら余計な行を足さない。"""
+    r = _forms(folder, tmp_path / "一覧.xlsx")
+    assert "混ざっています" not in r.stdout, r.stdout

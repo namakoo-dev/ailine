@@ -115,3 +115,20 @@ def test_demo_suggests_the_run_when_everything_is_ready(tmp_path, monkeypatch, c
                          lambda model="qwen2.5-coder:7b": [[_PY_CHECK, True, ""]])
     rc, out = _run_main(["demo"], capsys)
     assert rc == 0 and "次にこれを打って" in out, out
+
+
+@needs_impl
+def test_every_book_the_readme_walkthrough_names_is_placed_by_demo(tmp_path, monkeypatch, capsys):
+    """★ 2026-09-13（買い手役の初見・事務職）: README の手順表は `demo/2_売上.xlsx` を名指しするが、
+    `ailine demo` が置くのは sample/lookup/sales だった ── clone した `demo/` から手で持ってきて
+    初めて試せた。B1（案内どおり打つと動かない）の家系。表に出る冊は demo が置く。"""
+    import re
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    named = sorted(set(re.findall(r"`demo/([^`]+\.xlsx)`", readme)))
+    assert len(named) >= 2, named
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    rc, out = _run_main(["demo"], capsys)
+    assert rc == 0, out
+    missing = [n for n in named if not (tmp_path / n).exists()]
+    assert not missing, f"README の手順表が名指しする冊を demo が置いていない: {missing}"

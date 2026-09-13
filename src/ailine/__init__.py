@@ -17007,7 +17007,10 @@ def cmd_demo(a: argparse.Namespace) -> int:
         print(f"× 同梱サンプルが見つかりません（{src_dir}）")
         return EXIT_ENVIRONMENT
     dest_dir = Path(a.out).resolve() if getattr(a, "out", None) else Path.cwd()
-    wanted = ["sample.xlsx", "lookup.xlsx", "sales.xlsx"]
+    # ★ 2026-09-13（買い手役の初見・事務職）: README の手順表が名指しする 2 冊（2_売上・3_売上_欠けあり）
+    #   は clone の demo/ にしか無く、install した人は手で持ってこないと試せなかった（B1 の家系）。
+    #   表に出る冊は demo が置く（`tests/test_demo_command.py` が README と突き合わせる）。
+    wanted = ["sample.xlsx", "lookup.xlsx", "sales.xlsx", "2_売上.xlsx", "3_売上_欠けあり.xlsx"]
     available = [n for n in wanted if (src_dir / n).exists()]
     if not available:
         print(f"× 同梱サンプルが空です（{src_dir}）")
@@ -17134,6 +17137,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
               "field_grades": forms_collect.grades_per_file(collected),
               # ★ 請求書でない冊の徴候（B7）── 一覧からは外さない・名指しするだけ。
               "nothing_found": forms_collect.nothing_found(collected),
+              # ★ 期間外の混入を内訳で言う（疑いにはしない・B 経理の所見）
+              "months": forms_collect.months_of(collected),
               "self_excluded": self_excluded, "findings": findings,
               "suspicions": suspicions, "file_written": False}
 

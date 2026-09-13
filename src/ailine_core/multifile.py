@@ -121,12 +121,37 @@ def classify_folder_contents(folder: Path, *, also=()):
     return candidates, excluded
 
 
+def _first_row_signature(path) -> tuple | None:
+    """1 冊の 1 行目の見出し（結合を越えて読む）。開けなければ None。"""
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    except Exception:   # noqa: BLE001 ── 開けない冊は基準の候補にならない
+        return None
+    try:
+        ws = wb.worksheets[0]
+        return tuple(str(c.value).strip() for c in next(ws.iter_rows(min_row=1, max_row=1), ())
+                     if c.value is not None)
+    finally:
+        wb.close()
+
+
 def open_base_workbook(candidates):
-    """基準ファイル方式: パス辞書順（呼び出し側で名前順に並べ済み）で最初に読めた .xlsx を
-       基準にする。戻り値: (path, workbook) または、読める .xlsx が1つも無ければ (None, None)。
-       ★ .xls は openpyxl で開けないため基準になれない（読めたものだけが資格を持つ）。"""
-    for path in candidates:
-        if path.suffix.lower() != OPENPYXL_READABLE_SUFFIX:
+    """基準ファイル方式: **1 行目の見出しが最も多くの冊と同じ**冊を基準にする（同数なら名前順）。
+       戻り値: (path, workbook) または、読める .xlsx が1つも無ければ (None, None)。
+       ★ .xls は openpyxl で開けないため基準になれない（読めたものだけが資格を持つ）。
+
+       ★★ 2026-09-13（買い手役の初見・経理）: 旧版は**名前順で最初**に読めた冊を基準にしていた。
+         `10月_歓迎会出欠.xlsx`（異物 1 冊）が先頭に来ただけで、本物の請求書 20 冊が全部
+         「取れなかった（欠け: 氏名, 出欠, 備考）」になった。基準は多数派から選ぶ。
+         同じ雛形ばかりの束では旧版と同じ冊が選ばれる（名前順の先頭が多数派の一員）。"""
+    readable = [p for p in candidates if p.suffix.lower() == OPENPYXL_READABLE_SUFFIX]
+    sigs = {p: _first_row_signature(p) for p in readable}
+    counts: dict = {}
+    for s in sigs.values():
+        if s is not None:
+            counts[s] = counts.get(s, 0) + 1
+    for path in sorted(readable, key=lambda p: (-counts.get(sigs[p], 0), p.name)):
+        if sigs[path] is None:
             continue
         try:
             wb = openpyxl.load_workbook(path, data_only=True)

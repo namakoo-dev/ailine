@@ -111,6 +111,23 @@ def nothing_found(all_records: list) -> list:
     return out
 
 
+def months_of(all_records: list) -> dict:
+    """請求日の**月ごとの冊数**（`"2026-09"` → 15）。日付の無い冊は `""` に数える。
+
+    ★★ 2026-09-13（買い手役の初見・経理）: 「9月受領分」のフォルダに 5〜8 月の請求が 4 冊
+      （142,000 円）黙って混ざっていた。道具は月を理解している（束の所見に「どちらも 2026年9月」）
+      のに、期間外を一言も言わなかった。★ 疑いにはしない ── 受領フォルダに前月分が遅れて混ざるのは
+      実務で普通（検体の設計 §9.2 の ASSUMED）。**内訳を 1 行言う**だけ。数えるのは値の出た請求日。
+    """
+    out: dict = {}
+    for _name, records in all_records:
+        rec = records.get("請求日")
+        d = value(rec) if rec is not None else None
+        key = f"{d.year:04d}-{d.month:02d}" if hasattr(d, "year") and hasattr(d, "month") else ""
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
 def grades_per_file(all_records: list) -> list:
     """機械可読の側へ出す、1 冊 1 項目ごとの区分。★ 人向けの画面には出さない。
 

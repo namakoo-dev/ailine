@@ -32,8 +32,9 @@ MAGNITUDE = "桁違い"
 NUMBER_CLASH = "番号が重なる"
 DOUBLE_PAY = "二重払い"
 BLANK_DATE = "空欄"
+ZERO_AMOUNT = "金額が 0"
 
-KINDS = (DUPLICATE, DOUBLE_PAY, REISSUE, YEAR_OFF, MAGNITUDE, NUMBER_CLASH, BLANK_DATE)
+KINDS = (DUPLICATE, DOUBLE_PAY, REISSUE, YEAR_OFF, MAGNITUDE, NUMBER_CLASH, BLANK_DATE, ZERO_AMOUNT)
 
 #: 桁違いと呼ぶ比（他の月の中央値に対して）。検体の普通の変動は最大 2.3 倍（2026-09-11）。
 MAGNITUDE_RATIO = 4.0
@@ -166,6 +167,17 @@ def suspect(books: dict) -> list:
                 emit(DUPLICATE, (a, b),
                      f"「{a}」と「{b}」は {'・'.join(same_keys)}・金額（{_yen(fa['請求額'])}）が"
                      f"同じ ── 同じ請求書が 2 通ある（重複）疑い{note}")
+
+    # ── 1 冊で成り立つ疑い: 請求額が 0 ──
+    # ★★ 2026-09-13（買い手役の初見・経理）: 明細 0 行・小計/税/合計すべて ¥0 の**白紙の雛形**
+    #   （送り間違い）が請求額 `0` の行として一覧に載り、合計にそのまま入った。値は原本のまま
+    #   （0 と書いてある）── 黙らせないのはここ。取引先が読めない冊でも鳴らす（1 冊で分かる）。
+    for name in sorted(books):
+        x = books[name].get("請求額")
+        if isinstance(x, (int, float)) and not isinstance(x, bool) and abs(float(x)) < 0.005:
+            emit(ZERO_AMOUNT, (name,),
+                 f"「{name}」の請求額が 0 です ── 白紙の雛形（送り間違い）か、金額の無い書類の疑い。"
+                 "合計に入れる前に確認")
 
     # ── 取引先ごとの疑い ──
     for vendor, names in _groups_by_vendor(books).items():

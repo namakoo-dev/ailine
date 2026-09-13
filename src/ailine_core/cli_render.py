@@ -696,6 +696,15 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
         # ★ 区分の語も意味も field_record が持つ（ここで書き写さない・AST の番人が縛る）。
         got = "／".join(f"{g} {grades[g]}" for g in field_record.GRADE_ORDER if g in grades)
         lines.append(f"項目の区分: {got}（{field_record.grade_legend()}）")
+    months = {k: v for k, v in (result.get("months") or {}).items() if k}
+    if len(months) >= 2:
+        # ★★ 2026-09-13（買い手役・経理）: 9 月のフォルダに 5〜8 月が 4 冊（142,000 円）黙って
+        #   混ざっていた。疑いにはしない（前月分が遅れて混ざるのは実務で普通）── 内訳を 1 行言う。
+        shown = "／".join(f"{k[:4]}年{int(k[5:])}月 {months[k]}" for k in sorted(months))
+        undated = (result.get("months") or {}).get("", 0)
+        tail = f"・請求日の無い冊 {undated}" if undated else ""
+        lines.append(f"請求日の月が {len(months)} つ混ざっています: {shown}{tail}"
+                     "（別の月の請求が入っています ── 締めの対象か確認）")
     blanks = result.get("blanks", 0)
     if blanks:
         lines.append(f"空欄 {blanks} 件（理由つき {result.get('blanks_with_reason', 0)} 件）"
