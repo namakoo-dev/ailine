@@ -30,9 +30,10 @@ REISSUE = "訂正再発行"
 YEAR_OFF = "年の誤り"
 MAGNITUDE = "桁違い"
 NUMBER_CLASH = "番号が重なる"
+DOUBLE_PAY = "二重払い"
 BLANK_DATE = "空欄"
 
-KINDS = (DUPLICATE, REISSUE, YEAR_OFF, MAGNITUDE, NUMBER_CLASH, BLANK_DATE)
+KINDS = (DUPLICATE, DOUBLE_PAY, REISSUE, YEAR_OFF, MAGNITUDE, NUMBER_CLASH, BLANK_DATE)
 
 #: 桁違いと呼ぶ比（他の月の中央値に対して）。検体の普通の変動は最大 2.3 倍（2026-09-11）。
 MAGNITUDE_RATIO = 4.0
@@ -107,6 +108,22 @@ def _groups_by_vendor(books: dict) -> dict:
     return out
 
 
+#: 差し替えの徴候になるファイル名の語（★ 実務の言い回し）。
+RESEND_WORDS = ("再発行", "差替", "差し替え", "訂正", "修正", "取消", "取り消し")
+
+#: 二重払いを疑う日付の窓（日）。★ 月額固定の請求（毎月同額）で鳴らないための線。
+DOUBLE_PAY_DAYS = 7
+
+
+def _resend_word(*names) -> str:
+    """ファイル名に差し替えの語が在れば、その語を返す。"""
+    for name in names:
+        for word in RESEND_WORDS:
+            if word in str(name):
+                return word
+    return ""
+
+
 def _is_branch(a: str, b: str) -> bool:
     """b が a の枝番（a + '-2' など）か。"""
     a, b = _norm(a), _norm(b)
@@ -155,7 +172,10 @@ def suspect(books: dict) -> list:
         dated = [(n, _date(books[n].get("請求日"))) for n in names]
         dated = [(n, d) for n, d in dated if d]
 
-        # 同じ月に 2 通、金額が違う → 訂正再発行
+        # 同じ月に 2 通で金額が違い、かつ**差し替えの徴候**が在る → 訂正再発行
+        # ★★ 「同じ月に複数通」だけでは疑わない（2026-09-13・月末の束 125 冊で実測）──
+        #   建設・運送・資材では同じ取引先が月に 5 通出すのが商慣行で、C(5,2)=10 組が
+        #   一斉に立って**誤報 156 件**になった。疑うのは徴候が在るときだけ。
         for (a, da), (b, db) in combinations(dated, 2):
             if frozenset((a, b)) in paired or (da.year, da.month) != (db.year, db.month):
                 continue
@@ -163,13 +183,45 @@ def suspect(books: dict) -> list:
             if xa is None or xb is None or xa == xb:
                 continue
             na, nb = books[a].get("請求番号"), books[b].get("請求番号")
-            hint = ""
-            if na and nb and (_is_branch(na, nb) or _is_branch(nb, na)):
-                hint = f"・請求番号に枝番（{na} / {nb}）"
+            word = _resend_word(a, b)
+            # ★ 理由文の**頭**に徴候を置く ── 良性の行と一字も違わない文にしない。
+            if na and nb and number_key(na) == number_key(nb):
+                head = f"請求番号が同じ（{na}）{_number_note(na, nb)}"
+            elif na and nb and (_is_branch(na, nb) or _is_branch(nb, na)):
+                head = f"請求番号が枝番（{na} / {nb}）"
+            elif word:
+                head = f"ファイル名に「{word}」"
+            else:
+                continue          # ★ 徴候が無い同月複数請求は商慣行 ── 鳴らさない
             paired.add(frozenset((a, b)))
             emit(REISSUE, (a, b),
-                 f"「{a}」と「{b}」は同じ月（{_ym(da)}）の請求で金額が違う"
-                 f"（{_yen(xa)} と {_yen(xb)}）{hint} ── 訂正して再発行された疑い。どちらが有効か確認")
+                 f"「{a}」と「{b}」は{head} ── 同じ月（{_ym(da)}）の請求で金額が違う"
+                 f"（{_yen(xa)} と {_yen(xb)}）── 訂正して再発行された疑い。どちらが有効か確認")
+
+        # 同じ取引先・同じ金額・番号が違う・日付が近い → 二重払い
+        # ★★ `重複`（同じ紙が 2 枚）とは別の種類にする ── 買い手の次の一手が違う。
+        #   二重払いは**別の紙で同じ金額を 2 回**請求されている形で、取り逃すと一番高くつく。
+        # ★ 月額固定の保守料（毎月同額）で鳴らないよう、同じ月か DOUBLE_PAY_DAYS 日以内に限る。
+        for (a, da), (b, db) in combinations(dated, 2):
+            if frozenset((a, b)) in paired:
+                continue
+            xa, xb = books[a].get("請求額"), books[b].get("請求額")
+            if xa is None or xb is None or xa != xb:
+                continue
+            na, nb = books[a].get("請求番号"), books[b].get("請求番号")
+            if not na or not nb or number_key(na) == number_key(nb):
+                continue          # ★ 番号が同じなら別の種類（重複・番号が重なる）の話
+            gap = abs((da - db).days)
+            same_month = (da.year, da.month) == (db.year, db.month)
+            if not same_month and gap > DOUBLE_PAY_DAYS:
+                continue
+            when = (f"どちらも {_ym(da)} の請求" if same_month
+                    else f"請求日が {gap} 日違い（{da.isoformat()} と {db.isoformat()}）")
+            paired.add(frozenset((a, b)))
+            emit(DOUBLE_PAY, (a, b),
+                 f"「{a}」と「{b}」は同額（{_yen(xa)}）で請求番号が違う（{na} / {nb}）・"
+                 f"{when} ── 別の紙で同じ金額を 2 回請求されている"
+                 f"（二重払い・支払いが重複する）疑い。別の請求か、片方が再請求かを確認")
 
         # 同じ請求番号で日付か金額が違う → 番号が重なる
         for a, b in combinations(names, 2):

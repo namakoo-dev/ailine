@@ -11,9 +11,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from ailine_core import cli_render
 from ailine_core.cli_render import (
     render_code_block, render_retry_options, render_aborted, render_run_header,
     render_backup_list, render_restore_done, render_vocab_add_result, render_vocab_listing,
+    render_forms_report,
 )
 
 
@@ -122,3 +124,30 @@ def test_render_vocab_listing_sorted_and_formatted():
     lines = render_vocab_listing(vocab, vocab_file)
     assert lines[0] == f"用語集（{vocab_file}・2件）:"
     assert lines[1:] == ["  税抜 = 0.9", "  税込 = 1.1"]
+
+
+# --- render_forms_report: 打ち切りを黙らない（2026-09-13・買い手の初回体験 B3）----------
+#
+# ★★ 画面は SUSPECT_SHOWN 行で止まるのに「ほか N 件」と言っていなかった ── 買い手には
+#   「これで全部」に読める。黙って切るのは、数を偽るのと同じ。
+
+
+def _forms_result(n: int) -> dict:
+    return {"denominator": n, "collected": n,
+            "suspicions": [{"種類": "重複", "冊": [f"{i}.xlsx", f"{i}_2.xlsx"],
+                            "理由": "（試験）"} for i in range(n)]}
+
+
+def test_forms_report_says_how_many_it_cut_off():
+    n = cli_render.SUSPECT_SHOWN + 3
+    lines = render_forms_report("受領", "一覧.xlsx", _forms_result(n))
+    shown = [ln for ln in lines if ln.startswith("  ⚠ 重複")]
+    assert len(shown) == cli_render.SUSPECT_SHOWN, shown
+    assert any(f"ほか 3 件" in ln for ln in lines), lines
+    assert any(f"束で見て怪しいもの {n} 件" in ln for ln in lines), lines
+
+
+def test_forms_report_does_not_say_it_cut_off_when_it_did_not():
+    """★ 陰性対照 ── ちょうど収まる件数で「ほか」を言ったら嘘。"""
+    lines = render_forms_report("受領", "一覧.xlsx", _forms_result(cli_render.SUSPECT_SHOWN))
+    assert not any("ほか" in ln for ln in lines), lines

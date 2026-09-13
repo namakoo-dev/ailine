@@ -208,3 +208,93 @@ def test_the_folded_key_never_becomes_the_value():
     assert fs.number_key("ＩＮＶー０９ー９９９") == "INV-09-999"
     assert fs.number_key("INV-09-999") == "INV-09-999"
     assert fs.number_key("INV-09-998") != fs.number_key("INV-09-999")
+
+
+# --- 疑いの条件を実務の分布で引き直す（2026-09-13・月末の束 7 束 125 冊で実測）----------
+#
+# ★★ なぜ変えたか（測った数字がそのまま理由）: 「同じ月・金額が違う」だけで訂正再発行を
+#   鳴らしていたので、**同じ取引先が月に何通も出す商慣行**（建設の出来高・運送の便ごと・
+#   資材の納品ごと）を疑っていた。C(5,2)=10 組が一斉に立ち
+#
+#       正 5 ／ ★誤報 156 ／ ★取り逃し 2（どちらも二重払いの典型）
+#
+#   だった。条件を引き直して **正 7 ／ ★誤報 0 ／ ★取り逃し 0**（同じ検体・同じ採点器）。
+# ★ 引き直した形は 2 つ: ① 訂正再発行は**差し替えの徴候**（番号が同じ／枝番／ファイル名の語）
+#   が在るときだけ鳴る ② 二重払い（同額・番号違い・日付が近い）という種類を足した。
+
+
+def _many_in_one_month(n: int) -> dict:
+    """同じ取引先が同じ月に n 通、金額は全部違う（★ 商慣行 ── 鳴ってはいけない）。"""
+    return {f"梶原建設株式会社_{i}.xlsx":
+            _book("梶原建設株式会社", (2026, 7, 5 + i), f"K-70{i}", 30000 + i * 1100)
+            for i in range(1, n + 1)}
+
+
+def test_many_invoices_in_one_month_without_a_sign_are_business_as_usual():
+    """★★ 誤報 156 件の真因の番人 ── **分母つき**: 5 通なら組は 10 通りあり、そのどれも
+    鳴らない（1 件でも鳴ればオオカミ少年が戻る）。"""
+    books = _many_in_one_month(5)
+    assert len(books) * (len(books) - 1) // 2 == 10, "分母（組の数）が変わった"
+    assert fs.suspect(books) == []
+
+
+def test_the_same_invoice_number_makes_it_a_reissue_and_leads_the_reason():
+    """★ 徴候 a（決め手）── 番号が同じなら疑う。しかも理由文の**頭**で言う
+    （良性の行と一字も違わない文にしない ── 買い手は 8 行しか読まない）。"""
+    books = _many_in_one_month(2)
+    books["梶原建設株式会社_2.xlsx"]["請求番号"] = "K-701"
+    found = fs.suspect(books)
+    assert _kinds(found) == {(fs.REISSUE, ("梶原建設株式会社_1.xlsx", "梶原建設株式会社_2.xlsx"))}
+    why = found[0]["理由"]
+    assert "請求番号が同じ" in why and "K-701" in why, why
+    assert why.index("請求番号が同じ") < why.index("同じ月"), why
+
+
+def test_every_resend_word_in_the_filename_counts_as_a_sign():
+    """★ 徴候 c ── ファイル名の語は 1 箇所（`RESEND_WORDS`）にしか書かない。
+    その全部が本当に効くことを分母つきで見る（表に足したのに効かない語を作らない）。"""
+    checked = []
+    for word in fs.RESEND_WORDS:
+        books = _many_in_one_month(1)
+        name = f"梶原建設株式会社_{word}.xlsx"
+        books[name] = _book("梶原建設株式会社", (2026, 7, 20), "K-799", 44000)
+        got = _kinds(fs.suspect(books))
+        assert got == {(fs.REISSUE, ("梶原建設株式会社_1.xlsx", name))}, (word, got)
+        checked.append(word)
+    assert len(checked) == len(fs.RESEND_WORDS) >= 5, checked
+
+
+def test_the_same_amount_with_a_different_number_in_one_month_is_a_double_payment():
+    """★★ 取り逃し 2 件（一番高くつく形）の番人 ── 別の紙で同じ金額を 2 回。"""
+    books = {"小林電機_A01.xlsx": _book("小林電機株式会社", (2026, 6, 10), "INV-3001", 55000),
+             "小林電機_A02.xlsx": _book("小林電機株式会社", (2026, 6, 12), "INV-3002", 55000)}
+    found = fs.suspect(books)
+    assert _kinds(found) == {(fs.DOUBLE_PAY, ("小林電機_A01.xlsx", "小林電機_A02.xlsx"))}
+    why = found[0]["理由"]
+    assert all(w in why for w in ("同額", "55,000", "請求番号", "INV-3001", "INV-3002")), why
+
+
+def test_a_monthly_fixed_fee_of_the_same_amount_is_not_a_double_payment():
+    """★★ 一番外しそうだと凍結した所 ── 月額固定の保守料（別月・別番号・同額が 3 か月）で
+    鳴ったら、買い手の毎月の請求が全部疑いになる。"""
+    books = {f"三村保守株式会社_2026-0{m}.xlsx":
+             _book("三村保守株式会社", (2026, m, 25), f"M-{m}01", 27500) for m in (6, 7, 8)}
+    assert fs.suspect(books) == []
+
+
+def test_the_double_payment_window_has_both_edges():
+    """★ 窓の縁を両側から測る（片側だけだと「常に鳴る」版が素通りする）。"""
+    def books(day):
+        return {"A.xlsx": _book("福井興業株式会社", (2026, 6, 30), "F-1201", 61000),
+                "B.xlsx": _book("福井興業株式会社", (2026, 7, day), "F-1202", 61000)}
+    assert fs.DOUBLE_PAY in _kinds_of(books(7)), "7 日違いは鳴る"       # 6/30 → 7/7
+    assert fs.suspect(books(8)) == []                                   # 6/30 → 7/8
+    assert fs.DOUBLE_PAY_DAYS == 7, "窓は 1 箇所にしか書かない"
+
+
+def test_the_same_number_is_never_called_a_double_payment():
+    """★ 種類を取り違えない ── 番号が同じなら「同じ紙が 2 枚」か「番号の重なり」の話で、
+    二重払い（別の紙で 2 回）ではない。買い手の次の一手が違う。"""
+    books = {"A.xlsx": _book("福井興業株式会社", (2026, 6, 30), "F-1201", 61000),
+             "B.xlsx": _book("福井興業株式会社", (2026, 7, 2), "F-1201", 61000)}
+    assert fs.DOUBLE_PAY not in _kinds_of(books), _kinds_of(books)

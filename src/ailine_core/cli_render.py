@@ -223,6 +223,10 @@ def render_alias_listing(aliases: dict, order: list, aliases_file: Path) -> list
 #: ★ 2026-09-13（需要③）: `ailine accounts` は独立の検算（`verify_accounts`）を持って
 #:   出たので足す ── 持っていないものを足すと案内が嘘になり、持っているのに足さないと
 #:   「知られない検算は無い検算」になる。
+#: 束の所見を画面に出す件数。★ ここで打ち切ったら**必ず「ほか N 件」と言う** ──
+#: 黙って切ると「これで全部」に読める（2026-09-13・買い手の初回体験の B3）。
+SUSPECT_SHOWN = 8
+
 VERIFY_HINT_KINDS = ("ailine stack", "ailine extract", "ailine forms", "ailine split",
                      "ailine accounts")
 
@@ -683,8 +687,11 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
         lines.append(f"束で見て怪しいもの {len(sus)} 件（"
                      + "／".join(f"{k} {n}" for k, n in kinds.items())
                      + "）── 『束の所見』シートに 1 件ずつ出しています")
-        for s in sus[:8]:
+        for s in sus[:SUSPECT_SHOWN]:
             lines.append(f"  ⚠ {s['種類']}: {'／'.join(s['冊'])}")
+        if len(sus) > SUSPECT_SHOWN:
+            lines.append(f"  ⚠ ほか {len(sus) - SUSPECT_SHOWN} 件"
+                         "（ここで打ち切っています ── 全部は『束の所見』シートにあります）")
     if result.get("file_written"):
         lines.append("（一覧は新しいブックです ── 元の請求書は 1 バイトも変えていません）")
         lines += verify_hint("ailine forms", out_label, folder_label)
