@@ -223,12 +223,18 @@ def verify_forms_list(list_path, folder) -> dict:
                 breaks.append(("★ 元に無い値が載っている（含有の破れ）",
                                f"{name}／{header}: {value!r}"))
 
+    explained = {name for name, _item in reasons}
+    left_out = []
     for path in candidates(folder):
         if path.name in listed:
             continue
         # ★ こちらでも読めない冊は咎めない（製品が名指しで断った冊を二度叱らない）。
         if source_values(path) is None:
             unreadable.append(path.name)
+        elif path.name in explained:
+            # ★ 2026-09-13: 項目が 1 つも取れなかった冊は一覧に載らない（空行が次の道具を殺すため）。
+            #   検分に理由が在る冊は「取り逃し」でなく「理由つきで外した冊」── 数えて名指しする。
+            left_out.append(path.name)
         else:
             breaks.append(("★ フォルダに在るのに一覧に無い冊", path.name))
 
@@ -236,6 +242,9 @@ def verify_forms_list(list_path, folder) -> dict:
              "含有を確かめた値": checked, "検分の理由": len(reasons)}
     if unreadable:
         facts["こちらでも読めなかった冊"] = f"{len(unreadable)} 件（{', '.join(unreadable[:5])}）"
+    if left_out:
+        facts["一覧に載っていない冊（検分に理由あり）"] = (f"{len(left_out)} 件"
+                                                    f"（{', '.join(left_out[:5])}）")
     if unchecked:
         # ★ 出ないことを合格の証拠にしない ── 確かめられなかったものは名前を出して数える。
         facts["含有を確かめられなかった値"] = (f"{len(unchecked)} 件"

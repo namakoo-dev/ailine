@@ -686,7 +686,7 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
         more = f" ほか {len(nothing) - 5} 件" if len(nothing) > 5 else ""
         lines.append(f"  ⚠ 項目が 1 つも取れなかった冊 {len(nothing)} 件: {shown}{more}"
                      "（送付状・稟議書など請求書でない冊が混ざっているかもしれません"
-                     " ── 一覧では空の行になります）")
+                     " ── 一覧には載せていません。理由は『検分』シートに）")
     grades = result.get("grades") or {}
     if grades:
         # ★ 区分の語も意味も field_record が持つ（ここで書き写さない・AST の番人が縛る）。

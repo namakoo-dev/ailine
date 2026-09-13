@@ -112,7 +112,10 @@ def test_the_originals_are_not_touched(folder, tmp_path):
 def test_a_book_that_is_not_an_invoice_yields_no_values(folder, tmp_path):
     """★★ 請求書でないものから値を作らない（G2' の必達『混入で沈黙』）。
 
-    ★ 官公庁の統計表を混ぜても、その行は 3 項目とも空欄になること。
+    ★ 官公庁の統計表を混ぜても、値は 1 つも出ない。
+    ★★ 2026-09-13（買い手役の初見・経理）: 初版は**全列が空の行**として一覧に残していた ──
+      その一覧に `run "合計行を付けて"` を頼むと 3/3 で ×（事後条件の検証対象が 0 件）。
+      自分で作った空行が次の道具を殺すので、**一覧には載せず**、検分に 5 項目ぶんの理由を残す。
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -126,10 +129,41 @@ def test_a_book_that_is_not_an_invoice_yields_no_values(folder, tmp_path):
     wb.close()
 
     out = tmp_path / "一覧.xlsx"
-    assert _forms(folder, out).returncode == 0
+    r = _forms(folder, out)
+    assert r.returncode == 0
     got = _sheets(out)
-    row = next(r for r in got["一覧"][1:] if r[0] == "統計.xlsx")
-    assert row[1:] == [None] * 5, f"★ 請求書でない冊から値を作った: {row}"
+    names = [row[0] for row in got["一覧"][1:]]
+    assert "統計.xlsx" not in names, f"★ 請求書でない冊が一覧に行として残った: {names}"
+    assert len(names) == 2, names                      # 本物の 2 冊はそのまま
+    reasons = [row for row in got["検分"][1:] if row[0] == "統計.xlsx"]
+    assert len(reasons) == 5, f"外した冊の理由が検分に無い: {reasons}"
+    assert "3 ファイル中 3 冊を読みました" in r.stdout, r.stdout   # ★ 分母は動かさない
+    assert "一覧には載せていません" in r.stdout, r.stdout
+
+
+def test_the_list_never_carries_an_all_blank_row(folder, tmp_path):
+    """★ 空行は次の道具（合計行を付ける run）の事後条件を 0 件にする ── 1 行も作らない。"""
+    _not_an_invoice(folder / "送付状.xlsx", "送付状")
+    _not_an_invoice(folder / "稟議書.xlsx", "稟議書")
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    rows = _sheets(out)["一覧"][1:]
+    assert len(rows) >= 2, rows
+    blank = [row for row in rows if all(v in (None, "") for v in row[1:])]
+    assert blank == [], blank
+
+
+def test_verify_counts_a_left_out_book_instead_of_calling_it_a_break(folder, tmp_path):
+    """★ 独立検算の側も同じ線 ── 理由つきで外した冊は「取り逃し」でなく、数えて名指しする。"""
+    _not_an_invoice(folder / "稟議書.xlsx", "稟議書")
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(folder, out).returncode == 0
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(folder)],
+                       cwd=str(REPO), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    assert v.returncode == 0, f"exit={v.returncode} / {v.stdout}"
+    assert "一覧に載っていない冊（検分に理由あり）: 1 件（稟議書.xlsx）" in v.stdout, v.stdout
+    assert "フォルダに在るのに一覧に無い冊" not in v.stdout, v.stdout
 
 
 def test_every_blank_has_a_reason_in_the_inspection_sheet(folder, tmp_path):
@@ -137,15 +171,21 @@ def test_every_blank_has_a_reason_in_the_inspection_sheet(folder, tmp_path):
 
     ★「型が守っているはず」は検算ではない ── 出力を読んで数える。
     """
-    wb = openpyxl.Workbook()
-    wb.active["A1"] = "何かのメモ"
-    wb.save(folder / "メモ.xlsx")
+    # ★ 2026-09-13: 「何かのメモ」1 枚（項目が 1 つも取れない冊）は一覧に載らなくなった
+    #   （空行が次の道具を殺すため）。空欄の分母は**請求書なのに 3 項目が欠けた冊**で作る。
+    _invoice(folder / "欠け.xlsx", "", 7700)
+    wb = openpyxl.load_workbook(folder / "欠け.xlsx")
+    ws = wb.active
+    for at in ("G3", "H3", "G4", "H4"):        # 請求日・請求番号のラベルと値を消す
+        ws[at] = None
+    wb.save(folder / "欠け.xlsx")
     wb.close()
 
     out = tmp_path / "一覧.xlsx"
     r = _forms(folder, out)
     assert r.returncode == 0, r.stdout
     got = _sheets(out)
+    assert any(row[0] == "欠け.xlsx" for row in got["一覧"][1:]), "★ 金額の取れた冊が一覧から消えた"
     blanks = sum(1 for row in got["一覧"][1:] for v in row[1:] if v is None)
     inspect = {(x[0], x[1]) for x in got["検分"][1:]}
     for row in got["一覧"][1:]:

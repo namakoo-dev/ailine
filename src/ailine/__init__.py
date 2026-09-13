@@ -17110,7 +17110,13 @@ def cmd_forms(a: argparse.Namespace) -> int:
         print(f"⚠ 事後条件が破れた: 理由の無い空欄 {len(missing)} 件 ── {missing[:5]}")
         return 5
 
-    rows = [forms_collect.row_for(name, recs) for name, recs in collected]
+    # ★★ 2026-09-13（買い手役の初見・経理）: 項目が 1 つも取れなかった冊（送付状・稟議書）を
+    #   **全列が空の行**として一覧に残していたら、その一覧に `run "合計行を付けて"` を頼むと
+    #   3/3 で ×（事後条件の検証対象が 0 件）── 自分で作った空行が次の道具を殺していた。
+    #   一覧には載せない。検分には 5 項目ぶんの理由が残る・画面では名指しする（分母は動かさない）。
+    #   ★ 1 項目でも取れた冊は残す ── 「読めなかった請求書」を「請求書でない」と混ぜない。
+    nothing = set(forms_collect.nothing_found(collected))
+    rows = [forms_collect.row_for(name, recs) for name, recs in collected if name not in nothing]
     findings = [r for name, recs in collected for r in forms_collect.findings_for(name, recs)]
     # ★ 束で見て初めて分かる怪しさ（重複・訂正再発行・年の誤り・桁違い…）── 値は作らない、指さすだけ。
     suspicions = forms_collect.suspicions_for(collected)
@@ -17124,7 +17130,9 @@ def cmd_forms(a: argparse.Namespace) -> int:
               "self_excluded": self_excluded, "findings": findings,
               "suspicions": suspicions, "file_written": False}
 
-    if not rows:
+    # ★ 1 冊も読めなかったときだけ書かない。読めた冊が全部「請求書でない」でも、
+    #   検分（なぜ 1 項目も取れなかったか）は人が要る ── 一覧の行が 0 でも冊は書く。
+    if not collected:
         if a.json:
             print(json.dumps(result, ensure_ascii=False))
         else:
