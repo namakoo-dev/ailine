@@ -11545,6 +11545,32 @@ def _check_demo_dir() -> tuple:
     return ok, detail
 
 
+#: そのサブコマンドが **LibreOffice / AI（ollama）を要るか**の宣言（★ 1 箇所だけ）。
+#: ★★ 2026-09-13（買い手の初回体験で出た穴）: `doctor` が LibreOffice と basrun に × を出して
+#:   exit 1 を返し、その直後に `demo` が**動かない `run`** を勧めていた。実際には
+#:   forms / verify / scan は読むだけなので LO も AI も要らないのに、**それを言う文が
+#:   1 つも無かった** ── 買い手は「この PC では動かない」と結論して離脱する。
+#: ★ 番人が登録簿との等号で縛るので、新しいサブコマンドは分類するまで赤くなる
+#:   （今朝の「手書きの白名簿」と同じ轍を踏まないため）。
+NEEDS_MACHINE = {
+    "run": True,          # AI が依頼を訳し、LibreOffice が適用する
+    "stop": True,         # 起動した LibreOffice を落とす
+    "export-pdf": True,   # PDF は LibreOffice が描く
+    "doctor": False, "ops": False, "csv": False, "export-csv": False, "demo": False,
+    "scan": False, "stack": False, "forms": False, "split": False, "accounts": False,
+    "verify": False, "history": False, "restore": False, "undo": False, "redo": False,
+    "vocab": False, "alias": False, "attr": False,
+}
+
+#: doctor の項目のうち「実機（LibreOffice / AI）」の側（★ 名前の頭で照合する）。
+MACHINE_CHECKS = ("ollama 到達", "モデル", "LibreOffice", "basrun.py")
+
+
+def machine_free_routes() -> list:
+    """LibreOffice も AI も無しで使えるサブコマンド（★ 宣言 1 箇所から導く・手で並べない）。"""
+    return [name for name, needs in NEEDS_MACHINE.items() if not needs]
+
+
 def doctor_checks(model: str = DEFAULT_MODEL) -> list:
     """(項目名, ok, 詳細/直し方) のリスト。判定ロジックだけを持ち、副作用(print)は
        cmd_doctor 側に置く（テストしやすくするため分離）。"""
@@ -11584,8 +11610,19 @@ def _doctor_business_note(name: str) -> str | None:
     return None
 
 
+#: 実機が無いときに必ず出す 1 行の頭（★ 買い手が最初に読む・ここで離脱を止める）。
+MACHINE_FREE_NOTE = "★ LibreOffice も AI も無くても、**読むだけの道具**は使えます"
+
+#: その 1 行で名指しする入口（★ 買い手の用事に近い順・`machine_free_routes()` の部分集合）。
+MACHINE_FREE_SHOWN = ("forms", "split", "accounts", "scan", "stack", "verify")
+
+
 def format_doctor_report(results: list) -> tuple:
-    """(表示テキスト, all_ok)。"""
+    """(表示テキスト, all_ok)。
+
+    ★ 実機の項目が 1 つでも × なら、**何なら動くか**を最後に必ず言う（2026-09-13）。
+      「動かない」だけを言って去られるのが、買い手の初回体験で一番大きい穴だった。
+    """
     lines = []
     all_ok = True
     for name, ok, detail in results:
@@ -11598,6 +11635,14 @@ def format_doctor_report(results: list) -> tuple:
             all_ok = False
             line = f"{mark} {shown}" + (f" — {detail}" if detail else "")
         lines.append(line)
+    broken = [name for name, ok, _d in results
+              if not ok and any(name.startswith(p) for p in MACHINE_CHECKS)]
+    if broken:
+        shown_routes = " / ".join(f"ailine {n}" for n in MACHINE_FREE_SHOWN)
+        lines.append("")
+        lines.append(f"{MACHINE_FREE_NOTE}: {shown_routes}")
+        lines.append("  （Excel と PDF を読んで一覧にする・分けて配る・検算する ── "
+                     "どれも原本を 1 バイトも変えません）")
     return "\n".join(lines), all_ok
 
 
@@ -11627,11 +11672,22 @@ def cmd_ops(a: argparse.Namespace) -> int:
                     if isinstance(ac, argparse._SubParsersAction)]
     #   引数の形（位置引数の並び）も argparse 本体から取る ── 雛形で書くとずれる。
     def _positional_shape(name: str) -> str:
+        """その入口の**打てる形**（位置引数 ＋ ★ 必須の指定）。
+
+        ★★ 2026-09-13（買い手の初回体験）: ここは位置引数だけを並べていたので、
+          `--out` が必須の `forms` が `ailine forms <folder>` と案内され、**そのまま打つと
+          exit 2 で落ちた**。README もこの形を写していた。案内が動かないのは、
+          断るより悪い（`tests/test_a_refusal_points_at_the_command_that_can.py` と同じ線）。
+        ★ 必須かどうかは argparse に言わせる ── 手で並べない。
+        """
         sp = sub_actions[0].choices.get(name) if sub_actions else None
         if sp is None:
             return ""
-        return " ".join(f"<{ac.metavar or ac.dest}>" for ac in sp._actions
-                        if not ac.option_strings and ac.dest != "help")
+        parts = [f"<{ac.metavar or ac.dest}>" for ac in sp._actions
+                 if not ac.option_strings and ac.dest != "help"]
+        parts += [f"{ac.option_strings[-1]} <{ac.metavar or ac.dest}>" for ac in sp._actions
+                  if ac.option_strings and getattr(ac, "required", False)]
+        return " ".join(parts)
     pairs = [(ch.dest, ch.help or "", _positional_shape(ch.dest))
               for ac in sub_actions for ch in ac._choices_actions]
     for line in render_folder_routes(pairs, multi_file_routes()):
@@ -16970,6 +17026,14 @@ def cmd_demo(a: argparse.Namespace) -> int:
             print(f"  × {name}" + (f" ── {hint}" if hint else ""))
         print()
         print("揃ったら `ailine doctor` で全部 ○ になることを確かめてから、もう一度ここへ。")
+        # ★★ 2026-09-13（買い手の初回体験）: ここで止めて「揃えてから戻ってこい」だけを言うと、
+        #   **一覧を作りたいだけの人に LibreOffice を揃えろと言う**ことになる。
+        #   実際には読むだけの道具は何も要らない ── 足りないのが実機だけなら、今できる道を出す。
+        if all(any(name.startswith(p) for p in MACHINE_CHECKS) for name, _h in missing):
+            print()
+            print(f"{MACHINE_FREE_NOTE}:")
+            print(f"  ailine forms <請求書のフォルダ> --out 一覧.xlsx")
+            print("  → 出来た一覧は `ailine verify <一覧.xlsx> <フォルダ>` で確かめられます")
         return 0
     print("次にこれを打ってみてください:")
     print(f'  ailine run {copied[0]} "売上から原価を引いた利益の列を作って"')

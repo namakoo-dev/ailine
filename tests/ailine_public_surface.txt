@@ -32,11 +32,15 @@ value HISTORY_DIR
 value HISTORY_FILE
 value HISTORY_RECALL_MAX
 value KEEP_FOR_COLUMN_REQUEST
+value MACHINE_CHECKS
 value MACHINE_DERIVED_ARGS
+value MACHINE_FREE_NOTE
+value MACHINE_FREE_SHOWN
 value MAX_COLS
 value MAX_ROWS
 value MIN_PYTHON
 value MISCLASS_FILE
+value NEEDS_MACHINE
 value NEW_COLUMN_ORIGIN
 value NOOP_MACRO
 value NOTICE_V2_FILE
@@ -652,6 +656,7 @@ def lookup_alias(task: 'str', path: 'Path | None' = None) -> 'str | None'
 def lookup_attribute(word: 'str', book_key: 'dict', path: 'Path | None' = None) -> 'dict | None'
 def lookup_vocab_factor(text: 'str', vocab: 'dict') -> 'tuple'
 def lookup_vocab_tax_factor(vocab: 'dict') -> 'tuple'
+def machine_free_routes() -> 'list'
 def main(argv=None) -> 'int'
 def make_backup(book: 'Path', keep: 'int' = 10, shelf: 'bool' = False) -> 'Path'
 def maybe_show_notice_v2(path: 'Path | None' = None) -> 'bool'

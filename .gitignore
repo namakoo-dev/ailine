@@ -35,6 +35,7 @@ bench/received_invoices/答え_received_v2.json
 bench/received_invoices/received_nested/
 bench/received_invoices/received_bundle/
 bench/received_invoices/答え_received_bundle.json
+bench/received_invoices/monthend_books/
 bench/received_invoices/lo-profile-adv/
 bench/received_invoices/gov/
 bench/received_invoices/vendors/

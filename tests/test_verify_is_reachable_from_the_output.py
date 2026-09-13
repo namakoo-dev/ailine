@@ -27,9 +27,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import ailine   # noqa: E402
 from ailine_core import cli_render, stack as stack_core   # noqa: E402
 from test_forms_e2e import _invoice   # noqa: E402
 from test_split_e2e import _book   # noqa: E402
+# ★ 同名の器を 2 つ作らない（台帳の番人が居る）── 既にある方を借りる。
+from test_folder_routes_hygiene import _registered_subcommands   # noqa: E402
 
 #: 今回の器では案内しない印（★ 宣言 ── 増えたら等号の番人が鳴る）。**理由は別**なので分けて書く:
 #:   ailine csv    独立の検算がそもそも無い（案内すると嘘になる）
@@ -132,3 +135,97 @@ def test_the_hint_carries_the_condition_the_person_typed(tmp_path):
     got = _run(["verify", *args, *extra])
     assert got.returncode == 0, f"{got.stdout}\n{got.stderr}"
     assert "Σ元" in got.stdout, f"★ 金額を測っていない: {got.stdout}"
+
+
+# --- 実機が無い PC でも「今できること」に着ける（2026-09-13・買い手の初回体験）------------
+#
+# ★★ なぜ在るか（買い手役を冷たい状態から通した実測）:
+#   `ailine doctor` が LibreOffice と basrun に × を出して exit 1 を返し、その直後に
+#   `ailine demo` が**動かない `ailine run`** を勧めていた。実際には forms / verify / scan は
+#   読むだけなので LO も AI も要らないのに、**それを言う文が 1 つも無かった**。
+#   買い手は「この PC では動かない」と結論して離脱する ── 最初の 5 分で一番大きい穴。
+# ★ 名指しする入口は宣言 1 箇所（`NEEDS_MACHINE`）から導く。今朝の「手書きの白名簿」の轍を踏まない。
+
+
+def test_every_subcommand_declares_whether_it_needs_the_machine():
+    """★ 等号 ── 新しいサブコマンドは、実機が要るかを分類するまで赤くなる。"""
+    declared, registered = set(ailine.NEEDS_MACHINE), _registered_subcommands()
+    assert declared == registered, (
+        f"分類されていない: {sorted(registered - declared)} / "
+        f"登録簿に無い: {sorted(declared - registered)}")
+
+
+def test_the_routes_named_when_the_machine_is_missing_really_work_without_it():
+    """★ 嘘の案内を作らない ── 名指しする入口は、実機不要と**宣言されている**ものだけ。"""
+    free = set(ailine.machine_free_routes())
+    named = set(ailine.MACHINE_FREE_SHOWN)
+    assert named <= free, f"実機が要る入口を『要らない』と案内している: {sorted(named - free)}"
+    assert "run" not in free and "stop" not in free, "★ 実機が要る入口を要らない側に分類している"
+
+
+def test_doctor_says_what_still_works_when_the_machine_is_missing():
+    """★★ 「動かない」だけを言って去られない ── 何なら動くかを最後に必ず言う。"""
+    broken = [("python 3.12+", True, ""), ("openpyxl", True, ""),
+              ("LibreOffice", False, "見つかりません"), ("basrun.py", False, "ありません")]
+    text, ok = ailine.format_doctor_report(broken)
+    assert ok is False
+    assert ailine.MACHINE_FREE_NOTE in text, text
+    for name in ("forms", "verify"):
+        assert f"ailine {name}" in text, f"{name} が案内に無い: {text}"
+
+
+def test_doctor_stays_quiet_when_the_machine_is_there():
+    """★ 陰性対照 ── 実機が在る PC に余計な 1 行を足さない。"""
+    text, ok = ailine.format_doctor_report([("LibreOffice", True, ""), ("basrun.py", True, "")])
+    assert ok is True
+    assert ailine.MACHINE_FREE_NOTE not in text, text
+
+
+def test_a_non_machine_failure_does_not_trigger_the_note():
+    """★ 陰性対照 ── openpyxl が無いような**本当に動かない**回に「使えます」と言わない。"""
+    text, _ok = ailine.format_doctor_report([("openpyxl", False, "入っていません")])
+    assert ailine.MACHINE_FREE_NOTE not in text, text
+
+
+def test_the_guidance_shows_every_required_option():
+    """★★ 案内した形が**そのまま打てる**こと（2026-09-13・買い手の初回体験）。
+
+    ★ 実測: README と `ailine ops` は `ailine forms <フォルダ>` と案内していたが、
+      `--out` が必須なので**そのまま打つと exit 2 で落ちた**。stack / split / accounts も同じ。
+      案内が動かないのは、断るより悪い。
+    ★ 必須かどうかは argparse に言わせる（手で並べない）。
+    """
+    import argparse
+    parser = ailine.build_parser()
+    subs = [ac for ac in parser._actions if isinstance(ac, argparse._SubParsersAction)]
+    out = _run(["ops"])
+    assert out.returncode == 0, out.stdout
+    for name in sorted(ailine.multi_file_routes()):
+        sp = subs[0].choices.get(name)
+        required = [ac.option_strings[-1] for ac in (sp._actions if sp else [])
+                    if ac.option_strings and getattr(ac, "required", False)]
+        for flag in required:
+            assert flag in out.stdout, f"★ ops の案内に {name} の必須 {flag} が無い"
+
+
+def test_the_readme_shows_every_required_option_too():
+    """★ 買い手が最初に読むのは README ── そこに書いた形も打てること。"""
+    import argparse
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    parser = ailine.build_parser()
+    subs = [ac for ac in parser._actions if isinstance(ac, argparse._SubParsersAction)]
+    checked = []
+    for name in sorted(ailine.multi_file_routes()):
+        sp = subs[0].choices.get(name)
+        required = [ac.option_strings[-1] for ac in (sp._actions if sp else [])
+                    if ac.option_strings and getattr(ac, "required", False)]
+        if not required:
+            continue
+        line = next((ln for ln in text.splitlines() if f"`ailine {name} " in ln), None)
+        assert line, f"★ README に {name} の行が無い"
+        for flag in required:
+            assert flag in line, f"★ README の {name} の行に必須 {flag} が無い: {line.strip()}"
+        checked.append(name)
+    # ★ 分母を先に確かめる ── 必須の指定を持つ入口が 0 件なら、上のループは
+    #   **1 回も回らずに通る**（番人の番人に教わった・2026-09-13）。
+    assert len(checked) >= 3, f"必須の指定を持つ入口が {checked} しか見つかっていない"
