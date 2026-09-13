@@ -45,10 +45,15 @@ _PAST = [
 _TODAY = [
     ["11", "2026/08/03", "", "携帯", "甲通信", "8800", "現金", "", "8月分 電話代"],   # 確
     ["12", "2026/08/10", "", "", "乙商店", "1500", "現金", "", "ボールペン"],          # 単
-    ["13", "2026/08/20", "", "", "丙タクシー", "2500", "現金", "", "タクシー代"],      # 割
+    # ★ 2026-09-13 に規則が変わった: 割れた鍵は**沈黙**させるので、摘要が過去 1 行と
+    #   一致する行は 単 で引ける。ここは「割れた鍵**しか**無い」形にして 割 を測る
+    #   （摘要も補助科目も過去に無い ── 支払先だけが当たり、その内訳が割れている）。
+    ["13", "2026/08/20", "", "", "丙タクシー", "2500", "現金", "", "はじめての摘要"],  # 割
     ["14", "2026/08/25", "", "", "未知商会", "900", "現金", "", "よく分からない"],     # 無
     ["15", "2026/08/26", "旅費交通費", "", "丙タクシー", "1000", "現金", "", "電車"],  # 埋まっている
     ["", "", "", "", "", "", "未払金", "", "継続行"],                                  # 継続行
+    # ★ 末尾に足す（前の行の物理行番号を動かさないため）。割れた支払先でも摘要で解ける行。
+    ["16", "2026/08/27", "", "", "丙タクシー", "3000", "現金", "", "タクシー代"],      # 単
 ]
 
 
@@ -124,7 +129,8 @@ def test_the_book_has_the_two_sheets_and_the_candidate_columns(books, tmp_path):
     assert len(rows) == len(_TODAY), rows
     by_row = {row[len(MF) + 1]: row[len(MF) + 2:] for row in rows}
     assert by_row[2][0] == "通信費", by_row[2]
-    assert by_row[4][0] is None, "★ 割 の行に値を出している"
+    assert by_row[4][0] is None, "★ 割 の行に値を出している（割れた鍵しか無い）"
+    assert by_row[8][0] == "旅費交通費",         "★ 支払先が割れていても摘要で解ける行（2026-09-13 の規則変更）"
     assert by_row[7][0] is None, "★ 継続行に候補を出している"
 
 
@@ -163,7 +169,7 @@ def test_json_carries_the_whole_contract(books, tmp_path):
         assert key in payload, f"--json に {key} が無い: {sorted(payload)}"
     assert payload["refused"] is None and payload["原本が変わった"] is False
     # ★ 行番号は**物理行**（見出しが 1 行目なのでデータは 2 行目から）。
-    assert sorted(int(r0) for r0 in payload["rows"]) == [2, 3, 4, 5]
+    assert sorted(int(r0) for r0 in payload["rows"]) == [2, 3, 4, 5, 8]
     assert [r0 for r0, _why in payload["untouched"]] == [6, 7]
     assert payload["rows"]["2"]["account"] == "通信費"
     assert payload["rows"]["4"]["account"] is None

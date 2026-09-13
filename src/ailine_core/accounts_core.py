@@ -122,6 +122,10 @@ SWEEP_LIMIT = ("見ていない口（別の帳簿・人の判断・今回より�
 #:   `field_record` の docstring は「写し合いの 2 つを裏と数えるな」と書いている ──
 #:   同じ 1 行を 2 つの鍵で読むのは、まさにその形（結合セルを 2 度数えたのと同じ）。
 #:   **区分は契約どおりに出し、人には見えるようにする**（黙って強く名乗らない）。
+#: ★ 内訳が割れた鍵が在る行に必ず添える 1 行（その鍵は出所に数えないが、口は掃けていない）。
+SPLIT_KEY_CAP = ("内訳が割れた鍵があるので『裏が取れた』とは呼びません"
+                 "（割れた鍵は出所に数えず、ほかの鍵で引いています）")
+
 SAME_ROW_CAVEAT = ("この 2 本以上の鍵は同じ 1 行を指しています ── 別々の裏ではなく、"
                    "同じ 1 件の 2 通りの読み方です（裏が取れたと呼べるかは人が見てください）")
 
@@ -361,7 +365,10 @@ def reason_of(record) -> str:
             continue
         seen.add(evidence.at)
         parts.append(evidence.how)
-    if record.conflict and record.conflict_why:
+    if record.conflict_why:
+        # ★★ 2026-09-13: `record.conflict` が真のときだけ出していたが、割れた鍵を**沈黙**
+        #   させる形にしたら、値が出た行から「この支払先は割れています」が消えた（実測）。
+        #   割れは出所に数えないだけで、**人に伝えるべき事実**は変わらない ── 常に出す。
         parts.append(record.conflict_why)
     if grade not in field_record.GRADES_WITH_VALUE and record.blank_reason:
         parts.append(record.blank_reason)
@@ -453,7 +460,7 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
       1 つの入力の N 度刷りであって独立した裏ではない（設計 §6 の致命 1）。
     ★ 区分は `field_record.grade_of` だけが決める。ここでは材料（出所・食い違い）を渡すだけ。
     """
-    evidences, cites, conflict_lines, looked = [], [], [], []
+    evidences, cites, conflict_lines, looked, split_keys = [], [], [], [], []
     hit_count = 0
     for key in keys_used:
         raw = cell(values, header_map[key])
@@ -485,18 +492,35 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
         else:
             # ★ 1 本の鍵の内訳が 2 科目以上 → 割（`conflict=True`）。科目ごとの件数と
             #   最新の先例の日付を**原文のまま**添える（設計 §6.1 の★）。
+            # ★★ 2026-09-13（実物の形で測って直した）: 内訳が割れた鍵は**沈黙**させる
+            #   ── 出所に数えず、その行を止めもしない。理由に内訳だけ残す。
+            #   実測: 実務の密度の検体（請求書 3 通から起こした仕訳）で到達 30%。落ちた分は
+            #   「鍵が当たらない」ではなく「広い鍵（取引先）の割れが、完全に一致している
+            #   狭い鍵（摘要）を道連れにしていた」── タクシー 3 行はすべて摘要が過去 1 行と
+            #   完全一致して正しい科目を指していたのに空欄になっていた。
+            #   ★ 実務では支払先が割れているのが普通（通販・タクシー・雑貨）。狭い鍵で解くのが
+            #     作法で、そこを潰すと道具として使えない。
+            #   ★ ただし**掃けていない口**なので、この行の区分は 単 を上限にする（下の cap）。
+            #   ★ 本物の食い違い（2 本の鍵が違う科目を指す）は今までどおり割 ── そこは変えない。
             parts = []
             for same in by_account.values():
                 last = same[-1]
                 parts.append(f"{str(same[0][0]).strip()} {len(same)} 件"
                              f"（最新 {last[3]}・{last[1]} {last[2]} 行目）")
-                cites.append((key, last[1], last[2]))
-            conflict_lines.append(f"{key}『{shown}』の内訳: " + "／".join(parts))
+            split_keys.append(key)
+            conflict_lines.append(f"{key}『{shown}』の内訳: " + "／".join(parts)
+                                  + "（この鍵は出所に数えていません）")
 
-    conflict = bool(conflict_lines)
     sources = {}
     for evidence in evidences:
         sources.setdefault(evidence.at, evidence.value)
+    # ★★ 食い違い（割）になるのは 2 通り（2026-09-13・実物の形で測って直した）:
+    #   ① 鍵どうしが違う科目を指した（本物の食い違い）
+    #   ② **割れた鍵しか無い**（ほかの鍵が 1 本も引けていない）
+    #   ★ ② を「無」にすると「先例がありません」という**嘘**になる ── 先例は在って割れている。
+    #     凍結した検体の答えがここを守った（16 行が 割 → 無 に落ちて赤くなった実測）。
+    #   ★ 一方、ほかの鍵が引けているなら割れた鍵は**沈黙**させるだけで行は止めない（上の枝）。
+    conflict = len({str(v) for v in sources.values()}) > 1 or bool(split_keys and not evidences)
     same_row = len(sources) >= 2 and len({(name, row) for _k, name, row in cites}) == 1
     if same_row and not conflict:
         # ★★ 2 本以上の鍵が**同じ 1 行**を指していた ── 同じ行を 2 通りに読んだだけで、
@@ -507,15 +531,23 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
         merged_how = "／".join(e.how for e in evidences) + f"／{SAME_ROW_CAVEAT}"
         evidences = [field_record.Evidence(rule=first.rule, value=first.value,
                                            at=first.at, how=merged_how)]
+    if split_keys and len(evidences) > 1:
+        # ★ 割れた鍵が在る行は **単 を上限**にする ── 掃けていない口が残っているので
+        #   「裏が取れた」とは名乗らない。出所を 1 つに畳んで grade_of に渡す。
+        first = evidences[0]
+        capped_how = "／".join(e.how for e in evidences) + f"／{SPLIT_KEY_CAP}"
+        evidences = [field_record.Evidence(rule=first.rule, value=first.value,
+                                           at=first.at, how=capped_how)]
     grade = field_record.grade_of(tuple(evidences), swept=True, conflict=conflict)
     blank_reason = ""
     if grade not in field_record.GRADES_WITH_VALUE:
-        if conflict:
-            blank_reason = "1 本の鍵の中で科目が割れています ── 値は出しません"
-        elif len({str(v) for v in sources.values()}) > 1:
+        if len({str(v) for v in sources.values()}) > 1:
             blank_reason = ("鍵どうしが違う科目を指しています（"
                             + "／".join(f"{at}→{v}" for at, v in sources.items())
                             + "）── 値は出しません")
+        elif split_keys:
+            blank_reason = (f"先例の在る鍵（{'／'.join(split_keys)}）は内訳が割れていて、"
+                            "ほかの鍵に先例がありません ── 値は出しません")
         elif looked:
             blank_reason = ("どの鍵にも先例がありません（見た鍵: "
                             + "／".join(looked) + "）")

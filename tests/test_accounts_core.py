@@ -423,3 +423,78 @@ def test_a_headerless_25_column_file_with_an_empty_first_cell_is_refused():
     _head, _headers, header_map, refused = accounts_core.resolve_accounts_columns([(1, row)])
     assert refused and "4 桁" in refused, refused
     assert not header_map, "★ 断ったのに列を決めている（推測で先へ進んでいる）"
+
+
+# --- 割れた鍵は「拒否権」でなく「沈黙」（2026-09-13・実物の形で測って直した）------------
+#
+# ★★ なぜ在るか: Namakoo 提供の請求書 3 通から仕訳を起こして測ったら、到達が
+#   合成検体の 75% から **30%** に落ちた。落ちた分は「鍵が当たらない」ではなく
+#   **広い鍵（取引先）の割れが、完全に一致している狭い鍵（摘要）を道連れにしていた**。
+#   タクシー 3 行はすべて摘要が過去 1 行と完全一致して正しい科目を指していたのに空欄だった。
+#   ★ 実務では支払先が割れているのが普通（通販・タクシー・雑貨）で、狭い鍵で解くのが作法。
+# ★ この欠陥は**合成検体では永久に見つからない**（過去の行が疎で、割れた鍵と当たる鍵が
+#   同じ行に同居しないため）── 実測: 規則を変えても合成 155 行の点数は 155/155 のまま動かない。
+
+def test_a_split_key_does_not_veto_a_key_that_matches():
+    """★★ 取引先が割れていても、摘要が過去 1 行と一致していれば引ける（値が出る）。"""
+    plan = _plan(
+        [_row("11", "2026/04/10", "", "", "丙タクシー", "4500", memo="タクシー乗車 出張")],
+        [_row("1", "2026/02/10", "旅費交通費", "", "丙タクシー", "4500", memo="タクシー乗車 出張"),
+         _row("2", "2026/02/15", "接待交際費", "", "丙タクシー", "8200", memo="顧客送迎")])
+    assert _grade(plan, 2) == field_record.SINGLE, _grade(plan, 2)
+    assert _value(plan, 2) == "旅費交通費"
+
+
+def test_the_split_is_still_named_even_when_a_value_comes_out():
+    """★★ 沈黙させるのは**出所の数え方**だけ ── 「この支払先は割れている」は人に伝える。
+
+    ★ 初版はここを落とした（`conflict` が真のときだけ理由に出していたので、値が出た行から
+      内訳が消えた）。割れは出所に数えないだけで、伝えるべき事実は変わらない。
+    """
+    plan = _plan(
+        [_row("11", "2026/04/10", "", "", "丙タクシー", "4500", memo="タクシー乗車 出張")],
+        [_row("1", "2026/02/10", "旅費交通費", "", "丙タクシー", "4500", memo="タクシー乗車 出張"),
+         _row("2", "2026/02/15", "接待交際費", "", "丙タクシー", "8200", memo="顧客送迎")])
+    reason = accounts_core.reason_of(plan.records[2])
+    for token in ("丙タクシー", "旅費交通費 1 件", "接待交際費 1 件", "出所に数えていません"):
+        assert token in reason, f"{token} が根拠に無い: {reason}"
+
+
+def test_only_a_split_key_is_split_not_none_found():
+    """★★ 割れた鍵**しか**無い行は 割 ── 無 にすると「先例がありません」という嘘になる。
+
+    ★ 凍結した検体の答えがここを守った（沈黙させすぎた初版で 16 行が 割 → 無 に落ちて赤くなった）。
+    """
+    plan = _plan(
+        [_row("11", "2026/04/10", "", "", "丙タクシー", "4500", memo="はじめての摘要")],
+        [_row("1", "2026/02/10", "旅費交通費", "", "丙タクシー", "4500", memo="別の摘要"),
+         _row("2", "2026/02/15", "接待交際費", "", "丙タクシー", "8200", memo="また別の摘要")])
+    assert _grade(plan, 2) == field_record.SPLIT, _grade(plan, 2)
+    assert _value(plan, 2) is None
+    reason = plan.records[2].blank_reason
+    assert "割れて" in reason, reason
+    # ★ 物差しを 1 度直した: 「先例がありません」で探すと『ほかの鍵に先例がありません』
+    #   （正しい文）に当たって赤くなった。嘘なのは**どの鍵にも**と言い切る方。
+    assert "どの鍵にも先例がありません" not in reason, f"★ 嘘（先例は在って割れている）: {reason}"
+    assert "借方取引先" in reason, f"どの鍵が割れているか名指ししていない: {reason}"
+
+
+def test_a_split_key_caps_the_grade_at_single():
+    """★ 割れた鍵が在る行は 確 と名乗らない ── 掃けていない口が残っている。"""
+    plan = _plan(
+        [_row("11", "2026/04/10", "", "文具", "丙タクシー", "4500", memo="タクシー乗車 出張")],
+        [_row("1", "2026/02/10", "旅費交通費", "", "丙タクシー", "4500", memo="タクシー乗車 出張"),
+         _row("2", "2026/02/15", "接待交際費", "", "丙タクシー", "8200", memo="顧客送迎"),
+         _row("3", "2026/03/01", "旅費交通費", "文具", "", "300", memo="別の行")])
+    assert _grade(plan, 2) == field_record.SINGLE, _grade(plan, 2)
+    assert accounts_core.SPLIT_KEY_CAP in accounts_core.reason_of(plan.records[2])
+
+
+def test_two_keys_disagreeing_is_still_split():
+    """★ 陰性対照 ── **本物の食い違い**（鍵どうしが違う科目）は今までどおり 割。"""
+    plan = _plan(
+        [_row("11", "2026/04/10", "", "", "甲通信", "8800", memo="打合せ")],
+        [_row("1", "2026/02/03", "通信費", "", "甲通信", "8800", memo="2月分"),
+         _row("2", "2026/03/10", "会議費", "", "乙商店", "3000", memo="打合せ")])
+    assert _grade(plan, 2) == field_record.SPLIT
+    assert _value(plan, 2) is None
