@@ -557,6 +557,7 @@ CI から区別できなかった（外部 repo の取り込み調査が実測�
 | `DESIGN-20260823-report-per-row.md` | 行ごとの帳票出力 |
 | `DESIGN-20260824-format-map.md` | 様式（雛形）への写像 |
 | `DESIGN-20260824-history-suggest.md` | 履歴から「前に通った操作」を思い出す |
+| `DESIGN-20260914-言い回しの到達.md` | 事務職の言い回し 120 件を盲検で流し、誤配の家系ごとに直す（境目の数の接地から） |
 | `DESIGN-20260824-ledger-rest.md` | 台帳の残り |
 | `REVIEW-20260822-w10-architect.md` | 上流レビュー（W10） |
 | `REVIEW-20260822-csv-architect.md` | 上流レビュー（CSV） |

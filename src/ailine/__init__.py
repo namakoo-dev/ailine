@@ -149,6 +149,7 @@ from ailine_core import verify_split   # ★ ③: 分けた冊を後から独立
 from ailine_core import xml_readback   # ★ 検算の独立読み実装（openpyxl を import しない別実装）
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
+from ailine_core import threshold   # ★ 比較の境目の数は依頼文から機械が取る（EXTRACT/SET_WHERE 共通）
 from ailine_core import form_read   # ★ 帳票を読む器官（DESIGN-20260910 §1・需要①）
 from ailine_core import pdf_grid
 from ailine_core import filetypes
@@ -4496,8 +4497,24 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
         resolved["value"] = str(raw_value)
     else:
         try:
-            resolved["value"] = float(raw_value)
+            _llm_num = float(raw_value)
         except (TypeError, ValueError):
+            _llm_num = None
+        if _llm_num is not None and not task:
+            # ★ 依頼文が無い経路（DSL を直接渡す試験・ゴールデン）には接地する相手が無い ── 値をそのまま。
+            resolved["value"] = _llm_num
+        elif _llm_num is not None:
+            # ★★ 2026-09-14: 境目の数は**依頼文**から機械が取る（SET_WHERE が 09-04 に決めた
+            #   規則 ── EXTRACT には届いていなかった・兄弟間の片配線）。器官は 1 つ（threshold）。
+            #   「在庫少ないやつ」のように数が無い回は**断る** ── 0 を機械が決めない。
+            _g = threshold.ground(task, _llm_num,
+                                  example=f"{resolved['col']}が10{_EXTRACT_CMP_LABELS.get(cmp, '')}の行を抜き出して")
+            if _g.refusal:
+                return False, resolved, inferred, _g.refusal
+            if _g.warning:
+                resolved["_warnings"] = resolved.get("_warnings", []) + [_g.warning]
+            resolved["value"] = _g.value
+        else:
             # ★ 日付の範囲比較（台帳 DATE_RANGE_AGG 2件の正体・2026-08-24）。
             #   「2026/3/26 以降」は数値ではないが、対象列が日付列なら
             #   シリアル値に直せば既存の数値比較でそのまま通る（Basic 側は無改造）。
@@ -4536,6 +4553,18 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
                     f"比較『{cmp}』には数値の値が必要ですが『{raw_value}』は数値に変換できません"
                 )
             else:
+                # ★★ 2026-09-14（盲検「発注しなきゃいけないもの一覧にして」→ 区分 = 発注）:
+                #   列に無い値で等値の抽出をすると **0 行の結果が ✓ で出る**。列に在る値だけ受け、
+                #   無ければ在る値を並べて断る（決めるのは人）。
+                _real = list(dict.fromkeys(str(v).strip() for v in
+                                           _column_values(book_meta, first_sheet, resolved["col"])
+                                           if str(v).strip()))
+                if _real and str(raw_value).strip() not in _real:
+                    _shown = "』『".join(_real[:8])
+                    return False, resolved, inferred, (
+                        f"列『{resolved['col']}』に『{raw_value}』という値はありません"
+                        f"（在る値: 『{_shown}』{'…' if len(_real) > 8 else ''}）── "
+                        "在る値で指してください")
                 resolved["value"] = str(raw_value)
     # ★ 単位H: 出力シートの見出し署名(= 元シートの見出し行そのもの)を _own_output_headers
     #   が組めるよう、決めた材料をここで resolved に積む（他 op の _target_sheet と同じ作法）。
@@ -5270,7 +5299,8 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
             f"比較『{resolved.get('cmp')}』は {'/'.join(_EXTRACT_CMPS)} のどれでもありません")
     resolved["cmp"] = _cmp
     # ★ 閾値は**依頼文の数字**から機械が取る（LLM に確定させない）。
-    _nums = _re_threshold_num.findall((task or "").translate(_ZENKAKU_DIGITS))
+    # ★ 2026-09-14: 数の読み方は EXTRACT と**同じ器官**（threshold）── 万／千・桁区切りも畳む。
+    _nums = [threshold.fmt(v) for v in threshold.task_numbers(task)]
     # ★★ 2026-09-04（段2.5 の実測）: **文字列の条件が構造的に表現できなかった**。
     #   「所属が営業と等しい行のメモに『○』を付けて」は、読み直しが正しく
     #   条件つき書換まで来ているのに「条件の**数値**が読み取れません」で止まっていた
@@ -6559,11 +6589,15 @@ _EXTRACT_SHEET_NAME_FORBIDDEN_RE = re.compile(r'[:\\/?*\[\]]')
 #   種別(gte/lte/gt/lt/eq/contains)だけは LLM の言い分をそのまま検証していた（「より大きい」→
 #   gte・「未満」→lte と写し間違えても素通し・境界値の行が黙って混入する実害）。
 #   語の列挙は意味から広め（検体に無い自然な同義語も拾う）。
+# ★★ 2026-09-14（言い回し 120 件の盲検）: 役の人が打つのは「20時間**超えてる**」「10個**切ってる**」
+#   「発注点を**下回る**」── 辞書は「以上／以下／未満／を超える」しか知らず、LLM の `eq` が
+#   そのまま通って **= 0** の抽出が出ていた（誤配 16 件中 4 件）。口語を足す。
+#   ★ 口語は断片ガード必須（直前 10 文字に数字）── 「区切って」「締め切って」「予算を上回る努力」を拾わない。
 _EXTRACT_CMP_WORDS = (
     ("gt", ("より大きい", "より大きく", "を超える", "を超えて", "より多い", "より多く",
-             "より高い", "より高く")),
+             "より高い", "より高く", "超え", "上回")),
     ("lt", ("未満", "より小さい", "より小さく", "より少ない", "より少なく",
-             "より安い", "より安く")),
+             "より安い", "より安く", "切っ", "下回", "に満たない")),
     ("gte", ("以上",)),
     ("lte", ("以下",)),
     ("contains", ("を含む", "を含んで", "が含まれる", "を含める")),
@@ -6573,6 +6607,10 @@ _EXTRACT_CMP_WORDS = (
 #   直前 _EXTRACT_CMP_NUM_WINDOW 文字以内に数字が無ければ比較語として採用しない
 #   （対象を値の近傍の比較語に絞る）。gt/lt/contains/eq の語は文末定型と衝突しないので対象外。
 _EXTRACT_CMP_NEEDS_NUM_NEARBY = frozenset({"gte", "lte"})
+#: ★ 語そのものにも掛ける断片ガード（口語は短いので、数字が近くに無ければ比較語と読まない）。
+_EXTRACT_CMP_WORDS_NEED_NUM = frozenset({"超え", "上回", "切っ", "下回", "に満たない"})
+#: ★ 「切っ」は「締め切って」「区切って」「見切って」の断片にもなる ── 直前が数か数え語のときだけ比較語。
+_EXTRACT_CMP_WORD_PREFIX = {"切っ": re.compile(r"[0-9０-９個件人円時間日点本枚台%万千]$")}
 _EXTRACT_CMP_NUM_RE = re.compile(r'[0-9０-９]')
 _EXTRACT_CMP_NUM_WINDOW = 10
 
@@ -6587,11 +6625,15 @@ def extract_cmp_from_task(task: str) -> str | None:
         for w in words:
             idx = task.find(w)
             while idx >= 0:
-                if cmp_name in _EXTRACT_CMP_NEEDS_NUM_NEARBY:
+                if cmp_name in _EXTRACT_CMP_NEEDS_NUM_NEARBY or w in _EXTRACT_CMP_WORDS_NEED_NUM:
                     window = task[max(0, idx - _EXTRACT_CMP_NUM_WINDOW):idx]
                     if "。" in window or not _EXTRACT_CMP_NUM_RE.search(window):
                         idx = task.find(w, idx + 1)
                         continue
+                _pre = _EXTRACT_CMP_WORD_PREFIX.get(w)
+                if _pre is not None and not _pre.search(task[:idx]):
+                    idx = task.find(w, idx + 1)
+                    continue
                 if best is None or idx < best[0]:
                     best = (idx, cmp_name)
                 break
