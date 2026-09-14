@@ -755,3 +755,32 @@ def test_no_candidate_rows_means_no_ceiling_line():
     past = [_row("1", "2026/08/03", "通信費", "", "甲通信", "8800", memo="8月分")]
     plan = _plan([_row("11", "2026/09/03", "通信費", "", "甲通信", "8800", memo="9月分")], past)
     assert plan.records == {} and accounts_core.confirmation_ceiling(plan) == ""
+
+
+def test_the_book_wide_caveats_are_said_once_not_per_key():
+    """★★ 2026-09-14（買い手役 2 体・別の役が別の冊で「同じ文の繰り返し」「336 字」）:
+    冊ごとの但し書きが**行ごと・鍵ごとに**刷られていた（1 行に 2〜3 回）。
+
+    ★ 但し書きは冊で 1 回（検分の注）── 行の根拠には「読んだ並びで最後の先例」という
+      **語そのもの**を残す（「最新」と呼ばないために入れた語・§8 の買い手の指摘）。
+    """
+    past = [_row(str(i), f"2026/0{i}/01", "通信費", "携帯", "甲通信", "8800", memo=f"{i}月分")
+            for i in range(1, 4)]
+    plan = _plan([_row("11", "2026/09/03", "", "携帯", "甲通信", "8800", memo="1月分")], past)
+    reason = accounts_core.reason_of(plan.records[2])
+    assert "読んだ並びで最後の先例" in reason, reason
+    assert "日付順には並べていません" not in reason, f"★ 冊の但し書きが行に刷られている: {reason}"
+    assert accounts_core.SWEEP_LIMIT not in reason, f"★ 検分の注と同じ文が行にも: {reason}"
+    notes = [r[3] for r in accounts_core.inspection_rows(plan) if r[0] == accounts_core.NOTE_KIND]
+    assert accounts_core.ORDER_NOTE in notes, notes
+    assert accounts_core.SWEEP_LIMIT in "／".join(str(n) for n in notes), notes
+
+
+def test_a_confirmed_row_still_says_which_keys_were_swept():
+    """★ 消した情報が無いことの裏 ── 確 の行は「何本の鍵を見たか」を今までどおり言う。"""
+    past = [_row("1", "2026/08/03", "通信費", "携帯", "甲通信", "8800", memo="8月分 電話代"),
+            _row("2", "2026/08/04", "通信費", "", "乙電話", "1000", memo="9月分 電話代")]
+    plan = _plan([_row("11", "2026/09/03", "", "携帯", "甲通信", "8800", memo="9月分 電話代")], past)
+    assert _grade(plan, 2) == field_record.CONFIRMED
+    reason = accounts_core.reason_of(plan.records[2])
+    assert "本の鍵" in reason and "食い違う鍵はありませんでした" in reason, reason

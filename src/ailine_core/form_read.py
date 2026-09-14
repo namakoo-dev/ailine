@@ -385,8 +385,25 @@ def _empty_label_note(grid, labels, field: str) -> str:
     if not cells:
         return ""
     where = "／".join(f"{c.at}「{norm(c.value)[:8]}」" for c in cells[:3])
-    return (f": {where} のラベルは在りましたが、その右は空でした"
+    return (f"{where} のラベルは在りましたが、その右は空でした"
             f" ── この帳票には{field}が入っていないようです")
+
+
+def blank_reason(not_found: str, how_we_read: str, observed: str = "") -> str:
+    """空欄の理由 ── ★ **この冊で見えたもの**を先に、読み方の説明を後ろに。
+
+    ★★ 2026-09-14（買い手役・経理・3 回目「検分の理由が同じ文の繰り返し・肝心の
+      『右は空でした』が後ろ」）: 全行同じ定型（どう読むか）が先頭 60 字を占め、その冊だけの
+      事実（どこに何が在ったか）が後ろへ押し流されていた。**並べ方の判断はここ 1 箇所**
+      ── 呼び出し側ごとに並べると、片方だけ直る（開発手法 §13）。
+    ★★ 初版は定型を丸ごと後ろへ回して**長くなった**（128 → 133 字・実測）── 定型の中に
+      結論（「…が見つかりませんでした」）が入っていて、観測と二重になり括弧も入れ子になった。
+      結論と読み方を**別の引数**にして、観測が在る回は結論を観測が兼ねる形にした。
+    ★ 情報は 1 つも捨てない（読み方は括弧で後ろに残す）。
+    """
+    if observed:
+        return f"{observed}（読み方: {how_we_read}）"
+    return f"{not_found}（{how_we_read}）"
 
 
 def read_issue_date(grid: Grid) -> Record:
@@ -410,12 +427,12 @@ def read_issue_date(grid: Grid) -> Record:
                else f"{cell.at}（表示形式に「{norm(format_label(cell.fmt))[:8]}」）")
         evid.append(Evidence(rule="請求日の欄", value=d, at=cell.at, how=how))
     if not evid:
-        why = ("請求日が見つかりませんでした（『請求日』『発行日』のラベルの右か、"
-               "同じセルに西暦か和暦の日付が入っている形だけを読みます）")
-        if rivals:
-            why += ": " + "／".join(f"{at} は{note}" for at, _v, note in rivals)
-        else:
-            why += _empty_label_note(grid, _LABEL_DATE, "請求日")
+        observed = ("／".join(f"{at} は{note}" for at, _v, note in rivals) if rivals
+                    else _empty_label_note(grid, _LABEL_DATE, "請求日"))
+        why = blank_reason(
+            "請求日が見つかりませんでした",
+            "『請求日』『発行日』のラベルの右か、同じセルに西暦か和暦の日付が入っている"
+            "形だけを読みます", observed)
         return Record("請求日", (), rivals=tuple(rivals), blank_reason=why)
     return _record("請求日", evid, rivals)
 
@@ -443,10 +460,10 @@ def read_invoice_number(grid: Grid) -> Record:
                else f"{cell.at}（表示形式に「{norm(format_label(cell.fmt))[:8]}」）")
         evid.append(Evidence(rule="請求番号の欄", value=txt, at=cell.at, how=how))
     if not evid:
-        return Record("請求番号", (), blank_reason=(
-            "請求番号が見つかりませんでした（『請求番号』『請求書No』のラベルの右か、"
-            "同じセルに番号が入っている形だけを読みます）"
-            + _empty_label_note(grid, _LABEL_NUMBER, "請求番号")))
+        return Record("請求番号", (), blank_reason=blank_reason(
+            "請求番号が見つかりませんでした",
+            "『請求番号』『請求書No』のラベルの右か、同じセルに番号が入っている形だけを読みます",
+            _empty_label_note(grid, _LABEL_NUMBER, "請求番号")))
     return _record("請求番号", evid, [])
 
 

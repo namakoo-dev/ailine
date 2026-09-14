@@ -598,3 +598,41 @@ def test_the_value_keeps_the_original_spacing():
     # ★ 2 つの線が同居していることを 1 本で見せる（値は原本・照合は畳む）
     from ailine_core.form_read import norm as _norm
     assert _norm("㈱　デ　ル　タ") == _norm("㈱デルタ"), "★ 照合側まで原本のままになっている"
+
+
+def test_the_blank_reason_starts_with_what_was_seen_in_this_book():
+    """★★ 2026-09-14（買い手役・経理・3 回目）「検分の理由が同じ文の繰り返し・肝心の
+    『右は空でした』が後ろ」── 全行同じ定型が先頭 60 字を占め、その冊だけの事実が
+    後ろへ押し流されていた。**観測を先に・読み方は括弧で後ろに**（情報は捨てない）。
+
+    ★ 初版は定型を丸ごと後ろへ回して**長くなった**（128 → 133 字）。結論と読み方を
+      別の引数にして測り直した（117 字）── 並べ方の判断は `blank_reason` 1 箇所。
+    """
+    from ailine_core.form_read import blank_reason
+    got = blank_reason("請求日が見つかりませんでした", "ラベルの右だけを読みます",
+                       "G3「請求日：」 のラベルは在りましたが、その右は空でした")
+    assert got.startswith("G3「請求日：」"), got
+    assert got.endswith("（読み方: ラベルの右だけを読みます）"), got
+    assert "請求日が見つかりませんでした" not in got, f"結論が二重: {got}"
+    # ★ 観測が無い回は今までどおり「見つかりませんでした（読み方）」
+    bare = blank_reason("請求日が見つかりませんでした", "ラベルの右だけを読みます")
+    assert bare == "請求日が見つかりませんでした（ラベルの右だけを読みます）", bare
+
+
+def test_an_empty_label_is_quoted_before_the_reading_rule(tmp_path):
+    """★ 実物の形（ラベルは在るが右が空）で、冊の事実が先頭に来ることを端から端まで確かめる。"""
+    import openpyxl
+
+    from ailine_core import form_read
+    path = tmp_path / "a.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["B2"] = "請求書"
+    ws["G3"] = "請求日："
+    wb.save(path)
+    wb.close()
+    wb = openpyxl.load_workbook(path)
+    rec = form_read.read_form(wb.worksheets[0])["請求日"]
+    wb.close()
+    assert rec.blank_reason.startswith("G3「請求日：」"), rec.blank_reason
+    assert "（読み方: " in rec.blank_reason, rec.blank_reason

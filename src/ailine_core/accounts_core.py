@@ -161,6 +161,12 @@ CREDIT_NOTE = ("払い方（貸方の勘定科目）は鍵に入れていませ�
                "同じだけでは費用の科目は決まらないからです。貸方は鍵に入れていません"
                "（貸方取引先だけは鍵に入れています）")
 #: 掃き出しの限界（★ 機械では確かめられない側を先に書く・設計 §6.5 の末尾）。
+#: ★★ 2026-09-14（買い手役 2 体・別の役が別の冊で「同じ文の繰り返し」「336 字」）:
+#:   冊ごとの但し書きが**行ごと・鍵ごとに刷られて**いた（1 行に 2〜3 回）。但し書きは
+#:   冊で 1 回 ── 行の根拠には「読んだ並びで最後の先例」という**語そのもの**を残す
+#:   （「最新」と呼ばないための語・2026-09-13 の買い手の指摘で入れた所は動かさない）。
+ORDER_NOTE = ("先例の『読んだ並びで最後』は最新という意味ではありません ── 日付順には"
+              "並べていません（冊に書かれている順に読んでいます）")
 SWEEP_LIMIT = ("見ていない口（別の帳簿・人の判断・今回より後の仕訳）は掃けていません "
                "── 裏が取れたかの最後の一歩は人の目です")
 #: ★★ 2 本の鍵が**同じ 1 行**を指していたときに必ず添える 1 行（設計に無い所見・実装で踏んだ）。
@@ -461,7 +467,7 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
     credit_note = (CREDIT_NOTE if "貸方取引先" in keys_used
                    else CREDIT_NOTE.replace("（貸方取引先だけは鍵に入れています）",
                                             "（この冊には貸方取引先の列が無いので、貸方は鍵に入っていません）"))
-    notes = [credit_note, SWEEP_LIMIT,
+    notes = [credit_note, ORDER_NOTE, SWEEP_LIMIT,
              ("鍵にした列: " + ("／".join(f"『{k}』" for k in keys_used) if keys_used
                                 else "（1 本もありません）"))]
     if absent:
@@ -662,8 +668,7 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
             how = (f"{key}『{shown}』の先例は 1 件（{account}・{last[3]}・"
                    f"{last[1]} {last[2]} 行目）") if len(same) == 1 else (
                 f"{key}『{shown}』は過去 {len(same)} 件すべて {account}"
-                f"（読んだ並びで最後の先例 {last[3]}・{last[1]} {last[2]} 行目"
-                " ── 日付順には並べていません）")
+                f"（読んだ並びで最後の先例 {last[3]}・{last[1]} {last[2]} 行目）")
             evidences.append(field_record.Evidence(rule=key, value=account, at=key, how=how))
             cites.append((key, last[1], last[2]))
         else:
@@ -745,8 +750,10 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
         else:
             blank_reason = (f"鍵になる列（{'／'.join(keys_used)}）がすべて空の行です"
                             "── 引く手がかりがありません")
+    # ★ 限界の文（`SWEEP_LIMIT`）は検分の注に 1 行在る ── 同じ文を 2 か所に置かない
+    #   （行の根拠は「この行で何を見たか」だけにする・2026-09-14）。
     swept_how = (f"{len(keys_used)} 本の鍵（{'／'.join(keys_used)}）を見て、"
-                 f"食い違う鍵はありませんでした ── {SWEEP_LIMIT}")
+                 "食い違う鍵はありませんでした")
     record = field_record.Record(
         field=DEBIT_ACCOUNT, evidences=tuple(evidences), blank_reason=blank_reason,
         swept=True, swept_how=swept_how,
