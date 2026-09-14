@@ -132,10 +132,14 @@ def contained(value, values: list):
     return bool(want) and any(want in fold(v) for v in values)
 
 
-def candidates(folder) -> list:
-    """フォルダの帳票（★ ailine 自身の出力は入力に数えない ── 分母が汚れる）。"""
+def candidates(folder, recursive: bool = False) -> list:
+    """フォルダの帳票（★ ailine 自身の出力は入力に数えない ── 分母が汚れる）。
+
+    ★ `recursive` は**一覧の冊に焼かれた条件**から来る（こちらで決めない ── 決めると
+      「同じ範囲を見る」が破れる・2026-09-14）。
+    """
     out = []
-    for path in sorted(folder.iterdir()):
+    for path in sorted(folder.rglob("*") if recursive else folder.iterdir()):
         if not path.is_file() or path.name.startswith("~$"):
             continue
         if path.suffix.lower() not in (filetypes.OPENPYXL_READABLE_SUFFIX,
@@ -196,6 +200,22 @@ def _list_rows(list_path) -> tuple:
 _TOTAL_ROW_NAMES = frozenset({"合計", "小計", "総合計", "合計金額", "計"})
 
 
+def _shown_name(path, folder, recursive: bool) -> str:
+    """一覧に出ているはずの名前（★ 再帰なら相対パス ── 製品側の `_shown` と同じ線）。"""
+    return str(path.relative_to(folder)) if recursive else path.name
+
+
+def _condition_of(list_path) -> dict:
+    """一覧の冊に焼かれた条件（`recursive` など）。無ければ空 ── 昔の冊でも通る。"""
+    import json as _json
+    _creator, desc = xml_readback.read_core_properties(list_path)
+    try:
+        cond = _json.loads(desc) if desc else None
+    except (TypeError, ValueError):
+        cond = None
+    return cond if isinstance(cond, dict) else {}
+
+
 def verify_forms_list(list_path, folder) -> dict:
     """一覧をフォルダの帳票と突き合わせる。
 
@@ -203,6 +223,7 @@ def verify_forms_list(list_path, folder) -> dict:
             {"unsupported": 理由}。
     """
     headers, body, reasons, scoped = _list_rows(list_path)
+    recursive = bool(_condition_of(list_path).get("recursive"))
     if not headers or forms_collect.HEADERS[0] not in headers.values():
         return {"unsupported": f"一覧シート（{forms_collect.SHEET_NAME}）が読めません: {list_path}"}
     name_col = next(c for c, n in headers.items() if n == forms_collect.HEADERS[0])
@@ -250,22 +271,22 @@ def verify_forms_list(list_path, folder) -> dict:
 
     explained = {name for name, _item in reasons}
     left_out, out_of_scope = [], []
-    for path in candidates(folder):
-        if path.name in listed:
+    for path in candidates(folder, recursive):
+        if _shown_name(path, folder, recursive) in listed:
             continue
         # ★ こちらでも読めない冊は咎めない（製品が名指しで断った冊を二度叱らない）。
         if source_values(path) is None:
-            unreadable.append(path.name)
-        elif path.name in scoped:
-            out_of_scope.append(path.name)      # ★ --month で外した冊（『対象外』シートに理由つき）
-        elif path.name in explained:
+            unreadable.append(_shown_name(path, folder, recursive))
+        elif _shown_name(path, folder, recursive) in scoped:
+            out_of_scope.append(_shown_name(path, folder, recursive))      # ★ --month で外した冊（『対象外』シートに理由つき）
+        elif _shown_name(path, folder, recursive) in explained:
             # ★ 2026-09-13: 項目が 1 つも取れなかった冊は一覧に載らない（空行が次の道具を殺すため）。
             #   検分に理由が在る冊は「取り逃し」でなく「理由つきで外した冊」── 数えて名指しする。
-            left_out.append(path.name)
+            left_out.append(_shown_name(path, folder, recursive))
         else:
-            breaks.append(("★ フォルダに在るのに一覧に無い冊", path.name))
+            breaks.append(("★ フォルダに在るのに一覧に無い冊", _shown_name(path, folder, recursive)))
 
-    facts = {"一覧の行": len(listed), "フォルダの帳票": len(candidates(folder)),
+    facts = {"一覧の行": len(listed), "フォルダの帳票": len(candidates(folder, recursive)),
              "含有を確かめた値": checked, "検分の理由": len(reasons)}
     if total_rows:
         facts["合計行（検算の対象外）"] = f"{len(total_rows)} 行（{', '.join(total_rows[:3])}）"

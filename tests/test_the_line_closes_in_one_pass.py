@@ -186,3 +186,58 @@ def test_the_route_is_registered_everywhere():
     assert ailine.ROUTE_KIND["accounts-apply"] == "multi"
     assert ailine.NEEDS_MACHINE["accounts-apply"] is False
     assert "accounts-apply" in ailine.multi_file_routes()
+
+
+# ── forms --recursive（経理役が 3 回とも指した）────────────────────────────
+
+def _nested(tmp_path):
+    root = tmp_path / "受領"
+    _invoice(root / "2026-08" / "a.xlsx", "あかね商事株式会社", 3300)
+    _invoice(root / "2026-09" / "a.xlsx", "いろは工業株式会社", 5500)   # ★ 同じ名前・別の月
+    _invoice(root / "2026-09" / "b.xlsx", "うめ物産株式会社", 7700)
+    return root
+
+
+def test_recursive_reads_every_subfolder_and_keeps_names_apart(tmp_path):
+    root = _nested(tmp_path)
+    out = tmp_path / "一覧.xlsx"
+    r = _forms(root, out, "--recursive")
+    assert r.returncode == 0, r.stdout
+    assert "3 ファイル中 3 冊を読みました" in r.stdout, r.stdout
+    assert "（対象外）サブフォルダ" not in r.stdout, r.stdout      # ★ 見たものを対象外と言わない
+    names = [row[0] for row in _sheets(out)["一覧"][1:]]
+    assert sorted(names) == [str(Path("2026-08") / "a.xlsx"), str(Path("2026-09") / "a.xlsx"),
+                             str(Path("2026-09") / "b.xlsx")], names
+
+
+def test_without_recursive_the_parent_is_still_refused(tmp_path):
+    """★ 陰性対照 ── 既定は「サブフォルダは見ない」のまま（親を指した人に黙って 125 冊を読ませない）。"""
+    root = _nested(tmp_path)
+    r = _forms(root, tmp_path / "一覧.xlsx")
+    assert r.returncode == 9, r.stdout
+    assert "サブフォルダが 2 件ありますが、中は見ていません" in r.stdout, r.stdout
+
+
+def test_verify_reads_the_same_range_from_the_book_itself(tmp_path):
+    """★★ 独立検算は範囲を**自分で決めない** ── 一覧に焼かれた条件（recursive）から読む。"""
+    root = _nested(tmp_path)
+    out = tmp_path / "一覧.xlsx"
+    assert _forms(root, out, "--recursive").returncode == 0
+    v = _run(["verify", str(out), str(root)], tmp_path)
+    assert v.returncode == 0, f"exit={v.returncode} / {v.stdout}"
+    assert "一覧の行: 3" in v.stdout and "フォルダの帳票: 3" in v.stdout, v.stdout
+    assert "✓" in v.stdout, v.stdout
+    import json
+    import openpyxl
+    wb = openpyxl.load_workbook(out)
+    cond = json.loads(wb.properties.description)
+    wb.close()
+    assert cond["recursive"] is True and cond["kind"] == "forms", cond
+
+
+def test_recursive_and_month_work_together(tmp_path):
+    root = _nested(tmp_path)
+    out = tmp_path / "一覧.xlsx"
+    r = _forms(root, out, "--recursive", "--month", "2026-08")
+    assert r.returncode == 0, r.stdout
+    assert "対象月 2026年8月: 一覧 3 冊" in r.stdout, r.stdout   # ★ 検体は 3 冊とも 8/31

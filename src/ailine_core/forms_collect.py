@@ -27,6 +27,7 @@ from ailine_core import forms_suspect
 CREATOR_MARK = "ailine forms"
 
 #: 一覧シートの名前と見出し。★ 署名でもあるので、変えると過去の出力が他人のものになる。
+KIND = "forms"        #: 出力に焼く種類名（条件の JSON に入る）
 SHEET_NAME = "一覧"
 HEADERS = ("元ファイル", "請求元", "宛先", "請求額(税込)", "請求日", "請求番号")
 

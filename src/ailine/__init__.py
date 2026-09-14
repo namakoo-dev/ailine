@@ -17138,35 +17138,43 @@ def cmd_forms(a: argparse.Namespace) -> int:
     folder = Path(a.folder).resolve()
     out = Path(a.out).resolve()
     # ★ 帳票の一覧だけが .pdf を候補にする（受け取る請求書は PDF が本流・2026-09-12 設計 D9）。
-    candidates, excluded = multifile.classify_folder_contents(folder, also=(filetypes.PDF_SUFFIX,))
+    recursive = bool(getattr(a, "recursive", False))
+    candidates, excluded = multifile.classify_folder_contents(folder, also=(filetypes.PDF_SUFFIX,),
+                                                             recursive=recursive)
     # ★ 自分の出力を入力に数えない（V6・stack と同じ判定を使う ── 書き写さない）。
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     if not candidates:
-        print(multifile.nothing_to_read(folder, excluded, what="請求書（.xlsx / .pdf）",
+        print(multifile.nothing_to_read(folder, excluded,
+                                        what=("請求書（.xlsx / .pdf・サブフォルダの中も見ました）"
+                                              if recursive else "請求書（.xlsx / .pdf）"),
                                         self_excluded=self_excluded))
         return EXIT_ENVIRONMENT
+
+    def _shown(p: Path) -> str:
+        """一覧の『元ファイル』に出す名前。★ 再帰のときは相対パス（別フォルダの同名を潰さない）。"""
+        return str(p.relative_to(folder)) if recursive else p.name
 
     collected, unreadable = [], []
     for p in candidates:
         if p.suffix.lower() == filetypes.PDF_SUFFIX:
             try:
-                collected.append((p.name, form_read.read_pdf_book(p)))
+                collected.append((_shown(p), form_read.read_pdf_book(p)))
             except pdf_grid.NoTextLayer as e:
                 # ★ 「読めなかった」と「請求書ではなかった」を混ぜない（設計 D7）
-                unreadable.append({"name": p.name, "reason": str(e)})
+                unreadable.append({"name": _shown(p), "reason": str(e)})
             except Exception as e:   # noqa: BLE001 ── 1 冊で止めない（名指しして次へ）
-                unreadable.append({"name": p.name, "reason": f"読めませんでした: {type(e).__name__}"})
+                unreadable.append({"name": _shown(p), "reason": f"読めませんでした: {type(e).__name__}"})
             continue
         try:
             wb = openpyxl.load_workbook(p, data_only=True)
             wbf = openpyxl.load_workbook(p, data_only=False)
         except Exception as e:   # noqa: BLE001 ── 例外名を生で見せない（次の一手を言う）
-            unreadable.append({"name": p.name, "reason": input_path.explain_unreadable(e, p)})
+            unreadable.append({"name": _shown(p), "reason": input_path.explain_unreadable(e, p)})
             continue
         try:
-            collected.append((p.name, form_read.read_book(wb, wb_formula=wbf)))
+            collected.append((_shown(p), form_read.read_book(wb, wb_formula=wbf)))
         except Exception as e:   # noqa: BLE001 ── 1 冊で止めない（名指しして次へ）
-            unreadable.append({"name": p.name, "reason": f"読めませんでした: {type(e).__name__}"})
+            unreadable.append({"name": _shown(p), "reason": f"読めませんでした: {type(e).__name__}"})
         finally:
             wb.close()
             wbf.close()
@@ -17230,6 +17238,10 @@ def cmd_forms(a: argparse.Namespace) -> int:
         tmp_out = workdir / out.name
         wb_out = openpyxl.Workbook()
         wb_out.properties.creator = forms_collect.CREATOR_MARK   # ★ 書き手の印
+        # ★ 条件を機械可読で焼く（独立検算がどう数えるかをこの冊から読める ── 他の入口と同じ線）。
+        wb_out.properties.description = json.dumps(
+            {"tool": "ailine", "kind": forms_collect.KIND, "folder": str(folder),
+             "recursive": recursive, "month": month}, ensure_ascii=False)
         ws = wb_out.active
         ws.title = forms_collect.SHEET_NAME
         ws.append(list(forms_collect.HEADERS))
@@ -18427,6 +18439,9 @@ def build_parser() -> argparse.ArgumentParser:
     fm = sub.add_parser("forms", help="フォルダ内の請求書から項目を集めて一覧にする（読むだけ）")
     fm.add_argument("folder", help="対象フォルダ（直下の .xlsx と .pdf を読む・.xls/.csv は数えて名指しで断る・サブフォルダは見ない）")
     fm.add_argument("--out", required=True, help="一覧を書き出すブックのパス")
+    fm.add_argument("--recursive", action="store_true",
+                    help="サブフォルダの中も読む（月フォルダが並ぶ親を 1 回で ── 元ファイルは"
+                         "フォルダからの相対パスで出します）")
     fm.add_argument("--month", default=None, metavar="YYYY-MM", type=_month_arg,
                     help="この月の請求だけを一覧にして末尾に合計行を付ける（別の月・請求日なしは『対象外』シートへ）")
     fm.add_argument("--overwrite", action="store_true",

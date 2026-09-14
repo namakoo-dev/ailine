@@ -72,7 +72,7 @@ def nothing_to_read(folder: Path, excluded: dict, *, what: str = "読める帳�
     return "\n".join(lines)
 
 
-def classify_folder_contents(folder: Path, *, also=()):
+def classify_folder_contents(folder: Path, *, also=(), recursive: bool = False):
     """folder 直下（サブフォルダの中は見ない）を分類する。
        戻り値: (candidates: 名前順の Path リスト, excluded: {"temp": n, "subdirs": n, "csv": n})。
        ★ 分母そのものが検証対象（V7）── ~$ 一時ファイルとサブフォルダは対象外として数える
@@ -97,9 +97,16 @@ def classify_folder_contents(folder: Path, *, also=()):
     candidates = []
     excluded = {"temp": 0, "subdirs": 0, "csv": 0, "other_format": 0,
                  "other_format_names": []}
-    for item in sorted(folder.iterdir(), key=lambda p: p.name):
+    # ★★ 2026-09-14（買い手役・経理が 3 回とも）: 月フォルダが 7 つ並ぶ親を指すと 7 回打って
+    #   7 冊の一覧を手で束ねるしかなかった。`recursive` は**明示の指定だけ**で効く（既定は
+    #   「サブフォルダは見ない」のまま ── 親を指した人が黙って 125 冊を読まされない）。
+    #   ★ 中を見た回はサブフォルダを「対象外」に数えない（見たものを対象外と言うのは嘘）。
+    items = (sorted((p for p in folder.rglob("*")), key=lambda p: str(p).lower())
+             if recursive else sorted(folder.iterdir(), key=lambda p: p.name))
+    for item in items:
         if item.is_dir():
-            excluded["subdirs"] += 1
+            if not recursive:
+                excluded["subdirs"] += 1
             continue
         if not item.is_file():
             continue
