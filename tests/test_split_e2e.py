@@ -95,6 +95,9 @@ def test_one_book_per_person_with_the_provenance_columns(book, tmp_path):
     assert made == sorted(["山田.xlsx", "山田_.xlsx", "佐藤.xlsx", "_検分.xlsx"]), made
     head, *rows = _values(out / "山田.xlsx")
     assert head == _HEADERS + list(stack_core.PROVENANCE_HEADERS), head
+    # ★ 末尾は本人の合計行（2026-09-14 に足した ── 出所が空・中身は下の専用の番人が見る）。
+    *rows, last = rows
+    assert split_people.is_own_total(last[-1], list(last)), last
     assert [row[-2:] for row in rows] == [["売上一覧.xlsx", 3], ["売上一覧.xlsx", 5]], rows
     assert [row[3] for row in rows] == ["山田", "山田"]
 
@@ -119,13 +122,21 @@ def test_the_original_is_not_touched(book, tmp_path):
 
 
 def test_a_total_row_never_lands_in_anyones_book(book, tmp_path):
-    """★★ 最悪の混入（D2）── 合計行が誰かの冊に入っていないこと。"""
+    """★★ 最悪の混入（D2）── **元の表の**合計行が誰かの冊に入っていないこと。
+
+    ★★ 2026-09-14: 冊の末尾に本人の合計行を足した日、この番人は「合計」の語だけを見ていたので
+      自分が足した行に噛んだ。見る物を**出所**に変えた ── 元から来た行（元行が数）に合計の語が
+      在ってはいけない、が本当の契約（自分の合計行は出所が空で、金額は 75,000 ではない）。
+    """
     out = tmp_path / "配る"
     assert _split(book, out, "--amount", "金額").returncode == 0
     for path in out.glob("*.xlsx"):
         if path.name == "_検分.xlsx":
             continue
         for row in _values(path)[1:]:
+            if split_people.is_own_total(row[-1], list(row)):
+                assert row[-2] is None and 75000 not in row, f"{path.name}: {row}"
+                continue
             assert "合計" not in [str(v) for v in row], f"{path.name} に合計行が混入: {row}"
     assert not (out / "合計.xlsx").exists()
 
@@ -276,7 +287,12 @@ def test_the_proof_is_counted_from_the_written_books_not_from_memory(book, tmp_p
 
     def lying_read(path, sheet_name=None):
         data = real(path, sheet_name)
-        rows = [r for (r, _c) in data["grid"] if r > 1]
+        # ★ 落とすのは最後の**明細**の行（最終列＝元行が数の行）。★★ 2026-09-14: 冊の末尾に
+        #   本人の合計行（出所は空）を足した日に「最後の行」が合計行に変わり、この変異が
+        #   素通りした ── 治具が測る場所を失っていた（直すのは治具の側）。
+        cols = max((c for (_r, c) in data["grid"]), default=0)
+        rows = [r for (r, c), v in data["grid"].items()
+                if r > 1 and c == cols and isinstance(v, (int, float))]
         if rows:
             drop = max(rows)
             data["grid"] = {k: v for k, v in data["grid"].items() if k[0] != drop}
@@ -367,3 +383,147 @@ def test_a_stale_total_row_is_named_with_the_difference(book, tmp_path):
     assert r.returncode == 0, r.stdout
     assert "⚠ 元の表の合計行" in r.stdout and "合いません" in r.stdout, r.stdout
     assert "分けた冊は明細のとおりです" in r.stdout, r.stdout
+
+
+# --- 配った冊に本人の合計（2026-09-14・会計役 MISSING #2）-------------------------------------
+#
+# ★★ 「山田太郎.xlsx は明細 2 行だけ。8800 は _検分.xlsx にしかない。本人に渡す冊なら合計が欲しい」
+# ★ 足した行も**検算の対象**にする ── 出所（元行）が空の行を黙って飛ばすと「捏造した行」の穴になる。
+#   判断は `split_people.is_own_total` 1 箇所（書く側・事後条件・独立検算が同じ関数を呼ぶ）。
+
+
+def _books(out_dir):
+    return {p.stem: p for p in sorted(out_dir.glob("*.xlsx")) if not p.name.startswith("_")}
+
+
+def test_each_book_ends_with_its_own_total(book, tmp_path):
+    out = tmp_path / "配る"
+    r = _split(book, out, "--amount", "金額")
+    assert r.returncode == 0, r.stdout
+    checked = []
+    for stem, path in _books(out).items():
+        wb = openpyxl.load_workbook(path)
+        ws = wb.active
+        rows = [[c.value for c in row] for row in ws.iter_rows(min_row=2)]
+        head = [str(c.value) for c in ws[1]]
+        ai = head.index("金額")
+        last = rows[-1]
+        assert last[head.index("担当者")] == "合計", (stem, last)
+        assert last[-1] is None and last[-2] is None, f"{stem}: 合計行に出所が入っている: {last}"
+        detail = sum(r0[ai] for r0 in rows[:-1] if isinstance(r0[ai], (int, float)))
+        assert last[ai] == detail, (stem, last[ai], detail)
+        assert ws.cell(row=ws.max_row, column=head.index("担当者") + 1).font.bold
+        wb.close()
+        checked.append(stem)
+    assert len(checked) >= 2, checked
+
+
+def test_the_proof_and_the_verifier_do_not_double_count_the_total(book, tmp_path):
+    out = tmp_path / "配る"
+    r = _split(book, out, "--amount", "金額")
+    assert r.returncode == 0, r.stdout
+    assert "✓ 部分の和 ＝ 全体" in r.stdout, r.stdout
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(book),
+                        "--amount", "金額"], cwd=str(REPO), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    assert v.returncode == 0 and "✓" in v.stdout, f"exit={v.returncode} / {v.stdout}"
+
+
+def test_without_amount_no_total_row_is_added(book, tmp_path):
+    """★ 陰性対照 ── 金額の列を指していない回は冊の形を変えない。"""
+    out = tmp_path / "配る"
+    assert _split(book, out).returncode == 0
+    for stem, path in _books(out).items():
+        wb = openpyxl.load_workbook(path)
+        vals = [c.value for c in wb.active["A"]]
+        wb.close()
+        assert "合計" not in [str(v) for v in vals], stem
+
+
+def test_a_tampered_total_is_a_break(book, tmp_path):
+    """★★ 足した行は検算の対象 ── 合計を書き換えたら独立検算が破れる。"""
+    out = tmp_path / "配る"
+    assert _split(book, out, "--amount", "金額").returncode == 0
+    path = next(iter(_books(out).values()))
+    wb = openpyxl.load_workbook(path)
+    ws = wb.active
+    ai = [str(c.value) for c in ws[1]].index("金額") + 1
+    ws.cell(row=ws.max_row, column=ai).value = 999999
+    wb.save(path)
+    wb.close()
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(book),
+                        "--amount", "金額"], cwd=str(REPO), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    assert v.returncode == 5, f"exit={v.returncode} / {v.stdout}"
+    assert "★ 冊の合計が明細と合わない" in v.stdout, v.stdout
+
+
+def test_a_row_without_provenance_and_without_the_word_is_still_a_break(book, tmp_path):
+    """★★ 穴を開けていない証明 ── 出所の無い行は「合計」の語が無ければ今までどおり破れ。"""
+    out = tmp_path / "配る"
+    assert _split(book, out, "--amount", "金額").returncode == 0
+    path = next(iter(_books(out).values()))
+    wb = openpyxl.load_workbook(path)
+    ws = wb.active
+    head = [str(c.value) for c in ws[1]]
+    row = [None] * len(head)
+    row[head.index("担当者")] = "こっそり足した行"
+    row[head.index("金額")] = 1
+    ws.append(row)
+    wb.save(path)
+    wb.close()
+    v = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(book),
+                        "--amount", "金額"], cwd=str(REPO), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    assert v.returncode == 5 and "元行が数でない" in v.stdout, f"exit={v.returncode} / {v.stdout}"
+
+
+def test_a_person_named_like_a_total_is_never_handed_a_book(tmp_path):
+    """★ 検体 S05 の家系（担当者の値そのものが合計の語）── **実測して予測を却下した**回。
+
+    ★★ 2026-09-14: 「合計の語の人に合計行を足すと人と合計行が見分けられない」と読んで
+      `own_total_row` に柵を置き、この e2e で鳴らすつもりだった。測ってみると上流の
+      「分けない行」の判定が先に効き、『合計商事』の行は *誰の冊にも入らない* ── 冊自体が
+      作られないので、その事故は CLI からは起こせない。柵は第二の柵として残すが、番人は
+      `own_total_row` の単体試験（`test_split_people.py`）が持つ ── ★ 到達できない柵を
+      e2e で「守っている」と名乗らない（到達できず＝未確認）。
+    """
+    b = _book(tmp_path / "元" / "一覧.xlsx",
+              headers=["日付", "顧客", "担当者", "金額"],
+              rows=[["2026-09-01", "甲社", "合計商事", 1000],
+                    ["2026-09-02", "乙社", "内藤", 2000]])
+    out = tmp_path / "配る"
+    r = _split(b, out, "--amount", "金額")
+    assert r.returncode == 0, r.stdout
+    books = _books(out)
+    assert "合計商事" not in books, f"合計の語の行に冊が出た: {sorted(books)}"
+    assert "分けない行" in r.stdout, r.stdout
+    wb = openpyxl.load_workbook(books["内藤"])
+    assert wb.active.max_row == 3, "普通の人には足す"
+    wb.close()
+
+
+def test_a_wrong_total_never_reaches_the_person(book, tmp_path, monkeypatch):
+    """★★ 足した行は**書いた直後に読み戻して**確かめる ── 嘘の合計を書いたら 1 冊も置かない。
+
+    書き手（`own_total_row`）が 1 円ずれた合計を返すように差し替える。事後条件が合計行を
+    見ていなければ exit 0 で配られてしまう ── 見ているなら exit 5 で誰にも届かない。
+    ★ 「合計が明細と合わない」は独立検算にも在るが、あちらは**後から**の目。人に渡る前に
+      止める目がこちら側にも要る（片方だけだと、配った後に気づく）。
+    """
+    import ailine
+
+    real = ailine.split_people.own_total_row
+
+    def off_by_one(out_headers, plan, value, row_nums, row_values):
+        row = real(out_headers, plan, value, row_nums, row_values)
+        if row is not None and plan.amount_column:
+            row[plan.amount_column - 1] += 1
+        return row
+
+    monkeypatch.setattr(ailine.split_people, "own_total_row", off_by_one)
+    out = tmp_path / "配る"
+    args = argparse.Namespace(book=str(book), by="担当者", out=str(out), amount="金額",
+                              sheet=None, overwrite=False, json=False)
+    assert ailine.cmd_split(args) == 5, "★ 嘘の合計を書いても通った（合計行を確かめていない）"
+    assert not out.exists() or not list(out.glob("*.xlsx")), "★ 証明できていないのに配った"

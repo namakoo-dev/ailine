@@ -146,6 +146,7 @@ def verify_split_folder(out_dir, source, amount_header: str | None = None) -> di
                                "（`--amount` に元の冊の見出しを渡してください）。"}
 
     seen, parts_amount = {}, 0.0
+    own_unchecked: list = []          #: 突き合わせられなかった冊の合計行（`--amount` 無しの回）
     for book in books:
         head_row, names, body = _grid_rows(book)
         if head_row is None:
@@ -161,9 +162,21 @@ def verify_split_folder(out_dir, source, amount_header: str | None = None) -> di
         if unknown:
             breaks.append(("★ 見出しが元と合いません", f"{book.name} → {unknown}"))
         i_file, i_row = (col_of[n] for n in stack.PROVENANCE_HEADERS)
+        book_amount = 0.0
+        own_total = None
         for r, cells in body.items():
             raw_row = cells.get(i_row)
             if not primitives.is_number(raw_row):
+                # ★★ 2026-09-14: 冊の末尾の合計行（本人の合計）だけは出所が無くてよい ── ただし
+                #   **黙って飛ばさない**。1 冊に 1 行だけ許し、値が明細の和と合うかを下で確かめる。
+                #   判断は `split_people.is_own_total` 1 箇所（書く側・事後条件と同じ関数）。
+                #   ★ そこが見るのは「合計らしさ」ではなく**ラベルという定数**だけ ── 検算器が
+                #     書き手の規則を再現しないため（`total_row` は呼ばない・番人が禁じている）。
+                row_vals = [cells.get(c) for c in sorted(cells)]
+                if own_total is None and split_people.is_own_total(raw_row, row_vals):
+                    own_total = (r, _amount(cells.get(col_of[amount_header]))
+                                 if amount_header and amount_header in col_of else None)
+                    continue
                 breaks.append(("元行が数でない", f"{book.name} {r} 行目 → {raw_row!r}"))
                 continue
             n = int(float(raw_row))
@@ -187,6 +200,17 @@ def verify_split_folder(out_dir, source, amount_header: str | None = None) -> di
                 got = _amount(cells.get(col_of[amount_header]))
                 if got is not None:
                     parts_amount += got
+                    book_amount += got
+        if own_total is not None:
+            r, shown = own_total
+            if amount_header is None:
+                # ★★ 2026-09-14: 初版はここを破れにしていた ── `--amount` 無しの検算（今まで
+                #   exit 0 だった形）が全部 exit 5 になった。**確かめられなかったのは破れでない**。
+                #   黙って飛ばすのも禁止なので、下の事実に「突き合わせていません」と出す（三値）。
+                own_unchecked.append(f"{book.name} {r} 行目")
+            elif shown is None or abs(shown - book_amount) > AMOUNT_TOLERANCE:
+                breaks.append(("★ 冊の合計が明細と合わない",
+                               f"{book.name} {r} 行目 → {shown!r} ≠ 明細の和 {book_amount:,.0f}"))
 
     named = named_rows(report)
     for n in sorted(src_rows):
@@ -217,4 +241,9 @@ def verify_split_folder(out_dir, source, amount_header: str | None = None) -> di
                            f"元 {whole} ≠ 配った {parts_amount} ＋ 名指し {held}"))
     else:
         facts["金額"] = "測っていません（`--amount <見出し>` を渡すと和も検算します）"
+        if own_unchecked:
+            # ★ 出ないことを合格の証拠にしない ── 確かめていない行は件数と場所を言う。
+            facts["冊の末尾の合計行"] = (
+                f"{len(own_unchecked)} 件は突き合わせていません"
+                f"（{'／'.join(own_unchecked[:3])}{'…' if len(own_unchecked) > 3 else ''}）")
     return {"breaks": breaks, "facts": facts, "mismatch": bool(breaks)}

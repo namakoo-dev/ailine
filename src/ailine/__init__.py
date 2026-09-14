@@ -17725,6 +17725,16 @@ def cmd_split(a: argparse.Namespace) -> int:
                 ws_out.append(list(row_values[r]) + [book.name, r])
                 for c, fmt in enumerate(row_formats[r], start=1):
                     ws_out.cell(row=i, column=c).number_format = fmt
+            own_total = split_people.own_total_row(out_headers, plan, value, row_nums, row_values)
+            if own_total is not None:
+                ws_out.append(own_total)
+                # ★ 金額の書式は明細の行から写す・合計行は太字（`forms --month` と同じ線）。
+                first = row_nums[0]
+                fmts = row_formats[first]
+                if len(fmts) >= plan.amount_column:
+                    ws_out.cell(row=ws_out.max_row, column=plan.amount_column).number_format = (
+                        fmts[plan.amount_column - 1])
+                inspection.bold_row(ws_out, ws_out.max_row, len(out_headers))
             inspection.bold_row(ws_out, 1, len(out_headers))
             inspection.autosize_columns(ws_out)
             wb_out.save(tmp)
@@ -17741,8 +17751,14 @@ def cmd_split(a: argparse.Namespace) -> int:
             row_nums_out = xml_readback.data_row_numbers(data, header_row=1)
             src_col = len(out_names)          # 出所列の 2 本目（元行）＝最後の列
             src_rows = []
+            own_total_seen = None
             for rr in row_nums_out:
                 v = data["grid"].get((rr, src_col))
+                row_vals = [data["grid"].get((rr, c)) for c in range(1, len(out_names) + 1)]
+                if split_people.is_own_total(v, row_vals):
+                    # ★ 冊の合計行（出所は空）── 値はこの下で明細の和と突き合わせる。
+                    own_total_seen = rr
+                    continue
                 # ★ 元行が数でない行は「読めなかった」── 落とさずに破れとして扱う
                 #   （出ないことは信号でない ── 黙って除くと帰属の検算が甘くなる）。
                 src_rows.append(int(v) if primitives.is_number(v) else v)
@@ -17751,16 +17767,23 @@ def cmd_split(a: argparse.Namespace) -> int:
                 return _split_postcondition_fail(f"帰属（{value} の元行）",
                                                  sorted(plan.parts[value]),
                                                  sorted(src_rows, key=str))
-            parts_rows += len(row_nums_out)
+            parts_rows += len(row_nums_out) - (1 if own_total_seen else 0)
             if plan.amount_counted:
                 hits = split_people.matching_columns(out_names, plan.amount_header)
                 if len(hits) != 1:
                     return _split_postcondition_fail(f"金額の列（{value} の出力）", 1, len(hits))
                 got = 0.0
                 for rr in row_nums_out:
+                    if rr == own_total_seen:
+                        continue
                     v = data["grid"].get((rr, hits[0]))
                     if primitives.is_number(v):
                         got += float(v)
+                if own_total_seen:
+                    # ★ 足した合計行は**自分で確かめる**（書いた物を読み戻して明細の和と比べる）。
+                    shown = data["grid"].get((own_total_seen, hits[0]))
+                    if not primitives.is_number(shown) or abs(float(shown) - got) > 0.005:
+                        return _split_postcondition_fail(f"冊の合計（{value} の出力）", got, shown)
                 parts_amount += got
                 result["parts"][value] = {"rows": src_rows, "amount": got,
                                           "file": tmp.name}

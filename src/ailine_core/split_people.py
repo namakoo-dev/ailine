@@ -398,6 +398,54 @@ def plan_split(grid_rows, header_row: int, by_header, amount_header=None, *,
                      whole_rows=whole_rows, whole_amount=whole_amount)
 
 
+#: 配った冊の末尾に足す合計行のラベル（★ 語そのものは `total_row` が持つ ── ここで作る語も
+#: あちらの判定に当たる物でなければ、書いた側と読む側が食い違う）。
+OWN_TOTAL_LABEL = "合計"
+
+
+def own_total_row(out_headers: list, plan, value, row_nums: list, row_values: dict):
+    """配った冊の末尾に足す合計行（足さない回は None）。
+
+    ★★ 2026-09-14（買い手役・会計の MISSING #2）: 「配った冊に本人の合計が無い。8800 は
+      `_検分.xlsx` にしかない。本人に渡す冊なら合計が欲しい」。
+    ★ 足すのは `--amount` を渡した回だけ（金額の列が決まっている回だけ）。
+    ★ 担当者の値そのものが合計の語の回（検体 S05『合計商事』の家系）は足さない ── 人の名前と
+      合計行が同じ文字になり、受け取った人が見分けられない。
+    ★ 出所（元ファイル・元行）は**空**にする ── この行は元の冊から来ていない。空にした行は
+      `is_own_total` が見分け、事後条件と独立検算の**両方**が値を確かめる（穴を開けない）。
+    """
+    if plan.amount_column is None:
+        return None
+    if total_row.row_has_total_word([value]):
+        return None
+    total = 0.0
+    for r in row_nums:
+        v = (row_values[r][plan.amount_column - 1]
+             if len(row_values[r]) >= plan.amount_column else None)
+        if _is_number(v):
+            total += float(v)
+    row = [None] * len(out_headers)
+    row[plan.by_column - 1] = OWN_TOTAL_LABEL
+    row[plan.amount_column - 1] = total
+    return row
+
+
+def is_own_total(src_row_value, values: list) -> bool:
+    """その行が「冊の合計行」か ── 出所（元行）が空で、`OWN_TOTAL_LABEL` **そのもの**が在る行。
+
+    ★★ 判断はここ 1 箇所（書く側・事後条件・独立検算の 3 つが同じ関数を呼ぶ）。
+      3 箇所に書き写すと、片方だけ直って「出所の無い行が黙って通る」穴になる（開発手法 §13）。
+    ★★ 2026-09-14: 初版は `total_row.row_has_total_word`（合計**らしさ**の規則）で見ていて、
+      独立検算がそれを呼んだ瞬間に番人が赤くした ── 検算器が書き手の規則を再現すると恒真に
+      近づく（`test_the_verifier_does_not_reproduce_the_rules`）。物差しは**自分が書いた
+      ラベルという定数**に変えた（`PROVENANCE_HEADERS` と同じ ── 共有するのは語彙だけ）。
+    ★ 出所が空でもラベルと違えば**偽** ── 捏造した行は今までどおり破れになる。
+    """
+    if _is_number(src_row_value):
+        return False
+    return any(str(v).strip() == OWN_TOTAL_LABEL for v in values if v is not None)
+
+
 def total_row_check(plan) -> str | None:
     """元の表の合計行と、明細の和（配った＋空欄＋複数担当）を突き合わせる 1 行。
 

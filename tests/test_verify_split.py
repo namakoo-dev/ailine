@@ -53,8 +53,15 @@ def _edit(path: Path, fn):
 
 
 def _last_row(ws) -> int:
+    """最後の**明細**の行（元行が数の行）。
+
+    ★★ 2026-09-14: 「最後の非空行」で取っていたら、配った冊の末尾に本人の合計行を足した日に
+      下の 5 本が黙って**合計行**を触るようになった ── 治具が測る場所を失って全部緑／赤が
+      ずれた。合計行は出所（元行）が空なので、数の行だけを見る（★ 直すのは治具の側）。
+    """
+    i = _headers(ws).index(stack_core.PROVENANCE_HEADERS[1]) + 1
     return max(r for r in range(2, ws.max_row + 1)
-               if any(ws.cell(r, c).value not in (None, "") for c in range(1, ws.max_column + 1)))
+               if isinstance(ws.cell(r, i).value, (int, float)))
 
 
 def _headers(ws) -> list:
@@ -184,11 +191,17 @@ def test_a_folder_without_our_mark_is_refused(tmp_path):
 
 
 def test_not_measuring_the_amount_is_said_out_loud(split_out):
-    """★ 出ないことを合格の証拠にしない ── `--amount` が無い回は「測っていません」と書く。"""
+    """★ 出ないことを合格の証拠にしない ── `--amount` が無い回は「測っていません」と書く。
+
+    ★★ 2026-09-14（冊の末尾に本人の合計行を足した日）: 出所の無いその行を**破れ**にした初版で
+      この形が全部 exit 5 になった。**確かめられなかったのは破れでない**（三値）── かつ黙って
+      飛ばしもしない。件数と場所を「突き合わせていません」と言って exit 0。
+    """
     out, book = split_out
     r = _verify(out, book)
     assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
     assert "測っていません" in r.stdout, r.stdout
+    assert "冊の末尾の合計行" in r.stdout and "突き合わせていません" in r.stdout, r.stdout
 
 
 def test_the_verifier_does_not_reproduce_the_rules():
@@ -216,6 +229,10 @@ def test_the_verifier_does_not_reproduce_the_rules():
         assert expected in defined, f"物差しが読めていない（定義に {expected} が無い）"
     for expected in ("read_grid", "read_core_properties"):
         assert expected in used, f"物差しが読めていない（使用に {expected} が無い）"
+    # ★★ 2026-09-14 に実弾で効いた: 冊の末尾の合計行を見分けるのに
+    #   `total_row.row_has_total_word`（合計**らしさ**の規則）を呼んだ時点でここが赤くなり、
+    #   物差しを「自分が書いたラベルという定数」に変えた。関数名も直に禁じる
+    #   （`from ... import row_has_total_word` なら module 名を迂回できるため）。
     for forbidden in ("plan_split", "lookalike_pairs", "entity_core", "total_row",
-                      "find_header_row"):
+                      "row_has_total_word", "find_header_row"):
         assert forbidden not in used, f"検算器が規則を呼んでいる: {forbidden}"

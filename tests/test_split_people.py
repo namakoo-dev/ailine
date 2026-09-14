@@ -420,3 +420,51 @@ def test_reading_differences_are_still_unsolved_and_we_say_so():
     from ailine_core.split_people import lookalike_pairs, matching_core
     assert matching_core("ヤマダ") != matching_core("山田")
     assert lookalike_pairs({"山田": 1, "ヤマダ": 1}) == []
+
+
+# ── 配った冊の末尾に足す本人の合計（会計役 MISSING #2・2026-09-14）────────────────
+
+def _own_plan(**kw):
+    from ailine_core.split_people import SplitPlan
+    base = dict(header_row=1, by_header="担当者", by_column=1, amount_header="金額",
+                amount_column=2)
+    base.update(kw)
+    return SplitPlan(**base)
+
+
+def test_the_own_total_row_carries_the_label_and_no_provenance():
+    """★ 足す行は「合計」＋金額だけ ── 出所（元ファイル・元行）は**空**（元から来ていない）。"""
+    from ailine_core.split_people import OWN_TOTAL_LABEL, own_total_row
+    head = ["担当者", "金額", "元ファイル", "元行"]
+    row = own_total_row(head, _own_plan(), "山田", [3, 5],
+                        {3: ["山田", 12000], 5: ["山田", 25000]})
+    assert row == [OWN_TOTAL_LABEL, 37000.0, None, None], row
+
+
+def test_without_an_amount_column_nothing_is_added():
+    """★ 陰性対照 ── 金額の列を指していない回は足さない（数えていない物を合計と呼ばない）。"""
+    from ailine_core.split_people import own_total_row
+    assert own_total_row(["担当者", "元ファイル", "元行"], _own_plan(amount_column=None),
+                         "山田", [3], {3: ["山田"]}) is None
+
+
+def test_a_value_that_is_itself_a_total_word_gets_no_row():
+    """★ 第二の柵 ── 担当者の値そのものが合計の語なら足さない（人と合計行が見分けられない）。
+
+    ★★ 2026-09-14 の実測: CLI ではここまで来ない ── 上流の「分けない行」が先に効いて
+      『合計商事』の行は誰の冊にも入らない（`test_split_e2e.py` にその測定を残した）。
+      柵は残すが、番人は**この単体試験**が持つ（到達できない柵を e2e で名乗らない）。
+    """
+    from ailine_core.split_people import own_total_row
+    head = ["担当者", "金額", "元ファイル", "元行"]
+    assert own_total_row(head, _own_plan(), "合計商事", [3], {3: ["合計商事", 1000]}) is None
+
+
+def test_only_a_row_without_provenance_and_with_the_word_is_the_own_total():
+    """★★ 見分けは 1 箇所（書く側・事後条件・独立検算が同じ関数を呼ぶ）── 穴を開けない。"""
+    from ailine_core.split_people import OWN_TOTAL_LABEL, is_own_total
+    assert is_own_total(None, [OWN_TOTAL_LABEL, 37000, None, None])
+    assert not is_own_total(3, [OWN_TOTAL_LABEL, 37000, "売上一覧.xlsx", 3]), \
+        "★ 元行が数の行は明細（合計の語が入っていても合計行にしない）"
+    assert not is_own_total(None, ["こっそり足した行", 1, None, None]), \
+        "★ 出所が無く合計の語も無い行は今までどおり破れ（捏造の穴を開けない）"
