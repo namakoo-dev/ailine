@@ -150,6 +150,7 @@ from ailine_core import xml_readback   # ★ 検算の独立読み実装（openp
 from ailine_core import extract_multi   # ★ M2: `ailine run <フォルダ>`（抽出集約）の本体
 from ailine_core import inspection   # ★ M2.5: 検分シート + 視覚的誘導（DESIGN §M2.5）
 from ailine_core import threshold   # ★ 比較の境目の数は依頼文から機械が取る（EXTRACT/SET_WHERE 共通）
+from ailine_core import compare_words   # ★ 比較の語の辞書と、それを正確に引く 1 つの関数（否定は聞き返す）
 from ailine_core import form_read   # ★ 帳票を読む器官（DESIGN-20260910 §1・需要①）
 from ailine_core import pdf_grid
 from ailine_core import filetypes
@@ -4458,7 +4459,7 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
     #     表に実在する値のうち依頼文に現れるものを機械が拾い、「どれか」で抽出する。
     #   ★ 比較語が在る時は触らない ── 「原価が500以上」の 500 を名前と読まない。
     _hr_x = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
-    if extract_cmp_from_task(task) is None:
+    if not compare_words.read(task).hit:
         _named_vals = task_names_real_values(task, book_meta, first_sheet,
                                               resolved["col"], _hr_x)
         if _named_vals:
@@ -4496,8 +4497,14 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
             return True, resolved, inferred, None
     llm_cmp_raw = str(resolved.get("cmp", "")).strip().lower()
     # ★ operator9 ①: cmp も A' 原則の中へ。依頼文からの機械抽出が非 None かつ LLM の cmp と
-    #   食い違えば機械が勝つ（factor/value と同じ作法）。一致 or 機械 None なら現状どおり。
-    mechanical_cmp = extract_cmp_from_task(task)
+    #   食い違えば機械が勝つ（factor/value と同じ作法）。
+    # ★★ 2026-09-15（辞書を正確に引く）: 否定（「超えない」）と 2 つの比較（「3000以上5000未満」）
+    #   は**断る** ── 黙って反転・黙って片方を捨てる、が誤配の形だった。数値の比較で辞書に
+    #   当たらない回は LLM の不等号を採らない（下の数値の枝・compare_words.unconfirmed）。
+    _cmp_read = compare_words.read(task)
+    if _cmp_read.ambiguous:
+        return False, resolved, inferred, _cmp_read.ambiguous
+    mechanical_cmp = _cmp_read.cmp
     if mechanical_cmp is not None and mechanical_cmp != llm_cmp_raw:
         cmp = mechanical_cmp
         resolved["_warnings"] = resolved.get("_warnings", []) + [
@@ -4550,6 +4557,12 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
                                   example=f"{resolved['col']}が10{_EXTRACT_CMP_LABELS.get(cmp, '')}の行を抜き出して")
             if _g.refusal:
                 return False, resolved, inferred, _g.refusal
+            # ★ 辞書に当たらない数値の比較は LLM の不等号だけで通さない（2026-09-15・規則 ④）。
+            #   ★ 境目の接地の**後ろ**に置く ── 「在庫少ないやつ」は数の無い断り（「多い／少ない」
+            #     では線を引けない）の方が親切で、初版はここが先に立って横取りしていた。
+            if cmp in compare_words.NUMERIC_CMPS and not _cmp_read.hit:
+                return False, resolved, inferred, compare_words.unconfirmed(
+                    cmp, example=f"{resolved['col']}が10{_EXTRACT_CMP_LABELS.get(cmp, '')}の行を抜き出して")
             if _g.warning:
                 resolved["_warnings"] = resolved.get("_warnings", []) + [_g.warning]
             resolved["value"] = _g.value
@@ -5292,7 +5305,11 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
         return True, resolved, inferred, None
     # ★ 比較は機械が勝つ（EXTRACT と同じ作法・LLM の写し間違いで境界行が混入する）
     _llm_cmp = str(resolved.get("cmp", "")).strip().lower()
-    _mech_cmp = extract_cmp_from_task(task)
+    # ★ 2026-09-15: 否定・2 つの比較は断る（EXTRACT と同じ器官・同じ規則）。
+    _cmp_read = compare_words.read(task)
+    if _cmp_read.ambiguous:
+        return False, resolved, inferred, _cmp_read.ambiguous
+    _mech_cmp = _cmp_read.cmp
     if _mech_cmp is not None and _mech_cmp != _llm_cmp:
         resolved["_warnings"] = resolved.get("_warnings", []) + [
             f"LLM が返した比較({_llm_cmp or '(空)'})と依頼文の機械抽出({_mech_cmp})が"
@@ -5407,6 +5424,11 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
                 "条件の数値が依頼文から一意に読み取れません"
                 f"（見つかった数: {"、".join(sorted(set(_nums))) or "なし"}）── "
                 "「原価が500以上の行の…」のように 1 つだけ書いてください")
+        # ★ 辞書に当たらない数値の比較は LLM の不等号だけで通さない（2026-09-15・規則 ④・
+        #   EXTRACT と同じく数の検査の後ろ）。
+        if task and _cmp in compare_words.NUMERIC_CMPS and not _cmp_read.hit:
+            return False, resolved, inferred, compare_words.unconfirmed(
+                _cmp, example=f"{resolved['cond_col']}が500{_EXTRACT_CMP_LABELS.get(_cmp, '')}の行の…")
         resolved["cond_value"] = float(_nums[0])
     # ★ 書き込む値は引用符から（SET_COLUMN_VALUE と同じ関所 ── LLM に作らせない）
     _q = extract_quoted_literal(task)
@@ -6649,64 +6671,17 @@ _EXTRACT_SHEET_NAME_FORBIDDEN_RE = re.compile(r'[:\\/?*\[\]]')
 # ★ operator9 ①: 比較語(cmp)も A' 原則の中に入れる ── value は機械が数値化するのに、cmp の
 #   種別(gte/lte/gt/lt/eq/contains)だけは LLM の言い分をそのまま検証していた（「より大きい」→
 #   gte・「未満」→lte と写し間違えても素通し・境界値の行が黙って混入する実害）。
-#   語の列挙は意味から広め（検体に無い自然な同義語も拾う）。
 # ★★ 2026-09-14（言い回し 120 件の盲検）: 役の人が打つのは「20時間**超えてる**」「10個**切ってる**」
-#   「発注点を**下回る**」── 辞書は「以上／以下／未満／を超える」しか知らず、LLM の `eq` が
-#   そのまま通って **= 0** の抽出が出ていた（誤配 16 件中 4 件）。口語を足す。
-#   ★ 口語は断片ガード必須（直前 10 文字に数字）── 「区切って」「締め切って」「予算を上回る努力」を拾わない。
-_EXTRACT_CMP_WORDS = (
-    ("gt", ("より大きい", "より大きく", "を超える", "を超えて", "より多い", "より多く",
-             "より高い", "より高く", "超え", "上回", "過ぎ")),
-    ("lt", ("未満", "より小さい", "より小さく", "より少ない", "より少なく",
-             "より安い", "より安く", "切っ", "下回", "に満たない", "マイナス")),
-    ("gte", ("以上",)),
-    ("lte", ("以下",)),
-    ("contains", ("を含む", "を含んで", "が含まれる", "を含める")),
-    ("eq", ("と等しい", "に等しい", "と同じ")),
-)
-# ★ 断片ガード: 「以上」「以下」は文末の定型（「以上です」等）の断片として現れやすいので、
-#   直前 _EXTRACT_CMP_NUM_WINDOW 文字以内に数字が無ければ比較語として採用しない
-#   （対象を値の近傍の比較語に絞る）。gt/lt/contains/eq の語は文末定型と衝突しないので対象外。
-_EXTRACT_CMP_NEEDS_NUM_NEARBY = frozenset({"gte", "lte"})
-#: ★ 語そのものにも掛ける断片ガード（口語は短いので、数字が近くに無ければ比較語と読まない）。
-_EXTRACT_CMP_WORDS_NEED_NUM = frozenset({"超え", "上回", "切っ", "下回", "に満たない", "過ぎ"})
-#: ★ 「切っ」は「締め切って」「区切って」「見切って」の断片にもなる ── 直前が数か数え語のときだけ比較語。
-_EXTRACT_CMP_WORD_PREFIX = {"切っ": re.compile(r"[0-9０-９個件人円時間日点本枚台%万千]$")}
-#: ★★ 「マイナス」は 2 つの意味を持つ（2026-09-14・掃きの残り 1 件）: 「在庫数がマイナスに
-#:   なってる行」＝**0 未満**、「退勤マイナス出勤の列」＝**引き算**。後ろの形で見分ける
-#:   （盲検 #21・#74 はどちらも「マイナスになって」）── 引き算の側を奪わない。
-_EXTRACT_CMP_WORD_SUFFIX = {"マイナス": re.compile(r"^(?:になっ|になる|の行|のもの|の品|だけ)")}
-_EXTRACT_CMP_NUM_RE = re.compile(r'[0-9０-９]')
-_EXTRACT_CMP_NUM_WINDOW = 10
-
-
+#   ── 辞書は「以上／以下／未満／を超える」しか知らず、LLM の `eq` がそのまま通っていた。口語を足した。
+# ★★ 2026-09-15（Namakoo「辞書登録後は正確に引いてこれる仕組みも必要だ」）: 辞書と引き方を
+#   `ailine_core/compare_words.py` に 1 つにした（1 語 1 レコード・出所と検体つき・番人が全件回す）。
+#   旧版の欠陥 4 つ（否定を読まない／最初の一致で採る／ガードが語ごとの場当たり／引けない回に
+#   黙って LLM に負ける）は、辞書を増やすほど悪化する形だった。
 def extract_cmp_from_task(task: str) -> str | None:
-    """依頼文から比較語を機械抽出する。一致が無ければ None（機械は断定しない）。
-       複数の比較語が現れても、依頼文中で最初に出現した(かつ断片ガードを通った)ものを採る。"""
-    if not task:
-        return None
-    best = None   # (出現位置, cmp名)
-    for cmp_name, words in _EXTRACT_CMP_WORDS:
-        for w in words:
-            idx = task.find(w)
-            while idx >= 0:
-                if cmp_name in _EXTRACT_CMP_NEEDS_NUM_NEARBY or w in _EXTRACT_CMP_WORDS_NEED_NUM:
-                    window = task[max(0, idx - _EXTRACT_CMP_NUM_WINDOW):idx]
-                    if "。" in window or not _EXTRACT_CMP_NUM_RE.search(window):
-                        idx = task.find(w, idx + 1)
-                        continue
-                _pre = _EXTRACT_CMP_WORD_PREFIX.get(w)
-                if _pre is not None and not _pre.search(task[:idx]):
-                    idx = task.find(w, idx + 1)
-                    continue
-                _suf = _EXTRACT_CMP_WORD_SUFFIX.get(w)
-                if _suf is not None and not _suf.search(task[idx + len(w):]):
-                    idx = task.find(w, idx + 1)
-                    continue
-                if best is None or idx < best[0]:
-                    best = (idx, cmp_name)
-                break
-    return best[1] if best else None
+    """依頼文から比較語を機械抽出する。**1 つに決まった時だけ**返す（一致なし・否定・
+       2 つの比較は None ── 機械は断定しない）。
+       ★ 「比較の語が在るか」は None では読めない ── `compare_words.read(task).hit` で見る。"""
+    return compare_words.read(task).cmp
 
 
 # ★ グラフ段①: kind の機械抽出（cmp と同じ作法・extract_cmp_from_task の兄弟）。
@@ -9762,7 +9737,7 @@ def task_asks_for_a_conditional_write(task: str, book_meta: dict | None = None,
     #     を揃えたので、この門はもう閉じない。★ 逆のことをして ✓ を出す道は、
     #     「依頼 vs 宣言」の検査（verify_dsl_args）で塞いである。
     #   ★ 「味噌汁以外を抜き出して」（抽出）は引用が無いので、この門の手前で外れる。
-    if extract_cmp_from_task(task):
+    if compare_words.read(task).hit:
         return True
     if book_meta is None:
         return False
@@ -12945,7 +12920,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
         _one_cell = False
         _points = task_points_at_one_row(a.task, book_meta, _sheet_h) if _wide else None
         # ★ 比較語のある依頼は条件つき書換であって 1 セルではない（500 を名前と読まない）。
-        if (_row_no or _named) and task_quotes_a_value(a.task) and extract_cmp_from_task(a.task) is None:
+        if (_row_no or _named) and task_quotes_a_value(a.task) and not compare_words.read(a.task).hit:
             _fx = translate_task_fixed_op(a.model, "SET_CELL_VALUE", a.task, book_meta)
             if _fx and (_fx.get("args") or {}).get("col"):
                 _args = dict(_fx["args"])
@@ -13034,7 +13009,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     #     ★ ただし比較語（以上/以下…）が在る依頼には触らない ── それは条件であって
     #       名指しではない（「原価が500以上の行を抜き出して」の 500 を名前と読まない）。
     if (not _reread_done and _re_extract_ask.search(a.task or "")
-            and extract_cmp_from_task(a.task) is None
+            and not compare_words.read(a.task).hit
             and not task_asks_to_extract_columns(a.task) and len(plan) == 1
             and (plan[0] or {}).get("op") != "EXTRACT_COLUMNS"):
         # ★★ 2026-09-02: 「〜以外」は**否定**として読む（同じ読み直しの中で分ける）。
@@ -15888,7 +15863,13 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     # ★ operator9 ①（片配線の追補）: このフォルダ抽出経路は verify_dsl_args を通らず cmp を
     #   独自に確定するため、同じ機械抽出+開示を個別に配線する（verify_dsl_args の EXTRACT 分岐
     #   参照・同じ食い違いが起きうる別経路）。
-    mechanical_cmp = extract_cmp_from_task(a.task)
+    # ★ 2026-09-15: 否定・2 つの比較は断る／辞書に当たらない数値の比較は LLM の不等号だけで
+    #   通さない（verify_dsl_args の 2 兄弟と同じ器官・同じ規則）。
+    _cmp_read = compare_words.read(a.task)
+    if _cmp_read.ambiguous:
+        print(f"？ {_cmp_read.ambiguous}")
+        return 3
+    mechanical_cmp = _cmp_read.cmp
     cmp_mismatch_warning = None
     if mechanical_cmp is not None and mechanical_cmp != llm_cmp_raw:
         cmp = mechanical_cmp
@@ -15919,6 +15900,12 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 print(f"？ 『{value}』は数値として読めないので {_EXTRACT_CMP_LABELS[cmp]} の"
                       "比較ができません。数値で言い直してください。")
                 return 3
+        # ★ 辞書に当たらない数値の比較は LLM の不等号だけで通さない（2026-09-15・規則 ④・
+        #   兄弟と同じく値の検査の後ろ）。
+        if a.task and cmp in compare_words.NUMERIC_CMPS and not _cmp_read.hit:
+            print("？ " + compare_words.unconfirmed(
+                cmp, example=f"{col}が40000{_EXTRACT_CMP_LABELS.get(cmp, '')}の行を抜き出して"))
+            return 3
 
     # ⑤ 出力先（Q7: フォルダの親・機械命名）と書き込みの関所（40 冊読む前に判定して印字）。
     #    ★ review3#1/#5: 黙って作り直してよいのは「印」だけでなく「条件も一致」する時だけ。

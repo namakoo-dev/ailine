@@ -185,7 +185,7 @@ def test_a_conditional_request_is_never_stolen():
     #   探し方を条件式でなく**門の目印**（plan_writes_beyond_one_cell）に寄せた。
     #   ★ 守っている不変は同じ ── 比較語のある依頼を 1 セルへ落とさないこと。
     i = product_text().index("plan_writes_beyond_one_cell(plan):")
-    assert "extract_cmp_from_task(a.task) is None" in product_text()[i:i + 900], \
+    assert "not compare_words.read(a.task).hit" in product_text()[i:i + 900], \
         "1 セルの読み直しが、条件つき書換の依頼まで拾う形になっている"
 
 

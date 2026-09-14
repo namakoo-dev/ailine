@@ -1,0 +1,3623 @@
+{
+ "_about": "比較の語の辞書（ailine_core/compare_words.py）の**読みの凍結** ── 語を足す前後で 1 件も動かないことを番人が守る（語彙の共食いの測定）。句は 2026-09-14 の言い回し掃き（sonnet の役 agent 120／haiku 121／Qwen3-8B 167）。更新は AILINE_REGEN_COMPARE_FREEZE=1 で再生成し、git diff を人が読んでから commit。",
+ "readings": [
+  {
+   "writer": "sonnet",
+   "phrase": "日付順に並べ替えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "ソートして、日付の新しい順に",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "取引先ごとに金額を足して、多い順に並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "今月分だけ抜き出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "担当者ごとに色分けして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "数量×単価が金額と合ってるかチェックして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "備考に「要確認」って書いてある行だけ出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "先月と比べて売上が減った取引先を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "商品ごとの合計数量を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "重複してる行があったら消して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "空欄になってるセルに色付けて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "金額の合計を一番下に出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "取引先名の表記ゆれを直して、㈱と(株)がバラバラなので",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "月末締めなので今月の合計を担当者ごとに出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫数が10個以下のものだけ出して",
+   "cmp": "lte",
+   "word": "以下",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "区分ごとに並べ替えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "最終入荷日が古い順に並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "棚卸しのために品番順に並べ替えて印刷したい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫数×単価で在庫金額を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "品名が同じなのに品番が違うものがないか調べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫数がマイナスになってる行を教えて",
+   "cmp": "lt",
+   "word": "マイナス",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "半年以上入荷してない品目を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "区分が「消耗品」のものだけ別シートに分けて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "品番順に直して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "氏名順に並べ替えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "部署ごとに残業時間を合計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "残業時間が45時間超えてる人を教えて",
+   "cmp": "gt",
+   "word": "超え",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "出勤してるのに退勤が空欄の行を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "来月のシフトを今月と同じパターンで作って",
+   "cmp": "eq",
+   "word": "と同じ",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "日付順に並べ替えて、部署ごとにグループ化して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "数量×単価で金額の列を埋めて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "金額が10万円以上の行だけ黄色に塗って",
+   "cmp": "gte",
+   "word": "以上",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "担当者ごとに金額を合計して一覧にして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "金額に消費税10%乗せた列を追加して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "取引先ごとの売上合計を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "3月分の行だけ抜き出して別シートにコピーして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "金額の列、3桁ごとにカンマ入れて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "単価を全部5%引きにして金額も直して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "備考に要確認って書いてある行を一番上にもってきて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "担当者が山田の行だけ抜き出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "月ごとの売上合計を折れ線グラフにして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "取引先別の売上を棒グラフで並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "日付の古い順に並べ替えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "数量が0の行は消しちゃって",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "1行目の見出しを太字にしてスクロールしても消えないようにして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫表.xlsxの単価を見て、金額の列を最新の単価で計算し直して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫表の単価を原価にして、粗利の列を作って",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "今月の売上合計と先月の売上合計を比べて増減出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "取引先が同じ行をまとめて、間に小計の行を入れて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "担当者ごとに何件受注したか件数も出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫数が10個以下の行は赤字にして",
+   "cmp": "lte",
+   "word": "以下",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "区分ごとに在庫数を合計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "最終入荷日が3か月以上前の品番だけ抜き出して",
+   "cmp": "gte",
+   "word": "以上",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫数×単価で在庫金額の列を作って",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "品名を五十音順に並び替えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "残業時間が20時間超えてる人だけ教えて",
+   "cmp": "gt",
+   "word": "超え",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "出勤と退勤の時刻から実働時間を計算する列を作って",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "氏名ごとに今月の出勤日数を数えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "土日に当たる日付の行に色をつけて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "今月の売上、担当者ごとに合計出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "先月分の売上一覧、締めといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "取引先ごとに並べ替えといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "税抜きの金額も出しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "この売上表、コピー取ってバックアップしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "備考に要確認って書いてあるやつだけ抜き出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "先週の分、担当者の名前が抜けてるとこ埋めといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "これ、去年の同じ月と比べて出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "商品ごとの売上ランキング作って",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "金額の桁、カンマ区切りにしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "これ、PDFにして送れるようにして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "売上一覧、パスワードかけて保存しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "棚卸ししたから在庫数、直しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫数がマイナスになってるとこ、赤くしといて",
+   "cmp": "lt",
+   "word": "マイナス",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "最終入荷日が半年以上前のやつ、リストにして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "品番の重複がないか見といて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "区分ごとに在庫金額の合計出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "これ、去年の棚卸表と突き合わせて差分出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "単価が空欄のとこ、埋めといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫表、月末で締めて別に保存しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "残業時間、自動で計算して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "残業が45時間超えてる人、教えて",
+   "cmp": "gt",
+   "word": "超え",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "部署ごとに残業の合計出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "退勤時間が抜けてる日、まとめて出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "土日に出勤してる人だけ抜き出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "これ、まとめといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "さっきの直しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "いつもの感じでお願い",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "これ、ちゃんとしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "あれ、どうなった?",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫少ないやつ出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫数が10個切ってるの教えて",
+   "cmp": "lt",
+   "word": "切っ",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫やばいの上から並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "棚卸しの表作って",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "最終入荷日が古いやつ探して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "単価上がったやつだけ教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "今月の分だけ出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "先月と今月の売上比べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "取引先ごとにまとめて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "一番売れてる商品どれ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "担当者別の実績出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "金額の大きい順に並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "備考に未回収って書いてあるやつ集めて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "先方に出す請求書用にまとめて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "今月の売上の合計だけでいいから",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "今月の残業多い人出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "誰が休んでるか分かるようにして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "人工の集計お願い",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "部署ごとの残業時間まとめて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "先週のシフト表みたいにして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "残業時間が0の人チェックして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "これ元請けに出す用にして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "品番のとこ、番号順にして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "区分ごとに分けて見たい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "写真とかも一緒に見れるようにして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "在庫表のここ間違ってるから直しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "先月のやつ消して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "出勤簿、去年のと見比べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "これ全部グラフにして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "sonnet",
+   "phrase": "発注しなきゃいけないもの一覧にして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上が多い順に上から並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "今月のデータだけ抽出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "取引先ごとに金額を足して集計してください",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "担当者別に売上をまとめて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "金額の列を合計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "日付と取引先でフィルターをかけて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "同じ商品の売上を全部足して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "単価が〇〇以上のもの抽出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "重複データを削除して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫が少ないものから順に表示して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫がゼロのもの赤く塗ってください",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "最後の入荷日が古いもの順に並べ替えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫数と単価を掛けて、在庫の金額を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "勤怠表の残業時間合計を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "出勤日数をカウントしてください",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "部署ごとに残業時間を足して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "欠勤したら出勤欄に〇がついてない人を見つけて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "日付でグループ分けして合計残業を計算して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上一覧で取引先が〇〇のもの色分けして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "金額が高い順に上位5件だけ抽出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "品番と品名で検索して該当するの削除して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "商品ごとに売上をまとめて、多い順に並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "日付の形式を統一してください",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "取引先ごとの平均単価を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "最後の入荷日が3ヶ月以上前のもの赤くして",
+   "cmp": "gte",
+   "word": "以上",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "備考欄が空いてるもの見つけて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "9月と10月で比較して残業時間が増えたか見たい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上と在庫で照らし合わせて、在庫不足のもの警告して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "先月の売上全部出してくれ。合計もお願い",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "9月で金額が 100 万超えた取引だけリストアップして",
+   "cmp": "gt",
+   "word": "超え",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "客先ごとの売上合計を出してくれ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "単価と数量を掛けて金額を自動で計算させて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "値引きが入ってる行を色つけてほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "担当者ごとの売上ランキングを作ってほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "今月分の消費税を別列で計算して出す",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "金額の列に 3 桁区切りをつけて見やすくしてほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "客先ごとの売上推移を折れ線グラフで見たい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "備考欄が空いてる行をすべて教えてほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "金額が 50 万以上の取引と以下で背景色を分けてほしい",
+   "cmp": null,
+   "word": null,
+   "hit": true,
+   "negated": false,
+   "ambiguous": true
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫が 10 個以下の商品を赤でハイライトして",
+   "cmp": "lte",
+   "word": "以下",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "品番順に全部並べ直して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫数かける単価で在庫金額を新しい列に計算して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "区分ごとの在庫数の合計をピボットテーブルで出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "最終入荷日が 3 ヶ月以上前の商品に黄色をつけてほしい",
+   "cmp": "gte",
+   "word": "以上",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "残業が 10 時間以上の日を黄色でハイライトして",
+   "cmp": "gte",
+   "word": "以上",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "名前ごとに今月の総残業時間を計算して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "出勤時刻から退勤時刻を引いて実労働時間を計算してほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "部署別の平均残業時間を出してほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上一覧の担当者を勤怠と照合して、売上が多い人の残業をチェックしたい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "原価データから粗利を計算してほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "先月と今月の売上を比べて増えてる客を教えてほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "月初から今日までの日別売上を集計して欲しい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "月末請求書を売上データから自動で作ってほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "商品別の販売数量ベスト 5 をリストアップしてほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "取引先ごとに未入金の売上だけ抽出してほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上と在庫を 1 つのシートにして、品番で繋ぎたい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "毎月同じ処理をするからテンプレートとして残しておいてほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "経営層用の資料として、客先別の売上と粗利率を 1 ページの表にまとめてほしい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上一覧の金額、今月の分だけ合計出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫表の在庫数が負になってるの直しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "勤怠の残業時間、9月分を給与に反映できるようまとめといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "月末の締めだから、売上一覧の金額が正しいか確認しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "棚卸しで、実物と在庫表の在庫数が合わせばいいんだけど、差異を計算しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "取引先ごとの売上、集計表を作ってくれ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "賞与の計算用に、9月の残業時間とその金額を一覧にしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上一覧のこれ、何か単価おかしくないか？",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫表の『最終入荷日』が古い商品を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上一覧、日付でソートしといて。古い順で",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "勤怠の『出勤』『退勤』の時刻、記入漏れがないか確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "前年同月との売上比較、グラフで見られるようにしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "商品別に、どれが一番売れてるか順番つけといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "給与の控除額を自動で計算するように、社員ごとの残業時間を月別に整理しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "これ、消費税の対象かどうか区分しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "月末締めだから、売上一覧の【翌月繰越】を作って",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫表、赤字だってわかるように『在庫数』の少ないやつ色つけといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "勤怠のこれ、時間帯がおかしくない？",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上一覧に営業利益の欄がほしいんだけど、できる？",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫、ロケーション記号みたいなの追加できる？",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "税務署に出す資料になるから、この表の形式を変えといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "取引先別の売掛金残高、期末でまとめといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "給与明細、会社の控除と個人の控除を分けて計算できるようにしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "この商品、何で単価がこんなに動いてるの？",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "営業部の勤怠、今月分ちょっと出してくれ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫、SKUごとの回転率計算しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "バックアップ、昨日のと今日のちゃんと取れてるか確認しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "月初のデータチェック、毎月自動でやれる仕組みにしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "このシートの『担当者』ごとに、売上の達成率を計算して表示しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "何かまとめといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "給与、キチッと出してくれ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "9月分だけ出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "在庫少ないやつ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "山田さんの残業",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "金額でかいのから",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "品番 AA から始まるやつ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "今月の残業足して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "売上全部足す",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "入荷日で古いのから",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "休みの日外して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "田中商事のぶんだけ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "20個以下",
+   "cmp": "lte",
+   "word": "以下",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "営業部の人誰がいる",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "昨日のぶん",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "なくなってるやつ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "誰が一番残業してるか",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "備考に『返品』って入ってるやつ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "単価で並べ替えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "これ間違ってる",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "商品別に売上足して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "あ、区分が違う",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "シフト表にして",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "1万円以上だけ",
+   "cmp": "gte",
+   "word": "以上",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "足りてないやつ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "休み多い人",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "担当者ごとに足して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "9月に入荷したやつ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "勤務時間出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "月末までに集計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "いくらするやつ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "haiku",
+   "phrase": "人別で勤務時間",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "売上金合計を算出",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "担当者別で数量を集計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "日付順に並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "取引先の列を整理して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "商品名でフィルターかけて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "単価の高い順に並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "備考欄の空欄を埋めて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "金額合計を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "発注点を計算して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "担当者に分類して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数が0のものを表示して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品番で並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "区分で分類して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "単価の平均を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "最終入荷日を更新して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品名で検索して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数を増減して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "消費税を計算して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品番の重複を消して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤時間を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間を集計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "部署別に分類して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "退勤時間の空欄を埋めて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "シフトを比較して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の合計を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "氏名で検索して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤日を更新して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠の誤記を修正して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "月単位で集計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠の空欄を埋めて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤時間を変更して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "退勤時間を調整して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠のデータを整理して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "シフト時間の差を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の上限を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤日を一覧に",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠のデータを抽出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠の月ごとの集計を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠の曜日で分類して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の合計を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤日を並べて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠の記録を整理して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間を計算して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠のデータを一覧に",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "今月の売上集計を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "担当者別の売上集計をしたい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "商品別の売上を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "10月の売上を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "今月の金額を合計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "取引先で検索して売上を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "10月の売上を集計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "商品の数量を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "10月の売上集計を出力して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "担当者別に売上を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "値引き分を計算して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "今月の売上を一覧で出力して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "商品名で検索して売上を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "10月の売上集計を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "日付で絞って売上を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "10月の売上を合計して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "今月の売上を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "担当者別の売上を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "商品別の金額を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品番で検索して在庫を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "区分で絞って在庫を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "最終入荷日を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数を更新して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品名で検索して在庫を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "区分別の在庫を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数を一覧で出力して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "発注点を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の合計を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "部署別の出勤を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "シフトを確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "日付で絞って勤怠を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "氏名で検索して勤怠を出して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤時間の合計を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "部署別に勤怠を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠を一覧で出力して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の集計を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤日数を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠データを一覧で出力して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤務時間の確認をしたい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "部署別の勤務を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠を整理して出力して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の確認をしたい",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤日数の集計を教えて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤務時間を確認して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤怠を絞って出力して",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "金額列の合計を確認しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "日付順に並べろ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "取引先名を整理しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "数量がマイナスなのは全部削除しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "単価列の空欄をゼロにしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "担当者列に未入力なのは全部消しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "備考欄に『値引き』って書いてある行を抽出しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "税抜金額を計算しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "税込金額を自動計算しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "月末のデータを分離しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数が50未満の品を表示しといて",
+   "cmp": "lt",
+   "word": "未満",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品番で並べろ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "区分が『備品』の行を全部削除しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "最終入荷日が1年以内のものを抽出しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品名を全部アルファベット順にしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数と単価を掛けた金額列を追加しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品番で重複してる行を全部消しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の合計を確認しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤日を並べろ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "退勤時間の空欄を『00:00』にしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "シフトの一部を『休』に変更しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "日付でフィルタリングしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "氏名で並べろ",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の平均を計算しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤日が2023年度のものを全部削除しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "部署で分類しといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤時間の空欄を『なし』にしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "退勤時間が22時を過ぎる分だけ抽出しといて",
+   "cmp": "gt",
+   "word": "過ぎ",
+   "hit": true,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間の合計でソートしといて",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "売上日付を確認",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "取引先名を更新",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "商品を削除",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "数量を直す",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "単価を変更",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "金額を計算",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "担当者を追加",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "備考を補足",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数を確認",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品番を更新",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "区分を直す",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "単価を反映",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "最終入荷日を更新",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "発注点を確認",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品名を変更",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤時間を確認",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間を加算",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "日付を修正",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "部署を変更",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "氏名を追加",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "退勤時間を直す",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "税額を計算",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "値引き分を反映",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "売上を消す",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品名を追加",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数を増やす",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "シフトを確認",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "休日を記入",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間を削除",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "金額を再計算",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "区分を変更",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "最終入荷日を直す",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤時間を削除",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "備考を修正",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "担当者を削除",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品番を追加",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "勤務時間の確認",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "数量を加算",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "残業時間を記入",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "売上を反映",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "在庫数を減らす",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "休日を削除",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "金額を確認",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "品名を直す",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  },
+  {
+   "writer": "qwen",
+   "phrase": "出勤時間を記入",
+   "cmp": null,
+   "word": null,
+   "hit": false,
+   "negated": false,
+   "ambiguous": false
+  }
+ ]
+}
