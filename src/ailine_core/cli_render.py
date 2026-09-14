@@ -947,6 +947,9 @@ def render_accounts_report(today_label: str, out_label: str, result: dict) -> li
     if grades:
         got = "／".join(f"{g} {grades[g]}" for g in field_record.GRADE_ORDER if g in grades)
         lines.append(f"区分: {got}（{field_record.grade_legend()}）")
+    if result.get("ceiling"):
+        # ★ 「確 0」を「何も見つからなかった」と読ませない（2026-09-14・買い手役の目盛り）。
+        lines.append(f"（{result['ceiling']}）")
     blanks = [r for r, v in rows.items() if not (v or {}).get("account")]
     if blanks:
         lines.append(f"⚠ 空欄 {len(blanks)} 行（{_rows_label(sorted(blanks, key=int))}）"

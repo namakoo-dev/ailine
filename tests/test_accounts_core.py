@@ -692,3 +692,66 @@ def test_the_yayoi_shape_carries_the_tax_column_at_position_eight():
     plan = accounts_core.plan_accounts(
         today, header_map, {"弥生_過去.csv": {"header_map": header_map, "rows": past}})
     assert [r for r, _w in plan.tax_differs] == [1], plan.tax_differs
+
+
+# --- 「確 0」の目盛り合わせ（2026-09-14・会計役の 中「確 0/8（目盛り）」）--------------------
+#
+# ★★ 一番上の区分が 1 行も出ない冊で「道具が何も見つけられなかった」と読める。実測では
+#   確 が稀なのは**規則が正しく働いた結果**（実物で MF 1/10・弥生 0/6）── 確は「2 本以上の鍵が
+#   **別々の先例**で一致」で、同じ 1 行を 2 通りに読んだ回は裏 1 つ（結合セルの 2 度数えと同じ）。
+# ★ だから確を出やすくする方へは触らない（うま味調味料の最大化 ＝ 料理を壊す）。
+#   直すのは**読み手の目盛り合わせ** ── なぜ 0 なのかを、その冊の数で言う。
+
+def test_a_book_with_one_hitting_key_says_why_confirmation_is_zero():
+    past = [_row("1", "2026/08/03", "通信費", "", "甲通信", "8800", memo="8月分 電話代")]
+    plan = _plan([_row("11", "2026/09/03", "", "", "甲通信", "8800", memo="はじめての摘要")], past)
+    assert plan.ceilings == {2: accounts_core.CEILING_ONE_KEY}, plan.ceilings
+    line = accounts_core.confirmation_ceiling(plan)
+    assert line.startswith("確（2 本以上の鍵が別々の先例で一致）は 0 行"), line
+    assert f"{accounts_core.CEILING_ONE_KEY}行 1" in line, line
+    assert "見つからなかったという意味ではありません" in line, line
+    assert "**" not in line, "★ 黒い画面に文書の記法（**）を出さない"
+
+
+def test_two_keys_pointing_at_one_precedent_are_counted_as_such():
+    """★ 2 本の鍵が同じ 1 行を指した行 ── 裏は 1 つ（そう数えたことを人に見せる）。"""
+    past = [_row("1", "2026/08/03", "通信費", "携帯", "甲通信", "8800", memo="8月分 電話代")]
+    plan = _plan([_row("11", "2026/09/03", "", "携帯", "甲通信", "8800", memo="9月分 電話代")], past)
+    assert plan.ceilings == {2: accounts_core.CEILING_SAME_ROW}, plan.ceilings
+    assert f"{accounts_core.CEILING_SAME_ROW}行 1" in accounts_core.confirmation_ceiling(plan)
+
+
+def test_a_book_that_reaches_confirmation_says_nothing():
+    """★★ 陰性対照 ── 確 が 1 行でも出た冊では黙る（出す条件は「0 行」だけ）。
+
+    ★ 初版の検体は候補行が 1 行だけで、条件を外した版でも空が返って**素通り**した
+      （`ceilings` が空だから）。確 の行と 単 の行を**両方**入れて、条件だけを測る。
+    """
+    past = [_row("1", "2026/08/03", "通信費", "携帯", "甲通信", "8800", memo="8月分 電話代"),
+            _row("2", "2026/08/04", "通信費", "", "乙電話", "1000", memo="9月分 電話代"),
+            _row("3", "2026/08/05", "消耗品費", "", "丙商店", "500", memo="文具")]
+    plan = _plan([_row("11", "2026/09/03", "", "携帯", "甲通信", "8800", memo="9月分 電話代"),
+                  _row("12", "2026/09/04", "", "", "丙商店", "600", memo="はじめての摘要")], past)
+    assert _grade(plan, 2) == field_record.CONFIRMED, _grade(plan, 2)
+    assert plan.ceilings.get(3) == accounts_core.CEILING_ONE_KEY, plan.ceilings
+    assert accounts_core.confirmation_ceiling(plan) == ""
+
+
+def test_the_ceiling_line_is_also_written_into_the_book():
+    """★ 画面と冊に**同じ 1 行**（器は 1 つ ── 2 度書くと片方だけ直る）。"""
+    past = [_row("1", "2026/08/03", "通信費", "", "甲通信", "8800", memo="8月分 電話代")]
+    plan = _plan([_row("11", "2026/09/03", "", "", "甲通信", "8800", memo="はじめての摘要")], past)
+    line = accounts_core.confirmation_ceiling(plan)
+    notes = [r[3] for r in accounts_core.inspection_rows(plan) if r[0] == accounts_core.NOTE_KIND]
+    assert line in notes, notes
+
+
+def test_no_candidate_rows_means_no_ceiling_line():
+    """★ 候補行が 0 の冊（全部埋まっている）では言わない ── 測っていない所の話をしない。
+
+    ★ ここは「専用の枝」では守っていない（枝は変異で素通りしたので消した）── 理由の並びが
+      空なら空が返る、という一本道で守る。
+    """
+    past = [_row("1", "2026/08/03", "通信費", "", "甲通信", "8800", memo="8月分")]
+    plan = _plan([_row("11", "2026/09/03", "通信費", "", "甲通信", "8800", memo="9月分")], past)
+    assert plan.records == {} and accounts_core.confirmation_ceiling(plan) == ""

@@ -164,6 +164,13 @@ SWEEP_LIMIT = ("見ていない口（別の帳簿・人の判断・今回より�
 SPLIT_KEY_CAP = ("内訳が割れた鍵があるので『裏が取れた』とは呼びません"
                  "（割れた鍵は出所に数えず、ほかの鍵で引いています）")
 
+#: 「確」に届かなかった理由（★ 画面の目盛り合わせに使う ── 値そのものは変えない）。
+CEILING_ONE_KEY = "鍵が 1 本しか当たらなかった"
+CEILING_SAME_ROW = "2 本以上の鍵が同じ 1 行を指した"
+CEILING_SPLIT_KEY = "内訳の割れた鍵が残っている"
+#: ★ 画面と検分で同じ順に並べる（1 箇所）。
+CEILING_ORDER = (CEILING_ONE_KEY, CEILING_SAME_ROW, CEILING_SPLIT_KEY)
+
 SAME_ROW_CAVEAT = ("この 2 本以上の鍵は同じ 1 行を指しています ── 別々の裏ではなく、"
                    "同じ 1 件の 2 通りの読み方です（裏が取れたと呼べるかは人が見てください）")
 
@@ -332,6 +339,7 @@ class AccountsPlan:
     untouched: list = field(default_factory=list)
     differs: list = field(default_factory=list)     #: [(行番号, 1 行)] 付けた科目が先例と違う行
     tax_differs: list = field(default_factory=list)  #: [(行番号, 1 行)] 税区分が先例と違う行
+    ceilings: dict = field(default_factory=dict)    #: {行番号: 確に届かなかった理由}
     lookalike: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     past_rows: int = 0
@@ -461,6 +469,7 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
 
     index, past_rows, past_filled = _precedent_index(past_rows_by_file, keys_used)
     records, citations, hits, untouched, differs, tax_differs = {}, {}, {}, [], [], []
+    ceilings = {}                       #: {行番号: 確に届かなかった理由}
     for row_num, values in sorted(today_rows, key=lambda rv: rv[0]):
         account = cell(values, header_map.get(DEBIT_ACCOUNT))
         amount = cell(values, header_map.get(DEBIT_AMOUNT))
@@ -484,10 +493,12 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
                 if why:
                     differs.append((row_num, why))
             continue
-        record, cites, hit_count = _record_for(values, header_map, keys_used, index)
+        record, cites, hit_count, ceiling = _record_for(values, header_map, keys_used, index)
         records[row_num] = record
         citations[row_num] = cites
         hits[row_num] = hit_count
+        if ceiling:
+            ceilings[row_num] = ceiling
 
     lookalike = []
     for key in keys_used:
@@ -504,7 +515,7 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
 
     plan = AccountsPlan(header_map=dict(header_map), keys_used=keys_used, records=records,
                         citations=citations, hits=hits, untouched=untouched, differs=differs,
-                        tax_differs=tax_differs,
+                        tax_differs=tax_differs, ceilings=ceilings,
                         lookalike=lookalike, notes=notes, past_rows=past_rows,
                         past_precedents=past_filled)
     # ★★ 「当たった」は**先例の件数**で数える ── `evidences` で数えた初版は、鍵が当たって
@@ -680,6 +691,20 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
     #   ★ 一方、ほかの鍵が引けているなら割れた鍵は**沈黙**させるだけで行は止めない（上の枝）。
     conflict = len({str(v) for v in sources.values()}) > 1 or bool(split_keys and not evidences)
     same_row = len(sources) >= 2 and len({(name, row) for _k, name, row in cites}) == 1
+    # ★★ 2026-09-14（買い手役・会計の 中「確 0/8（目盛り）」）: 一番上の区分が 1 行も出ない冊で
+    #   「道具が何も見つけられなかった」と読める。実測すると 確 が稀なのは**規則が正しく
+    #   働いた結果**（確＝2 本以上の鍵が**別々の先例**で一致・同じ 1 行の 2 度読みは裏 1 つ）。
+    #   ★ だから確を出やすくする方へは触らない ── 直すのは**読み手の目盛り合わせ**。
+    #   止まった理由はここ（決めている場所）で**構造として**控える。散文を後から読み直す形に
+    #   すると、根拠の文言を変えた日に黙って壊れる。
+    ceiling = ""
+    if not conflict and sources:
+        if same_row:
+            ceiling = CEILING_SAME_ROW
+        elif split_keys and len(evidences) > 1:
+            ceiling = CEILING_SPLIT_KEY
+        elif len(sources) == 1:
+            ceiling = CEILING_ONE_KEY
     if same_row and not conflict:
         # ★★ 2 本以上の鍵が**同じ 1 行**を指していた ── 同じ行を 2 通りに読んだだけで、
         #   裏は 1 つ（`field_record` の「写しを裏に数えるな」と同じ形・結合セルの 2 度数え）。
@@ -718,7 +743,37 @@ def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tupl
         field=DEBIT_ACCOUNT, evidences=tuple(evidences), blank_reason=blank_reason,
         swept=True, swept_how=swept_how,
         conflict=conflict, conflict_why="／".join(conflict_lines))
-    return record, cites, hit_count
+    return record, cites, hit_count, ceiling
+
+
+def confirmation_ceiling(plan: AccountsPlan) -> str:
+    """「確」が 1 行も出なかった冊で、**なぜ 0 なのか**をその冊の数で言う 1 行（出なければ空）。
+
+    ★★ 2026-09-14（買い手役・会計の「確 0/8（目盛り）」）: 0 が「道具が何も見つけられなかった」と
+      読める。実測では 確 が稀なのは規則が正しく働いた結果（MF で 1/10・弥生で 0/6）なので、
+      **確の条件は緩めない** ── 読み手の目盛りを合わせる（うま味調味料の最大化はしない）。
+    ★ 数は `plan.ceilings`（決めた場所で控えた構造）から数える。散文は読み直さない。
+    """
+    # ★ 出す条件は「確が 0 行」だけ。★★ 初版は `or not plan.records` も書いていたが、
+    #   変異試験で**素通り**した ── `ceilings` の鍵は候補行の部分集合なので、候補が 0 なら
+    #   下の `not counts` で必ず空になる（到達できない枝だった）。番人を足すのでなく枝を消した
+    #   （到達できない柵を「守っている」と名乗らない・2026-09-14 に 2 度目）。
+    graded = [r for r in plan.records if field_record.grade(plan.records[r])
+              == field_record.CONFIRMED]
+    if graded:
+        return ""
+    counts = {}
+    for reason in plan.ceilings.values():
+        counts[reason] = counts.get(reason, 0) + 1
+    if not counts:
+        return ""
+    breakdown = "／".join(f"{reason}行 {counts[reason]}"
+                          for reason in CEILING_ORDER if counts.get(reason))
+    # ★ 画面に出す文なので飾りの記号は使わない（`**` は文書の記法 ── 黒い画面では雑音）。
+    return (f"確（2 本以上の鍵が別々の先例で一致）は 0 行 ── {breakdown}"
+            f"（鍵は {len(plan.keys_used)} 本: "
+            + "／".join(f"『{k}』" for k in plan.keys_used)
+            + "）。この冊の形で決まる所で、見つからなかったという意味ではありません")
 
 
 def candidate_rows(plan: AccountsPlan) -> list:
@@ -758,6 +813,10 @@ def inspection_rows(plan: AccountsPlan) -> list:
                     "末尾の敬称を無視すると同じ文字になります（同じものだと決めるのは"
                     "人の仕事なので、別の鍵のままにしています ── 完全一致で引くので、"
                     "この 2 つは別の先例として数えています）"])
+    ceiling = confirmation_ceiling(plan)
+    if ceiling:
+        # ★ 画面と冊に**同じ 1 行**（器は `confirmation_ceiling` 1 つ ── 2 度書かない）。
+        out.append([NOTE_KIND, "", "", ceiling])
     for note in plan.notes:
         out.append([NOTE_KIND, "", "", note])
     return out

@@ -456,3 +456,23 @@ def test_json_carries_the_tax_findings(tmp_path):
                  headers=_TAX_MF)
     payload = _payload(_accounts(today, past, tmp_path / "候補.xlsx", "--json"))
     assert [r for r, _w in payload["tax_differs"]] == [2], payload["tax_differs"]
+
+
+def test_the_zero_confirmation_scale_is_explained_on_screen(tmp_path):
+    """★★ 2026-09-14（会計役の 中「確 0/8（目盛り）」）: 確 0 を「何も見つからなかった」と
+    読ませない ── その冊の数で、なぜ 0 なのかを言う（★ 確の条件は緩めない）。"""
+    past = _csv(tmp_path / "過去.csv",
+                [["1", "2026/08/03", "通信費", "", "甲通信", "8800", "未払金", "", "8月分 電話代"]])
+    today = _csv(tmp_path / "今回.csv",
+                 [["11", "2026/09/03", "", "", "甲通信", "8800", "未払金", "", "はじめての摘要"]])
+    out = tmp_path / "候補.xlsx"
+    r = _accounts(today, past, out)
+    assert r.returncode == 0, r.stdout
+    assert "確 0" in r.stdout, r.stdout
+    assert "確（2 本以上の鍵が別々の先例で一致）は 0 行" in r.stdout, r.stdout
+    assert accounts_core.CEILING_ONE_KEY in r.stdout, r.stdout
+    wb = openpyxl.load_workbook(out)
+    notes = [row[3] for row in wb["検分"].iter_rows(min_row=2, values_only=True)
+             if row[0] == accounts_core.NOTE_KIND]
+    wb.close()
+    assert any("確（2 本以上の鍵が別々の先例で一致）は 0 行" in str(n) for n in notes), notes
