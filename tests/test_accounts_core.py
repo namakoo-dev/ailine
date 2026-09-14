@@ -586,3 +586,109 @@ def test_the_report_carries_the_kind_and_the_blank_denominator_is_unchanged():
     kinds = [r[0] for r in rows]
     assert accounts_core.DIFFERS_KIND in kinds, kinds
     assert accounts_core.BLANK_KIND not in kinds, kinds      # ★ 空欄の分母には入れない
+
+
+# --- 税区分が先例と違う行（2026-09-14・会計役の MISSING「税区分の整合」）---------------------
+#
+# ★★ 科目が合っていても税区分が違えば**消費税の納税額が変わる** ── しかも誰も気づかない
+#   （採用した人の申告に静かに乗る）。取り返しの順でここが先。
+# ★ 鳴らす条件は `differs_from_precedent` と同じ狭さ: その鍵の先例の税区分が**全部同じ**で、
+#   今回が**空でなく**違うときだけ。割れた鍵・今回が空・列が無い冊は**沈黙**（陰性対照 4 本）。
+# ★★ 候補を出す行と触らない行の**両方**に効く（片配線を先に塞いだ ── 開発手法 §13c）。
+
+TAX_MF = MF + [accounts_core.DEBIT_TAX]
+
+
+def _trow(no="", date="", account="", sub="", partner="", amount="", memo="", tax=""):
+    return _row(no, date, account, sub, partner, amount, memo=memo) + [tax]
+
+
+_T_PAST = [_trow("1", "2026/08/03", "通信費", "携帯電話", "甲通信", "13750",
+                 memo="8月分 携帯", tax="課対仕入10%"),
+           _trow("2", "2026/07/03", "通信費", "携帯電話", "甲通信", "13750",
+                 memo="7月分 携帯", tax="課対仕入10%")]
+
+
+def _tax(today_rows, past=None, headers=TAX_MF):
+    plan = _plan(today_rows, past if past is not None else _T_PAST, headers, headers)
+    return {r: w for r, w in plan.tax_differs}
+
+
+def test_a_tax_class_that_contradicts_a_unanimous_precedent_is_named():
+    got = _tax([_trow("11", "2026/09/03", "", "携帯電話", "甲通信", "13750",
+                      memo="9月分 携帯", tax="課対仕入8%(軽)")])
+    assert list(got) == [2], got
+    why = got[2]
+    assert "税区分『課対仕入8%(軽)』と先例が違います" in why, why
+    assert "借方取引先『甲通信』の先例 2 件はすべて『課対仕入10%』" in why, why
+    assert "納める税が変わります" in why and "値は変えていません" in why, why
+
+
+def test_the_same_tax_class_stays_silent():
+    assert _tax([_trow("11", "2026/09/03", "", "携帯電話", "甲通信", "13750",
+                       memo="9月分 携帯", tax="課対仕入10%")]) == {}
+
+
+def test_an_empty_tax_class_stays_silent():
+    """★ 陰性対照 ── 今回が空の行は黙る（空は誤値より安い・こちらで決めない）。"""
+    assert _tax([_trow("11", "2026/09/03", "", "携帯電話", "甲通信", "13750",
+                       memo="9月分 携帯", tax="")]) == {}
+
+
+def test_a_split_tax_class_stays_silent():
+    """★★ 陰性対照 ── 先例の税区分が割れている鍵は黙る。
+
+    実務で本当に混ざる（コンビニ・スーパーは同じ支払先で 10% と軽減 8% が並ぶ）。
+    ★ 対照は「割れた鍵**しか**当たらない」形にする ── 摘要も補助科目も先例に無い行。
+    """
+    past = [_trow("1", "2026/08/03", "会議費", "", "甲商店", "1000", memo="8月の茶菓",
+                  tax="課対仕入10%"),
+            _trow("2", "2026/07/03", "会議費", "", "甲商店", "1000", memo="7月の弁当",
+                  tax="課対仕入8%(軽)")]
+    assert _tax([_trow("11", "2026/09/03", "", "", "甲商店", "1000",
+                       memo="はじめての摘要", tax="対象外")], past) == {}
+
+
+def test_a_book_without_the_tax_column_says_nothing():
+    """★ 陰性対照 ── 税区分の列が無い冊では一言も言わない（測っていないものを言わない）。"""
+    plan = _plan([_row("11", "2026/09/03", "", "携帯電話", "甲通信", "13750", memo="9月分")],
+                 [_row("1", "2026/08/03", "通信費", "携帯電話", "甲通信", "13750", memo="8月分")])
+    assert plan.tax_differs == [], plan.tax_differs
+    assert accounts_core.TAX_KIND not in {r[0] for r in accounts_core.inspection_rows(plan)}
+
+
+def test_a_filled_row_is_checked_too():
+    """★★ 片配線を先に塞いだ所 ── 人が科目を付けた行（触らない行）でも税区分を見る。
+
+    科目は先例と一致するので `differs` は黙る ── **税区分だけ**が違う形は、科目の検査では
+    絶対に拾えない（会計役が別項目として挙げた理由）。
+    """
+    plan = _plan([_trow("11", "2026/09/03", "通信費", "携帯電話", "甲通信", "13750",
+                        memo="9月分 携帯", tax="課対仕入8%(軽)")], _T_PAST, TAX_MF, TAX_MF)
+    assert plan.differs == [], plan.differs
+    assert [r for r, _w in plan.tax_differs] == [2], plan.tax_differs
+    assert [r for r, _w in plan.untouched] == [2], plan.untouched
+
+
+def test_the_report_carries_the_tax_kind_without_touching_the_blank_denominator():
+    plan = _plan([_trow("11", "2026/09/03", "", "携帯電話", "甲通信", "13750",
+                        memo="9月分 携帯", tax="課対仕入8%(軽)")], _T_PAST, TAX_MF, TAX_MF)
+    rows = accounts_core.inspection_rows(plan)
+    kinds = [r[0] for r in rows]
+    assert accounts_core.TAX_KIND in kinds, kinds
+    assert accounts_core.BLANK_KIND not in kinds, "★ 空欄の分母に混ぜてはいけない"
+
+
+def test_the_yayoi_shape_carries_the_tax_column_at_position_eight():
+    """★ 弥生は見出しが無い ── 税区分は一次資料の並びで 8 列目（借方金額の 1 つ前）。"""
+    def row(date, account, sub, amount, memo, tax):
+        r = _yayoi_row(date, account, sub, amount, memo)
+        r[7] = tax
+        return r
+    today = [(1, row("R08/09/03", "", "ひかり回線", "6600", "9月分 回線", "課対仕入8%(軽)"))]
+    _h, _hh, header_map, refusal = accounts_core.resolve_accounts_columns(today)
+    assert refusal is None and header_map[accounts_core.DEBIT_TAX] == 8, header_map
+    past = [(1, row("R08/08/03", "通信費", "ひかり回線", "6600", "8月分 回線", "課対仕入10%"))]
+    plan = accounts_core.plan_accounts(
+        today, header_map, {"弥生_過去.csv": {"header_map": header_map, "rows": past}})
+    assert [r for r, _w in plan.tax_differs] == [1], plan.tax_differs

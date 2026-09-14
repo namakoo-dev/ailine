@@ -44,6 +44,10 @@ KEYS = ("借方取引先", "貸方取引先", "借方補助科目", "摘要")
 DEBIT_ACCOUNT = "借方勘定科目"
 #: 候補を出す行の条件のもう半分（在ることを要求する ── 複合仕訳の継続行を触らないため）。
 DEBIT_AMOUNT = "借方金額"
+#: 借方の税区分（★ 2026-09-14・会計役の MISSING「税区分の整合」）。
+#: ★ **無ければ黙る**（列が無い冊で文面を出さない ── 出ないことを信号にしない、の裏返し:
+#:   測っていないものを測ったように言わない）。値は 1 文字も変えない。
+DEBIT_TAX = "借方税区分"
 #: 日付の列（★ 読まない・原文のまま根拠文へ echo するだけ）。
 DATE = "取引日"
 #: 伝票の番号（★ 触らない行を人が原本で見つけるための手がかり）。
@@ -82,6 +86,7 @@ COLUMN_ALIASES = {
     "貸方取引先": ("貸方取引先",),
     "借方補助科目": ("借方補助科目",),
     "摘要": ("摘要", "借方摘要"),
+    DEBIT_TAX: ("借方税区分", "借方税率区分"),
 }
 
 #: 見出しが無くても受ける唯一の形（弥生インポート形式）。★ 列位置で受けるのはここだけ。
@@ -94,7 +99,10 @@ COLUMN_ALIASES = {
 #:   全部断ることになる ── 「測って動かない」だけを理由に広げ、**形だけで受ける**線は保つ
 #:   （1 列目に文字が入っている 25 列の冊は今も断る・番人あり）。
 YAYOI_COLUMN_COUNT = 25
-YAYOI_POSITIONS = {DATE: 4, DEBIT_ACCOUNT: 5, "借方補助科目": 6, DEBIT_AMOUNT: 9, "摘要": 17}
+#: ★ 税区分は 8 列目（一次資料の並び: 識別フラグ1／伝票No2／決算3／取引日付4／借方勘定科目5／
+#:   借方補助科目6／借方部門7／**借方税区分8**／借方金額9）。
+YAYOI_POSITIONS = {DATE: 4, DEBIT_ACCOUNT: 5, "借方補助科目": 6, DEBIT_TAX: 8,
+                   DEBIT_AMOUNT: 9, "摘要": 17}
 #: ★ 弥生の 1 列目（識別フラグ）は一次資料どおり **4 桁の半角数字**だけを受ける。
 #:   実装の途中で検体の 1 列目が空だったため `{0,4}` に広げかけたが、それは「検体の欠けに
 #:   合わせて規則を書く」形 ── 読み手は狭いまま、検体を実物に寄せた（2026-09-13）。
@@ -123,6 +131,8 @@ LOOKALIKE_KIND = "表記ゆれ"
 #:   借方勘定科目が既に埋まった行は「触らない行」として番号だけ控えて終わっていた ── 先例と
 #:   突き合わせていなかった。★ 候補を出す行では候補＝先例なので「違う」は原理的に出ない。
 DIFFERS_KIND = "付けた科目が先例と違う"
+#: 税区分が、その鍵の先例と食い違う行（★ 科目が合っていても納税額が変わる ── 静かに乗る側）。
+TAX_KIND = "税区分が先例と違う"
 NOTE_KIND = "鍵について"
 
 #: 書き手の印（docProps/core.xml の dc:creator）。★ 読む側の判定は `stack.KIND_SIGNATURES`。
@@ -321,6 +331,7 @@ class AccountsPlan:
     hits: dict = field(default_factory=dict)
     untouched: list = field(default_factory=list)
     differs: list = field(default_factory=list)     #: [(行番号, 1 行)] 付けた科目が先例と違う行
+    tax_differs: list = field(default_factory=list)  #: [(行番号, 1 行)] 税区分が先例と違う行
     lookalike: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     past_rows: int = 0
@@ -352,12 +363,14 @@ def _precedent_index(past_rows_by_file: dict, keys_used: tuple) -> tuple:
                 continue
             filled += 1
             date_text = str(cell(values, header_map.get(DATE)) or "").strip()
+            # ★ 2026-09-14: 税区分を 5 番目に足す（既存の参照は位置で読んでいるので後方互換）。
+            tax_text = str(cell(values, header_map.get(DEBIT_TAX)) or "").strip()
             for key in keys_used:
                 ident = key_identity(cell(values, header_map.get(key)))
                 if ident is None:
                     continue
                 index[key].setdefault(ident, []).append(
-                    (account, name, row_num, date_text or "（日付の列がありません）"))
+                    (account, name, row_num, date_text or "（日付の列がありません）", tax_text))
     return index, rows_seen, filled
 
 
@@ -447,7 +460,7 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
                      "── 列の取り違えか、別のソフトの書き出しが混ざっています"))
 
     index, past_rows, past_filled = _precedent_index(past_rows_by_file, keys_used)
-    records, citations, hits, untouched, differs = {}, {}, {}, [], []
+    records, citations, hits, untouched, differs, tax_differs = {}, {}, {}, [], [], []
     for row_num, values in sorted(today_rows, key=lambda rv: rv[0]):
         account = cell(values, header_map.get(DEBIT_ACCOUNT))
         amount = cell(values, header_map.get(DEBIT_AMOUNT))
@@ -457,6 +470,12 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
         #   「在る」と数えて候補行にし、偽の「無」を作っていた（xlsx の数値 0 は触らない行）。
         #   同じ仕訳が CSV だと 13 行・xlsx だと 12 行 ── 数が入力の形に依っていた。金額の在否は
         #   `money_value` で数にしてから見る（0 は無い・数に見えない文字は在るとして隠さない）。
+        # ★★ 税区分の検査は**候補を出す行と触らない行の両方**に効かせる（2026-09-14）──
+        #   片方に配線して「直した」と書くのが この repo の再発する欠陥（開発手法 §13・§13c）。
+        #   科目を出す／出さないに関わらず、納める税が変わる行は名指しする。
+        tax_why = tax_differs_from_precedent(values, header_map, keys_used, index)
+        if tax_why:
+            tax_differs.append((row_num, tax_why))
         if form_read.norm(account) or not _amount_present(amount):
             untouched.append((row_num, _why_untouched(values, header_map)))
             # ★ 埋まっている行は「触らない」が、**先例と突き合わせる**（会計役が一番期待した所）。
@@ -485,6 +504,7 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
 
     plan = AccountsPlan(header_map=dict(header_map), keys_used=keys_used, records=records,
                         citations=citations, hits=hits, untouched=untouched, differs=differs,
+                        tax_differs=tax_differs,
                         lookalike=lookalike, notes=notes, past_rows=past_rows,
                         past_precedents=past_filled)
     # ★★ 「当たった」は**先例の件数**で数える ── `evidences` で数えた初版は、鍵が当たって
@@ -541,6 +561,50 @@ def differs_from_precedent(values, header_map: dict, keys_used: tuple, index: di
         return ""
     return (f"付けた科目『{str(account).strip()}』と先例が違います: " + CITATION_SEP.join(said)
             + " ── 付け替えたのが正しいなら、このままで構いません（値は変えていません）")
+
+
+def tax_differs_from_precedent(values, header_map: dict, keys_used: tuple, index: dict) -> str:
+    """今回の行の税区分が、鍵の先例と食い違うなら 1 行で返す（食い違わなければ空）。
+
+    ★★ 2026-09-14（買い手役・会計の MISSING「税区分の整合」）: 科目が合っていても税区分が
+      違えば**消費税の納税額が変わる** ── しかも誰も気づかない（採用した人の申告に静かに乗る）。
+    ★ 鳴らす条件は狭く取る（`differs_from_precedent` と同じ線）:
+      その鍵の先例の税区分が**全部同じ**で、今回の行の税区分が**空でなく**違うときだけ。
+      割れている鍵は沈黙（コンビニのように 10% と軽減 8% が本当に混ざる支払先が在る）。
+    ★ 税区分の列が無い冊では何も言わない（`header_map` に無ければ `keys_used` を回る前に出る）。
+    ★ 値は 1 文字も変えない ── 決めるのは人。
+    """
+    if not header_map.get(DEBIT_TAX):
+        return ""
+    mine = form_read.norm(cell(values, header_map[DEBIT_TAX]))
+    if not mine:
+        return ""                          # ★ 今回が空の行は黙る（空は誤値より安い）
+    said = []
+    for key in keys_used:
+        raw = cell(values, header_map[key])
+        ident = key_identity(raw)
+        if ident is None:
+            continue
+        found = [hit for hit in (index[key].get(ident) or []) if len(hit) > 4 and hit[4]]
+        if not found:
+            continue
+        by_tax = {}
+        for hit in found:
+            by_tax.setdefault(form_read.norm(hit[4]), []).append(hit)
+        if len(by_tax) != 1:
+            continue                       # ★ 割れている鍵は沈黙
+        theirs = next(iter(by_tax.values()))
+        if form_read.norm(theirs[0][4]) == mine:
+            continue
+        last = theirs[-1]
+        said.append(f"{key}『{str(raw).strip()}』の先例 {len(theirs)} 件はすべて"
+                    f"『{str(theirs[0][4]).strip()}』（{last[1]} {last[2]} 行目）")
+    if not said:
+        return ""
+    return (f"税区分『{str(cell(values, header_map[DEBIT_TAX])).strip()}』と先例が違います: "
+            + CITATION_SEP.join(said)
+            + " ── 科目が合っていても納める税が変わります"
+              "（値は変えていません・決めるのは人）")
 
 
 def _record_for(values, header_map: dict, keys_used: tuple, index: dict) -> tuple:
@@ -684,6 +748,8 @@ def inspection_rows(plan: AccountsPlan) -> list:
         out.append([BLANK_KIND, row_num, plan.hits.get(row_num, 0), reason_of(record)])
     for row_num, why in plan.differs:
         out.append([DIFFERS_KIND, row_num, "", why])
+    for row_num, why in plan.tax_differs:
+        out.append([TAX_KIND, row_num, "", why])
     for row_num, why in plan.untouched:
         out.append([UNTOUCHED_KIND, row_num, "", why])
     for key, first, second in plan.lookalike:

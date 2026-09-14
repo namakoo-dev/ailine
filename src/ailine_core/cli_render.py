@@ -883,6 +883,17 @@ def _rows_label(rows, show: int = 8) -> str:
     return f"{', '.join(nums)} 行目"
 
 
+def flagged_rows_line(label: str, items: list, tail: str) -> str:
+    """検査で見つけた行を名指しする 1 行（★ 最初の 5 行だけ出して残りは件数）。
+
+    ★ `accounts` の 2 つの検査（付けた科目／税区分）が**同じ器**を呼ぶ ── 2 度書くと
+      片方だけ直る（この repo の再発する欠陥・開発手法 §13）。
+    """
+    shown = "／".join(str(r) for r, _w in items[:5])
+    more = f" ほか {len(items) - 5} 行" if len(items) > 5 else ""
+    return f"⚠ {label} {len(items)} 行（元ファイルの {shown} 行目{more}）{tail}"
+
+
 def render_accounts_report(today_label: str, out_label: str, result: dict) -> list:
     """`ailine accounts`（経費の勘定科目を先例から引く）の人向け報告（需要③・2026-09-13）。
 
@@ -913,12 +924,16 @@ def render_accounts_report(today_label: str, out_label: str, result: dict) -> li
 
     rows = result.get("rows") or {}
     valued = [r for r, v in rows.items() if (v or {}).get("account")]
-    differs = result.get("differs") or []
-    if differs:
-        shown = "／".join(str(r) for r, _w in differs[:5])
-        more = f" ほか {len(differs) - 5} 行" if len(differs) > 5 else ""
-        lines.append(f"⚠ 付けた科目が先例と違う行 {len(differs)} 行（元ファイルの {shown} 行目{more}）"
-                     "── 『検分』シートに 1 行ずつ（値は変えていません・決めるのは人）")
+    # ★ 2026-09-14: 「検査で見つけた行を名指しする 1 行」は 2 種類ある（科目／税区分）。
+    #   ★★ 同じ形を 2 度書かない ── 書くと片方だけ直る（開発手法 §13）。器は 1 つ・呼ぶだけ。
+    for label, items, tail in (
+            ("付けた科目が先例と違う行", result.get("differs") or [],
+             "── 『検分』シートに 1 行ずつ（値は変えていません・決めるのは人）"),
+            ("税区分が先例と違う行", result.get("tax_differs") or [],
+             "── 科目が合っていても納める税が変わります"
+             "（『検分』シートに 1 行ずつ・値は変えていません）")):
+        if items:
+            lines.append(flagged_rows_line(label, items, tail))
     if not rows:
         # ★ 2026-09-13（3 回目の買い手役・会計）: 借方勘定科目が全部埋まった冊（期間違いの書き出し）で
         #   「0 行のうち 0 行」exit 0 ── 手掛かりが括弧の中だけだった。主役の 1 行で言う。

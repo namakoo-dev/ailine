@@ -399,3 +399,60 @@ def test_a_book_whose_filled_accounts_match_says_nothing(tmp_path):
                   ["12", "2026/09/26", "", "本社回線", "ＮＴＴ西日本", "8800", "未払金", "", "9月分2"]])
     r = _accounts(today, past, tmp_path / "候補.xlsx")
     assert r.returncode == 0 and "先例と違う" not in r.stdout, r.stdout
+
+
+# --- 税区分が先例と違う行（2026-09-14・会計役の MISSING「税区分の整合」）---------------------
+
+_TAX_MF = MF + [accounts_core.DEBIT_TAX]
+
+
+def test_a_tax_class_that_contradicts_the_precedent_is_named_on_screen(tmp_path):
+    """★★ 科目が合っていても税区分が違えば納税額が変わる ── 採用した人の申告に静かに乗る側。
+
+    ★ 検体は「科目は先例と同じ・税区分だけ違う」行にする ── 科目の検査（`differs`）では
+      **原理的に拾えない**形で、だから別の検査が要ることの実証になる。
+    """
+    past = _csv(tmp_path / "過去.csv",
+                [["1", "2026/08/03", "通信費", "携帯", "甲通信", "13750", "未払金", "", "8月分", "課対仕入10%"],
+                 ["2", "2026/07/03", "通信費", "携帯", "甲通信", "13750", "未払金", "", "7月分", "課対仕入10%"]],
+                headers=_TAX_MF)
+    today = _csv(tmp_path / "今回.csv",
+                 [["11", "2026/09/03", "通信費", "携帯", "甲通信", "13750", "未払金", "", "9月分", "課対仕入8%(軽)"],
+                  ["12", "2026/09/04", "", "携帯", "甲通信", "13750", "未払金", "", "9月分2", "課対仕入10%"]],
+                 headers=_TAX_MF)
+    before = today.read_bytes()
+    out = tmp_path / "候補.xlsx"
+    r = _accounts(today, past, out)
+    assert r.returncode == 0, r.stdout
+    assert "⚠ 税区分が先例と違う行 1 行（元ファイルの 2 行目）" in r.stdout, r.stdout
+    assert "付けた科目が先例と違う行" not in r.stdout, f"科目は合っている: {r.stdout}"
+    assert today.read_bytes() == before, "★ 元の仕訳が変わった"
+    wb = openpyxl.load_workbook(out)
+    rows = [row for row in wb["検分"].iter_rows(min_row=2, values_only=True)
+            if row[0] == accounts_core.TAX_KIND]
+    wb.close()
+    assert len(rows) == 1 and "課対仕入8%(軽)" in rows[0][3] and "課対仕入10%" in rows[0][3], rows
+
+
+def test_a_book_whose_tax_classes_match_says_nothing(tmp_path):
+    """★ 陰性対照 ── 先例と同じ税区分なら一言も言わない（オオカミ少年にしない）。"""
+    past = _csv(tmp_path / "過去.csv",
+                [["1", "2026/08/03", "通信費", "携帯", "甲通信", "13750", "未払金", "", "8月分", "課対仕入10%"]],
+                headers=_TAX_MF)
+    today = _csv(tmp_path / "今回.csv",
+                 [["11", "2026/09/03", "", "携帯", "甲通信", "13750", "未払金", "", "9月分", "課対仕入10%"]],
+                 headers=_TAX_MF)
+    r = _accounts(today, past, tmp_path / "候補.xlsx")
+    assert r.returncode == 0 and "税区分" not in r.stdout, r.stdout
+
+
+def test_json_carries_the_tax_findings(tmp_path):
+    """★ 機械可読の側にも同じ事実（自動化と採点器はここを読む）。"""
+    past = _csv(tmp_path / "過去.csv",
+                [["1", "2026/08/03", "通信費", "携帯", "甲通信", "13750", "未払金", "", "8月分", "課対仕入10%"]],
+                headers=_TAX_MF)
+    today = _csv(tmp_path / "今回.csv",
+                 [["11", "2026/09/03", "", "携帯", "甲通信", "13750", "未払金", "", "9月分", "対象外"]],
+                 headers=_TAX_MF)
+    payload = _payload(_accounts(today, past, tmp_path / "候補.xlsx", "--json"))
+    assert [r for r, _w in payload["tax_differs"]] == [2], payload["tax_differs"]
