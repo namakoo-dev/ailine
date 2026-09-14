@@ -4518,17 +4518,21 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
         # ★★ 2026-09-14（盲検 #85「土日に出勤してる人だけ抜き出して」→ 日付に『土』を含む行）:
         #   曜日は日付列の**文字には無い**のに、近い操作で代用して 0 行の結果が ✓ で出ていた
         #   （誤配の家系④「範囲外を近い操作で代用」）。★ eq と同じ線 ── 1 行も当たらない値は断る。
-        _hit = None
-        if task:
+        # ★★ 2026-09-14: 一度ここで**全部断って**いたが、凍結した 120 件の突き合わせが
+        #   「備考に『要確認』って書いてある行だけ出して」（判定者 2 人とも 正）を断りに
+        #   変えていたのを捕まえた ── **1 行も当たらないことは、依頼が間違っている証拠ではない**
+        #   （その表に無いだけで「0 行」が正しい答え。事後条件が「N行中0行が一致」と必ず出す）。
+        #   ★ 判定者が 誤配 と言ったのは**列も値も機械が選んだ**回（「土日に出勤してる人」→
+        #     日付 を含む『土』）。だから断るのは **列を依頼文が名指ししていない**時だけにする。
+        if task and str(resolved["col"]) not in task:
             _v = str(raw_value).strip()
             _real = [str(x) for x in _column_values(book_meta, first_sheet, resolved["col"])]
-            _hit = any(_v and _v in x for x in _real) if _real else None
-        if _hit is False:
-            _shown = "』『".join(list(dict.fromkeys(_real))[:5])
-            return False, resolved, inferred, (
-                f"列『{resolved['col']}』に『{raw_value}』を含む行は 1 行もありません"
-                f"（在る値の例: 『{_shown}』）── 曜日や「今日から見て」のような読み方は"
-                "この道具にはありません。列に在る文字で指してください")
+            if _real and _v and not any(_v in x for x in _real):
+                _shown = "』『".join(list(dict.fromkeys(_real))[:5])
+                return False, resolved, inferred, (
+                    f"列『{resolved['col']}』に『{raw_value}』を含む行は 1 行もありません"
+                    f"（在る値の例: 『{_shown}』）── 曜日や「今日から見て」のような読み方は"
+                    "この道具にはありません。どの列のどの文字かを書いてください")
         resolved["value"] = str(raw_value)
     else:
         try:
@@ -4594,7 +4598,10 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
                 _real = list(dict.fromkeys(str(v).strip() for v in
                                            _column_values(book_meta, first_sheet, resolved["col"])
                                            if str(v).strip()))
-                if _real and str(raw_value).strip() not in _real:
+                # ★ contains と同じ線（2026-09-14 に揃えた）: 列を依頼文が名指ししている回は
+                #   「0 行」が正しい答えなので通す。断るのは列も値も機械が選んだ回だけ。
+                if (_real and str(resolved["col"]) not in (task or "")
+                        and str(raw_value).strip() not in _real):
                     _shown = "』『".join(_real[:8])
                     return False, resolved, inferred, (
                         f"列『{resolved['col']}』に『{raw_value}』という値はありません"
@@ -6651,7 +6658,7 @@ _EXTRACT_CMP_WORDS = (
     ("gt", ("より大きい", "より大きく", "を超える", "を超えて", "より多い", "より多く",
              "より高い", "より高く", "超え", "上回", "過ぎ")),
     ("lt", ("未満", "より小さい", "より小さく", "より少ない", "より少なく",
-             "より安い", "より安く", "切っ", "下回", "に満たない")),
+             "より安い", "より安く", "切っ", "下回", "に満たない", "マイナス")),
     ("gte", ("以上",)),
     ("lte", ("以下",)),
     ("contains", ("を含む", "を含んで", "が含まれる", "を含める")),
@@ -6665,6 +6672,10 @@ _EXTRACT_CMP_NEEDS_NUM_NEARBY = frozenset({"gte", "lte"})
 _EXTRACT_CMP_WORDS_NEED_NUM = frozenset({"超え", "上回", "切っ", "下回", "に満たない", "過ぎ"})
 #: ★ 「切っ」は「締め切って」「区切って」「見切って」の断片にもなる ── 直前が数か数え語のときだけ比較語。
 _EXTRACT_CMP_WORD_PREFIX = {"切っ": re.compile(r"[0-9０-９個件人円時間日点本枚台%万千]$")}
+#: ★★ 「マイナス」は 2 つの意味を持つ（2026-09-14・掃きの残り 1 件）: 「在庫数がマイナスに
+#:   なってる行」＝**0 未満**、「退勤マイナス出勤の列」＝**引き算**。後ろの形で見分ける
+#:   （盲検 #21・#74 はどちらも「マイナスになって」）── 引き算の側を奪わない。
+_EXTRACT_CMP_WORD_SUFFIX = {"マイナス": re.compile(r"^(?:になっ|になる|の行|のもの|の品|だけ)")}
 _EXTRACT_CMP_NUM_RE = re.compile(r'[0-9０-９]')
 _EXTRACT_CMP_NUM_WINDOW = 10
 
@@ -6686,6 +6697,10 @@ def extract_cmp_from_task(task: str) -> str | None:
                         continue
                 _pre = _EXTRACT_CMP_WORD_PREFIX.get(w)
                 if _pre is not None and not _pre.search(task[:idx]):
+                    idx = task.find(w, idx + 1)
+                    continue
+                _suf = _EXTRACT_CMP_WORD_SUFFIX.get(w)
+                if _suf is not None and not _suf.search(task[idx + len(w):]):
                     idx = task.find(w, idx + 1)
                     continue
                 if best is None or idx < best[0]:

@@ -143,6 +143,14 @@ def test_a_value_the_column_does_not_have_is_refused_with_the_real_ones(tmp_path
     assert "『発注』という値はありません" in err and "資材" in err and "消耗品" in err, err
 
 
+def test_an_absent_value_on_a_named_column_still_passes(tmp_path):
+    """★ contains と同じ線: 人が列を名指ししたなら、在らない値でも「0 行」が答え。"""
+    ok, r, _i, err = _extract(_book(tmp_path), {"col": "区分", "cmp": "eq", "value": "発注"},
+                              "区分が発注の行を抜き出して")
+    assert ok, err
+    assert r["value"] == "発注"
+
+
 def test_a_value_the_column_has_still_passes(tmp_path):
     """陰性対照 ── 列に在る値の等値は今までどおり。"""
     ok, r, _i, err = _extract(_book(tmp_path), {"col": "区分", "cmp": "eq", "value": "資材"},
@@ -197,21 +205,35 @@ def test_the_word_qwen_found_is_read_with_its_guard(task, want):
 
 # ── ④ 範囲外を近い操作で代用しない（盲検 #85）──────────────────────────────
 
-def test_a_contains_that_matches_nothing_is_refused(tmp_path):
-    """★★ 「土日に出勤してる人」→ 日付に『土』を含む行 ── 曜日は日付列の文字には無い。
+def test_a_contains_the_machine_chose_and_that_matches_nothing_is_refused(tmp_path):
+    """★★ 「土日に出勤してる人」→ 日付に『土』を含む行 ── 列も値も**機械が選んだ**回。
 
-    0 行の結果が ✓ で出るのが一番悪い（頼んだ人は「該当なし」と読む）。
-    ★ eq と同じ線: 1 行も当たらない値は断り、在る値の例を見せる。
+    ★★ 初版は「1 行も当たらなければ断る」にして、凍結した 120 件の突き合わせが
+      「備考に『要確認』って書いてある行だけ出して」（判定者 2 人とも 正）を断りに
+      変えているのを捕まえた ── **1 行も当たらないことは依頼が間違っている証拠ではない**。
+      断るのは列を依頼文が名指ししていない回だけにした（下の陰性対照が線を守る）。
     """
     meta = _book(tmp_path)
     ok, _r, _i, err = _extract(meta, {"col": "区分", "cmp": "contains", "value": "土"},
                                "土日の分だけ抜き出して")
-    assert not ok, "1 行も当たらない contains を通した"
+    assert not ok, "列も値も機械が選んだ contains を通した"
     assert "含む行は 1 行もありません" in err and "曜日" in err, err
 
 
+def test_a_contains_on_a_column_the_person_named_passes_even_with_no_match(tmp_path):
+    """★★ 陰性対照（盲検が教えた線）── 人が列を名指ししたなら「0 行」が正しい答え。
+
+    事後条件が「N行中0行が一致」と必ず出すので、空であることは画面に残る。
+    """
+    meta = _book(tmp_path)
+    ok, r, _i, err = _extract(meta, {"col": "区分", "cmp": "contains", "value": "要確認"},
+                              "区分に要確認って書いてある行だけ出して")
+    assert ok, err
+    assert r["value"] == "要確認"
+
+
 def test_a_contains_that_matches_is_unchanged(tmp_path):
-    """★ 陰性対照 ── 当たる値は今までどおり（盲検で 正 だった経路を壊さない）。"""
+    """★ 陰性対照 ── 当たる値は今までどおり。"""
     meta = _book(tmp_path)
     ok, r, _i, err = _extract(meta, {"col": "区分", "cmp": "contains", "value": "事務"},
                               "区分に事務って書いてある行だけ出して")
@@ -224,3 +246,18 @@ def test_no_task_leaves_contains_alone(tmp_path):
     ok, r, _i, err = _extract(_book(tmp_path), {"col": "区分", "cmp": "contains", "value": "土"}, "")
     assert ok, err
     assert r["value"] == "土"
+
+
+@pytest.mark.parametrize("task,want", [
+    ("在庫数がマイナスになってる行を教えて", "lt"),      # 盲検 #21（判定者 2 人とも 正）
+    ("在庫数がマイナスの行", "lt"),
+    ("退勤マイナス出勤の列を作って", None),              # ★ こちらは引き算 ── 奪わない
+    ("マイナス5度以下の日", "lte"),                      # 既存の語が勝つ
+])
+def test_minus_has_two_meanings_and_the_shape_decides(task, want):
+    """★★ 「マイナス」は 2 つの意味を持つ ── 0 未満 と 引き算。後ろの形で見分ける。
+
+    ★ 掃き（sonnet 120／haiku 121／Qwen 167）で最後に残った 1 件がこれだった。
+      語を足すと意味の近い所から奪うので、**引き算の側を奪っていないこと**を陰性対照で縛る。
+    """
+    assert ailine.extract_cmp_from_task(task) == want, task
