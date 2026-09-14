@@ -17950,7 +17950,7 @@ def cmd_accounts(a: argparse.Namespace) -> int:
     result = {"today": str(today_path), "out": str(out), "past": [], "past_paths": [],
               "refused": None, "header_row": None, "encoding": None, "ambiguous": False,
               "ambiguous_books": [], "keys": list(accounts_core.KEYS), "keys_used": [],
-              "rows": {}, "untouched": [], "lookalike": [], "notes": [], "grades": {},
+              "rows": {}, "untouched": [], "differs": [], "lookalike": [], "notes": [], "grades": {},
               "unreadable": [], "past_rows": 0, "past_precedents": 0,
               "changed_inputs": [], "原本が変わった": False, "file_written": False}
 
@@ -18033,6 +18033,7 @@ def cmd_accounts(a: argparse.Namespace) -> int:
     rows = accounts_core.candidate_rows(plan)
     result.update({"keys_used": list(plan.keys_used), "refused": plan.refused,
                    "untouched": [[r, why] for r, why in plan.untouched],
+                   "differs": [[r, why] for r, why in plan.differs],
                    "lookalike": [[k, one, two] for k, one, two in plan.lookalike],
                    "notes": list(plan.notes), "past_rows": plan.past_rows,
                    "past_precedents": plan.past_precedents,

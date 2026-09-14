@@ -913,6 +913,12 @@ def render_accounts_report(today_label: str, out_label: str, result: dict) -> li
 
     rows = result.get("rows") or {}
     valued = [r for r, v in rows.items() if (v or {}).get("account")]
+    differs = result.get("differs") or []
+    if differs:
+        shown = "／".join(str(r) for r, _w in differs[:5])
+        more = f" ほか {len(differs) - 5} 行" if len(differs) > 5 else ""
+        lines.append(f"⚠ 付けた科目が先例と違う行 {len(differs)} 行（元ファイルの {shown} 行目{more}）"
+                     "── 『検分』シートに 1 行ずつ（値は変えていません・決めるのは人）")
     if not rows:
         # ★ 2026-09-13（3 回目の買い手役・会計）: 借方勘定科目が全部埋まった冊（期間違いの書き出し）で
         #   「0 行のうち 0 行」exit 0 ── 手掛かりが括弧の中だけだった。主役の 1 行で言う。

@@ -367,3 +367,35 @@ def test_overwriting_its_own_previous_output_is_said_out_loud(books, tmp_path):
     assert "上書きします" not in _accounts(today, past, out).stdout
     r = _accounts(today, past, out)
     assert r.returncode == 0 and "前回の自分の出力 候補.xlsx を上書きします" in r.stdout, r.stdout
+
+
+def test_a_filled_account_that_contradicts_the_precedent_is_named_on_screen(tmp_path):
+    """★★ 2026-09-14（会計役が 2 回・「この道具に一番期待した」所）: 人が付けた科目が先例と
+    食い違う行を名指しする。★ 値は 1 文字も変えない（触らない行のまま・決めるのは人）。"""
+    past = _csv(tmp_path / "過去.csv",
+                [["1", "2026/08/25", "通信費", "本社回線", "ＮＴＴ西日本", "8800", "未払金", "", "8月分"],
+                 ["2", "2026/07/25", "通信費", "本社回線", "ＮＴＴ西日本", "8800", "未払金", "", "7月分"]])
+    today = _csv(tmp_path / "今回.csv",
+                 [["11", "2026/09/25", "仮払金", "本社回線", "ＮＴＴ西日本", "8800", "未払金", "", "9月分"],
+                  ["12", "2026/09/26", "", "本社回線", "ＮＴＴ西日本", "8800", "未払金", "", "9月分2"]])
+    before = today.read_bytes()
+    out = tmp_path / "候補.xlsx"
+    r = _accounts(today, past, out)
+    assert r.returncode == 0, r.stdout
+    assert "⚠ 付けた科目が先例と違う行 1 行（元ファイルの 2 行目）" in r.stdout, r.stdout
+    assert today.read_bytes() == before, "★ 元の仕訳が変わった"
+    wb = openpyxl.load_workbook(out)
+    rows = [r for r in wb["検分"].iter_rows(min_row=2, values_only=True) if r[0] == "付けた科目が先例と違う"]
+    wb.close()
+    assert len(rows) == 1 and "仮払金" in rows[0][3] and "通信費" in rows[0][3], rows
+
+
+def test_a_book_whose_filled_accounts_match_says_nothing(tmp_path):
+    """★ 陰性対照 ── 先例と同じ科目を付けた行では鳴らない（オオカミ少年にしない）。"""
+    past = _csv(tmp_path / "過去.csv",
+                [["1", "2026/08/25", "通信費", "本社回線", "ＮＴＴ西日本", "8800", "未払金", "", "8月分"]])
+    today = _csv(tmp_path / "今回.csv",
+                 [["11", "2026/09/25", "通信費", "本社回線", "ＮＴＴ西日本", "8800", "未払金", "", "9月分"],
+                  ["12", "2026/09/26", "", "本社回線", "ＮＴＴ西日本", "8800", "未払金", "", "9月分2"]])
+    r = _accounts(today, past, tmp_path / "候補.xlsx")
+    assert r.returncode == 0 and "先例と違う" not in r.stdout, r.stdout

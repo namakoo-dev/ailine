@@ -509,3 +509,80 @@ def test_the_last_precedent_is_not_called_the_newest():
     reason = accounts_core.reason_of(plan.records[2])
     assert "最新" not in reason, reason
     assert "並びで最後の先例 2026/07/25" in reason, reason
+
+
+# --- 付けた科目が先例と違う行（2026-09-14・会計役が 2 回「一番期待した」所）------------------
+#
+# ★★ 借方勘定科目が既に埋まった行は「触らない行」として番号だけ控えて終わっていた ── 先例と
+#   突き合わせていなかった。候補を出す行では候補＝先例なので「違う」は原理的に出ない。
+# ★ 鳴らす条件は狭い: その鍵の先例が**全部同じ科目**で、付けた科目と違うときだけ。
+#   割れた鍵・先例 0 件・同じ科目は**沈黙**（3 つとも陰性対照）。値は 1 文字も変えない。
+
+_D_PAST = [_row("1", "2026/08/25", "通信費", "本社回線", "ＮＴＴ西日本", "8800", memo="8月分 回線"),
+           _row("4", "2026/08/26", "消耗品費", "", "アスクル", "3000", memo="コピー用紙"),
+           _row("5", "2026/08/27", "新聞図書費", "", "アスクル", "2000", memo="業界誌")]
+
+
+def _differs(today_rows):
+    return {r: w for r, w in _plan(today_rows, _D_PAST).differs}
+
+
+def test_a_filled_account_that_contradicts_a_unanimous_precedent_is_named():
+    got = _differs([_row("11", "2026/09/01", "仮払金", "本社回線", "ＮＴＴ西日本", "8800",
+                         memo="9月分 回線")])
+    assert list(got) == [2], got
+    why = got[2]
+    assert "付けた科目『仮払金』と先例が違います" in why, why
+    assert "借方取引先『ＮＴＴ西日本』の先例 1 件はすべて『通信費』" in why, why
+    assert "2 行目" in why, why
+    assert "付け替えたのが正しいなら、このままで構いません" in why, why
+
+
+def test_a_split_key_stays_silent():
+    """★ 陰性対照 ── **割れた鍵だけが当たる行**では黙る（「違う」と言えない）。
+
+    ★ 対照の作り方を 2 度間違えた（記録として残す）:
+      ① 割れた側の 1 つ目と同じ科目を付けた → 沈黙の規則を外した版でも黙り、対照にならない
+      ② どちらとも違う科目にしたら、**摘要**の鍵が一致して鳴った ── これは**正しい挙動**
+         （鍵ごとに独立に見るので、狭い鍵が一致すればそちらで鳴る）。
+      → だから対照は「割れた鍵しか当たらない行」にする（摘要も補助科目も先例に無い）。
+    """
+    got = _differs([_row("12", "2026/09/01", "雑費", "", "アスクル", "3000",
+                         memo="初めて買うもの")])
+    assert got == {}, got
+
+
+def test_a_narrow_key_still_fires_even_when_a_wide_key_is_split():
+    """★★ 鍵ごとに独立 ── 支払先が割れていても、摘要が全部同じなら**そちらで**鳴る。
+    実務でいちばん多い形（通販・タクシー・雑貨は支払先が割れ、摘要で決まる）。"""
+    got = _differs([_row("12", "2026/09/01", "雑費", "", "アスクル", "3000",
+                         memo="コピー用紙")])
+    assert list(got) == [2], got
+    assert "摘要『コピー用紙』の先例 1 件はすべて『消耗品費』" in got[2], got[2]
+    assert "借方取引先" not in got[2], f"割れた鍵は言わない: {got[2]}"
+
+
+def test_a_new_partner_stays_silent():
+    assert _differs([_row("13", "2026/09/01", "旅費交通費", "", "新しい会社", "1000",
+                          memo="タクシー")]) == {}
+
+
+def test_the_same_account_stays_silent():
+    assert _differs([_row("14", "2026/09/01", "通信費", "本社回線", "ＮＴＴ西日本", "8800",
+                          memo="9月分 回線")]) == {}
+
+
+def test_a_candidate_row_is_not_in_this_list():
+    """★ 空の行は候補の側（候補＝先例なので「違う」は出ない）── 分母を混ぜない。"""
+    plan = _plan([_row("15", "2026/09/01", "", "本社回線", "ＮＴＴ西日本", "8800", memo="9月分")],
+                 _D_PAST)
+    assert plan.differs == [] and 2 in plan.records, (plan.differs, sorted(plan.records))
+
+
+def test_the_report_carries_the_kind_and_the_blank_denominator_is_unchanged():
+    plan = _plan([_row("11", "2026/09/01", "仮払金", "本社回線", "ＮＴＴ西日本", "8800",
+                       memo="9月分 回線")], _D_PAST)
+    rows = accounts_core.inspection_rows(plan)
+    kinds = [r[0] for r in rows]
+    assert accounts_core.DIFFERS_KIND in kinds, kinds
+    assert accounts_core.BLANK_KIND not in kinds, kinds      # ★ 空欄の分母には入れない
