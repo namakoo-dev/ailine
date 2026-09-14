@@ -107,21 +107,38 @@ def money_columns(ws, columns, first_row: int = 2) -> int:
     return touched
 
 
-def reading_aids(ws, *, wrap_headers=(), freeze: str = "A2") -> None:
+#: この字数を超える文が在る列は、見出し名を知らなくても折り返す（下の理由）。
+WRAP_OVER_CHARS = 40
+
+
+def reading_aids(ws, *, wrap_headers=(), freeze: str = "A2", auto_filter: bool = True,
+                 wrap_over: int = WRAP_OVER_CHARS) -> None:
     """人が**読む**ためのシートの支度 ── 見出しの固定・オートフィルタ・長い文の折り返し。
 
     ★★ 2026-09-13（買い手役・会計・2 回とも）: 根拠が 1 セル最大 665 字・折り返し無し・列幅 60・
       フィルタ無し・枠固定無しで、「根拠を読んで判断する」のが売りなのに読む姿勢を自分で作る形だった。
+    ★★ 2026-09-14: その支度を **15 シート中 1 枚**にしか通していなかった（実測）── しかも
+      通っていないのは人が一番読む「検分」（理由が 200 字入る所）。この repo の再発する欠陥
+      （片配線・開発手法 §13）。処方どおり **1 関数のまま引数で分け**、番人は書いた冊を分母に
+      全シートを 1 本で縛る（`tests/test_the_sheets_are_readable.py`）。
+    ★ 折り返しは**データ駆動** ── `wrap_over` 字を超える文が在る列は、見出し名を知らなくても
+      折り返す（手書きの列名一覧は必ずずれる。`wrap_headers` は明示の追加として残す）。
+    ★ `auto_filter=False` は**合計行が入るシート**に使う（絞ると合計が消える／残る形が読み手を
+      惑わす ── 配る冊・束の要約）。
     ★ 値は 1 文字も変えない（表示の支度だけ）。
     """
     from openpyxl.styles import Alignment
     if ws.max_row < 1:
         return
     ws.freeze_panes = freeze
-    ws.auto_filter.ref = ws.dimensions
+    if auto_filter:
+        ws.auto_filter.ref = ws.dimensions
     wanted = {str(h) for h in wrap_headers}
     for col in range(1, (ws.max_column or 0) + 1):
-        if str(ws.cell(row=1, column=col).value) in wanted:
+        long_text = any(isinstance(ws.cell(row=r, column=col).value, str)
+                        and len(ws.cell(row=r, column=col).value) > wrap_over
+                        for r in range(2, (ws.max_row or 1) + 1))
+        if long_text or str(ws.cell(row=1, column=col).value) in wanted:
             for row in range(2, (ws.max_row or 1) + 1):
                 ws.cell(row=row, column=col).alignment = Alignment(wrap_text=True, vertical="top")
 

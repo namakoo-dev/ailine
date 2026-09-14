@@ -15934,6 +15934,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 inspection.tint_row(ws_out, i, len(out_headers), prov_col_idx, reason_lines)
         inspection.bold_row(ws_out, 1, len(out_headers))   # ★ UX 磨き③: 見出し行
         inspection.autosize_columns(ws_out)   # ★ UX 磨き②: 列幅を内容から機械算出
+        inspection.reading_aids(ws_out)   # ★ 読む支度（全経路に通す・2026-09-14）
         wb_out.save(tmp_out)
 
         # ⑧ 事後条件: 書いた直後の中身を**独立読み**（xml_readback）で検算する。
@@ -17291,6 +17292,7 @@ def cmd_forms(a: argparse.Namespace) -> int:
         inspection.bold_row(ws, 1, len(forms_collect.HEADERS))
         inspection.money_columns(ws, forms_collect.money_column_indexes())
         inspection.autosize_columns(ws)
+        inspection.reading_aids(ws, auto_filter=not month)   # ★ 読む支度（全経路に通す・2026-09-14）
         if month:
             ws_o = wb_out.create_sheet(forms_collect.OUT_OF_SCOPE_SHEET)
             ws_o.append(list(forms_collect.OUT_OF_SCOPE_HEADERS))
@@ -17299,6 +17301,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
             inspection.bold_row(ws_o, 1, len(forms_collect.OUT_OF_SCOPE_HEADERS))
             inspection.money_columns(ws_o, forms_collect.money_column_indexes())
             inspection.autosize_columns(ws_o)
+            inspection.reading_aids(ws_o)   # ★ 読む支度（全経路に通す・2026-09-14）
+
 
         ws2 = wb_out.create_sheet(forms_collect.INSPECT_SHEET)
         ws2.append(list(forms_collect.INSPECT_HEADERS))
@@ -17306,6 +17310,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
             ws2.append(row)
         inspection.bold_row(ws2, 1, len(forms_collect.INSPECT_HEADERS))
         inspection.autosize_columns(ws2)
+        inspection.reading_aids(ws2)   # ★ 読む支度（全経路に通す・2026-09-14）
+
 
         ws3 = wb_out.create_sheet(forms_collect.SUSPECT_SHEET)
         ws3.append(list(forms_collect.SUSPECT_HEADERS))
@@ -17313,6 +17319,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
             ws3.append(row)
         inspection.bold_row(ws3, 1, len(forms_collect.SUSPECT_HEADERS))
         inspection.autosize_columns(ws3)
+        inspection.reading_aids(ws3)   # ★ 読む支度（全経路に通す・2026-09-14）
+
         # ★ 束の要約 ── 画面に出た事実（読めなかった冊・載せなかった冊・月の混在）をブックにも残す。
         ws4 = wb_out.create_sheet(forms_collect.SUMMARY_SHEET)
         ws4.append(list(forms_collect.SUMMARY_HEADERS))
@@ -17320,6 +17328,8 @@ def cmd_forms(a: argparse.Namespace) -> int:
             ws4.append(row)
         inspection.bold_row(ws4, 1, len(forms_collect.SUMMARY_HEADERS))
         inspection.autosize_columns(ws4)
+        inspection.reading_aids(ws4)   # ★ 読む支度（全経路に通す・2026-09-14）
+
         wb_out.save(tmp_out)
 
         # ★ 事後条件: 書いた直後の中身を**別の読み実装**で数える（同じ道具の同じ盲点を避ける）。
@@ -17521,6 +17531,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
                 inspection.tint_row(ws_out, i, len(out_headers), prov_col_idx, reason_lines)
         inspection.bold_row(ws_out, 1, len(out_headers))   # ★ UX 磨き③: 見出し行
         inspection.autosize_columns(ws_out)   # ★ UX 磨き②: 列幅を内容から機械算出
+        inspection.reading_aids(ws_out)   # ★ 読む支度（全経路に通す・2026-09-14）
         wb_out.save(tmp_out)
 
         # ★ 事後条件①②: 独立読み実装（xml_readback）で書いた直後の中身を検算する
@@ -17774,6 +17785,9 @@ def cmd_split(a: argparse.Namespace) -> int:
                 inspection.bold_row(ws_out, ws_out.max_row, len(out_headers))
             inspection.bold_row(ws_out, 1, len(out_headers))
             inspection.autosize_columns(ws_out)
+            # ★ 配る冊は枠固定だけ ── 末尾の合計行がフィルタ範囲に入ると、絞った時に
+            #   合計が消える／残る形になって読み手を惑わす（2026-09-14）。
+            inspection.reading_aids(ws_out, auto_filter=False)
             wb_out.save(tmp)
             wb_out.close()
             written[value] = tmp
@@ -17857,6 +17871,8 @@ def cmd_split(a: argparse.Namespace) -> int:
             ws_rep.append(row)
         inspection.bold_row(ws_rep, 1, len(split_people.REPORT_HEADERS))
         inspection.autosize_columns(ws_rep)
+        inspection.reading_aids(ws_rep)   # ★ 読む支度（全経路に通す・2026-09-14）
+
         wb_rep.save(report_tmp)
         wb_rep.close()
 
@@ -18143,6 +18159,8 @@ def cmd_accounts(a: argparse.Namespace) -> int:
             ws2.append(row)
         inspection.bold_row(ws2, 1, len(accounts_core.REPORT_HEADERS))
         inspection.autosize_columns(ws2)
+        inspection.reading_aids(ws2)   # ★ 読む支度（全経路に通す・2026-09-14）
+
         wb_out.save(tmp_out)
         wb_out.close()
 
