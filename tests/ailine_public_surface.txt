@@ -45,6 +45,7 @@ value NEW_COLUMN_ORIGIN
 value NOOP_MACRO
 value NOTICE_V2_FILE
 value NOTICE_V2_TEXT
+value NO_MODEL
 value NUM_CTX
 value NUM_CTX_FREEFORM
 class NoOlderBackupError(?)
@@ -628,7 +629,7 @@ def fold_insert_then_add(plan) -> 'tuple'
 def format_confirmation_line(op: 'str', resolved_args: 'dict', inferred: 'set', sheets: 'list | None' = None, target_sheet: 'str | None' = None) -> 'str'
 def format_doctor_report(results: 'list') -> 'tuple'
 def format_fidelity_warning(fidelity: 'dict') -> 'str'
-def format_history_table(entries: 'list') -> 'str'
+def format_history_table(entries: 'list', base=None) -> 'str'
 def format_op_from_task(task: 'str') -> 'str | None'
 def format_output_fidelity_warning(fidelity: 'dict', name: 'str') -> 'str'
 def format_plan_preview(items: 'list') -> 'list'
@@ -642,6 +643,9 @@ def freeform_notice_reason(op: 'str', about: 'str' = '') -> 'str'
 def get_column_letter(col_idx)
 def header_cell_target(task: 'str', target: 'str', header_row: 'int', columns) -> 'str | None'
 def header_row_drops_columns(ws, chosen_row: 'int') -> 'str | None'
+def history_in_folder(entries: 'list', folder) -> 'list'
+def history_place(book, base=None) -> 'str'
+def history_scope_line(shown: 'int', hidden: 'int', ledger, folder=None) -> 'str'
 def insert_rows_should_have_been_add_row(task: 'str', resolved: 'dict', book_meta: 'dict | None' = None, sheet: 'str | None' = None) -> 'str | None'
 def inspection_sheet_basic_call(sheet_name: 'str', header: 'list', rows: 'list', types: 'str') -> 'str'
 def interfaces_only(bas_text: 'str') -> 'str'

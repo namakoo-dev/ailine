@@ -959,3 +959,46 @@ def render_accounts_report(today_label: str, out_label: str, result: dict) -> li
     else:
         lines.append("（冊は作っていません）")
     return lines
+
+
+# ── 実行履歴の見え方（2026-09-14・買い手役 2 体が別の回に指した）─────────────────
+#
+# ★★ 「`history` が PC 単位（共有 PC だと他人の作業が混ざる）」「モデル欄 None」。
+#   実測すると報告より悪く、**別のフォルダ・別のドライブの 3 冊が全部同じ `売上.xlsx`**
+#   に見えていた（`Path(book).name` しか出していなかった）。`ailine undo` は冊のパスを
+#   引数に取るので、履歴は「何をどの冊にしたか」を引く唯一の場所なのに、そこから
+#   **引数が作れない**。★ 幅が溢れるより曖昧が悪い ── そのまま貼れる形にする。
+
+#: モデルを使っていない回（規則で書けた回）の表示。★ `None` と読ませない。
+NO_MODEL = "—"
+
+
+def history_place(book, base=None) -> str:
+    """履歴の『文書』の欄 ── 場所が分かる形（そのまま `ailine undo` に貼れる）。
+
+    ★ base（ふつうは cwd）の配下なら base からの相対パス、外なら**フルパス**。
+      記録が相対のまま入っている古い行はそのまま出す（作り直して嘘の場所を書かない）。
+    """
+    text = str(book or "")
+    if not text:
+        return "(パス不明)"
+    p = Path(text)
+    if not p.is_absolute():
+        return text
+    try:
+        return str(p.relative_to(Path(base) if base is not None else Path.cwd()))
+    except ValueError:
+        return text
+
+
+def history_scope_line(shown: int, hidden: int, ledger, folder=None) -> str:
+    """1 行目 ── 範囲と台帳の置き場所。★ 絞った回は隠した件数を必ず言う。"""
+    if folder is None:
+        head = f"この PC のこのアカウントで動かした記録 {shown} 件"
+    else:
+        head = f"{folder} の中の記録 {shown} 件"
+        if hidden:
+            head += f"（ほかの場所の記録 {hidden} 件は出していません）"
+        else:
+            head += "（ほかの場所の記録はありません）"
+    return f"{head}  台帳: {ledger}"

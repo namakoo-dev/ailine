@@ -134,6 +134,7 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_split_report,   # ★ 担当者別に分けて配る: `ailine split`
     render_folder_routes,
     render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
+    NO_MODEL, history_place, history_scope_line,   # ★ 履歴の『文書』は場所まで出す（2026-09-14）
 )
 from ailine_core.filetypes import (BOOKLIKE_SUFFIXES, CSV_SUFFIX,
                                    OPENPYXL_PROBEABLE_SUFFIXES,
@@ -11876,7 +11877,7 @@ def _last_task_for_book(book: Path) -> str:
     return ""
 
 
-def format_history_table(entries: list) -> str:
+def format_history_table(entries: list, base=None) -> str:
     """人が読める表形式。履歴が無ければ「履歴はまだ無い」を返す。
        ★ W8a 項目1: dry(下見・未適用)の行は末尾に「(下見)」を付けて実適用と区別する
        （「dry-run」は事務の言葉ではないため表示には出さない）。dict にキーが無い旧行は
@@ -11889,8 +11890,11 @@ def format_history_table(entries: list) -> str:
         mark = "✓" if e.get("ok") else "×"
         ts = str(e.get("ts", ""))
         attempts = str(e.get("attempts", ""))
-        model = str(e.get("model", ""))
-        book = Path(str(e.get("book", ""))).name
+        # ★ 2026-09-14: モデルを使っていない回（規則で書けた回）を「None」と読ませない。
+        model = str(e.get("model") or "") or NO_MODEL
+        # ★ 2026-09-14: 名前だけだと別のフォルダの同名が全部同じ行に見える（実測 3/3）。
+        #   場所まで出す ── そのまま `ailine undo <文書>` に貼れる形（cli_render に 1 箇所）。
+        book = history_place(e.get("book", ""), base)
         task = str(e.get("task", ""))
         line = f"{ts:<20} {mark:<4} {attempts:<4} {model:<20} {book:<20} {task}"
         if e.get("dry", False):
@@ -11906,9 +11910,42 @@ def format_history_table(entries: list) -> str:
     return "\n".join(lines)
 
 
+def history_in_folder(entries: list, folder) -> list:
+    """フォルダの中の記録だけ（★ 判定は 1 箇所 ── 数える側と出す側で違う数にしない）。"""
+    root = Path(folder).resolve()
+    out = []
+    for e in entries:
+        book = Path(str(e.get("book", "")))
+        if not book.is_absolute():
+            continue
+        try:
+            book.resolve().relative_to(root)
+        except ValueError:
+            continue
+        out.append(e)
+    return out
+
+
 def cmd_history(a: argparse.Namespace) -> int:
+    """★ 2026-09-14（買い手役 2 体・別の回）: 台帳は `~/.ailine` に 1 本なので、別の仕事・
+       別のフォルダの記録が混ざる。**範囲を言い、場所を出し、絞れるようにする**。
+       ★ 既定では絞らない ── cwd の配下だけにすると、別の場所から動かした人の記録が
+         黙って消える（出ないことを信号にしない）。"""
+    folder = getattr(a, "folder", None)
+    if folder is not None:
+        # ★ 打ち間違いを「0 件」と読ませない ── 無いフォルダは唯一の入口で名指しして断る
+        #   （`--folder` の打ち間違いが「ここには記録がありません」に化けるのが一番悪い）。
+        folder = input_path.require_folder(folder)
     entries = read_history(max_n=a.max)
-    print(format_history_table(entries))
+    shown = history_in_folder(entries, folder) if folder else entries
+    print(history_scope_line(len(shown), len(entries) - len(shown),
+                             HISTORY_FILE, folder))
+    if not shown and folder is not None:
+        # ★ 絞って 0 件の回に「履歴はまだ無い」と言わない（記録は在る ── 嘘になる）。
+        print("（このフォルダの冊を動かした記録はまだありません ── "
+              "全部見るなら `ailine history`）")
+    else:
+        print(format_history_table(shown))
     return 0
 
 
@@ -18526,6 +18563,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     h = sub.add_parser("history", help="実行履歴を表示する")
     h.add_argument("--max", type=int, default=10, help="表示件数（既定 10、新しい順）")
+    h.add_argument("--folder", default=None, metavar="パス",
+                   help="このフォルダの中の冊の記録だけを出す（共有 PC で別の仕事と混ざる時）")
     h.set_defaults(func=cmd_history)
 
     rs = sub.add_parser("restore", help="原本への反映前のバックアップから復元する（ailine undo と同じ）")

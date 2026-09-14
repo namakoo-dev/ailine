@@ -1,5 +1,6 @@
-usage: ailine history [-h] [--max MAX]
+usage: ailine history [-h] [--max MAX] [--folder パス]
 
 options:
-  -h, --help  show this help message and exit
-  --max MAX   表示件数（既定 10、新しい順）
+  -h, --help   show this help message and exit
+  --max MAX    表示件数（既定 10、新しい順）
+  --folder パス  このフォルダの中の冊の記録だけを出す（共有 PC で別の仕事と混ざる時）
