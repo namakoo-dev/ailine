@@ -134,6 +134,14 @@ DIFFERS_KIND = "付けた科目が先例と違う"
 #: 税区分が、その鍵の先例と食い違う行（★ 科目が合っていても納税額が変わる ── 静かに乗る側）。
 TAX_KIND = "税区分が先例と違う"
 NOTE_KIND = "鍵について"
+#: ★★ 2026-09-14（買い手役・会計の 中「検分の『13』」「候補シートと 1 ずれ・見出しに書いていない」）:
+#:   行番号が**元ファイルの物理行**（説明行を含む）だと分かっても、**もう一方のシートでどこを
+#:   見ればいいか**が分からない。見出しの語だけでは足りないので、表の**先頭**で 1 行だけ言う
+#:   （読む人の疑問が生まれる場所に置く）。★ 番号の意味は変えない ── 説明を足す。
+HOW_TO_READ_KIND = "この表の見方"
+HOW_TO_READ = ("『元ファイルの行』は元の CSV／Excel の行番号です（説明行や見出しも数えた"
+               "物理行 ── 1 行目から数えてください）。『候補』シートでは『元行』の列に同じ"
+               "番号が入っています（その列で絞り込むと、同じ行に行けます）")
 
 #: 書き手の印（docProps/core.xml の dc:creator）。★ 読む側の判定は `stack.KIND_SIGNATURES`。
 CREATOR_MARK = "ailine accounts"
@@ -795,7 +803,7 @@ def inspection_rows(plan: AccountsPlan) -> list:
     ★ `空欄の理由` の行番号が**分母の片側**（設計 §6.5 の 2）── 候補が出た行と合わせて
       「借方が空で金額が在る行」に一致するべきもの。検算はここから**名指しだけ**を読む。
     """
-    out = []
+    out = [[HOW_TO_READ_KIND, "", "", HOW_TO_READ]]
     for row_num in plan.candidates:
         record = plan.records[row_num]
         if field_record.grade(record) in field_record.GRADES_WITH_VALUE:

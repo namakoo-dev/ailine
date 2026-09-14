@@ -476,3 +476,26 @@ def test_the_zero_confirmation_scale_is_explained_on_screen(tmp_path):
              if row[0] == accounts_core.NOTE_KIND]
     wb.close()
     assert any("確（2 本以上の鍵が別々の先例で一致）は 0 行" in str(n) for n in notes), notes
+
+
+def test_the_inspection_sheet_tells_how_to_find_the_row_in_the_other_sheet(tmp_path):
+    """★★ 2026-09-14（会計役の 中「検分の『13』」）: 行番号だけでは**もう一方のシートで
+    どこを見るか**が分からない（候補シートの行とは説明行の分だけずれる）。
+
+    ★ 番号の意味は変えない ── 表の**先頭**で 1 行だけ、読み方を言う。
+    """
+    past = _csv(tmp_path / "過去.csv",
+                [["1", "2026/08/03", "通信費", "", "甲通信", "8800", "未払金", "", "8月分 電話代"]])
+    today = _csv(tmp_path / "今回.csv",
+                 [["11", "2026/09/03", "", "", "甲通信", "8800", "未払金", "", "9月分 電話代"],
+                  ["12", "2026/09/04", "", "", "未知商店", "500", "未払金", "", "はじめての摘要"]])
+    out = tmp_path / "候補.xlsx"
+    r = _accounts(today, past, out)
+    assert r.returncode == 0, r.stdout
+    wb = openpyxl.load_workbook(out)
+    rows = [list(r) for r in wb["検分"].iter_rows(min_row=2, values_only=True)]
+    head = [c.value for c in wb["検分"][1]]
+    wb.close()
+    assert rows[0][0] == accounts_core.HOW_TO_READ_KIND, rows[0]
+    assert "『元行』の列" in str(rows[0][3]) and "物理行" in str(rows[0][3]), rows[0]
+    assert head[1] == "元ファイルの行", head
