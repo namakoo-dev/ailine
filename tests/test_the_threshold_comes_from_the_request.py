@@ -160,3 +160,22 @@ def test_the_same_number_reading_serves_set_where_too(tmp_path):
         task="金額が10万円以上の行の区分に『大口』と入れて")
     assert ok, err
     assert r["cond_value"] == 100000.0, r["cond_value"]
+
+
+def test_a_word_that_means_zero_is_a_boundary_too():
+    """★★ ① の初版が**正だった 1 件を壊した**（実測で気づいた・盲検 #21）。
+
+    「在庫数がマイナスになってる行を教えて」は数を言っていないが境目は 0 ── 判定者 2 人が
+    正 と読んだ件なので、断りに落としてはいけない。★ 語は実際に打たれた物だけ（#21・#74）。
+    """
+    assert threshold.zero_boundary("在庫数がマイナスになってる行を教えて")
+    assert not threshold.zero_boundary("在庫が少ない行を教えて")
+    g = threshold.ground("在庫数がマイナスになってる行", 0.0, example="例")
+    assert g.value == 0.0 and not g.refusal, g
+
+
+def test_the_zero_word_survives_the_whole_path(tmp_path):
+    ok, r, _i, err = _extract(_book(tmp_path), {"col": "在庫数", "cmp": "lt", "value": 0},
+                              "在庫数がマイナスになってる行を教えて")
+    assert ok, err
+    assert (r["cmp"], r["value"]) == ("lt", 0.0), (r["cmp"], r["value"])

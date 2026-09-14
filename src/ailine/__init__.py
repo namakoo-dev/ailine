@@ -4087,6 +4087,27 @@ def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers
         resolved["operands"] = new_operands
         if resolved.get("operator") not in ("+", "-", "*", "/"):
             return False, resolved, inferred, f"演算子『{resolved.get('operator')}』が不明です"
+        # ★★ 2026-09-14（盲検・誤配の家系③）: 「出勤と退勤の時刻から実働時間を計算する列を」で
+        #   `出勤 − 退勤`（符号が逆）が黙って通っていた。引き算と割り算は**向きで答えが変わる**
+        #   ── 依頼文が向きを言っていなければ聞き返す（並び順をそのまま演算の順にしない）。
+        #   ★ 足し算・掛け算は向きが無いので触らない（陰性対照）。
+        # ★ 向きの関所は**並び順だけ**の話 ── 依頼文に出てこない列が混じっている回は
+        #   「どの列か」の食い違いで、既存の関所（subject_mismatch → 確認）の仕事。
+        #   ここで先に断ると、聞けば済む回を断りに変えてしまう（実測: 凍結検体が 7→3 になった）。
+        if (task and resolved["operator"] in ("-", "/")
+                and all(str(o) in task for o in new_operands)):
+            _dir = threshold.direction_of(task, new_operands, resolved["operator"])
+            if _dir is None:
+                _x, _y = new_operands
+                _verb = "引く" if resolved["operator"] == "-" else "割る"
+                _ex = "引いた" if resolved["operator"] == "-" else "割った"
+                return False, resolved, inferred, (
+                    f"『{_x}』と『{_y}』のどちらから{_verb}のかが依頼文から決まりません"
+                    f"（例:「{_y}から{_x}を{_ex}列を作って」のように書いてください）")
+            if _dir != new_operands:
+                resolved["_warnings"] = resolved.get("_warnings", []) + [
+                    f"依頼文の向き（{_dir[0]} {resolved['operator']} {_dir[1]}）を採用しました"]
+                resolved["operands"] = _dir
     # ★ M2c: target(任意) — 依頼が既存列を名指し（「小計に」等）した場合はその列に書く。
     #   無指定なら従来どおり新規列（codegen_dsl 側で分岐）。
     # ★ W3: target が実在しない場合、翻訳が「新しい列の名前」（例:「利益列を作って」の
@@ -6182,7 +6203,11 @@ def _verify_pivot(resolved, inferred, first_sheet, resolve_in):
     return None
 
 
-def _verify_aggregate(resolved, inferred, first_sheet, resolve_in):
+#: ★ 集計は**合計しか無い** ── 「何件」を数量の合計で代用しない（盲検 #50 の誤配）。
+_COUNT_WORDS = ("件数", "何件", "回数", "人数", "何人", "何回")
+
+
+def _verify_aggregate(resolved, inferred, first_sheet, resolve_in, task="", sheet_headers=()):
     """AGGREGATE の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
     ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
@@ -6192,6 +6217,15 @@ def _verify_aggregate(resolved, inferred, first_sheet, resolve_in):
     """
     if (err := resolve_in("group_col", first_sheet)):
         return False, resolved, inferred, err
+    # ★★ 2026-09-14（盲検 #50「担当者ごとに何件受注したか件数も出して」→ 数量の**合計**）:
+    #   件数を数える器がこの道具に無いのに、近い操作で代用して別の数字を件数として出していた。
+    #   ★ 語彙の穴は穴と言う（代用しない）── ただし合計する列を依頼文が名指ししていれば通す。
+    if task and any(w in task for w in _COUNT_WORDS):
+        _named = [h for h in (sheet_headers or ()) if h and h in task]
+        if str(resolved.get("value_col") or "") not in _named:
+            return False, resolved, inferred, (
+                "件数は数えられません（この道具の集計は合計だけです）── "
+                "合計なら「担当者ごとに金額を集計して」のように、合計する列を書いてください")
     if (err := resolve_in("value_col", first_sheet)):
         return False, resolved, inferred, err
     return None
@@ -6268,6 +6302,11 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     if book_meta.get("_sheet_source"):
         resolved["_sheet_source"] = book_meta["_sheet_source"]
     inferred: set = set()
+    # ★★ 2026-09-14（盲検・誤配の家系②）: 「重複がないか見といて」が重複除去に写されていた。
+    #   見るだけの依頼を減らす op に写したら**断る**。単発も複合計画の段もこの関数を通るので
+    #   関所は 1 箇所（判定は intent に置き、ここは呼ぶだけ）。依頼文が無い経路は触らない。
+    if task and (_chk := intent_mismatch.refuse_reducing_a_check(task, op, OP_LABELS.get(op, op))):
+        return False, resolved, inferred, _chk
 
     def resolve_in(key: str, sheet_name: str):
         val, was_inferred, err = resolve_col_ref(resolved.get(key), headers.get(sheet_name, []))
@@ -6322,7 +6361,8 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return r
 
     elif op == "AGGREGATE":
-        r = _verify_aggregate(resolved, inferred, first_sheet, resolve_in)
+        r = _verify_aggregate(resolved, inferred, first_sheet, resolve_in, task,
+                              [str(h) for h in (headers.get(first_sheet) or [])])
         if r is not None:
             return r
 

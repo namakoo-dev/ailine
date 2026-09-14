@@ -124,6 +124,7 @@ value _COL_BEFORE
 value _COL_HEAD
 value _COL_TAIL
 value _CONFIRM_FIELDS
+value _COUNT_WORDS
 value _CSV_REASON_LABELS
 class _CsvEvaluation(error: 'str' = None, sha256: 'str' = None, encoding: 'object' = None, parsed: 'object' = None, classifications: 'list' = None, warnings: 'list' = None) -> None
 value _DEST_JA
@@ -441,7 +442,7 @@ def _utc_ts() -> 'str'
 def _value_changed_cells(before: 'dict', after: 'dict') -> 'list'
 def _verify_add_column(resolved, inferred, book_meta, task, sheets, headers)
 def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op)
-def _verify_aggregate(resolved, inferred, first_sheet, resolve_in)
+def _verify_aggregate(resolved, inferred, first_sheet, resolve_in, task='', sheet_headers=())
 def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in, args, task, vocab, headers)
 def _verify_autofit()
 def _verify_bold(resolved, inferred, first_sheet, headers, op, task='', header_row=1)

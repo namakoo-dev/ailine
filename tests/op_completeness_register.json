@@ -19,6 +19,7 @@
     "src/ailine/__init__.py:_CONFIRM_FIELDS",
     "src/ailine/__init__.py:_OP_SCHEMA_NOTES",
     "src/ailine_core/examples.py:EXAMPLE_TASKS",
+    "src/ailine_core/intent.py:REDUCING_EXAMPLES",
     "src/ailine_core/op_axes.py:AXES",
     "src/ailine_core/projection.py:PROJECTIONS",
     "src/ailine_core/target_sheet.py:_OP_VERBS"

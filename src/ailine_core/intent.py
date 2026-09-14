@@ -36,6 +36,55 @@ from __future__ import annotations
 #: 「消す」と読める**裸の動詞**（op の照合語彙は「行を消して」の形しか持たないため）。
 BARE_REMOVALS = ("消して", "削除して", "消す", "削除する", "取り除いて", "取り除く")
 
+# ── 見るだけの依頼（2026-09-14・言い回し 120 件の盲検・誤配の家系②）──────────────────
+#
+# ★★ 「品番の重複がないか**見といて**」→ 重複除去、「〜がないか**調べて**」→ 重複除去。
+#   確認の依頼が**行を減らす**操作に写されていた。既定は新しい冊に書くので原本は壊れないが、
+#   出てくるのは「重複を除いた表」で、**どれが重複だったかは分からない**（頼んだことの逆側）。
+# ★ 一方、確認語が**抽出**（読むだけ・新しいシート）に着いた依頼は盲検で 9/9 正だった。
+#   だから規則は狭い: 確認語が在り、**変更の動詞が 1 つも無い**依頼を、減らす op に写さない。
+# ★ 語の列挙で正しい ── 判定しているのは「人がどの動作を言ったか」で、動作は言葉でしか
+#   分からない（`_REMOVAL_WORDS` と同じ理屈）。漏れた語は「今までどおり」になるだけで、
+#   黙って別のことをする方向には壊れない。
+CHECK_ONLY_WORDS = ("ないか", "あるか", "調べて", "調べといて", "確認して", "確認しといて",
+                    "チェックして", "見といて", "見ておいて", "教えて", "探して")
+#: 在れば「見るだけ」ではない（減らす・書く・変える意思が言葉に出ている）。
+CHANGE_VERBS = BARE_REMOVALS + ("削除", "除いて", "除く", "取り除", "抜いて", "無くして",
+                                "直して", "書いて", "入れて", "変えて", "にして", "埋めて",
+                                "付けて", "塗って", "並べ")
+#: 行や列を**減らす** op ── 見るだけの依頼をここへ写したら止める。
+ROW_REDUCING_OPS = frozenset({"DEDUP", "DELETE_ROWS", "DELETE_COLUMN"})
+#: 減らしてよいときの通る書き方（op ごと）。
+REDUCING_EXAMPLES = {"DEDUP": "品番が同じ行を重複として除いて",
+                     "DELETE_ROWS": "金額が0の行を削除して",
+                     "DELETE_COLUMN": "備考の列を削除して"}
+
+
+def check_only_request(task: str | None) -> str | None:
+    """依頼が「見るだけ」なら、その確認語を返す（変更の動詞が 1 つでも在れば None）。"""
+    text = task or ""
+    if any(v in text for v in CHANGE_VERBS):
+        return None
+    for w in CHECK_ONLY_WORDS:
+        if w in text:
+            return w
+    return None
+
+
+def refuse_reducing_a_check(task: str | None, op: str, label: str) -> str | None:
+    """見るだけの依頼が減らす op に写されていたら、断り文を返す（そうでなければ None）。
+
+    ★ 「見つけるだけの操作は無い」と正直に言い、減らしてよいときの通る書き方を添える。
+    """
+    if op not in ROW_REDUCING_OPS:
+        return None
+    word = check_only_request(task)
+    if word is None:
+        return None
+    return (f"『{word}』は見るだけの依頼と読めますが、『{label}』は行や列を減らす操作です"
+            "（見つけるだけの操作はありません）。減らしてよければ"
+            f"「{REDUCING_EXAMPLES.get(op, '…を削除して')}」のように頼んでください")
+
 #: 数値書式で頼まれがちだが、この道具が**持っていない**書き方（語 → 人に見せる名前）。
 #: ★ 持っているのは桁区切りだけ（FormatThousands）。
 UNSUPPORTED_FORMATS = {
