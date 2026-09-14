@@ -4515,6 +4515,20 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
     if raw_value in (None, ""):
         return False, resolved, inferred, "抽出する値(value)が依頼文から読み取れません"
     if cmp == "contains":
+        # ★★ 2026-09-14（盲検 #85「土日に出勤してる人だけ抜き出して」→ 日付に『土』を含む行）:
+        #   曜日は日付列の**文字には無い**のに、近い操作で代用して 0 行の結果が ✓ で出ていた
+        #   （誤配の家系④「範囲外を近い操作で代用」）。★ eq と同じ線 ── 1 行も当たらない値は断る。
+        _hit = None
+        if task:
+            _v = str(raw_value).strip()
+            _real = [str(x) for x in _column_values(book_meta, first_sheet, resolved["col"])]
+            _hit = any(_v and _v in x for x in _real) if _real else None
+        if _hit is False:
+            _shown = "』『".join(list(dict.fromkeys(_real))[:5])
+            return False, resolved, inferred, (
+                f"列『{resolved['col']}』に『{raw_value}』を含む行は 1 行もありません"
+                f"（在る値の例: 『{_shown}』）── 曜日や「今日から見て」のような読み方は"
+                "この道具にはありません。列に在る文字で指してください")
         resolved["value"] = str(raw_value)
     else:
         try:
@@ -6635,7 +6649,7 @@ _EXTRACT_SHEET_NAME_FORBIDDEN_RE = re.compile(r'[:\\/?*\[\]]')
 #   ★ 口語は断片ガード必須（直前 10 文字に数字）── 「区切って」「締め切って」「予算を上回る努力」を拾わない。
 _EXTRACT_CMP_WORDS = (
     ("gt", ("より大きい", "より大きく", "を超える", "を超えて", "より多い", "より多く",
-             "より高い", "より高く", "超え", "上回")),
+             "より高い", "より高く", "超え", "上回", "過ぎ")),
     ("lt", ("未満", "より小さい", "より小さく", "より少ない", "より少なく",
              "より安い", "より安く", "切っ", "下回", "に満たない")),
     ("gte", ("以上",)),
@@ -6648,7 +6662,7 @@ _EXTRACT_CMP_WORDS = (
 #   （対象を値の近傍の比較語に絞る）。gt/lt/contains/eq の語は文末定型と衝突しないので対象外。
 _EXTRACT_CMP_NEEDS_NUM_NEARBY = frozenset({"gte", "lte"})
 #: ★ 語そのものにも掛ける断片ガード（口語は短いので、数字が近くに無ければ比較語と読まない）。
-_EXTRACT_CMP_WORDS_NEED_NUM = frozenset({"超え", "上回", "切っ", "下回", "に満たない"})
+_EXTRACT_CMP_WORDS_NEED_NUM = frozenset({"超え", "上回", "切っ", "下回", "に満たない", "過ぎ"})
 #: ★ 「切っ」は「締め切って」「区切って」「見切って」の断片にもなる ── 直前が数か数え語のときだけ比較語。
 _EXTRACT_CMP_WORD_PREFIX = {"切っ": re.compile(r"[0-9０-９個件人円時間日点本枚台%万千]$")}
 _EXTRACT_CMP_NUM_RE = re.compile(r'[0-9０-９]')

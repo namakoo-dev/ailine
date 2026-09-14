@@ -179,3 +179,48 @@ def test_the_zero_word_survives_the_whole_path(tmp_path):
                               "在庫数がマイナスになってる行を教えて")
     assert ok, err
     assert (r["cmp"], r["value"]) == ("lt", 0.0), (r["cmp"], r["value"])
+
+
+@pytest.mark.parametrize("task,want", [
+    ("退勤時間が22時を過ぎる分だけ抽出しといて", "gt"),   # ★ Qwen の 167 件が見つけた語
+    ("10日を過ぎたもの", "gt"),
+    ("締め切りを過ぎた案件", None),                       # 断片ガード（数が近くに無い）
+    ("予定を過ぎる", None),
+])
+def test_the_word_qwen_found_is_read_with_its_guard(task, want):
+    """★ 辞書の語は**観測から**採る ── この語は Qwen3-8B に 167 件書かせた中の 1 件から。
+
+    ★ 1 語につき陽性 1・断片の陰性 1 を要求する（語が増えるほど誤爆も増えるので）。
+    """
+    assert ailine.extract_cmp_from_task(task) == want, task
+
+
+# ── ④ 範囲外を近い操作で代用しない（盲検 #85）──────────────────────────────
+
+def test_a_contains_that_matches_nothing_is_refused(tmp_path):
+    """★★ 「土日に出勤してる人」→ 日付に『土』を含む行 ── 曜日は日付列の文字には無い。
+
+    0 行の結果が ✓ で出るのが一番悪い（頼んだ人は「該当なし」と読む）。
+    ★ eq と同じ線: 1 行も当たらない値は断り、在る値の例を見せる。
+    """
+    meta = _book(tmp_path)
+    ok, _r, _i, err = _extract(meta, {"col": "区分", "cmp": "contains", "value": "土"},
+                               "土日の分だけ抜き出して")
+    assert not ok, "1 行も当たらない contains を通した"
+    assert "含む行は 1 行もありません" in err and "曜日" in err, err
+
+
+def test_a_contains_that_matches_is_unchanged(tmp_path):
+    """★ 陰性対照 ── 当たる値は今までどおり（盲検で 正 だった経路を壊さない）。"""
+    meta = _book(tmp_path)
+    ok, r, _i, err = _extract(meta, {"col": "区分", "cmp": "contains", "value": "事務"},
+                              "区分に事務って書いてある行だけ出して")
+    assert ok, err
+    assert r["value"] == "事務"
+
+
+def test_no_task_leaves_contains_alone(tmp_path):
+    """★ 依頼文が無い経路（DSL 直渡し）は触らない ── 接地する相手が無い。"""
+    ok, r, _i, err = _extract(_book(tmp_path), {"col": "区分", "cmp": "contains", "value": "土"}, "")
+    assert ok, err
+    assert r["value"] == "土"
