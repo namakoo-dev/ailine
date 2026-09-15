@@ -101,6 +101,51 @@ def test_the_currency_check_does_not_fire_on_the_word_for_issuer():
     assert not any("通貨" in m for m in unswept_mouths(Grid.read(ws), 9900))
 
 
+# ── ★ 2026-09-15: 請求書で作り込むなら、まず「請求書でないもの」を取り違えないこと ──────
+#   Namakoo「今は請求書しか対応していない。まず請求書で作り込んで充足させてから他の帳票も」。
+#   その線を確かめたら、**日本の実務でいちばん普通の書き方が素通りしていた**（実測・素通り 9/17）。
+#   素通りした冊は invoice_signals を満たすので請求書として読まれ、**見積額が請求額として
+#   一覧に載る**（静かな嘘・二重払いの疑いにも混ざる）。
+
+_NOT_AN_INVOICE = [
+    "見積書", "納品書", "領収書", "受領書",          # 元から検出できていた
+    "御見積書", "お見積書", "ご見積書",               # ★ 敬称つき（実務で最も普通）
+    "見積り書", "見積もり書", "御見積",                # ★ 送り仮名・書なし
+    "発注書", "注文書", "注文請書", "検収書",          # ★ 語が名簿に無かった
+    "支払明細書", "支払通知書", "入金明細",
+    "Quotation", "ESTIMATE", "quote", "Receipt",   # ★ 英語単独
+    "Delivery Note", "PURCHASE ORDER",
+    # ★★ 和名＋英字の併記 ── 実物の日本の帳票で非常に多い形。書き直しの初版でここを落とし、
+    #   俺が書いた検体 24 件では見えず**合成 87 冊の X03（`見積書 ESTIMATE`）だけが捕まえた**。
+    #   検体は自分の思い込みをそのまま持つ ── 実物に当てるまで分からないものがある。
+    "見積書 ESTIMATE", "納品書 DELIVERY NOTE", "領収書 RECEIPT", "御見積書 QUOTATION",
+]
+
+#: ★ 陰性対照 ── ここが鳴ったら請求書そのものや部分語を巻き込んでいる。
+#:   広げても偽陽性が増えない理由は**短いセルだけを見る**という構造の側にある（語の側ではない）。
+_STILL_AN_INVOICE = [
+    "請求書", "御請求書", "ご請求書", "請求明細書",
+    "見積番号", "発注番号", "注文日", "検収印", "支払期限", "納品先", "領収印",
+    "ご注文ありがとうございます", "お見積りは無料です",
+    "請求書 INVOICE",                                # ★ 併記でも請求書は請求書（陰性対照）
+    "無料のクラウド見積・納品・請求書サービス「Misoca」",
+]
+
+
+@pytest.mark.parametrize("title", _NOT_AN_INVOICE)
+def test_a_cell_naming_another_kind_of_form_is_named(title):
+    ws = _invoice({"B2": title})
+    mouths = unswept_mouths(Grid.read(ws), 9900)
+    assert any("名乗って" in m for m in mouths), (title, mouths)
+
+
+@pytest.mark.parametrize("text", _STILL_AN_INVOICE)
+def test_the_invoice_itself_and_partial_words_are_not_named(text):
+    ws = _invoice({"B48": text})
+    mouths = unswept_mouths(Grid.read(ws), 9900)
+    assert not any("名乗って" in m for m in mouths), (text, mouths)
+
+
 def test_a_long_sentence_mentioning_another_form_is_not_a_document_title():
     """★ misoca のフッタ「無料のクラウド見積・納品・請求書サービス」で鳴らない
     （語で数えると偽陽性 29 冊だった）。**短いセル**だけを帳票名と見る。"""
