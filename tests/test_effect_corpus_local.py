@@ -84,6 +84,15 @@ def compare(expect: dict, after_path: Path, before: dict, rc: int) -> list:
             diff = [k for k in set(after[sheet]) | set(before.get(sheet, {}))
                     if after[sheet].get(k) != before.get(sheet, {}).get(k)]
             breaks.append(f"『{sheet}』が変わっている（{len(diff)} セル: {sorted(diff)[:6]}）")
+    if "extra_workbooks" in expect:
+        # ★ 2026-09-16: 道具が**黙って残すブック**を宣言で縛る（関所で断った run の .out が
+        #   次の run を塞いだ事故 ── 残骸の在庫を検体が持つ）。
+        #   ★ 見るのはブックだけ ── 隔離した履歴などの持ち物は道具の内側の話で、買い手の机には出ない。
+        got = sorted(q.name for q in Path(after_path).parent.iterdir()
+                     if q.is_file() and q.suffix.lower() in (".xlsx", ".xlsm")
+                     and q.name != Path(after_path).name)
+        if got != sorted(expect["extra_workbooks"]):
+            breaks.append(f"余計に残ったブックが {got}（宣言は {sorted(expect['extra_workbooks'])}）")
     for addr, want in (expect.get("cells") or {}).items():
         sheet, cell = addr.split("!", 1)
         if sheet not in wb.sheetnames:
@@ -132,6 +141,7 @@ def test_the_scorer_calls_a_correct_book_correct(tmp_path):
 
 @pytest.mark.parametrize("expect,why", [
     ({"cells": {"S!A1": "ちがう"}}, "値の違い"),
+    ({"extra_workbooks": ["無い.xlsx"]}, "余計に残ったブックの違い"),
     ({"cells": {"S!Z9": "何か"}}, "空のセルに値を宣言"),
     ({"sheets": ["S", "無い"]}, "シートの顔ぶれ"),
     ({"exit": 3}, "終了コード"),

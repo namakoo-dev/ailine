@@ -12250,6 +12250,34 @@ def _finish_failed_apply(a: argparse.Namespace, book: Path, result: dict) -> int
     return EXIT_APPLY_FAILED
 
 
+def _finish_gated(a: argparse.Namespace, book: Path, out_book: Path | None,
+                  result: dict, gate_exit: int) -> int:
+    """**上書きの関所で断って**終わる時の、唯一の出口。
+
+    ★★ 2026-09-16（盲検の買い手役が「事務職に配れる品質ではない」と言った所・再現済み）:
+      関所で断った run が `.out.xlsx` を**黙って**残し、次の run が出力先の関所で
+      「この道具が書いた記録がありません（人が置いたファイルか…）」と塞がれていた。
+      **1 分前にこの道具自身が作った物**なのに。`run` には上書き許可のフラグが無いので、
+      人がエクスプローラでファイルを消すまで、その本には二度と実行できない ── 行き止まり。
+
+    ★★ これは 2026-08-26 に `_finish_failed_apply` で直したのと**同じ形**（上の docstring）。
+      あの時直したのは「反映に**失敗**した」経路だけで、「関所で**断った**」兄弟が残っていた。
+      ★ 失敗の出口は 10 箇所以上が `_untouched_original_line` で残したことを言っているのに、
+        関所だけが黙っていた ── 片方だけ直すと、必ずこうなる。
+
+    ★ だから失敗の出口と同じ 2 つを揃える:
+        ① 残したことを**言う**（人が次に何を見ればいいか分かる）
+        ② `result["out"]` を置いて履歴へ ── `_finish_run` が指紋を残し、
+           次の run が「俺が置いたまま」と分かって作り直せる（三項の実体の項）。
+    ★ 消さない ── 作業結果は人の物で、道具が黙って捨ててよいものではない。
+    """
+    if out_book is not None and Path(out_book).exists():
+        print(_untouched_original_line(book, out_book))
+        result["out"] = str(out_book)
+    _finish_run(a, book, result, "gate_refused")
+    return gate_exit
+
+
 def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Path,
                    result: dict, machine_verified: bool, scope: str = "",
                    scope_note: str = "", warning_count: int = 0,
@@ -13857,7 +13885,15 @@ def _confirm_overwrite_or_gate(a: argparse.Namespace, warn_overwrite: str | None
     prompt = prompt or ("上書きしますか？" if warn_overwrite else "この対象で実行しますか？")
     try:
         ans = input(f"{step_prefix}{prompt} [y/N]: ").strip().lower()
-    except EOFError:
+    # ★★ 2026-09-16: 「聞けない」の飛び方は**環境で違う**（実測）:
+    #     stdin が /dev/null   → EOFError
+    #     stdin が閉じている   → ValueError（I/O operation on closed file）
+    #     pytest の捕捉下      → OSError（reading from stdin while output is captured）
+    #   ★ EOFError だけを捕まえていたので、**GUI や捕捉下では逃げ道を出さずに落ちていた**。
+    #     聞けない理由が何であれ、人に示す道は同じ ── だから 3 つとも同じ出口へ。
+    #   ★ 起きうる全部を数えてから広げた（`except Exception` にはしない ── 関所の中で
+    #     起きた別の異常まで「聞けなかった」に化けさせない）。
+    except (EOFError, OSError, ValueError):
         _del = prompt == "削除しますか？"
         options = [("--overwrite", ("削除を承知して続行する（バックアップから ailine undo で戻せる）"
                                      if _del else
@@ -14128,7 +14164,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
         print(warn_precondition)
         gate_exit = _confirm_overwrite_or_gate(a, warn_precondition)
         if gate_exit is not None:
-            return gate_exit
+            # ★ 2026-09-16: 関所で断っても、残した物を言い・履歴に指紋を残す（行き止まりの根治）
+            return _finish_gated(a, book, out_book, result, gate_exit)
 
     # ★ C9: postcondition が warn（検証対象不足）なら ✓ は名乗らない。scope は「解釈: ...」行から
     #   「解釈: 」を除いた宣言テキスト（＝計画が宣言した対象）。
@@ -14310,7 +14347,8 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
         print(warn_precondition)
         gate_exit = _confirm_overwrite_or_gate(a, warn_precondition)
         if gate_exit is not None:
-            return gate_exit
+            # ★ 2026-09-16: 関所で断っても、残した物を言い・履歴に指紋を残す（行き止まりの根治）
+            return _finish_gated(a, book, out_book, result, gate_exit)
 
     warning_count = (count_suspicious_advisories(advisories) + (1 if warn_precondition else 0)
                       + len(resolved.get("_warnings", [])))
@@ -14479,7 +14517,8 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
         print(warn_precondition)
         gate_exit = _confirm_overwrite_or_gate(a, warn_precondition)
         if gate_exit is not None:
-            return gate_exit
+            # ★ 2026-09-16: 関所で断っても、残した物を言い・履歴に指紋を残す（行き止まりの根治）
+            return _finish_gated(a, book, out_book, result, gate_exit)
 
     warning_count = (count_suspicious_advisories(advisories) + (1 if warn_precondition else 0)
                       + len(resolved.get("_warnings", [])))
@@ -15523,7 +15562,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                 book_name=book.name, subject_sink=subject_sink, suspicion_sink=suspicion_sink,
                 derived_sheets=derived_sheets, before_chart_paths=before_chart_paths)
         if gate_exit is not None:
-            return gate_exit
+            # ★ 2026-09-16: 計画の段が関所で断った回も同じ器官へ（4 経路目・片配線を作らない）
+            return _finish_gated(a, book, out_book, result, gate_exit)
         if item is not None:
             items.append(item)
         if plan_json_entry is not None:
