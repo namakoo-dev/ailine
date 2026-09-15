@@ -88,6 +88,26 @@ def _mentioned_with_marker(task: str, name: str) -> bool:
     return re.search(re.escape(name) + _SHEET_MARKER_SUFFIX, task) is not None
 
 
+#: ★★ 2026-09-16（盲検の買い手役⑤）: 名前の**直後がサ変動詞**なら、それはシートの名指しでなく
+#:   依頼文の動詞。ブックに『集計』シートが在ると「担当者ごとの金額を集計して」の『集計』が
+#:   シートの言及として採られ、**一度『集計』を作ったら二度と「集計して」と言えなく**なっていた
+#:   （買い手の言葉:「事務の言葉づかいでは避けようがない」── 月末に 2 種類の集計は必ず作る）。
+#:   ★ 危険は `resolve_target_sheet` のコメントに**既に書いてあった**が、対処は「言及が 2 つの時」
+#:     だけで、1 つの時は動詞がそのまま勝っていた（在っても鳴らない番人の形）。
+#:   ★ 狭く取る: マーカー付き（「集計シートを」）は今までどおり無条件で勝つ。
+#:     「集計を並べ替えて」のように**助詞が続く**形は動詞ではないので触らない。
+#:   ★ op は使えない ── この関数は翻訳の**前**に呼ばれ、操作がまだ決まっていない。だから語の形で決める。
+_SAHEN_SUFFIX = re.compile(r"^(?:し(?:ます|まし|ろ|よう|たい|て|た|、|,)|する|すれ|せよ)")
+
+
+def _used_as_a_verb(task: str, name: str) -> bool:
+    """依頼文の中で name が**サ変動詞**として使われているか（「集計して」「集計する」）。"""
+    for m in re.finditer(re.escape(name), task or ""):
+        if _SAHEN_SUFFIX.match((task or "")[m.end():]):
+            return True
+    return False
+
+
 def _is_also_a_column_name(name: str, headers: dict | None) -> bool:
     """name が（どのシートであれ）実在の列見出しと完全一致するか。"""
     for cols in (headers or {}).values():
@@ -241,6 +261,10 @@ def resolve_target_sheet(task: str, sheets: list, cli_sheet: str | None = None,
     task = task or ""
     named = sheet_names_mentioned_in(task, sheets)   # ★ 単位E: 照合の素材は1箇所（上記）
     named = [s for s in named if not any(s != t and s in t for t in named)]   # 部分文字列は長い方だけ残す
+    # ★★ 2026-09-16: **動詞はシートの名指しではない**（`_used_as_a_verb` の上の説明を見ること）。
+    #   マーカー付きは残す ── 「集計シートを集計して」は、はっきり書いた方が勝つ。
+    named = [s for s in named
+             if _mentioned_with_marker(task, s) or not _used_as_a_verb(task, s)]
     # ★★ 明示マーカーは裸の言及に勝つ（2026-08-24 の実測）: ブックに『集計』シートが在ると、
     #   依頼文の**動詞**「集計して」がシート名と一致して言及が 2 つになり、はっきり
     #   「売上60以上シートを」と書いた指定まで曖昧扱いで既定へ落ちていた。
