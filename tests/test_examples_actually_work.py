@@ -128,3 +128,36 @@ def test_the_examples_shown_for_a_vague_request_can_be_typed_back(tmp_path):
         again = _run(example, src)
         assert again.returncode == 0, (
             f"示した例が通らない: 「{example}」\n" + again.stdout[-400:])
+
+
+# ── ★ 2026-09-16: 断りの画面に**開発者の語**を出さない（盲検の買い手役⑧）────────────
+#
+# ★★ 事故（買い手の引用）: 画面に `依頼を『抽出』と読みました（対象列=売上、条件=lte、値=1000）`。
+#   「意味が分からなかった言葉」として `lt` / `lte` が挙げられた。
+# ★ ラベル（『条件』）は日本語に直してあったのに、**値が生**だった。
+#   ★ 値を人の言葉に直す関数は `_CONFIRM_FIELDS` の第 3 要素に**既に在る**（解釈行が使っている）。
+#     在るのに、この断りの画面だけが呼んでいなかった ── 器官が在って配線が無い形。
+
+_CODES_THAT_MUST_NOT_SHOW = ("=lt", "=lte", "=gt", "=gte", "=eq", "=contains",
+                             "=asc", "=desc", "=nin", "=in")
+
+
+@pytest.mark.parametrize("op,args,want", [
+    ("EXTRACT", {"col": "金額", "cmp": "lte", "value": 1000}, "条件=以下"),
+    ("EXTRACT", {"col": "金額", "cmp": "gt", "value": 1000}, "条件=超"),
+    ("EXTRACT", {"col": "備考", "cmp": "contains", "value": "至急"}, "条件=を含む"),
+    ("SORT", {"col": "金額", "order": "desc"}, "順=降順"),
+    ("SORT", {"col": "金額", "order": "asc"}, "順=昇順"),
+])
+def test_the_refusal_screen_speaks_japanese_not_codes(op, args, want):
+    joined = "".join(ailine.render_refusal(op, args, "テストの理由"))
+    assert want in joined, joined
+    for code in _CODES_THAT_MUST_NOT_SHOW:
+        assert code not in joined, f"開発者の語が画面に出ている（{code}）:\n{joined}"
+
+
+def test_a_value_that_cannot_be_formatted_still_shows_the_refusal():
+    """★ 整形に失敗しても断りは出る（画面を止めない）── 整形は飾りで、断りは本体。"""
+    lines = ailine.render_refusal("SORT", {"col": "金額", "order": object()}, "テストの理由")
+    joined = "".join(lines)
+    assert "止めた理由" in joined and "テストの理由" in joined, joined

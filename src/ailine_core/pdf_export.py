@@ -276,3 +276,39 @@ def vanishing_shapes_warning(names, with_pillow: bool | None = None) -> list:
     lines.append("  → 印が要る書類なら、LibreOffice や Excel で直接 PDF 保存して"
                  "ください。")
     return lines
+
+
+def next_step_for_missing(*, fit_to_width: bool, out_exists: bool,
+                          orientation: str | None = None) -> list:
+    """PDF にシートの値が見つからなかった時の「次の一手」。★ 案内は**そのまま打てる**こと。
+
+    ★★ 2026-09-16（盲検の買い手役⑥）: 言われたとおりに打つと**必ず止まっていた**。
+      ```
+      × …14 個が PDF の中に見つかりません → `--fit-to-width` を付けて出し直してください
+      $ ailine export-pdf 9月売上.xlsx --fit-to-width
+      × 出力先 …9月売上.pdf が既にあります。別名にするなら --out、上書きしてよければ --overwrite を
+      ```
+      PDF は**検算より先に**書かれるので、失敗した 1 回目が出力先を塞ぐ。
+      ★ `--overwrite` も要ることは 1 回目の案内に**書かれていなかった** ── 案内が実行できない。
+    ★★ もう 1 つ: `--fit-to-width` を付けた 2 回目も × だったとき、**次に何をすればいいかが
+      1 行も出なかった**。買い手は「PDF はフォルダに出来ているが、渡していいのか判断できない」
+      と書いた。★ 打つ手が無いなら「無い」と言い、**いま在る物をどう扱えばよいか**を言う。
+    ★ ここは純関数（印字しない）── 画面の文は測れる形で持つ。
+    """
+    lines = []
+    flags = [] if fit_to_width else ["--fit-to-width"]
+    if out_exists:
+        flags.append("--overwrite")
+    if flags:
+        why = ("列幅で文字が切れている可能性があります" if not fit_to_width
+               else "同じ出力先に上書きします")
+        lines.append(f"  → {why}。`{' '.join(flags)}` を付けて出し直してください")
+    if fit_to_width:
+        if (orientation or "").lower() != "landscape":
+            lines.append("  → それでも収まらないなら `--orientation landscape` を試してください")
+        else:
+            # ★ 打つ手が尽きた ── 黙らずに、そう言う。
+            lines.append("  → 横幅・向きとも試したので、この道具からの手はここまでです")
+        lines.append("  → PDF 自体は出来ています。上の『見当たりません』の値を PDF で目で確かめ、"
+                     "問題なければそのまま使えます（機械では確かめられていません）")
+    return lines

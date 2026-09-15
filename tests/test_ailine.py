@@ -7414,7 +7414,7 @@ def test_cmd_refuse_vocab_miss_instantly_no_generate_no_apply_book_untouched(tmp
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 3
-    assert "照合できませんでした" in captured.out
+    assert "決められませんでした" in captured.out  # ★ 2026-09-16: 文言を「決められませんでした」に変えた（『無い』と断定しない・設計書 §8.2）
     assert book.read_bytes() == original_bytes   # 原本は無傷
 
 def test_cmd_refuse_vocab_miss_allow_freeform_flag_still_refuses_with_sunset_notice(tmp_path, monkeypatch, capsys):
@@ -7472,7 +7472,7 @@ def test_cmd_refuse_vocab_miss_out_of_vocab_names_the_topic_in_the_reason(tmp_pa
     captured = capsys.readouterr()
     assert rc == 3
     assert "条件付き書式" in captured.out
-    assert "照合できませんでした" in captured.out
+    assert "決められませんでした" in captured.out  # ★ 2026-09-16: 文言を「決められませんでした」に変えた（『無い』と断定しない・設計書 §8.2）
 
 
 # --- cmd_run_plan 統合（複合計画の段の自由生成の関所） -----------------------

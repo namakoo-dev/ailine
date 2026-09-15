@@ -47,7 +47,7 @@ def test_vocab_miss_refuses_instantly_records_and_guides(tmp_path, monkeypatch, 
     out = capsys.readouterr().out
     assert rc != 0
     assert hashlib.sha256(book.read_bytes()).hexdigest() == sha
-    assert "照合できませんでした" in out or "一覧にありません" in out, f"断りの理由が無い: {out}"
+    assert "決められませんでした" in out or "一覧にありません" in out, f"断りの理由が無い: {out}"  # ★ 2026-09-16: 文言を「決められませんでした」に変えた（『無い』と断定しない・設計書 §8.2）
     assert "要望" in out and "記録" in out, f"vocab_miss 記録の開示が無い: {out}"
     assert "ops" in out, f"次の手（ops 導線）が無い: {out}"
 

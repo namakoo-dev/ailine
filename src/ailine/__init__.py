@@ -8636,9 +8636,24 @@ def render_refusal(op: str, resolved_or_args, reason: str) -> list:
         args = resolved_or_args if isinstance(resolved_or_args, dict) else {}
         # ★ 内部の引数名（col=…）ではなく、解釈行と**同じ日本語の欄名**で見せる
         #   ── 画面の他の場所と言葉が揃っていないと、そこでまた迷わせる。
+        # ★★ 2026-09-16（盲検の買い手役⑧）: ラベルは日本語に直していたのに、**値が生**だった
+        #   ── 買い手の画面に「条件=lte」と出た（「lt も分かりません」と書かれた）。
+        #   ★ 値を人の言葉に直す関数は `_CONFIRM_FIELDS` の第 3 要素に**既に在る**（解釈行が使う）。
+        #     在るのに、この断りの画面だけが呼んでいなかった ── 器官が在って配線が無い形。
         _labels = {k: lab for lab, k, _fn in _CONFIRM_FIELDS.get(op, ())}
+        _fmts = {k: fn for _lab, k, fn in _CONFIRM_FIELDS.get(op, ()) if fn}
+
+        def _show(k, v):
+            fn = _fmts.get(k)
+            if fn is None:
+                return v
+            try:
+                return fn(v)
+            except Exception:
+                return v      # ★ 整形に失敗しても断りは出す（画面を止めない）
+
         shown = "、".join(
-            f"{_labels.get(k, k)}={v}" for k, v in args.items()
+            f"{_labels.get(k, k)}={_show(k, v)}" for k, v in args.items()
             if not str(k).startswith("_") and v not in (None, "", [], {})
             and not isinstance(v, (dict, list, tuple)))
         head = f"  依頼を『{label}』と読みました"
@@ -17247,9 +17262,12 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
                       f"PDF の中に見つかりません（読み戻しで確認）")
         for v in check.missing[:10]:
             lines.append(f"  ⚠ 『{v}』が PDF に見当たりません")
-        if not a.fit_to_width:
-            lines.append("  → 列幅で文字が切れている可能性があります。"
-                          "`--fit-to-width` を付けて出し直してください")
+        # ★★ 2026-09-16（買い手役⑥）: 案内は**そのまま打てる**こと。PDF は検算より先に
+        #   書かれるので、失敗した 1 回目が出力先を塞ぎ、案内どおり打つと必ず止まっていた。
+        #   打つ手が尽きた回に黙らないことも含め、文は pdf_export の純関数が組む（測れる形）。
+        lines.extend(pdf_export.next_step_for_missing(
+            fit_to_width=bool(a.fit_to_width), out_exists=out_path.exists(),
+            orientation=getattr(a, "orientation", None)))
         if len(check.missing) > 10:
             lines.append(f"  … 他 {len(check.missing) - 10} 個")
         lines.append("  （数値の書式や列幅で表示が変わっている可能性があります）")

@@ -66,7 +66,7 @@ def test_missing_required_slot_is_recorded_as_slot_missing(tmp_path, monkeypatch
     out = capsys.readouterr().out
     assert rc == 3
     assert entries[0]["failure_kind"] == "語彙外/slot_missing", entries[0]
-    assert "照合できませんでした" in out
+    assert "決められませんでした" in out  # ★ 2026-09-16: 文言を「決められませんでした」に変えた（『無い』と断定しない・設計書 §8.2）
 
 
 def test_translate_task_transport_failure_is_recorded_as_translate_error(tmp_path, monkeypatch, capsys):

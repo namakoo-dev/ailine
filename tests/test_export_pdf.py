@@ -103,3 +103,53 @@ def test_verify_values_in_pdf_is_not_tautological():
     assert callable(monkey)
     r = pdf_export.PdfCheck()
     assert r.missing == [] and r.checked == 0
+
+# ── ★ 2026-09-16: 案内は**そのまま打てる**こと（盲検の買い手役⑥）────────────────────
+#
+# ★★ 事故（買い手の引用）: 言われたとおりに打つと必ず止まっていた。
+#     × …14 個が PDF の中に見つかりません → `--fit-to-width` を付けて出し直してください
+#     $ ailine export-pdf 9月売上.xlsx --fit-to-width
+#     × 出力先 …9月売上.pdf が既にあります。別名にするなら --out、上書きしてよければ --overwrite を
+#   ★ PDF は**検算より先に**書かれるので、失敗した 1 回目が出力先を塞ぐ。
+#     `--overwrite` も要ることは 1 回目の案内に書かれていなかった。
+# ★★ もう 1 つ: `--fit-to-width` を付けた 2 回目も × だったとき、**次の一手が 1 行も出なかった**。
+#   買い手「PDF はフォルダに出来ているが、渡していいのか判断できない」。
+
+from ailine_core.pdf_export import next_step_for_missing   # noqa: E402
+
+
+def test_the_advice_can_be_typed_as_printed_when_the_output_is_taken():
+    """★ 事故そのもの ── 出力先が塞がっているなら、案内に --overwrite が入ること。"""
+    lines = next_step_for_missing(fit_to_width=False, out_exists=True)
+    joined = "".join(lines)
+    assert "--fit-to-width" in joined and "--overwrite" in joined, lines
+
+
+def test_the_advice_does_not_add_overwrite_when_the_output_is_free():
+    """★ 陰性対照 ── 塞がっていない時に余計なフラグを勧めない（言われたとおりが最短であること）。"""
+    lines = next_step_for_missing(fit_to_width=False, out_exists=False)
+    joined = "".join(lines)
+    assert "--fit-to-width" in joined and "--overwrite" not in joined, lines
+
+
+def test_it_does_not_repeat_a_flag_that_is_already_on():
+    """★ `--fit-to-width` を既に付けている回に、同じ物をもう一度勧めない。"""
+    lines = next_step_for_missing(fit_to_width=True, out_exists=False)
+    assert not any("--fit-to-width" in l for l in lines), lines
+
+
+def test_it_never_goes_silent_when_the_flags_run_out():
+    """★★ 打つ手が尽きた回に**黙らない** ── 「PDF は出来ている・目で確かめてよい」まで言う。
+       ★ 沈黙は「まだ手がある」と読まれる。無いなら無いと言う。"""
+    lines = next_step_for_missing(fit_to_width=True, out_exists=False, orientation="landscape")
+    assert lines, lines
+    joined = "".join(lines)
+    assert "ここまで" in joined, joined
+    assert "PDF 自体は出来ています" in joined, joined
+
+
+def test_it_offers_landscape_before_giving_up():
+    """★ 手が残っているうちは、その手を出す（諦めを先に言わない）。"""
+    lines = next_step_for_missing(fit_to_width=True, out_exists=False)
+    joined = "".join(lines)
+    assert "landscape" in joined and "ここまで" not in joined, joined
