@@ -4459,7 +4459,8 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
     #     表に実在する値のうち依頼文に現れるものを機械が拾い、「どれか」で抽出する。
     #   ★ 比較語が在る時は触らない ── 「原価が500以上」の 500 を名前と読まない。
     _hr_x = int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1)
-    if not compare_words.read(task).hit:
+    _cmp_read = compare_words.read(task)   # ★ 読みは 1 回（下の決定点も同じ物を見る）
+    if not _cmp_read.hit:
         _named_vals = task_names_real_values(task, book_meta, first_sheet,
                                               resolved["col"], _hr_x)
         if _named_vals:
@@ -4501,7 +4502,6 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
     # ★★ 2026-09-15（辞書を正確に引く）: 否定（「超えない」）と 2 つの比較（「3000以上5000未満」）
     #   は**断る** ── 黙って反転・黙って片方を捨てる、が誤配の形だった。数値の比較で辞書に
     #   当たらない回は LLM の不等号を採らない（下の数値の枝・compare_words.unconfirmed）。
-    _cmp_read = compare_words.read(task)
     if _cmp_read.ambiguous:
         return False, resolved, inferred, _cmp_read.ambiguous
     mechanical_cmp = _cmp_read.cmp
@@ -6680,7 +6680,7 @@ _EXTRACT_SHEET_NAME_FORBIDDEN_RE = re.compile(r'[:\\/?*\[\]]')
 def extract_cmp_from_task(task: str) -> str | None:
     """依頼文から比較語を機械抽出する。**1 つに決まった時だけ**返す（一致なし・否定・
        2 つの比較は None ── 機械は断定しない）。
-       ★ 「比較の語が在るか」は None では読めない ── `compare_words.read(task).hit` で見る。"""
+       ★ 「比較の語が在るか」は None では読めない ── Reading の `.hit` で見る。"""
     return compare_words.read(task).cmp
 
 

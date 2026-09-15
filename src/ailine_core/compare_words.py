@@ -31,10 +31,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-#: 数値の比較（境目の数が要る比較）── threshold.NUMERIC_CMPS と同じ集合。
-NUMERIC_CMPS = frozenset({"gt", "lt", "gte", "lte"})
+from ailine_core.threshold import NUMERIC_CMPS   # ★ 数値の比較の集合は 1 箇所（threshold）から借りる
 
-#: 人に見せる比較の名（★ ailine 本体の _EXTRACT_CMP_LABELS と同じ語 ── 断り文が本体の表示と揃う）。
+#: 人に見せる比較の名（★ ailine 本体の _EXTRACT_CMP_LABELS の**部分集合**で、共通の鍵は同じ語 ──
+#: 断り文が本体の表示と揃う。番人 tests/test_compare_words.py が機械で縛る。in/nin は read() が返さない）。
 LABELS = {"gte": "以上", "lte": "以下", "gt": "超", "lt": "未満",
           "eq": "等しい", "contains": "を含む"}
 
@@ -44,14 +44,25 @@ NEGATED_OF = {"gt": "lte", "lt": "gte", "gte": "lt", "lte": "gt"}
 # ── 断片ガード（3 種だけ。語ごとの場当たりを畳んだ）──────────────────────────────
 NONE = "none"                     #: ガード無し（文末定型と衝突しない長い語）
 NUM_BEFORE = "num_before"         #: 直前 10 文字（同じ文の中）に数字が在るときだけ比較語
-COUNTER_BEFORE = "counter_before" #: 直前 1 文字が数か数え語のときだけ（「締め切って」「区切って」の断片）
+COUNTER_BEFORE = "counter_before" #: NUM_BEFORE **に加えて**直前 1 文字が数か数え語（「締め切って」「区切って」の断片）
 GUARDS = (NONE, NUM_BEFORE, COUNTER_BEFORE)
+#: ★ 2026-09-15 レビュー（盲検）が捕まえた退行: 初版の COUNTER_BEFORE は「直前 1 文字」だけで、旧版に
+#:   在った「近くに数字」を落としていた ── 「会議の時間切って」の『間』が数え語に当たり lt に化けた。
+#:   畳む時は畳む前後の判定集合が同じかを確かめる（陰性対照が 1 本あれば捕まった）。
 
 _NUM_WINDOW = 10
 _NUM_RE = re.compile(r"[0-9０-９]")
 _COUNTER_RE = re.compile(r"[0-9０-９個件人円時間日点本枚台%万千]$")
-#: 一致の**直後**に付く否定の形（「超え|ない」「下回|らない」「切っ|ていない」「以上|ではない」）。
-_NEGATION_AFTER = re.compile(r"^(?:てい|て|ら|では|じゃ|で|は)?(?:ない|ません|なかった|なけれ|ぬ)")
+#: 一致の**直後**に付く否定の形。語（text）は活用の共通部分なので、語尾までの間に活用の残り
+#: （い／て／てい／ら／り／っ／では／じゃ／になって(い)／あり）が挟まる ── それを許す。
+#: ★ 2026-09-15 レビュー（盲検）: 初版は「超え|ない」「超え|てない」しか読めず「超え|て**い**ない」
+#:   「下回|**り**ません」「以上|**あり**ません」が素通りして**逆の比較で通った**（LLM が正しく lte を
+#:   返した回も機械が gt に上書き）。この機構は反転せず聞き返すだけなので、**過検出の害は小さく、
+#:   過小検出だけが逆の実行を生む** ── 広めに取る。「ず」は「5個以上ずつ」を除く。
+_NEGATION_AFTER = re.compile(
+    r"^(?:になって?い?|じゃ|あり|[いてらりっでは]{0,3})(?:ない|ません|なかっ|なけれ|ぬ|ず(?![つっ]))")
+#: 文の境界（数値優先を同じ節に限る・NUM_BEFORE の窓もここで切る）。★ 「！」「改行」は次回（保留）。
+_CLAUSE_SEP = "。"
 
 
 @dataclass(frozen=True)
@@ -145,13 +156,12 @@ class Reading:
 
 
 def _passes_guard(w: Word, text: str, idx: int) -> bool:
-    if w.guard == NUM_BEFORE:
+    if w.guard in (NUM_BEFORE, COUNTER_BEFORE):
         window = text[max(0, idx - _NUM_WINDOW):idx]
-        if "。" in window or not _NUM_RE.search(window):
+        if _CLAUSE_SEP in window or not _NUM_RE.search(window):
             return False
-    elif w.guard == COUNTER_BEFORE:
-        if not _COUNTER_RE.search(text[:idx]):
-            return False
+    if w.guard == COUNTER_BEFORE and not _COUNTER_RE.search(text[:idx]):
+        return False
     if w.after is not None and not re.match(w.after, text[idx + len(w.text):]):
         return False
     return True
@@ -206,16 +216,24 @@ def read(task: str | None) -> Reading:
     cmps = list(dict.fromkeys(w.cmp for _s, _e, w, _n in found))
     numeric = [c for c in cmps if c in NUMERIC_CMPS]
     if len(numeric) > 1:
-        # ★ 範囲（『以上』と『未満』）── 測った誤配の形。黙って片方を捨てない。
+        # ★ 数値の比較が 2 つ ── 範囲（『以上』と『未満』）か、2 つの列の条件か。どちらもこの道具には
+        #   無く、黙って片方を捨てると誤配（測った形）。★ どちらかは列名の解決が要るのでここでは
+        #   決めない ── 断り文は**両方**を言う（レビューが「範囲と言い切る」誤誘導を捕まえた）。
         shown = "』『".join(dict.fromkeys(w.text for _s, _e, w, _n in found if w.cmp in NUMERIC_CMPS))
         return Reading(None, None, True, ambiguous=(
-            f"比較の語が 2 つあります（『{shown}』）── 範囲の抽出はこの道具にありません。"
-            "片方で頼んでください（例: 「金額が5000以上の行を抜き出して」）"))
+            f"比較の語が 2 つあります（『{shown}』）── 1 つの条件だけ書いてください"
+            "（範囲の抽出も、2 つの列の条件も、この道具にはありません。"
+            "例: 「金額が5000以上の行を抜き出して」）"))
     # ★ 数値の比較と 等しい／含む が並ぶ回（「金額が1000以上で部門が営業と同じ行」）は **2 条件の
     #   依頼** ── 比較は数値の側。2 組目は呼び出し側が実表の値で読む（2026-09-06 の AND の道）。
+    #   ★ ただし**同じ節の中**だけ（レビュー: 「…を含む行を抜き出して。ちなみに売上は5000以上です」で
+    #     後ろの雑談が主文の contains を奪った）。節をまたぐ語は先に出た語に譲る。
     # ★ 数値でない比較が 2 つ（「を含む」と「と同じ」）は実文が無く測っていない ── 旧来どおり
     #   先に出た語（保留・発火条件: 実文が 1 件出た日に、範囲と同じ線で断るかを測る）。
-    chosen = next((w for _s, _e, w, _n in found if w.cmp in NUMERIC_CMPS), found[0][2])
+    first_s, _e, first_w, _n = found[0]
+    clause = (task or "")[:first_s].count(_CLAUSE_SEP)
+    chosen = next((w for s, _e, w, _n in found
+                   if w.cmp in NUMERIC_CMPS and (task or "")[:s].count(_CLAUSE_SEP) == clause), first_w)
     return Reading(chosen.cmp, chosen.text, True)
 
 
