@@ -63,6 +63,7 @@ value OUT_OF_SCOPE_TERMS
 value OVERWRITE_OWN
 value PIVOT_CAVEAT
 value PLAN_CHAIN_CONSUMER_OPS
+value PLAN_CHAIN_UNNAMED_PRODUCERS
 value PLAN_CHAIN_WARNING_OPS
 value POSTCONDITIONS
 class Path(*args, **kwargs)
@@ -696,6 +697,7 @@ def own_prior_output_notice_lines(before: 'dict', after: 'dict', own_output_head
 def parse_date_literal(raw) -> 'dt.date | None'
 def parse_structdump_raw(text: 'str') -> 'dict'
 def placements_in_plan(plan) -> 'dict'
+def plan_chain_sheet_of(op: 'str', resolved: 'dict') -> 'str | None'
 def plan_is_all_giving_up(plan) -> 'bool'
 def plan_only_inserts_a_bare_row(plan) -> 'bool'
 def plan_writes_beyond_one_cell(plan) -> 'bool'

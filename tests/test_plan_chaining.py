@@ -223,3 +223,70 @@ def test_explicitly_named_sheet_beats_the_chain(tmp_path, monkeypatch, capsys):
                           "--copy"], capsys)
     assert len(seen) == 2, out
     assert "売上60以上" not in seen[1], "人が『売上シート』と指定したのに連鎖で上書きした"
+
+
+# ── ★ 2026-09-15: 連鎖の作り手は**宣言から導く**（買い手役の初見で出た事故の根治）──────────
+#
+# ★★ 事故（盲検の買い手役が初手で踏み、こちらで再現した）:
+#   「取引先ごとに金額を合計して、多い順に並べて」で
+#     1段目 集計 → 新規シート『集計』（正しい）
+#     2段目 並べ替え → **1 枚目の明細** ── 頼んでいない並べ替えが掛かり日付順が消えた
+#     集計シートは並んでいない。それで **✓ 機械検証済み・exit 0**。
+#   ★ 原因は作り手の名簿が**手書きで 2 つ**（EXTRACT/DEDUP）だったこと。`OP_WRITE_TARGET` は
+#     既に 7 op が WRITE_NEW_SHEET を宣言していたのに、連鎖だけ別の名簿を手で持っていた。
+#   ★ 直しは「AGGREGATE を足す」ではなく **宣言から導く**（次に増える op でも同じ穴が開かない）。
+
+def test_every_op_that_declares_a_new_sheet_is_classified():
+    """★ 宣言 vs 分類の番人（ROUTE_KIND と同じ作法）: 「新しいシートに書く」と宣言した op は
+       **連鎖の作り手になる**か、**名前が 1 つに決まらない理由を台帳に書く**かのどちらか。
+       新しい op を足したら、分類するまで赤くなる。"""
+    declared = {op for op, w in ailine.OP_WRITE_TARGET.items()
+                if ailine.WRITE_NEW_SHEET in w.writes}
+    assert declared, "WRITE_NEW_SHEET を宣言する op が 0 ── 宣言の読み方が変わった"
+    unclassified = []
+    for op in sorted(declared):
+        named = (ailine.plan_chain_sheet_of(op, {"_new_sheet": "X"})
+                 or ailine.plan_chain_sheet_of(op, {}))
+        if not named and op not in ailine.PLAN_CHAIN_UNNAMED_PRODUCERS:
+            unclassified.append(op)
+    assert not unclassified, (
+        f"新しいシートに書くと宣言しているのに、連鎖の作り手にも台帳にも居ない op: {unclassified}"
+        "（作り手にするか、名前が 1 つに決まらない理由を PLAN_CHAIN_UNNAMED_PRODUCERS に書くこと）")
+    for op, why in ailine.PLAN_CHAIN_UNNAMED_PRODUCERS.items():
+        assert op in declared, f"台帳に在るのに宣言していない op: {op}"
+        assert why.strip(), f"理由の無い台帳の行: {op}"
+
+
+@pytest.mark.parametrize("op,resolved,want", [
+    ("AGGREGATE", {}, "集計"),                       # ★ 静的な宣言名（これが抜けていた）
+    ("PIVOT", {}, "ピボット"),
+    ("EXTRACT", {"_new_sheet": "金額40000以上"}, "金額40000以上"),
+    ("EXTRACT_COLUMNS", {"_new_sheet": "品名・金額だけ"}, "品名・金額だけ"),
+    ("DEDUP", {"_new_sheet": "重複なし"}, "重複なし"),
+    ("REPORT_PER_ROW", {"_new_sheet": "X"}, None),   # ★ N 枚作る ── 台帳で明示的に外す
+    ("FORMAT_MAP", {"_new_sheet": "X"}, None),
+    ("SORT", {}, None),                               # 新しいシートを作らない op
+    ("BOLD", {}, None),
+])
+def test_the_producer_and_its_sheet_name_come_from_the_declaration(op, resolved, want):
+    assert ailine.plan_chain_sheet_of(op, resolved) == want, (op, resolved)
+
+
+def test_aggregate_then_sort_lands_on_the_aggregate_not_the_detail(tmp_path, monkeypatch, capsys):
+    """★★ 事故そのものの検体。集計の**後**の並べ替えが、明細でなく『集計』に掛かること。
+       ★ 見分けは「解釈行が 集計 を指す」ことと「明細が 1 セルも変わらない」ことの両方
+       （片方だけだと、対象を変えずに明細を並べ替えて表示だけ直す実装でも通ってしまう）。"""
+    book = _sales(tmp_path)
+    before = [tuple(r) for r in openpyxl.load_workbook(book)["売上"].iter_rows(values_only=True)]
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "AGGREGATE", "args": {"group_col": "現場", "value_col": "売上"}},
+                                  {"op": "SORT", "args": {"col": "合計 - 売上", "order": "desc"}}]})
+    monkeypatch.setattr(ailine, "basrun_apply", _fake_apply_extract_then_agg)
+    # ★ --copy: 原本を触らない道（既存の連鎖の検体と同じ作法）。y/N の関所で止まらない。
+    rc, out = _run_main(["run", str(book), "現場ごとに売上を合計して、多い順に並べて", "--copy"], capsys)
+    assert "『集計』" in out, out
+    after = [tuple(r) for r in openpyxl.load_workbook(book)["売上"].iter_rows(values_only=True)]
+    assert after == before, f"頼んでいない明細が変わった\n前: {before}\n後: {after}"
+    assert rc in (0, 1), out

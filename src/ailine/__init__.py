@@ -6648,7 +6648,45 @@ _CONFIRM_FIELDS = {
 #   どちらの意図かは機械に決まらない。決まらないものを黙って決めたのが事故そのもの。
 #   だから名指しして人に返す（★ 付き助言 → 決裁③ で ✓→△ に降格）。
 #   派生シートを作る op（＝出力が「絞り込んだ同じ表」であるもの）だけを対象にする。
+#
+# ★★ 2026-09-15（買い手役の初見・盲検で出て、こちらで再現した）:
+#   「取引先ごとに金額を合計して、多い順に並べて」で
+#     1段目 集計 → 新規シート『集計』（正しい）
+#     2段目 並べ替え → **シート『9月売上』(1枚目)** ── 頼んでいない明細が金額降順になり日付順が消えた
+#     集計シートは並んでいない。それで **✓ 機械検証済み・exit 0**。
+#   ★ 原因はこの名簿が**手書きで 2 つ**だったこと。`OP_WRITE_TARGET` は既に **7 op** が
+#     `WRITE_NEW_SHEET` を宣言している（AGGREGATE / EXTRACT_COLUMNS / PIVOT / EXTRACT /
+#     DEDUP / REPORT_PER_ROW / FORMAT_MAP）のに、連鎖の作り手だけ別に手で並べていた
+#     ── 宣言が在るのに名簿を手書きした（ROUTE_KIND で踏んだのと同じ形）。
+#   ★ だから**宣言から導く**: 「新しいシートに書く」と宣言し、かつ**シート名が 1 つに決まる**op。
+#     名前は実行時の `resolved["_new_sheet"]` か、静的な `OP_DECLARED_SHEET_NAME[op]`。
+#     REPORT_PER_ROW（N 枚作る）と FORMAT_MAP（名前が決まらない）は**自然に外れる** ──
+#     手で選んでいない。名前が取れるかどうかが判定。
+#   ★ 名簿は `tests/test_plan_chaining.py` が宣言と突き合わせる（新しい op は分類するまで赤）。
 PLAN_CHAIN_WARNING_OPS = ("EXTRACT", "DEDUP")
+
+#: ★ 「新しいシートに書く」と宣言しているのに、**連鎖の作り手にしない** op と、その理由。
+#:   ★ ここに書くのは「名前が 1 つに決まらない」ものだけ ── 決まるなら必ず作り手になる。
+#:   新しい op を足したら、作り手になるかここに理由を書くかのどちらか（番人が強制する）。
+PLAN_CHAIN_UNNAMED_PRODUCERS = {
+    "REPORT_PER_ROW": "1 行につき 1 枚、N 枚のシートを作る ── 「直前の出力」が 1 つに決まらない",
+    "FORMAT_MAP": "出力先の名前を依頼ごとに人が決める ── 機械には 1 つに決まらない",
+}
+
+
+def plan_chain_sheet_of(op: str, resolved: dict) -> str | None:
+    """その段が作った**派生シートの名前**（連鎖の作り手でなければ None）。
+
+    ★ 判定は宣言から: `OP_WRITE_TARGET` が `WRITE_NEW_SHEET` を宣言し、かつ名前が 1 つに決まる時だけ。
+      名前は実行時に決まる `_new_sheet`（EXTRACT/EXTRACT_COLUMNS/DEDUP）か、
+      静的な `OP_DECLARED_SHEET_NAME`（AGGREGATE→『集計』・PIVOT→『ピボット』）。
+    """
+    if not _op_writes(op, WRITE_NEW_SHEET) or op in PLAN_CHAIN_UNNAMED_PRODUCERS:
+        # ★ 台帳を**明示的に**見る ── 名前が取れないから外れる、に任せない。
+        #   任せると、その op が後日 `_new_sheet` を持った日に連鎖が黙って点く。
+        return None
+    name = (resolved or {}).get("_new_sheet") or OP_DECLARED_SHEET_NAME.get(op)
+    return str(name) if name else None
 
 
 # ★ EXTRACT: 比較の語彙（設計書どおり6種）。gte/lte/gt/lt は数値比較・eq は値の型に応じて
@@ -15310,8 +15348,10 @@ def _run_dsl_plan_step(i: int, op: str, raw_args: dict, *, task: str, current_me
     item_status = "warn" if status == "warn" else "ok"
     # ★ 連鎖の番人: この段が派生シートを作ったことを、後段のために記録する
     #   （失敗した段は記録しない ── 作られていないシートを後段に突き付けない）。
-    if derived_sheets is not None and op in PLAN_CHAIN_WARNING_OPS and resolved.get("_new_sheet"):
-        derived_sheets.append({"step": i, "op": op, "sheet": resolved["_new_sheet"]})
+    # ★★ 2026-09-15: 作り手は**宣言から**導く（手書きの名簿で 5 op が抜けていた ──
+    #   集計の後の並べ替えが明細に落ち、頼んでいない並べ替えに ✓ が出ていた）。
+    if derived_sheets is not None and (_chain_sheet := plan_chain_sheet_of(op, resolved)):
+        derived_sheets.append({"step": i, "op": op, "sheet": _chain_sheet})
     warn_precondition = _precondition[1] if _precondition else None   # ★ 単位G: 上で 1 度だけ検査済み
     if warn_precondition:
         print(f"{step_prefix}{warn_precondition}")
