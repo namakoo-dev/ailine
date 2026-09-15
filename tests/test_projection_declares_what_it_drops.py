@@ -100,10 +100,22 @@ def test_the_projected_value_read_is_folded_into_one_function():
       5 件の欠陥の共通の根）。帳票と様式写像が **6・7 件目**だったので、
       2 箇所に書き写さず 1 本を通す。
     """
-    derive = (Path(ailine.__file__).parent.parent / "ailine_core" / "postconditions"
-              / "derive.py").read_text(encoding="utf-8")
-    assert derive.count("source_value_as_projected(") == 3, \
-        "定義 1 + 呼び出し 2 になっていない（書き写しが増えている）"
+    post = Path(ailine.__file__).parent.parent / "ailine_core" / "postconditions"
+    derive = (post / "derive.py").read_text(encoding="utf-8")
+    move = (post / "move.py").read_text(encoding="utf-8")
+    # ★★ 2026-09-15: 呼び出しが増えた（抽出の述語・重複削除の鍵）。増やした理由を書く ──
+    #   盲検の買い手役が「この道具が作った計算列で絞れない」を踏み、原因が
+    #   「述語だけ式ビューを読んでいた」だった（同じ関数の中で行の比較は値ビュー＝片配線）。
+    #   ★ 数だけ上げない。**どこから呼ぶか**を名指しで縛る（増えたら理由を書かせる）。
+    assert derive.count("def source_value_as_projected(") == 1, "定義が 1 つでない"
+    callers = {"derive.py": derive.count("source_value_as_projected(") - 1,
+               "move.py": move.count("source_value_as_projected(")}
+    assert callers == {"derive.py": 3, "move.py": 1}, (
+        f"呼び出しの数が変わった: {callers}"
+        "（derive: 帳票・様式写像・抽出の述語 ／ move: 重複削除の鍵）"
+        "── 増やすなら、1 本を通す形を壊していないか見てから数を直すこと")
+    assert "from ailine_core.postconditions.derive import source_value_as_projected" in move, \
+        "move.py が書き写している（import して 1 本を通すこと）"
     assert 'src.cell(row=src_row, column=ph["col_idx"]).value' not in derive, \
         "式ビューから直に読む書き方が残っている"
 

@@ -29,6 +29,9 @@ from ailine_core.table_scan import _cell_ref, _col_index_by_header, _scan_last_c
 
 from ailine_core.postconditions._shared import _ZERO_TARGET_REASON, _cells_for_shift, _moved_rows_note, _numeric_value, _row_as_shown, compare_moved_rows, note_stringy_numbers, note_unverified
 
+# ★ 2026-09-15: 「写す側が実際に写す値」（式はキャッシュ値）── 抽出の述語と同じ器官を借りる。
+from ailine_core.postconditions.derive import source_value_as_projected
+
 def _dedup_key_display(key_tuple) -> str:
     """check_dedup の名指し用: 正規化キー（(型名, 値) のタプルの列）を人が読める文字列に。"""
     parts = [str(v) for _typ, v in key_tuple]
@@ -942,7 +945,11 @@ def check_dedup(path: Path, args: dict, header_row: int = 1,
         r = header_row + 1
         while src.cell(row=r, column=1).value not in (None, ""):
             total += 1
-            key_tuple = tuple(_dedup_normalize_key_part(src.cell(row=r, column=idx).value)
+            # ★★ 2026-09-15（抽出の兄弟・同じ日に一緒に直す）: 鍵の列が**式**のとき、ここが
+            #   式ビューを読むと '=A2' と '=A3' を別の鍵と数え、**重複が永久に見つからない**。
+            #   ★ 抽出の述語が同じ穴を持っていた（そちらは買い手役が踏んだ）── 片方だけ直さない。
+            #   ★ 行の中身の比較（_row_as_shown）は既に値ビューを読んでいる。鍵だけ揃っていなかった。
+            key_tuple = tuple(_dedup_normalize_key_part(source_value_as_projected(bv, src, r, idx))
                               for idx in key_idxs)
             if key_tuple in seen:
                 dropped.append((r, key_tuple))

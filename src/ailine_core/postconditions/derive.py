@@ -51,10 +51,15 @@ def source_value_as_projected(bv, src, row: int, col: int):
 
     ★ 呼び出し側 2 箇所に書き写さない ── ここ 1 本を通す。
     """
-    formula = bv.cell_formula(row, col)
+    # ★★ 2026-09-15: シート名を **src から取る**。以前はシート名なしで呼んでいて BookView の
+    #   既定（1 枚目）を見ていた ── 対象が 2 枚目以降のブックでは**別のシートの式**を読む
+    #   潜在の穴（呼び出し側が渡す src とずれる）。実害が出る前に塞ぐ。
+    #   ★ src がここに渡って来ている以上、シート名は src.title が唯一の正。
+    _sheet = getattr(src, "title", None)
+    formula = bv.cell_formula(row, col, _sheet)
     if formula is None:
         return src.cell(row=row, column=col).value
-    cached = bv.cell_value(row, col)
+    cached = bv.cell_value(row, col, _sheet)
     # ★ キャッシュ値が無い（一度も計算されていない式）なら、式のまま返す ──
     #   「値が無い」と「式はあるがキャッシュ値が無い」を混ぜない（BookView の契約）。
     return cached if cached is not None else src.cell(row=row, column=col).value
@@ -277,7 +282,14 @@ def check_extract(path: Path, args: dict, header_row: int = 1,
                 r += 1
                 continue
             total += 1
-            cell_v = src.cell(row=r, column=col_idx).value
+            # ★★ 2026-09-15（盲検の買い手役が踏み、こちらで再現した）: この道具が作った計算列で
+            #   絞ろうとすると **正しい抽出が × で捨てられていた**。
+            #     「過不足がマイナスの行を抜き出して」→ 出力は正解 3 行なのに「6行中0行が一致」
+            #   ここが**式ビュー**を読んでいたため `'=C2-D2' < 0` が常に偽で、分母が 0 になっていた。
+            #   ★ キャッシュ値は同じファイルに在り、**行の中身の比較（_row_as_shown）は既に
+            #     値ビューを読んでいた** ── 同じ関数の中で述語だけが配線されていなかった。
+            #   ★ 判定に使う値は「人に見えている値」でなければならない（写像の線は _row_as_shown と同じ）。
+            cell_v = source_value_as_projected(bv, src, r, col_idx)
             if match(cell_v):
                 expected_rows.append(_row_as_shown(bv, src_name, r, last_col))
             else:
