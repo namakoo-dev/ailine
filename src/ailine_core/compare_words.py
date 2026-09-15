@@ -59,10 +59,20 @@ _COUNTER_RE = re.compile(r"[0-9０-９個件人円時間日点本枚台%万千]$
 #:   「下回|**り**ません」「以上|**あり**ません」が素通りして**逆の比較で通った**（LLM が正しく lte を
 #:   返した回も機械が gt に上書き）。この機構は反転せず聞き返すだけなので、**過検出の害は小さく、
 #:   過小検出だけが逆の実行を生む** ── 広めに取る。「ず」は「5個以上ずつ」を除く。
+#: ★ 2026-09-15（レビュー #10）: 「ないし」（＝または）は否定ではない ── 「5000未満ないし3000以上」を
+#:   否定の聞き返しにしていた。`ない` の直後の `し` を除く（`ないしくみ` も同時に外れるが、実文が無い
+#:   ので**どちらの向きにも測っていない**と書いておく ── 出たら測って決める）。
 _NEGATION_AFTER = re.compile(
-    r"^(?:になって?い?|じゃ|あり|[いてらりっでは]{0,3})(?:ない|ません|なかっ|なけれ|ぬ|ず(?![つっ]))")
-#: 文の境界（数値優先を同じ節に限る・NUM_BEFORE の窓もここで切る）。★ 「！」「改行」は次回（保留）。
-_CLAUSE_SEP = "。"
+    r"^(?:になって?い?|じゃ|あり|[いてらりっでは]{0,3})(?:ない(?!し)|ません|なかっ|なけれ|ぬ|ず(?![つっ]))")
+#: 文の境界（数値優先を同じ節に限る・NUM_BEFORE の窓もここで切る）。
+#: ★ 2026-09-15（レビュー #9）: 「。」だけ見ていた ── 「5000でした！以下のとおり」「100だった\n以上ですが」が
+#:   素通りしていた（旧版からの癖）。全角・半角の終止符と改行に広げる。
+_CLAUSE_SEP_RE = re.compile(r"[。．.！!？?\r\n]")
+
+
+def _clause_of(text: str, pos: int) -> int:
+    """その位置が何番目の節か（節の境界の数）。"""
+    return len(_CLAUSE_SEP_RE.findall(text[:pos]))
 
 
 @dataclass(frozen=True)
@@ -158,7 +168,7 @@ class Reading:
 def _passes_guard(w: Word, text: str, idx: int) -> bool:
     if w.guard in (NUM_BEFORE, COUNTER_BEFORE):
         window = text[max(0, idx - _NUM_WINDOW):idx]
-        if _CLAUSE_SEP in window or not _NUM_RE.search(window):
+        if _CLAUSE_SEP_RE.search(window) or not _NUM_RE.search(window):
             return False
     if w.guard == COUNTER_BEFORE and not _COUNTER_RE.search(text[:idx]):
         return False
@@ -196,23 +206,17 @@ def read(task: str | None) -> Reading:
     """依頼文から比較を 1 つ引く。引けない時は決めない（Reading.cmp=None）。
 
     - 一致なし                → Reading()（hit=False）。★ 呼び出し側は LLM の不等号を採らず聞き返す
+    - 数値の比較が 2 つ以上   → 曖昧（範囲も 2 列の条件もこの道具にない）── 黙って片方を捨てない
     - 否定が付いた            → 聞き返す（反転させない）
-    - 違う比較が 2 つ以上     → 曖昧（範囲の抽出はこの道具にない）── 黙って片方を捨てない
     - 同じ比較が何度出ても    → その比較（「5000以上の行を、以上で」など）
+
+    ★ 2026-09-15（レビュー #10）: **曖昧を否定より先に見る**。順が逆だと
+      「5000未満ないし3000以上」で片方の語の否定だけを報告し、比較が 2 つ在ることを黙っていた。
+      2 つ在る事実の方が、どう書き直すかを決めるのに要る。
     """
     found = matches(task)
     if not found:
         return Reading()
-    negs = [(w, w.text + n) for _s, _e, w, n in found if n]
-    if negs:
-        w, shown = negs[0]
-        inv = NEGATED_OF.get(w.cmp)
-        hint = (f"『{LABELS[inv]}』のことですか？ " if inv else "")
-        return Reading(None, w.text, True, negated=True, ambiguous=(
-            f"依頼文の『{shown}』は否定の比較です ── {hint}"
-            "否定の比較は機械で確かめられないので実行しません"
-            + (f"（例: 「金額が5000{LABELS[inv]}の行」のように書き直してください）" if inv
-               else "（列に在る値を名指しして「〜以外」と書いてください）")))
     cmps = list(dict.fromkeys(w.cmp for _s, _e, w, _n in found))
     numeric = [c for c in cmps if c in NUMERIC_CMPS]
     if len(numeric) > 1:
@@ -224,16 +228,27 @@ def read(task: str | None) -> Reading:
             f"比較の語が 2 つあります（『{shown}』）── 1 つの条件だけ書いてください"
             "（範囲の抽出も、2 つの列の条件も、この道具にはありません。"
             "例: 「金額が5000以上の行を抜き出して」）"))
+    negs = [(w, w.text + n) for _s, _e, w, n in found if n]
+    if negs:
+        w, shown = negs[0]
+        inv = NEGATED_OF.get(w.cmp)
+        hint = (f"『{LABELS[inv]}』のことですか？ " if inv else "")
+        return Reading(None, w.text, True, negated=True, ambiguous=(
+            f"依頼文の『{shown}』は否定の比較です ── {hint}"
+            "否定の比較は機械で確かめられないので実行しません"
+            + (f"（例: 「金額が5000{LABELS[inv]}の行」のように書き直してください）" if inv
+               else "（列に在る値を名指しして「〜以外」と書いてください）")))
     # ★ 数値の比較と 等しい／含む が並ぶ回（「金額が1000以上で部門が営業と同じ行」）は **2 条件の
     #   依頼** ── 比較は数値の側。2 組目は呼び出し側が実表の値で読む（2026-09-06 の AND の道）。
     #   ★ ただし**同じ節の中**だけ（レビュー: 「…を含む行を抜き出して。ちなみに売上は5000以上です」で
     #     後ろの雑談が主文の contains を奪った）。節をまたぐ語は先に出た語に譲る。
     # ★ 数値でない比較が 2 つ（「を含む」と「と同じ」）は実文が無く測っていない ── 旧来どおり
     #   先に出た語（保留・発火条件: 実文が 1 件出た日に、範囲と同じ線で断るかを測る）。
+    text = task or ""
     first_s, _e, first_w, _n = found[0]
-    clause = (task or "")[:first_s].count(_CLAUSE_SEP)
+    clause = _clause_of(text, first_s)
     chosen = next((w for s, _e, w, _n in found
-                   if w.cmp in NUMERIC_CMPS and (task or "")[:s].count(_CLAUSE_SEP) == clause), first_w)
+                   if w.cmp in NUMERIC_CMPS and _clause_of(text, s) == clause), first_w)
     return Reading(chosen.cmp, chosen.text, True)
 
 

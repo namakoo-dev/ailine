@@ -78,6 +78,9 @@ NEGATIVE_CONTROLS = [
     "10日で締め切ってる案件",
     "報告は以上です。ご確認ください。",
     "先月は5000円でした。以下のとおり修正します",
+    "売上は5000でした！以下のとおり修正して",          # ★ レビュー #9: 「。」以外の終止符
+    "在庫は100だった\n以上ですがよろしく",              # ★ 改行も節の境界
+    "報告は3件送りました！以上、よろしく",
     "予算を上回る努力をして",
     "締め切りを過ぎた案件",
     "退勤マイナス出勤の列を作って",
@@ -165,6 +168,8 @@ def test_longest_match_wins_at_the_same_place(monkeypatch):
     ("金額が3000以上5000未満の行を抜き出して", ["以上", "未満"]),
     ("金額が1000以上で数量が10以下の行を抜き出して", ["以上", "以下"]),      # 2 列の条件も同じ断り
     ("数量が10より多く100より少ない行", ["より多く", "より少ない"]),
+    ("金額が5000未満ないし3000以上", ["未満", "以上"]),             # ★ レビュー #10:「ないし」は否定でない
+    ("金額が3000以上5000未満ではない行", ["以上", "未満"]),          # ★ 曖昧を否定より先に見る
 ])
 def test_two_numeric_comparisons_are_refused_and_both_words_are_named(task, words):
     """② 数値の比較が 2 つ ── 黙って片方を捨てない。断り文は**可変部**で検査する（恒真にしない）。
@@ -186,11 +191,37 @@ def test_a_numeric_comparison_beside_an_equality_is_two_conditions_not_a_range(t
     assert (r.cmp, r.word, r.ambiguous) == (want, word, ""), r
 
 
-def test_numeric_priority_does_not_cross_a_sentence_boundary():
+@pytest.mark.parametrize("sep", ["。", "！", "!", "？", "?", "．", ".", "\n"])
+def test_numeric_priority_does_not_cross_a_sentence_boundary(sep):
     """★ レビュー #3: 「…を含む行を抜き出して。ちなみに売上は5000以上です」で後ろの雑談が
-       主文の contains を奪っていた ── 数値優先は**同じ節の中**だけ。"""
-    r = C.read("備考に東京を含む行を抜き出して。ちなみに売上は5000以上です")
-    assert (r.cmp, r.word) == ("contains", "を含む"), r
+       主文の contains を奪っていた ── 数値優先は**同じ節の中**だけ。
+       ★ レビュー #9: 節の境界は「。」だけではない（旧版からの癖）。"""
+    r = C.read(f"備考に東京を含む行を抜き出して{sep}ちなみに売上は5000以上です")
+    assert (r.cmp, r.word) == ("contains", "を含む"), (sep, r)
+
+
+@pytest.mark.parametrize("task,want", [
+    # ★ 比較が**1 つだけ**の文を使う ── 2 つ在る文は「曖昧」の規則が先に返してしまい、
+    #   この規則自身が効いているかを測れない（変異試験で緑のままだった＝別の規則に守られた番人）。
+    ("売上が10万以上ないし相当額の行を抜き出して", "gte"),
+    ("金額が5000を超えないし方法がない", "gt"),
+])
+def test_a_negation_word_is_not_read_inside_naishi(task, want):
+    """★ レビュー #10: 「ないし」は『または』── 否定ではない。
+       ★ 正直に書く: 「超えないしくみ」のような語も同時に否定から外れるが、**実文が無く
+         どちらの向きにも測っていない**（出たら測って決める）。"""
+    r = C.read(task)
+    assert (r.cmp, r.negated) == (want, False), (task, r)
+
+
+def test_the_ambiguous_check_runs_before_the_negation_check():
+    """★ レビュー #10（順序）: 比較が 2 つ在る文では、**2 つ在る事実**を先に言う。
+       順を逆にすると「5000未満ないし3000以上」が片方の語の否定として返り、
+       比較が 2 つ在ることを黙る ── どう書き直すかを決める材料が消える。
+       ★ 番人は**中身**で縛る（字面の順でなく）── この 2 文は否定の語も比較 2 つも含む。"""
+    for task in ("金額が5000未満ないし3000以上", "金額が3000以上5000未満ではない行"):
+        r = C.read(task)
+        assert not r.negated and len(_shown(r.ambiguous)) == 2, (task, r)
 
 
 def test_two_non_numeric_words_keep_the_old_first_match_until_measured():
