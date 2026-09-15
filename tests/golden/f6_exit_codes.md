@@ -4,6 +4,9 @@
 組んだドキュメントで、`tests/test_golden_exit_codes.py` が表の主張を1つずつ生の関数呼び出し
 で裏取りする（表だけ書いて終わりにしない）。
 
+
+★★ 2026-09-15（実機で打って画面を読んで見つけた）: `--dry` の**複合計画**だけが、全段「× 未対応」でも **exit 0 ＋ `"ok": true`** を返していた（履歴にも成功として残る）。同じ断りが単発の経路では 3 ── **同じ入力に 2 通りの返事**（片配線）。いまは失敗した段が 1 つでも在れば `cmd_run_plan` の dry 分岐が **3** を返す（裏取り: `tests/test_compare_words.py::test_a_dry_plan_whose_steps_all_fail_does_not_claim_success`・陰性対照 `..._that_can_run_still_exits_zero`）。
+
 ## 表
 
 | code | 意味 | 発生箇所（関数） | 裏取りテスト |

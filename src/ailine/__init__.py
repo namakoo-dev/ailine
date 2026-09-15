@@ -15397,11 +15397,25 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     if a.dry:
         print("\n（--dry プレビュー・語彙外の段は実行時に AI が直接作成（機械保証なし）で対応します。未実行）")
         plan_json = _preview_dsl_plan(a, plan, book_meta, vocab, book.name)
+        # ★★ 2026-09-15（実機で打って画面を読んで見つけた・関数の層では見えない）:
+        #   「売上が800以上1200未満の行を抜き出して」の --dry は全段が「× 未対応」なのに
+        #   **exit 0 ＋ `"ok": true`** を返していた（履歴にも成功として残る）。
+        #   ★ 同じ断りが単発の経路では exit 3 ── **同じ入力に 2 通りの返事**（片配線）。
+        #     終了コードの表（tests/golden/f6_exit_codes.md）は 0 を「成功」と定義しており、
+        #     1 段も通らないプレビューは成功ではない。★ 単発の経路は検証を通った後にしか
+        #     ここへ来ないので 0 のままで正しい ── 直すのは**計画の経路だけ**。
+        #   ★ 「一部だけ失敗」も 3 にする: 出来ない段を黙って落として残りをやらない、という
+        #     既存の線（複合に未対応が混じった時に × を返す）と揃える。
+        _failed = [st for st in plan_json if (st or {}).get("status") == "fail"]
         print("\n（--dry: 適用しない。レビュー後に --dry を外して実行）")
-        result["ok"] = True
+        result["ok"] = not _failed
         result["dry"] = True
         result["plan"] = plan_json
         _finish_run(a, book, result, "none")
+        if _failed:
+            print(f"× {len(_failed)}/{len(plan_json)} 段が未対応です"
+                  "（この依頼は --dry を外しても実行できません ── 上の理由を読んで言い直してください）")
+            return 3
         return 0
 
     shutil.copy2(source_book, out_book)

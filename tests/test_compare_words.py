@@ -367,3 +367,42 @@ def test_the_three_deciders_share_one_organ():
     assert count_in_product("_EXTRACT_CMP_WORDS") == 0, "旧辞書が本体に残っている（辞書が 2 つになる）"
     assert count_in_product("compare_words.unconfirmed(") == 3, "規則 ④ が 3 経路に配線されていない"
     assert count_in_product("if _cmp_read.ambiguous:") == 3, "否定・曖昧の断りが 3 経路に配線されていない"
+
+
+# ── ★ 実機で打って見つけた片配線（2026-09-15・関数の層では見えない）──────────────
+
+def test_a_dry_plan_whose_steps_all_fail_does_not_claim_success(tmp_path, monkeypatch, capsys):
+    """★★ 「売上が800以上1200未満の行を抜き出して」の `--dry` は全段が「× 未対応」なのに
+       **exit 0 ＋ `"ok": true`** を返していた（履歴にも成功として残る）。
+       ★ 同じ断りが単発の経路では exit 3 ── 同じ入力に 2 通りの返事（系譜「出力と終了コードも
+         片配線する」）。★ 見つけ方は**実機で打って画面を読む**しかなかった ── 関数の層の
+         検体 82 本は 1 本も鳴らなかった。
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_golden_transcripts import _book, _isolate, _run_main   # noqa: E402
+    _isolate(monkeypatch, tmp_path)
+    book = _book(tmp_path, [["商品", "売上"], ["a", 900], ["b", 1300]])
+    # ★ 段は**別々**にする ── 同じ args を 2 つ並べると道具が畳んで単発の経路へ落ち、
+    #   計画の経路を測れない（初版はこれで空振りした）。
+    plan = [{"op": "EXTRACT", "args": {"col": "売上", "cmp": "gte", "value": 800}},
+            {"op": "EXTRACT", "args": {"col": "売上", "cmp": "lt", "value": 1200}}]
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1: {"plan": plan})
+    rc, out = _run_main(["run", str(book), "売上が800以上1200未満の行を抜き出して", "--dry"], capsys)
+    assert "未対応" in out, out
+    assert rc == 3, f"全段が未対応なのに exit {rc}（0 は『成功』の意味 ── 自動化が成功と読む）\n{out}"
+
+
+def test_a_dry_plan_that_can_run_still_exits_zero(tmp_path, monkeypatch, capsys):
+    """★ 陰性対照 ── 通るプレビューは今までどおり 0（直した所が別の所を壊していない）。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_golden_transcripts import _book, _isolate, _run_main   # noqa: E402
+    _isolate(monkeypatch, tmp_path)
+    book = _book(tmp_path, [["商品", "売上"], ["a", 900], ["b", 1300]])
+    monkeypatch.setattr(ailine, "translate_task",
+                        lambda model, task, book_meta, temperature=0.1:
+                        {"plan": [{"op": "SORT", "args": {"col": "売上", "order": "desc"}},
+                                  {"op": "BOLD", "args": {"target": "row:1"}}]})
+    rc, out = _run_main(["run", str(book), "売上で降順に並べ替えて見出しを太字に", "--dry"], capsys)
+    assert rc == 0, out
+    assert "未対応" not in out, out
