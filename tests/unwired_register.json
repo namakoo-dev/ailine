@@ -1,0 +1,95 @@
+{
+  "_meta": {
+    "purpose": "scripts/unwired.py が見つけた『在るのに誰も呼んでいない』ものを、**人が分類した結果**で宣言する台帳。番人 tests/test_unwired_is_declared.py が『宣言の無い未到達が現れたら赤』にする。",
+    "rule": "kind は by_design（配線しないのが正しい）／ leftover（残骸・消してよいが別の仕事）／ unwired（★ 本物。直す候補）の 3 つ。why には**調べた上での理由**を書く。分からなければ『未調査』と書く ── 作文しない。",
+    "warning": "★★ 到達不能＝宝ではない。別プロジェクトで 833 行の未配線モジュールを『宝』と呼び、実際は断念済みだった事故がある。ここは候補を並べるだけで、消す/直すの判断はしない。",
+    "limits": "数えているのは『名前の出現』であって呼び出しではない。getattr や辞書の値からの動的な呼び出しは追えないので、『0 件』は『呼ばれていない』ではなく『名前がどこにも書かれていない』まで。",
+    "generated": "2026-09-16"
+  },
+  "declared": {
+    "ailine_core.postconditions": {
+      "kind": "by_design",
+      "why": "パッケージの __init__。中の部品（derive / move / shape / _shared）は本体が直接 import しており、パッケージ名そのものを import する必要が無い。"
+    },
+    "ailine_core.stage_organs": {
+      "kind": "by_design",
+      "why": "段種 × 器官の**宣言表**。モジュール自身の docstring が「この表は ailine.py のどの経路からも読まれない」と明記している（循環 import を避けるため、在/無だけを持つ）。読むのは番人 tests/test_stage_organs.py。"
+    },
+    "ailine_core.stage_organs:reality_mismatches": {
+      "kind": "by_design",
+      "why": "上と同じ宣言表の中の関数。番人が宣言と実装の食い違いを数えるために呼ぶ。"
+    },
+    "ailine:_console_entry": {
+      "kind": "by_design",
+      "why": "pyproject.toml の [project.scripts] が `ailine = \"ailine:_console_entry\"` で指す**配布の入口**。Python のコードから名指しされないのが正しい。"
+    },
+    "ailine_core.cellmap:insert_rows": {
+      "kind": "by_design",
+      "why": "cellmap は「セルの地図」を Python 側で動かして検算するための部品群。insert/delete/permute は**検算の側**が使う道具で、製品の経路は Basic が動かす。"
+    },
+    "ailine_core.cellmap:delete_rows": {
+      "kind": "by_design",
+      "why": "上に同じ（cellmap は検算側の道具）。"
+    },
+    "ailine_core.cellmap:insert_cols": {
+      "kind": "by_design",
+      "why": "上に同じ（cellmap は検算側の道具）。"
+    },
+    "ailine_core.cellmap:delete_cols": {
+      "kind": "by_design",
+      "why": "上に同じ（cellmap は検算側の道具）。"
+    },
+    "ailine_core.cellmap:permute_rows": {
+      "kind": "by_design",
+      "why": "上に同じ（cellmap は検算側の道具）。"
+    },
+    "ailine_core.pdf_export:_renderable": {
+      "kind": "leftover",
+      "why": "「互換のための 1 本目の表記」と本人が書いている薄い皮。本体は renderings()。消す前に、外から使っていないことを確かめる。"
+    },
+    "ailine_core.form_grid:below_of": {
+      "kind": "leftover",
+      "why": "格子を辿る兄弟（right_of などの並び）のうち、今のところ使い道が無いもの。帳票の読み取りを広げるときに要るかもしれないので、消すのは実需が出てから。"
+    },
+    "ailine_core.write_precondition:check_write_preconditions": {
+      "kind": "leftover",
+      "why": "本体は check_write_preconditions_detail（種類つき）で、こちらは文言だけ返す薄い皮。docstring が「判定は 1 箇所しか無い」と明記している。製品は detail の方を呼ぶ。"
+    },
+    "ailine_core.report_group:needs_grouping": {
+      "kind": "leftover",
+      "why": "「同じ名前が 2 行以上あれば**断る**」という設計の名残。2026-08-28 の設計査読で『断ってはいけない（領収書・納品書は取引ごとに 1 枚）』と決まり、呼び出し側にはその理由がコメントで残っている。判断が反転したので呼ばれなくなった。"
+    },
+    "src/ailine/__init__.py:PLAN_CHAIN_WARNING_OPS": {
+      "kind": "leftover",
+      "why": "2026-09-15 に唯一の読み手が宣言駆動の plan_chain_sheet_of に置き換わり、名前だけが残った。★ 危ないのは『連鎖の警告対象はこの 2 つ』と読めるのに**何も制御していない**こと。消すには tests/ailine_public_surface.txt からも外す。"
+    },
+    "ailine_core.intent:refuse_row_add_that_is_really_a_write": {
+      "kind": "leftover",
+      "why": "2026-09-16 に関所を 9 op へ広げたとき、既存の検体のために残した旧名。呼ぶのは検体 1 本だけ。検体を新しい名前に寄せたら消す。"
+    },
+    "ailine:_lock_is_stale": {
+      "kind": "by_design",
+      "why": "ロックが古いかの判定。製品側は同じ判定を呼び出し元に埋め込んでおり、ここは番人が境界値を突くための口。"
+    },
+    "ailine:lookup_attribute": {
+      "kind": "by_design",
+      "why": "属性の辞書引き。製品は上位の経路から属性表を引くので直接は名指ししない。"
+    },
+    "ailine_core.csv_quarantine:control_char_cells": {
+      "kind": "by_design",
+      "why": "検疫した CSV に制御文字が残っていないかを**検算側**が数えるための口。"
+    },
+    "ailine_core.helper_interface:names_in": {
+      "kind": "by_design",
+      "why": "ヘルパの署名を読む道具。番人（カタログ同期）が使う。"
+    },
+    "ailine_core.cellmap:check_shift": {
+      "kind": "by_design",
+      "why": "セルの地図のずれを検算する口。製品の経路は事後条件から別の関数を呼ぶ。"
+    },
+    "ailine_core.attributes:render_no_evidence": {
+      "kind": "unwired",
+      "why": "★★ 三兄弟のうち**これだけ配線されていない**。候補 2 件以上→選ばせる、1 件→「そう読みました」、**0 件→何も言わない**。この関数は 0 件のときに『？ このブックに『所属』は見当たりません／シート: …／列: …』と、実表の中身を見せて終わる文面を持っている（docstring は「非対話でも言ってよい」）。★ ただし素直に繋ぐと害が出る: 「所属を東棟にして」では『東棟』も候補 0 件になり、**これから書く値**に対して「見当たりません」と言ってしまう。探している列と書く値を分ける線を**測ってから**繋ぐこと（2026-09-16 に助詞だけで断って 195 件中 56 件を誤爆した轍を踏まない）。"
+    }
+  }
+}
