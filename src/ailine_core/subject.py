@@ -214,6 +214,55 @@ def _standalone_occurrence(name: str, task: str, others) -> bool:
     return False
 
 
+#: 「〜シート」「〜タブ」の形での明示的な言及。
+#: ★★ 2026-09-16: ここは **target_sheet から動かしてきた正本**。
+#:   畳むときに書き写して別物にし（閉じ括弧を許さない版を書いた）、
+#:   『金額』シートを… の検体が落ちた ── 判定を 1 本にしても
+#:   **材料を書き写したら同じ穴**が開く。定数も 1 本に保つこと。
+SHEET_MARKER_SUFFIX = r"[』」”’\"'）\)]*\s*(?:シート|タブ)"
+_SHEET_MARKER_SUFFIX = SHEET_MARKER_SUFFIX   # 旧名（この中だけで使う）
+#: サ変動詞の語尾（「集計して」「集計する」「集計しよう」…）。
+_SAHEN_SUFFIX = re.compile(r"^(?:し(?:ます|まし|ろ|よう|たい|て|た|、|,)|する|すれ|せよ)")
+
+
+def mentioned_with_marker(task: str, name) -> bool:
+    """依頼文で name が「〜シート」「〜タブ」と明示されているか。"""
+    return re.search(re.escape(str(name)) + _SHEET_MARKER_SUFFIX, str(task or "")) is not None
+
+
+def used_as_a_verb(task: str, name) -> bool:
+    """依頼文の中で name が**サ変動詞**として使われているか（「集計して」「集計する」）。"""
+    task, name = str(task or ""), str(name or "")
+    if not name:
+        return False
+    for m in re.finditer(re.escape(name), task):
+        if _SAHEN_SUFFIX.match(task[m.end():]):
+            return True
+    return False
+
+
+def designates_a_sheet(task: str, name) -> bool:
+    """依頼文がこのシートを**名指し**しているか（動詞は名指しではない）。
+
+    ★★ 2026-09-16（買い手 2 体目の ④⑤ は同じ根だった）:
+      ブックに『集計』シートが在ると、「担当者ごとに金額を集計して」の『集計』が
+      シートの言及として採られ、**一度『集計』を作ったら二度と「集計して」と言えない**。
+      買い手の言葉:「事務の言葉づかいでは避けようがない」── 月末に 2 種類の集計は必ず作る。
+    ★ 朝に器官は作ったが、置いたのは target_sheet.resolve_target_sheet の中だけだった。
+      **対象は正しく選べるのに、ここが『集計』を designator に数えて ⚠ と [y/N] が立ち、
+      実行そのものが止まっていた**（実機で再現）。器官は在ったが配線が片方だけ。
+    ★ だから判定はここに 1 本だけ置き、target_sheet は**これを呼ぶ**。
+    ★ 線は狭く取る（実測 13/13）:
+        マーカー付き（「集計シートを」）は無条件で名指し
+        助詞が続く形（「集計を並べ替えて」「集計の金額を」）は動詞ではないので名指し
+        直後がサ変（「集計して」「集計する」「集計しよう」）だけを名指しから外す
+    ★ op では決められない ── この判定は翻訳の**前**に要る（操作がまだ決まっていない）。
+    """
+    if mentioned_with_marker(task, name):
+        return True
+    return not used_as_a_verb(task, name)
+
+
 def name_matches_task(name, task: str, others=()) -> bool:
     """実在名 name が依頼文と機械照合できたか（定義 (i) or (ii)）。
        others は「同じブックの他の実在名」（name 自身は除いて渡してよい・ここでも除く）。"""
@@ -257,8 +306,11 @@ def task_designators(task: str, columns=(), header_row: int = 1, sheets=()) -> T
     snames = [str(s) for s in sheets if s]
     return TaskDesignators(columns=cols, rows=tuple(rows), row_words=tuple(words),
                             whole_word=wm.group(0) if wm else "",
-                            sheets=tuple(s for s in sheets if s and _standalone_occurrence(
-                                str(s), task, [o for o in snames if o != str(s)])))
+                            sheets=tuple(s for s in sheets
+                                          if s and designates_a_sheet(task, s)
+                                          and _standalone_occurrence(
+                                              str(s), task,
+                                              [o for o in snames if o != str(s)])))
 
 
 def _row_value(raw: str):
@@ -280,7 +332,9 @@ def _match_slot(slot: Slot, task: str, columns, d: TaskDesignators, sheets,
         matched = name_matches_task(raw, task, others=sheets)
         return None, (("sheet", raw) if matched else None)
     if slot.kind == SHEET:
-        if name_matches_task(raw, task, others=sheets):
+        # ★ 動詞はシートの名指しではない（designates_a_sheet の説明を見ること）。
+        #   ここを通さないと、対象は正しいのに ⚠ が立って [y/N] で止まる。
+        if designates_a_sheet(task, raw) and name_matches_task(raw, task, others=sheets):
             return True, ("sheet", raw)
         return False, None
     if slot.kind == LABEL:

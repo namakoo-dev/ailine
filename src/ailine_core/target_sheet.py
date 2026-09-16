@@ -35,10 +35,13 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
+from ailine_core import subject
+
 _SHEET_ORDINAL_RE = re.compile(r"(\d+)\s*枚目")
 # シート名の直後に来ると「シートを指している」と読める語。閉じ括弧・引用符は挟まってよい
 # （「『金額』シート」のような書き方を拾う）。
-_SHEET_MARKER_SUFFIX = r"[』」”’\"'）\)]*\s*(?:シート|タブ)"
+#: ★ マーカーの正本は subject.py に在る（畳んだ先を呼ぶ・書き写さない）。
+_SHEET_MARKER_SUFFIX = subject.SHEET_MARKER_SUFFIX
 
 
 @dataclass(frozen=True)
@@ -83,29 +86,12 @@ def sheet_names_mentioned_in(task: str, sheets: list) -> list:
     return [s for s in (sheets or []) if s and s in task]
 
 
-def _mentioned_with_marker(task: str, name: str) -> bool:
-    """依頼文で name が「〜シート」「〜タブ」の形で言及されているか（明示マーカー）。"""
-    return re.search(re.escape(name) + _SHEET_MARKER_SUFFIX, task) is not None
-
-
-#: ★★ 2026-09-16（盲検の買い手役⑤）: 名前の**直後がサ変動詞**なら、それはシートの名指しでなく
-#:   依頼文の動詞。ブックに『集計』シートが在ると「担当者ごとの金額を集計して」の『集計』が
-#:   シートの言及として採られ、**一度『集計』を作ったら二度と「集計して」と言えなく**なっていた
-#:   （買い手の言葉:「事務の言葉づかいでは避けようがない」── 月末に 2 種類の集計は必ず作る）。
-#:   ★ 危険は `resolve_target_sheet` のコメントに**既に書いてあった**が、対処は「言及が 2 つの時」
-#:     だけで、1 つの時は動詞がそのまま勝っていた（在っても鳴らない番人の形）。
-#:   ★ 狭く取る: マーカー付き（「集計シートを」）は今までどおり無条件で勝つ。
-#:     「集計を並べ替えて」のように**助詞が続く**形は動詞ではないので触らない。
-#:   ★ op は使えない ── この関数は翻訳の**前**に呼ばれ、操作がまだ決まっていない。だから語の形で決める。
-_SAHEN_SUFFIX = re.compile(r"^(?:し(?:ます|まし|ろ|よう|たい|て|た|、|,)|する|すれ|せよ)")
-
-
-def _used_as_a_verb(task: str, name: str) -> bool:
-    """依頼文の中で name が**サ変動詞**として使われているか（「集計して」「集計する」）。"""
-    for m in re.finditer(re.escape(name), task or ""):
-        if _SAHEN_SUFFIX.match((task or "")[m.end():]):
-            return True
-    return False
+#: ★★ 2026-09-16: 「名前が動詞として使われているか」の判定は **subject.py に 1 本**だけ置く。
+#:   ここに書き写していたせいで、対象を決める側だけが直り、**⚠ を出す側は素通り**だった
+#:   （買い手の ④⑤ ── 対象は正しく選べるのに [y/N] の関門が立って実行できない）。
+#:   ★ 呼び出し側に判定を持たせない。畳んだ先を呼ぶ。
+_mentioned_with_marker = subject.mentioned_with_marker
+_used_as_a_verb = subject.used_as_a_verb
 
 
 def _is_also_a_column_name(name: str, headers: dict | None) -> bool:

@@ -53,6 +53,15 @@ def edges() -> tuple:
             if isinstance(n, ast.ImportFrom) and n.module and n.module.startswith("ailine"):
                 if n.module in mods and n.module != name:
                     imports[name].add(n.module)
+                # ★★ 2026-09-16: `from ailine_core import subject` は部品名が **names 側**に
+                #   来るので、辺がパッケージ止まりになる。実測すると **105 本**がこの形で
+                #   隠れており、部品名で書かれた辺 85 本より多かった ──
+                #   図は配線の半分も描いていなかった（`ailine_core` の被依存 23 はその影）。
+                #   ★ 名前が実在の部品なら、そこへ辺を張る。
+                for a in n.names:
+                    sub = f"{n.module}.{a.name}"
+                    if sub in mods and sub != name:
+                        imports[name].add(sub)
             elif isinstance(n, ast.Import):
                 for a in n.names:
                     if a.name in mods and a.name != name:
