@@ -15055,9 +15055,44 @@ def _maybe_suggest_or_refuse(a: argparse.Namespace, book: Path, source_book: Pat
 # ---------------------------------------------------------------------------
 
 # col系 slot を持つ op → その slot 名（依存つき連鎖の新規列フォールバック対象）。
+#: 依存つき連鎖で「前段が作った新規列」へ読み替えてよい**引数**（op → その引数名）。
+#:
+#: ★★ 2026-09-16: ここは事故のたびに 1 本ずつ足されてきた（CHART の category_col が
+#:   「4 本目の配線」と試験に記録されている）。配線盤で数えたら、宣言 4 op に対して
+#:   **同じ扱いを受けるべき op が 15** 在り、実際に PIVOT と APPEND_TOTAL が落ちていた:
+#:       「単価と数量を掛けた列を作って、金額で部門別にまとめて」
+#:         集計・並べ替え・数値書式 → 通る（前段の列を指していると読み替える）
+#:         ピボット・合計追加       → 「列『金額』がありません」で断る
+#:   ★ 道具が自分で作った列を、自分で使えない ── 買い手にはそう見える。
+#:
+#: 線は宣言から導いた（手で選ばない）:
+#:   OP_SUBJECT_SLOTS が**列**と宣言した引数のうち、
+#:   ・OP_WRITE_TARGET の col_key（＝書き込み先の列）は外す
+#:     …… 読み替えを誤ると「エラー」でなく「別の列への書き込み」になるため
+#:   ・writes に remove を含む op（DELETE_COLUMN / DELETE_ROWS）は丸ごと外す
+#:     …… 前段が作った列を消す方向に化ける
+#: ★ 例外 1 件（理由つき）: CHART の category_col。**列を名指しする引数**だが
+#:   **判定される対象ではない**（2026-08-23 の検分で SUBJ_INPUT に決めた ── 対象にすると
+#:   「商品ごとの構成比を円グラフにして」で value_col への誤爆が出て ✓ が消える）。
+#:   2 つの表は別の問いに答えているので、揃えるのではなく理由を書いて足す。
+#: ★ 計算式にしない ── dict リテラルでないと配線盤の走査から消える（実装前に確認）。
+#:   宣言と導出の一致は tests/test_column_arg_keys_is_derived.py が縛る。
 _COLUMN_ARG_KEYS = {
-    "SORT": ("col",), "NUMBER_FORMAT": ("col",), "CHART": ("value_col", "category_col"),
     "AGGREGATE": ("group_col", "value_col"),
+    "APPEND_TOTAL": ("col",),
+    "CHART": ("value_col", "category_col"),
+    "DEDUP": ("keys",),
+    "EXTRACT": ("col",),
+    "EXTRACT_COLUMNS": ("cols",),
+    "LOOKUP_FILL": ("key_col",),
+    "MOVE_COLUMN": ("col",),
+    "NUMBER_FORMAT": ("col",),
+    "PIVOT": ("group_col", "value_col"),
+    "REPORT_PER_ROW": ("name_col",),
+    "SET_WHERE": ("cond_col",),
+    "SORT": ("col",),
+    "SPLIT_CELL": ("col",),
+    "SWAP": ("a", "b"),
 }
 
 # ★ 致命1(W10e): 依頼文に「見出し」の語があるのに BOLD/FILL_COLOR/CENTER_ALIGN の対象が
