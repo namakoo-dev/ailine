@@ -35,4 +35,39 @@ if ! out=$(python -m pytest -q -p no:cacheprovider --no-header tests/test_no_con
     exit 1
 fi
 printf ' ✓\n'
+
+# --- 2 本目: 図・行数・試験の本数が実体とずれていないか（2026-09-16）-------------
+# ★ Namakoo「自動じゃなくてもフックで気付ける？ 実際の構成と図やグラフが一致してないと
+#   それを追うのが不可能になる」── そのとおりで、この番人も**元から在った**。
+#   居場所が全件の中、つまり **push の 30 分後**に鳴っていた。同じ日に 2 回それで止まった。
+#   1 本目と同じ処方: 検出は失敗していない、**鳴る場所を手前に出す**。
+# ★ 直さない（自動更新しない）。気づかせるだけにして、直す一行を画面に出す ──
+#   commit の最中にファイルを書き換えると staged と working tree がずれる。
+# ★ 費用は変わったファイルで絞る: 行数 0.1 秒 / 図 3.4 秒 / 試験の本数 6.8 秒。
+#   絞らないと毎 commit 10 秒になり、いずれ外される（外された番人は在っても鳴らない）。
+# ★ 測定の記録（効果の行列・翻訳精度）はここでは見ない ── 実機を 25 分回して初めて出る数字。
+staged=$(git diff --cached --name-only)
+parts=""
+case "$staged" in *src/ailine/__init__.py*) parts="lines";; esac
+case "$staged" in *tests/*.py*) parts="${parts:+$parts,}tests";; esac
+case "$staged" in
+    *src/ailine/*.py*|*src/ailine_core/*.py*) parts="${parts:+$parts,}graph";;
+esac
+
+if [ -n "$parts" ]; then
+    printf '▶ pre-commit: 記録と実体の一致（%s）…' "$parts"
+    if ! out=$(python scripts/refresh_records.py --parts "$parts" 2>&1); then
+        printf '\n%s\n' "$out" >&2
+        echo "" >&2
+        echo "✗ pre-commit: 図や数が実体とずれています。" >&2
+        echo "  ★ ずれたまま積むと、図を見ても実装を追えなくなります（それが図の存在理由）。" >&2
+        echo "  直す:  python scripts/refresh_records.py --write" >&2
+        echo "         作り直したら git add してから commit し直してください。" >&2
+        echo "  ★ 測定の記録（効果の行列・翻訳精度）はこの道具では直りません ──" >&2
+        echo "    実機を回して、出た数を人が tests/battery_recorded.json に書きます。" >&2
+        echo "  意図的に通すなら: git commit --no-verify" >&2
+        exit 1
+    fi
+    printf ' ✓\n'
+fi
 exit 0

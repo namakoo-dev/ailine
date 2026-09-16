@@ -76,30 +76,42 @@ def _replace_mark(mark: str, value: str, write: bool) -> list:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--write", action="store_true", help="①だけ作り直す")
+    ap.add_argument("--parts", default="lines,tests,graph",
+                    help="見るものを絞る（lines / tests / graph をカンマ区切り）。"
+                         "★ commit の瞬間に走らせる時は、変わったファイルに合わせて絞る "
+                         "── 全部だと 10 秒、絞れば 0〜7 秒")
     a = ap.parse_args(argv)
+    parts = {x.strip() for x in a.parts.split(",") if x.strip()}
+    unknown = parts - {"lines", "tests", "graph"}
+    if unknown:
+        raise SystemExit(f"知らない部位: {sorted(unknown)}（lines / tests / graph）")
 
     todo = []
 
-    lines = len(MAIN.read_bytes().decode("utf-8").splitlines())
-    if BUDGET.read_bytes().decode("utf-8").strip() != str(lines):
-        todo.append(f"ailine.py の行数 → {lines}")
-        if a.write:
-            BUDGET.write_bytes((str(lines) + "\n").encode("utf-8"))
-    for f in _replace_mark("MAIN_FILE_LINES", str(lines), a.write):
-        todo.append(f"  印 MAIN_FILE_LINES: {f}")
+    if "lines" in parts:
+        lines = len(MAIN.read_bytes().decode("utf-8").splitlines())
+        if BUDGET.read_bytes().decode("utf-8").strip() != str(lines):
+            todo.append(f"ailine.py の行数 → {lines}")
+            if a.write:
+                BUDGET.write_bytes((str(lines) + "\n").encode("utf-8"))
+        for f in _replace_mark("MAIN_FILE_LINES", str(lines), a.write):
+            todo.append(f"  印 MAIN_FILE_LINES: {f}")
 
-    total, local = _count_tests()
-    for mark, val in (("TOTAL_TESTS", total), ("LOCAL_TESTS", local)):
-        for f in _replace_mark(mark, str(val), a.write):
-            todo.append(f"  印 {mark} → {val}: {f}")
+    if "tests" in parts:
+        total, local = _count_tests()
+        for mark, val in (("TOTAL_TESTS", total), ("LOCAL_TESTS", local)):
+            for f in _replace_mark(mark, str(val), a.write):
+                todo.append(f"  印 {mark} → {val}: {f}")
 
-    r = subprocess.run([sys.executable, str(REPO / "scripts" / "deps_graph.py"),
-                        *(["--write"] if a.write else [])],
-                       cwd=str(REPO), capture_output=True, text=True, encoding="utf-8")
-    if r.returncode != 0:
-        raise SystemExit("依存の図の生成に失敗:\n" + r.stderr[-600:])
+    r = None
+    if "graph" in parts:
+        r = subprocess.run([sys.executable, str(REPO / "scripts" / "deps_graph.py"),
+                            *(["--write"] if a.write else [])],
+                           cwd=str(REPO), capture_output=True, text=True, encoding="utf-8")
+        if r.returncode != 0:
+            raise SystemExit("依存の図の生成に失敗:\n" + r.stderr[-600:])
     doc = REPO / "docs" / "依存関係.md"
-    if not a.write and doc.exists():
+    if r is not None and not a.write and doc.exists():
         have = doc.read_bytes().decode("utf-8").replace("\r\n", "\n").strip()
         if have != r.stdout.replace("\r\n", "\n").strip():
             todo.append("依存の図 → scripts/deps_graph.py --write")
