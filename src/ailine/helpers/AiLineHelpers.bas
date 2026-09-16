@@ -1,6 +1,51 @@
 Option VBASupport 1
 Option Explicit
 
+' ──────────────────────────────────────────────────────────────────
+' ★★ 表の終わりを決める（2026-09-16・掃き出しで 11 か所の書き写しを 1 本に畳んだ）
+'
+' なぜ 1 本にしたか: それまで 11 か所が各自で「**A 列が空になった行**で止める」と
+' 書いていた。だから A 列が空の行（合計行・続きの行）を持つ表では、そこから先が
+' 丸ごと見えない。実機で確かめた症状（どれも原本は壊れず × で止まる）:
+'     金額の列を3桁区切りにして  → 合計行だけ書式が付かず × 
+'     表全体を中央寄せにして      → 合計行を除いた範囲に掛けて ×
+'     表に罫線を引いて            → 同上 ×
+'     金額の多い順に並べ替えて    → 途中で切れて 1 行しか対象にならず ×
+' ★ Python 側は 2026-09-05 に「行の幅のどこかに値が在れば行」へ直してあった。
+'   直っていなかったのは Basic 側だけ ── 言語の境目で切れた片配線。
+'
+' 数え方（Python の _scan_last_row と同じ規則にそろえる）:
+'   見出し行の幅を測り、その幅のどこかに値が在るあいだ下へ進む。
+'   **全部空の行**で止める（空行より下は別の表とみなす ── 使用範囲の末尾まで
+'   取ると、表から離れた注記 1 つで範囲が跳ね上がる）。
+' ★ 見出しの幅が 0（見出し行が空）なら見出し行自身を返す ── 呼び出し側は
+'   「lastRow < headerRow + 1 なら何もしない」で既に守っている。
+Function TableLastRow(oSheet As Object, headerRow As Integer) As Long
+    Dim lastCol As Integer, r As Long, c As Integer, seen As Boolean
+    lastCol = 0
+    Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
+        lastCol = lastCol + 1
+    Loop
+    lastCol = lastCol - 1
+    If lastCol < 0 Then
+        TableLastRow = headerRow
+        Exit Function
+    End If
+    r = headerRow + 1
+    Do
+        seen = False
+        For c = 0 To lastCol
+            If oSheet.getCellByPosition(c, r).getString() <> "" Then
+                seen = True
+                Exit For
+            End If
+        Next c
+        If Not seen Then Exit Do
+        r = r + 1
+    Loop
+    TableLastRow = r - 1
+End Function
+
 ' ────────────────────────────────────────────────────────────────
 '  ailine の検証済みヘルパ集。arcane な UNO 操作を「呼ぶだけ」にする。
 '  モデルはこれらを呼ぶだけ。中の難所（ソートの ContainsHeader 等）は触らせない。
@@ -22,11 +67,7 @@ Sub SortByColumn(oDoc As Object, headerRow As Integer, lastCol As Integer, col A
     oSheet = oDoc.Sheets.getByIndex(0)
 
     ' 最終データ行（A 列を見出しの直下から走査）
-    lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, headerRow)
 
     If lastRow < headerRow + 1 Then Exit Sub   ' データが無い
 
@@ -427,11 +468,7 @@ Sub DrawTableBorders(oDoc As Object)
     Dim lastRow As Long, lastCol As Integer
     oSheet = oDoc.Sheets.getByIndex(0)
 
-    lastRow = 0
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, 0)
     lastCol = 0
     Do While oSheet.getCellByPosition(lastCol, 0).getString() <> ""
         lastCol = lastCol + 1
@@ -483,11 +520,7 @@ Sub AlignCenter(oDoc As Object, headerRow As Integer, lastCol As Integer)
     Dim lastRow As Long
     oSheet = oDoc.Sheets.getByIndex(0)
     ' 最終データ行（A 列を見出しの直下から走査。0行でも見出し行自体は対象にする）
-    lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, headerRow)
     If lastCol < 0 Then Exit Sub
     oRange = oSheet.getCellRangeByPosition(0, headerRow, lastCol, lastRow)
     oRange.HoriJustify = com.sun.star.table.CellHoriJustify.CENTER
@@ -504,11 +537,7 @@ Sub FormatThousands(oDoc As Object, headerRow As Integer, col As Integer)
     Dim lastRow As Long, nFmt As Long
     Dim aLocale As New com.sun.star.lang.Locale
     oSheet = oDoc.Sheets.getByIndex(0)
-    lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, headerRow)
     If lastRow < headerRow + 1 Then Exit Sub
     oFormats = oDoc.getNumberFormats()
     nFmt = oFormats.queryKey("#,##0", aLocale, False)
@@ -537,18 +566,10 @@ Sub VLookupFromTable(oDoc As Object, headerRow As Integer, keyCol As Integer, re
     oLook = oDoc.Sheets.getByName(lookupSheet)
 
     ' 対象シートの最終データ行
-    lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, headerRow)
 
     ' 参照表の最終行（参照表は常に物理1行目が見出し）
-    lastLook = 1
-    Do While oLook.getCellByPosition(0, lastLook).getString() <> ""
-        lastLook = lastLook + 1
-    Loop
-    lastLook = lastLook - 1
+    lastLook = TableLastRow(oLook, 0)
 
     For i = headerRow + 1 To lastRow
         key = oSheet.getCellByPosition(keyCol, i).getString()
@@ -578,11 +599,7 @@ Sub PivotSum(oDoc As Object, groupCol As Integer, valueCol As Integer)
     Dim lastRow As Long, lastCol As Integer
     oSheet = oDoc.Sheets.getByIndex(0)
 
-    lastRow = 0
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, 0)
     lastCol = 0
     Do While oSheet.getCellByPosition(lastCol, 0).getString() <> ""
         lastCol = lastCol + 1
@@ -640,9 +657,7 @@ Sub SummaryTable(oDoc As Object, headerRow As Integer, groupCol As Integer, valu
     skips = ""
     If Not IsMissing(skipRowsCsv) Then skips = "," & CStr(skipRowsCsv) & ","
     oSheet = oDoc.Sheets.getByIndex(0)
-    lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> "" : lastRow = lastRow + 1 : Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, headerRow)
     If lastRow < headerRow + 1 Then Exit Sub
 
     Dim gHead As String, vHead As String
@@ -947,11 +962,7 @@ Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode
     oSheet = oDoc.Sheets.getByIndex(0)
 
     ' 最終データ行（A 列を見出しの直下から走査）
-    lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, headerRow)
     ' 最終列（見出し行を走査）
     lastCol = 0
     Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
@@ -1033,11 +1044,7 @@ Sub DedupRows(oDoc As Object, headerRow As Integer, keyIdxCsv As String, dstName
     nKeys = UBound(keyIdxStrs) - LBound(keyIdxStrs) + 1
 
     ' 最終データ行（A 列を見出しの直下から走査）
-    lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, headerRow)
     ' 最終列（見出し行を走査）
     lastCol = 0
     Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
@@ -1288,11 +1295,7 @@ Sub SplitColumn(oDoc As Object, headerRow As Integer, colIdx As Integer, sep As 
     oSheet = oDoc.Sheets.getByIndex(0)
     names = Split(namesCsv, ",")
 
-    lastRow = headerRow + 1
-    Do While oSheet.getCellByPosition(0, lastRow).getString() <> ""
-        lastRow = lastRow + 1
-    Loop
-    lastRow = lastRow - 1
+    lastRow = TableLastRow(oSheet, headerRow)
     lastCol = 0
     Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
         lastCol = lastCol + 1

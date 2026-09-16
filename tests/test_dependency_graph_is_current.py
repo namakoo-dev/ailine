@@ -103,3 +103,66 @@ def test_no_relative_imports_inside_the_core():
     assert not bad, (
         "ailine_core で相対 import を使っている ── 依存が図から消えます。"
         f"絶対 import（from ailine_core.x import y）に直してください: {bad}")
+
+
+# ---------------------------------------------------------------------------
+# ⑤ ★★ import では見えない 2 層が、図に**在る**こと（2026-09-16）
+#
+# ★ なぜ足したか: この図はもともと「辞書経由の呼び出しと Basic 側は見えない」と
+#   **自分で断っていた**。そして 2026-09-16 に出たバグ 3 件は、全部その 2 つに住んでいた ──
+#     ・名簿 `_OPS_THAT_SKIP_NON_DATA_ROWS` が AGGREGATE を落とし、合計行が実際に消えた
+#     ・`PROJECTIONS` が DEDUP を落とし、式が値に落ちることを誰にも告げなかった
+#     ・`AXES` が AGGREGATE/PIVOT を落とし、平均を頼むと黙って合計が返った
+#   ★ 「見えない」と断っただけでは、そこは永久に暗いまま。描けるものは描く。
+# ★ 消えても図は「一致」で通ってしまう（節ごと無くなれば生成側も一致する）ので、
+#   **節が在ること**と**中身が空でないこと**を別に縛る。
+# ---------------------------------------------------------------------------
+
+def test_the_layers_that_imports_cannot_see_are_drawn():
+    """⑤-1 層②（op → 生成関数 → Basic の腕 → 事後条件）と層③（op の名簿）が在ること。"""
+    t = DOC.read_bytes().decode("utf-8")
+    assert "## 層② op の配線" in t, "op の配線の節が消えた（辞書経由の層がまた暗くなる）"
+    assert "## 層③ op の名簿" in t, "op の名簿の節が消えた"
+    assert "Basic の腕" in t, "Basic 側への配線が図から消えた"
+
+
+def test_every_op_appears_in_the_wiring_table():
+    """⑤-2 空回りの検出 ── 全 op が配線の表に出ていること。
+
+    ★ 表が空でも、または 1 行でも、①の一致は通る。だから**分母**を別に縛る。
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(REPO / "src"))
+    import ailine
+    t = DOC.read_bytes().decode("utf-8")
+    body = t.split("## 層② op の配線")[1].split("## 層③")[0]
+    missing = [op for op in ailine.OP_SCHEMA if f"| `{op}` |" not in body]
+    assert not missing, f"配線の表に出ていない op: {sorted(missing)}"
+
+
+def test_the_roster_table_lists_every_op_and_at_least_one_roster():
+    """⑤-3 名簿の表も全 op を持つこと（名簿が 0 本なら表として無意味）。"""
+    import sys as _sys
+    _sys.path.insert(0, str(REPO / "src"))
+    _sys.path.insert(0, str(REPO / "tests"))
+    import ailine
+    from test_op_completeness import discover_op_rosters
+    n = len(ailine.OP_SCHEMA)
+    partial = [k for k, v in discover_op_rosters().items() if len(v["ops"]) < n]
+    assert partial, "部分の名簿が 1 本も見つからない（走査が壊れている）"
+    t = DOC.read_bytes().decode("utf-8")
+    body = t.split("## 層③ op の名簿")[1]
+    for k in partial:
+        assert k.split(":")[-1] in body, f"名簿が表に出ていない: {k}"
+    missing = [op for op in ailine.OP_SCHEMA if f"| `{op}` |" not in body]
+    assert not missing, f"名簿の表に出ていない op: {sorted(missing)}"
+
+
+def test_the_document_still_says_what_it_cannot_show():
+    """⑤-4 ★ 描いた分だけ注記を縮めたが、**残りの限界**は必ず書いてあること。
+
+    ★ 「全部見えている」と読ませないための行。描けば描くほど、この行が要る。
+    """
+    t = DOC.read_bytes().decode("utf-8")
+    assert "それでもなお出ないもの" in t, (
+        "描いた後の限界（実行時の条件分岐・Basic の腕どうしの呼び出し）が書かれていない")

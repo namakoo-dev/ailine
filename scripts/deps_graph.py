@@ -124,8 +124,144 @@ def render() -> str:
         "- Basic 側（`helpers/*.bas`）への依存",
         "- ★ **「辺が無い＝影響が無い」ではない。「import では繋がっていない」まで。**",
         "",
+        "★★ 2026-09-16: ここに挙げた 2 つ（辞書経由・Basic 側）に**バグが 3 件住んでいた**。",
+        "  『見えない』と断って済ませるのをやめ、**下に層②・層③として描いた**。",
+        "  それでもなお出ないもの: 実行時の条件分岐（どの経路を通るかは依頼文で変わる）と、",
+        "  Basic の腕どうしの呼び出し関係。",
+        "",
     ]
-    return "\n".join(header + lines) + "\n"
+    return "\n".join(header + lines + _wiring_section()) + "\n"
+
+
+def _op_wiring() -> dict:
+    """op → (生成関数, 事後条件, 呼ぶ Basic の腕) を**実体から**引く。
+
+    ★ なぜ要るか: この図はもともと import だけを見ていて、自分で
+      「辞書経由の呼び出しは辺に出ない／Basic 側は見えない」と断っていた。
+      2026-09-16 に出たバグ 3 件は**全部そこ**に住んでいた ──
+        ・名簿 `_OPS_THAT_SKIP_NON_DATA_ROWS` が AGGREGATE を落として合計行が消えた
+        ・`PROJECTIONS` が DEDUP を落として「失うもの」を告げなかった
+        ・`AXES` が AGGREGATE/PIVOT を落として平均が黙って合計になった
+      断ったなら描く。描けない理由が無いものを「見えない」で済ませない。
+    """
+    import inspect
+    import re as _re
+    sys.path.insert(0, str(SRC))
+    import ailine  # noqa: E402
+
+    bas = (SRC / "ailine" / "helpers" / "AiLineHelpers.bas").read_text(
+        encoding="utf-8", errors="replace")
+    arms = sorted(set(_re.findall(r"^\s*(?:Sub|Function)\s+(\w+)", bas, _re.M)))
+
+    def _src(fn):
+        try:
+            return inspect.getsource(fn)
+        except (OSError, TypeError):
+            return ""
+
+    rows = []
+    for op in sorted(ailine.OP_SCHEMA):
+        fn = ailine.CODEGEN_BY_OP.get(op)
+        pc = ailine.POSTCONDITIONS.get(op)
+        body = _src(fn)
+        called = sorted({m for m in _re.findall(r"Call\s+(\w+)\s*\(", body) if m in arms})
+        rows.append({
+            "op": op,
+            "codegen": getattr(fn, "__name__", "(無し)"),
+            "post": getattr(pc, "__name__", "★ 辞書に載らない"),
+            "arms": called,
+        })
+
+    # ★ 腕に届いているかは **Python 全体**から数える ── 生成関数だけを分母にすると
+    #   `wrap()` が足す MoveColumnTo や、別経路の WriteInspectionSheet を
+    #   「死んでいる」と誤って名指しする（試作で実際に踏んだ）。
+    whole = "\n".join(p.read_text(encoding="utf-8", errors="replace")
+                       for p in [SRC / "ailine" / "__init__.py"]
+                       + sorted((SRC / "ailine_core").rglob("*.py")))
+    unreached = [a for a in arms
+                 if not _re.search(r"\b" + a + r"\b", whole)
+                 and not _re.search(r"\b" + a + r"\s*\(",
+                                    _re.sub(r"^\s*(?:Sub|Function)\s+" + a + r"\b.*$",
+                                            "", bas, flags=_re.M))]
+    return {"rows": rows, "arms": arms, "unreached": sorted(unreached)}
+
+
+def _op_rosters() -> dict:
+    """op 名を並べた名簿（dict/set/frozenset/tuple/list）を実体から集める。
+
+    ★ 走査の本体は tests/test_op_completeness.py の `discover_op_rosters`。
+      **数え方を 2 つ持たない** ── 番人と図が別々に数えると、片方だけ直る。
+    """
+    sys.path.insert(0, str(REPO / "tests"))
+    from test_op_completeness import discover_op_rosters  # noqa: E402
+    sys.path.insert(0, str(SRC))
+    import ailine  # noqa: E402
+    n = len(ailine.OP_SCHEMA)
+    found = discover_op_rosters()
+    partial = {k: v["ops"] for k, v in found.items() if len(v["ops"]) < n}
+    return {"all": found, "partial": partial, "n": n,
+            "ops": sorted(ailine.OP_SCHEMA)}
+
+
+def _wiring_section() -> list:
+    w = _op_wiring()
+    r = _op_rosters()
+    short = {k: k.split(":")[-1] for k in r["partial"]}
+    out = [
+        "",
+        "---",
+        "",
+        "## 層② op の配線（import では見えない）",
+        "",
+        "★ 上の図は **import しか見ていない**。op の実処理は「辞書で引いて呼ぶ」ので、",
+        "  `op → 生成関数 → Basic の腕 → 事後条件` の道筋は 1 本も辺に出ない。",
+        "  2026-09-16 のバグ 3 件は**全部この層**に住んでいた。だからここに並べる。",
+        "",
+        f"- Basic の腕 **{len(w['arms'])}** 本 / Python のどこからも名指しされない腕: "
+        f"**{len(w['unreached'])}** 本"
+        + ("（" + " / ".join("`" + a + "`" for a in w["unreached"]) + "）"
+           if w["unreached"] else ""),
+        "",
+        "| op | 生成関数 | Basic の腕 | 事後条件 |",
+        "|---|---|---|---|",
+    ]
+    for row in w["rows"]:
+        arms = " / ".join("`" + a + "`" for a in row["arms"]) or "（Call を使わず直に書く）"
+        out.append(f"| `{row['op']}` | `{row['codegen']}` | {arms} | `{row['post']}` |")
+
+    # 同じ腕を分け合う op ── 片方だけ直すと片配線になる組
+    share = {}
+    for row in w["rows"]:
+        for a in row["arms"]:
+            share.setdefault(a, []).append(row["op"])
+    shared = {a: v for a, v in share.items() if len(v) > 1}
+    out += ["",
+            "★ **同じ腕を分け合う op**（片方だけ直すと、もう片方に同じ穴が残る）:",
+            ""]
+    out += [f"- `{a}` ← " + " / ".join("`" + o + "`" for o in sorted(v))
+            for a, v in sorted(shared.items())] or ["- （無し）"]
+
+    out += [
+        "",
+        "---",
+        "",
+        "## 層③ op の名簿（どの op がどの扱いを受けるか）",
+        "",
+        "★ ailine の判断の多くは「この op はこの名簿に居るか」で決まる。名簿は",
+        "  コードの中の dict / set / tuple なので、これも import の辺には出ない。",
+        "★ **全 op が居る名簿は載せない**（どの op も同じなので読む意味が無い）。",
+        f"  ここに出るのは**部分**の名簿 **{len(r['partial'])}** 本だけ。",
+        "★ 名簿が部分であること自体は多くの場合正しい。理由と解除条件は",
+        "  `tests/op_completeness_register.json` の `op_roster_coverage` に書いてある。",
+        "",
+        "| op | " + " | ".join(short[k] for k in sorted(r["partial"])) + " |",
+        "|---|" + "---|" * len(r["partial"]),
+    ]
+    for op in r["ops"]:
+        cells = ["○" if op in r["partial"][k] else "·" for k in sorted(r["partial"])]
+        out.append(f"| `{op}` | " + " | ".join(cells) + " |")
+    out.append("")
+    return out
 
 
 def main(argv=None):
