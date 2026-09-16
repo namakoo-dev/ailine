@@ -363,7 +363,10 @@ def test_the_three_deciders_share_one_organ():
        ★ 数は**等号**（レビュー #7: `>= 7` は呼び出しを 2 つ消しても緑だった）。
          呼ぶ場所は 7 ＝ 在否の門 3（条件つき書換／1 セル／名指しの読み直し）＋ 決定点 3
          （EXTRACT は 1 回の読みを名指しの門と決定点の 2 箇所で使う）＋ 包み 1。"""
-    assert count_in_product("compare_words.read(") == 7, count_in_product("compare_words.read(")
+    # ★ 2026-09-16: 8 に増えた。足したのは**行追加の関所**（「…列に★を入れて」が行追加に化けて
+    #   台帳に架空の行が入った事故・買い手役 2 体目）── 比較語が在る依頼を行追加に落とさない。
+    #   ★ 数だけ上げない。増えた理由をここに書く（等号で縛っているのは、黙って増えないため）。
+    assert count_in_product("compare_words.read(") == 8, count_in_product("compare_words.read(")
     assert count_in_product("_EXTRACT_CMP_WORDS") == 0, "旧辞書が本体に残っている（辞書が 2 つになる）"
     assert count_in_product("compare_words.unconfirmed(") == 3, "規則 ④ が 3 経路に配線されていない"
     assert count_in_product("if _cmp_read.ambiguous:") == 3, "否定・曖昧の断りが 3 経路に配線されていない"

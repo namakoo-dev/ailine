@@ -5592,6 +5592,16 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
     #   ★ 分担を変える: LLM は「誰の隣か」を言うだけ／**行番号は機械が実表を数えて決める**
     #     （列名の解決を機械 3 段でやっているのと同じ形）。
     #   ★ 機械が決めた位置は LLM の数字より優先する ── 実表を見た側が正しい。
+    # ★★ 2026-09-16（盲検の買い手役 2 体目・再現 2/2・EXIT=0 で通っていた）:
+    #   「納期が…より後の行のチェック列に★を入れて」が**行追加**に化け、受注台帳に
+    #   取引先も金額も空の行が入った。★ 買い手の値段の回答は 0 円で、理由はこの 1 件だった。
+    #   ★ 「その op にしてよいか」を依頼文に問い返す器官（OP_META の requires_word）は在るのに、
+    #     宣言していたのは PIVOT ただ 1 つ ── 行を足す op は「足す意図」を何も要求していなかった。
+    #   ★ 判定は ailine_core/intent.py に 1 つだけ置き、ここは材料を渡すだけ（既存の作法）。
+    _row_add_refusal = intent_mismatch.refuse_row_add_that_is_really_a_write(
+        task or "", comparison_in_task=compare_words.read(task).hit)
+    if _row_add_refusal:
+        return False, resolved, inferred, _row_add_refusal
     _sheet0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
     _hr0 = int((book_meta.get("header_rows") or {}).get(_sheet0, 1) or 1)
     _anchor0: dict = {}
