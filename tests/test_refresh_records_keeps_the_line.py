@@ -106,8 +106,22 @@ def test_the_tool_says_what_it_will_not_touch():
 
 
 def test_the_measured_marks_list_is_not_empty():
-    """★ 空回りの検出 ── 守る対象の名簿が空なら、②の試験は自明に通る。"""
-    sys.path.insert(0, str(REPO / "scripts"))
-    import refresh_records
-    assert len(refresh_records.MEASURED_MARKS) >= 3, refresh_records.MEASURED_MARKS
-    assert "MATRIX" in refresh_records.MEASURED_MARKS
+    """★ 空回りの検出 ── 守る対象の名簿が空なら、②の試験は自明に通る。
+
+    ★★ 2026-09-16: 初版は `sys.path` に scripts を足して `import refresh_records` していた。
+      手元では通るが、**素の環境の番人**（scripts/_ci_parity_blocker.py）が
+      「宣言外の import」として弾き、push が止まった ── 番人としては正しい振る舞いで、
+      直すのは検体の側。`ast` で**読むだけ**にして、import しない
+      （道具の中身を確かめるのに、道具を動かす必要はない）。
+    """
+    import ast
+    tree = ast.parse(TOOL.read_bytes().decode("utf-8"))
+    marks = None
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Assign)
+                and any(getattr(t, "id", "") == "MEASURED_MARKS" for t in n.targets)):
+            marks = ast.literal_eval(n.value)
+            break
+    assert marks is not None, "MEASURED_MARKS の宣言が見つからない"
+    assert len(marks) >= 3, marks
+    assert "MATRIX" in marks
