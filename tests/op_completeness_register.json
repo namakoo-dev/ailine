@@ -7,7 +7,8 @@
       "postcondition",
       "op_verbs",
       "battery>=2"
-    ]
+    ],
+    "op_roster_coverage_rule": "op 名を並べた名簿（dict / set / frozenset / tuple / list）は、全部ここに被覆を宣言する。『全域』なら本当に全 op を持つこと。『部分』なら reason（正直な理由・分からなければ「未調査」）と unlock（何が起きたら見直すか）を必ず書く。番人は tests/test_op_completeness.py の④。★ 部分であること自体は多くの場合正しい。悪いのは、部分なのが意図か足し忘れかを誰も問わないまま置かれること ── 2026-09-16 にそれで合計行が消えていた。"
   },
   "registered_op_tables": [
     "src/ailine/__init__.py:CODEGEN_BY_OP",
@@ -20,6 +21,7 @@
     "src/ailine/__init__.py:_OP_SCHEMA_NOTES",
     "src/ailine_core/examples.py:EXAMPLE_TASKS",
     "src/ailine_core/intent.py:REDUCING_EXAMPLES",
+    "src/ailine_core/intent.py:STRUCTURAL_EFFECT",
     "src/ailine_core/op_axes.py:AXES",
     "src/ailine_core/projection.py:PROJECTIONS",
     "src/ailine_core/target_sheet.py:_OP_VERBS"
@@ -61,5 +63,112 @@
       "reason": "REPORT_PER_ROW と同じ設計コメント（target_sheet.py:173-177）が名指しした『集計する/転記する』と同じ形の自然なフォールバックに当たる。FORMAT_MAP のラベルは『様式写像』で、フォールバックは『様式写像する/様式写像した』── 日本語として破綻していない自然な活用（「様式写像をした場合を」のような3択の文でも意味が通る）。個別の活用形を要する具体的な不自然さは見つかっていない。",
       "unlock": "FORMAT_MAP の3択文言（sheet_conflict_choice_lines 経由）が実際に日本語として不自然だと判明したとき、または _OP_VERBS に個別の活用形が必要な具体的な検体が見つかったとき。"
     }
-  ]
+  ],
+  "op_roster_coverage": {
+    "src/ailine/__init__.py:OP_META": {
+      "coverage": "full"
+    },
+    "src/ailine/__init__.py:OP_SUBJECT_SLOTS": {
+      "coverage": "full"
+    },
+    "src/ailine/__init__.py:OP_WRITE_TARGET": {
+      "coverage": "full"
+    },
+    "src/ailine/__init__.py:_CONFIRM_FIELDS": {
+      "coverage": "full"
+    },
+    "src/ailine/__init__.py:CODEGEN_BY_OP": {
+      "coverage": "full"
+    },
+    "src/ailine/__init__.py:POSTCONDITIONS": {
+      "coverage": "partial",
+      "reason": "CHART 1 つだけ欠ける。検証が無いのではなく『登録方式（辞書）に乗らない』── 他の op は (out_book, resolved_args, header_row) の共通シグネチャだが、CHART は 『適用前のグラフ数と比べて +1 か』を見るため before_charts を要る。run_postcondition が辞書引きの手前で特別扱いしている（src/ailine/__init__.py:10150-10169）。免除簿の {CHART, postcondition} エントリと同じ実態。",
+      "unlock": "check_chart を共通シグネチャに包むアダプタを書いて dict に統合し、run_postcondition の if 分岐を消したとき。そのとき免除の腐り防止が赤くなる。"
+    },
+    "src/ailine_core/target_sheet.py:_OP_VERBS": {
+      "coverage": "partial",
+      "reason": "日本語の活用形を手書きする表。ここに無い op は『ラベル+する / ラベル+した』に落ちる（target_sheet.py:326-330 が明記）。欠ける 5 op はいずれもフォールバックが自然に読める（集計する／転記する／セル結合する／帳票作成する／様式写像する）。5 op すべて免除簿に宣言済み。★ ただし MERGE は免除簿自身が「未調査（設計意図か単なる未整備か特定できず）」と書いている。",
+      "unlock": "3 択の文言が実際に日本語として不自然だと判明したとき、または個別の活用形が要る検体が出たとき。名簿ごと要らなくなるのは、活用形をラベルから機械生成できるようになったとき。"
+    },
+    "src/ailine_core/examples.py:EXAMPLE_TASKS": {
+      "coverage": "partial",
+      "reason": "『そのまま打てば通る 1 文』だけを載せる。無い op は黙る（examples.py:29「無い例を発明しない」）。番人 test_the_example_actually_runs が 1 例につき実機 1 本を**固定の検体 1 枚**（シート「表」／品名・部門・金額・備考／3 行）に打つので、その 1 枚では書けない例が実在する ── LOOKUP_FILL は 2 枚目が要る、REPORT_PER_ROW/FORMAT_MAP は雛形シートが要る、SPLIT_CELL は区切りのある列が無い、COMPUTE_COLUMN は数値列が 1 本しかなく 2 項演算が書けない。",
+      "unlock": "番人の検体を『2 シート＋雛形＋区切りのある列＋数値 2 列』に広げたとき（COMPUTE_COLUMN / SPLIT_CELL / LOOKUP_FILL / REPORT_PER_ROW / FORMAT_MAP が書けるようになる）。★ COMPUTE_COLUMN は軸の断り（累乗など）の直後に例の行を出す経路が在るのに例が無く、同じ形の APPEND_TOTAL では出る ── 直しは『例を足す』でなく『検体を広げる』側。"
+    },
+    "src/ailine_core/examples.py:DEFAULT_SUGGESTIONS": {
+      "coverage": "partial",
+      "reason": "曖昧な依頼への『まずこれが頼めます』の既定の並び。表示側の上限が limit=3 なので、3 つを超えて持っても画面に出ない（examples.py:82, 92-94, 99-100）。",
+      "unlock": "呼び出し側（__init__.py:13684）が場面に応じた op 群を ops= で渡すようになったとき ── そうなれば『既定の並び』自体が要らなくなる。または limit が 3 でなくなったとき。★ 所見: いまは ops を渡していないので、集計や転記の聞き返しでも例は『けい線／列幅／太字』になる。これは名簿に足しても直らない（呼び出し側の引数の問題）。"
+    },
+    "src/ailine_core/projection.py:PROJECTIONS": {
+      "coverage": "partial",
+      "reason": "値を写して新しい表を作る op が『この写し方で保存されないもの』を宣言する表。分母は手書きの _DERIVE_OPS（tests/test_projection_declares_what_it_drops.py:32-35）で、その定義は『postconditions/derive.py の対象』── **意味でなくファイルの置き場が分母**になっている。★ 2026-09-16 の掃き出しで DEDUP の欠けを見つけた（check_dedup だけ move.py に在るため漏れた）。宣言は EXTRACT と一字一句同じで、生成する Basic の行コピー部も同一、事後条件も『EXTRACT の兄弟・非破壊形』と自称している。",
+      "unlock": "keeps/drops を OP_WRITE_TARGET と事後条件の宣言から機械で導けるようになったとき。それまでは、値を写して新しい表を作る op が増えるたび _DERIVE_OPS と同時に更新する。"
+    },
+    "src/ailine_core/op_axes.py:AXES": {
+      "coverage": "partial",
+      "reason": "op の『軸』の上で、まだ実装していない兄弟を宣言する閉集合。2026-08-22 に Namakoo が却下したのは開集合（道具が持たない全機能）── 軸は op の意味が決めるので有限、という線で狭くしてある（op_axes.py:33-37）。★ 読まれるのは断り／提案の 3 経路だけで、**LLM が実在の op を返した成功経路では読まれない**。",
+      "unlock": "実需で別の op の軸に『まだ無い値』が出たとき（各 note が発火条件を持つ）。★ 掃き出しの所見: AGGREGATE / PIVOT は合計しか計算しない（SummaryTable / PivotSum）のに軸を宣言しておらず、AGGREGATE 側は _COUNT_WORDS の if で件数だけを手書きで止めている（文面は render_axis_refusal の雛形と同じ言い回し）。ただし AXES に足すだけでは成功経路に効かないので、_verify_aggregate から軸を引く配線が要る。**平均が AGGREGATE へ写るかは未実測** ── 測ってから動かす。"
+    },
+    "src/ailine_core/intent.py:REDUCING_EXAMPLES": {
+      "coverage": "partial",
+      "reason": "『減らしてよければこう頼んでください』の op ごとの文例。到達できるのは ROW_REDUCING_OPS の 3 op だけ（intent.py:80-81 が他を早期 return）なので、自分の定義域に対しては 3/3 の全域。",
+      "unlock": "ROW_REDUCING_OPS が増えたら同時に増やす。名簿が消えるのは refuse_reducing_a_check が消えるとき＝『見つけるだけの操作』を実装したとき。★ 2026-09-16 に等号の番人を足した（足し忘れると黙って一般文に落ちていた）。"
+    },
+    "src/ailine_core/intent.py:ROW_REDUCING_OPS": {
+      "coverage": "partial",
+      "reason": "『見るだけ』の依頼を減らす op に写したら断る、その対象。**測って狭くした** ── 確認語が抽出（読むだけ・新しいシート）に着いた依頼は盲検で 9/9 正だったので、対象を広げると正しい経路を壊す側に倒れる（intent.py:45-46・DESIGN-20260914）。共通条件は破壊性ではなく『出力に、見るだけの問いへの答えが残らない』こと（DEDUP は非破壊だが該当する）。",
+      "unlock": "盲検の言い回しで、抽出以外の『読むだけ』系 op に確認語が着いて誤配する家系が出たとき（＝ 9/9 の測定が崩れたとき）。または『見つけるだけの操作』を実装したとき。"
+    },
+    "src/ailine_core/intent.py:STRUCTURAL_EFFECT": {
+      "coverage": "partial",
+      "reason": "表の**構造**を変える op（行や列が増減する）と、その帰結・本当に頼む時の書き方。構造を変えない op（書式・並べ替え・条件つき書換など）は対象外なので部分で正しい。",
+      "unlock": "行や列を増減させる op が増えたとき（足さないと、条件つき書換がその op に化けても止まらない）。名簿ごと要らなくなるのは、OP_WRITE_TARGET の writes 宣言から『構造を変えるか』を機械で導けるようになったとき。"
+    },
+    "src/ailine/__init__.py:_OPS_THAT_SKIP_NON_DATA_ROWS": {
+      "coverage": "partial",
+      "reason": "合計行などデータ行でない行を**自分で対象外にする** op。データを走査する op だけなので部分で正しい。★ 2026-09-16 に AGGREGATE の欠けを見つけた（合計行が実際に消えていた）。",
+      "unlock": "全域化はありえない（書式 op は自分で外さない）。★ 2026-09-16 に、実装から導いた集合と等号で縛る番人へ畳んだので、この名簿は手で守るものではなくなった ── 直し忘れれば番人が赤くなる。"
+    },
+    "src/ailine/__init__.py:PLAN_CHAIN_CONSUMER_OPS": {
+      "coverage": "partial",
+      "reason": "前段が作った派生シートを対象として引き継ぐ op。書式だけを触る op は元表に掛けたい場合も多いので外してある（__init__.py:3280 が明記）。",
+      "unlock": "『絞り込んだ結果に掛けたいのか元表に掛けたいのか』を機械が決められるようになったとき。★ 2026-09-16 の掃き出しの所見（未処置・証拠つき）: EXTRACT_COLUMNS は『EXTRACT と同じ・新しいシートを作るだけ』と宣言され作り手としては配線済みなのに使い手として載っていない（作り手 yes・使い手 no の片配線）。SET_WHERE も_OPS_THAT_SKIP_NON_DATA_ROWS に SORT/EXTRACT/AGGREGATE と並んで載るのにここに無く、2 段目が**元の台帳の既存列に書き込む**。どちらも ★ 助言と △ は出るが、原本は書き換わった後。"
+    },
+    "src/ailine/__init__.py:PLAN_CHAIN_WARNING_OPS": {
+      "coverage": "partial",
+      "reason": "★ 未調査あらため **死んだ名前** ── src に読み手が無い（2026-09-15 の eb10631 で唯一の読み手が宣言駆動の plan_chain_sheet_of に置き換わった）。在る/無いで挙動は変わらない。★ 危険なのは名前が残っていること自体 ── 『連鎖の警告対象はこの 2 つ』と読めるのに何も制御していない。",
+      "unlock": "削除すること。tests/ailine_public_surface.txt:67 から外し、tests/test_plan_chaining.py:36 の hasattr ガードを実在する名前に付け替えれば消せる。"
+    },
+    "src/ailine/__init__.py:PLAN_CHAIN_UNNAMED_PRODUCERS": {
+      "coverage": "partial",
+      "reason": "新しいシートを作ると宣言する 7 op のうち、**出力シート名が 1 つに決まらない**ものだけを連鎖の作り手から外す（__init__.py:6683-6685 が明記）。母数は構造上その 7 op に限られる。",
+      "unlock": "全域化はありえない。名簿が**空になる**条件なら在る ── REPORT_PER_ROW の N 枚に索引シートを1 枚足す等で『直前の出力』が 1 つに決まり、FORMAT_MAP の出力先名が機械に決まったとき。"
+    },
+    "src/ailine/__init__.py:OP_DECLARED_SHEET_NAME": {
+      "coverage": "partial",
+      "reason": "helpers/*.bas が**固定で決め打つ**出力シート名を op に対応づける表（__init__.py:1789-1793）。出力名が動的な op（col/cmp/value から機械決定）は明示的に対象外で、単位H 側が扱う。",
+      "unlock": "固定名で書き出すヘルパが増えたとき（同じ commit でここへ足す）。全 30 op が要ることはない。"
+    },
+    "src/ailine/__init__.py:KEEP_FOR_COLUMN_REQUEST": {
+      "coverage": "partial",
+      "reason": "『列を追加して』という依頼に対して、一段目の答えを**そのまま残してよい** op の allowlist。中身のある列を作る op だけ。除外側を数え上げると、返しうる op が増えるたび穴が開くためallowlist にしてある（__init__.py:9707-9709）。",
+      "unlock": "『中身のある列を作る』op が新設されたとき。名簿を消せるのは、一段目が ADD_COLUMN を安定して返すようになったとき。★ 2026-09-16 の掃き出しで SPLIT_CELL に両論が出た ── 宣言（新しい列を作る）は在る 2 op と同じだが、__init__.py:13207-13209 は実測に基づき**外す相手として名指ししている**。裸の「列を追加して」では現状が正しく、分割語を伴う言い方では現状が誤る。op 単位の粒度では両立しないので、**判断は人に返す**（Namakoo 待ち）。"
+    },
+    "src/ailine/__init__.py:MACHINE_DERIVED_ARGS": {
+      "coverage": "partial",
+      "reason": "★ 未調査 ── EXTRACT を入れた理由（2026-08-30 の実測事故）は書かれているが、他の op を入れていない理由はどこにも書かれていない。コードから言えるのは母数だけで、読み手のガードにより意味を持つのは新しいシートを作る 7 op に限られる。",
+      "unlock": "その 7 op それぞれについて『機械が依頼文から取り直す引数』を洗い出して載せたとき。より強い形は resolved['_sources'] から名簿を導いて等号で縛ること。★ 掃き出しの所見（未処置）: EXTRACT_COLUMNS は EXTRACT と同じ A' 原則で cols を機械が拾うのに載っておらず、段が畳まれず 2 段目が 1 段目の出力を作り直す。EXTRACT の cmp も機械が取り直す側になったのに名簿は value/values のまま。"
+    },
+    "src/ailine/__init__.py:_COLUMN_ARG_KEYS": {
+      "coverage": "partial",
+      "reason": "★ 未調査 ── 何をする表か（col 系 slot を持つ op → その slot 名）は書かれているが、なぜ 4 op だけなのかは書かれていない。観測できる事実として、この名簿は事故が出るたび1 本ずつ足されてきた（CHART の category_col が『4 本目の配線』と試験に記録されている）。",
+      "unlock": "OP_SUBJECT_SLOTS が既に op ごとに SUBJ_COLUMN の slot を宣言しているので、**そこから導いて等号で縛る**こと ── そうすれば事故のたびに『5 本目』を足す必要がなくなる。★ 掃き出しの所見（未処置）: PIVOT は AGGREGATE と slot 名まで同一なのに救済されず『列がこの表にありません』で落ちる（兄弟間の片配線）。APPEND_TOTAL も SORT の col と同種で、COMPUTE_COLUMN→APPEND_TOTAL の複合検体が battery に実在する。"
+    },
+    "src/ailine/__init__.py:_OP_SCHEMA_NOTES": {
+      "coverage": "partial",
+      "reason": "op を機械が固定して args だけ埋めさせる**第二段翻訳**のプロンプトに 1 行足す表。slot 名だけでは意味が伝わらない op にだけ足す（__init__.py:3758-3760）。",
+      "unlock": "第二段で args の取り違えが実測された op が出たら 1 行足す。★ 掃き出しの所見（未処置）: SET_CELL_VALUE は『col に書き込む値を入れてきた』（列名と値が入れ替わる）が 2026-08-30 に実測されており、これは名簿に在る SET_WHERE の注記が防いでいる誤りと同型。★ 併せて訂正: 『語彙を増やすと濁る』の実測（98.1%→94.2%）は一段目の OPS_DOC 全文の話で、この名簿が載るのは op を固定した第二段（1 op 分しか見せない）── 足す費用はその op に閉じる。抑止の根拠として使うなら測った場所が違う。"
+    }
+  }
 }

@@ -5598,10 +5598,6 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
     #   ★ 「その op にしてよいか」を依頼文に問い返す器官（OP_META の requires_word）は在るのに、
     #     宣言していたのは PIVOT ただ 1 つ ── 行を足す op は「足す意図」を何も要求していなかった。
     #   ★ 判定は ailine_core/intent.py に 1 つだけ置き、ここは材料を渡すだけ（既存の作法）。
-    _row_add_refusal = intent_mismatch.refuse_row_add_that_is_really_a_write(
-        task or "", comparison_in_task=compare_words.read(task).hit)
-    if _row_add_refusal:
-        return False, resolved, inferred, _row_add_refusal
     _sheet0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
     _hr0 = int((book_meta.get("header_rows") or {}).get(_sheet0, 1) or 1)
     _anchor0: dict = {}
@@ -6360,6 +6356,33 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     #   関所は 1 箇所（判定は intent に置き、ここは呼ぶだけ）。依頼文が無い経路は触らない。
     if task and (_chk := intent_mismatch.refuse_reducing_a_check(task, op, OP_LABELS.get(op, op))):
         return False, resolved, inferred, _chk
+
+    # ★★ 2026-09-16（買い手役 2 体目・0 円査定の唯一の理由）: 「…の行のチェック列に★を入れて」が
+    #   **行追加**に化け、受注台帳に取引先も金額も空の行が EXIT=0 で入った。
+    #   ★ 朝の直しは ADD_ROW **1 op だけ**に置いたが、同じ文を表の構造を変える 9 op 全部に
+    #     通したら **4 op が通った**（DELETE_COLUMN／INSERT_ROWS／APPEND_TOTAL／COMPUTE_COLUMN）。
+    #   ★ だから op ごとに置かず、**全 op が必ず通るここ**に移した。判定は intent に 1 つ。
+    if task and (_sw := intent_mismatch.refuse_structural_op_that_is_really_a_write(
+            task, op, comparison_in_task=compare_words.read(task).hit)):
+        return False, resolved, inferred, _sw
+
+    # ★★ 2026-09-16（掃き出しで出た、いちばん重い壊れ方）: 「部門ごとの**平均**金額を出して」が
+    #   **合計**を計算して通り、出力の見出しは『合計 - 金額』、値は青果 400（平均なら 200）、
+    #   それで **✓ 機械検証済み** が出ていた（実機で再現）。間違った答えに ✓ が付く形。
+    #   ★ 軸（op_axes.py）という器官は在り、「まだ扱えません」の文面まで持っていたのに、
+    #     読まれるのは**語彙外の断り／もしかしての提案**の経路だけで、
+    #     LLM が実在の op を返した**成功経路では一度も読まれていなかった** ── 片配線。
+    #   ★ だから op ごとでなく、単発も計画の段も通るここで 1 回だけ判定する。
+    #   ★ 誤爆は実測で 0/31（battery の軸を持つ op の検体）。「最大手」は not_when で外した。
+    if task:
+        _ax_v, _ax_d = judge_axis(op, task, headers.get(first_sheet) or [])
+        if _ax_v == "lacks":
+            # ★ 通る書き方（「こう頼めます」）は**呼び出し側の断りの画面が既に出す** ──
+            #   ここで足すと実機で 2 回出た（重ねない。断り文は 1 行に保つ）。
+            _ax_lines = [ln.lstrip("？ ") for ln in render_axis_refusal(
+                op, _ax_d, OP_LABELS.get(op, op))]
+            if _ax_lines:
+                return False, resolved, inferred, "\n".join(_ax_lines)
 
     def resolve_in(key: str, sheet_name: str):
         val, was_inferred, err = resolve_col_ref(resolved.get(key), headers.get(sheet_name, []))
@@ -9117,10 +9140,17 @@ def fold_identical_steps(plan) -> tuple:
     return out, dropped
 
 
-#: 合計行など「データ行でない行」を**自分で対象外にする** op（_skip_rows を立てる側）。
-#: ★ 実測で確かめた 3 つ（_verify_sort / _verify_extract / _verify_set_where が
-#:   「データ行でないため…ません」を画面に出す）。増やす時はここだけ直す。
-_OPS_THAT_SKIP_NON_DATA_ROWS = frozenset({"SORT", "EXTRACT", "SET_WHERE"})
+#: 合計行など「データ行でない行」を**自分で対象外にする** op。
+#: ★★ 2026-09-16 の掃き出しで **AGGREGATE が抜けていた**（手書きの名簿の片配線）。
+#:   実害: 「合計行を除いて部署別に集計して」だけが、先頭の行削除の段を落とせず
+#:   **利用者の台帳から合計行を実際に消していた**。同じ言い方でも並べ替え・抽出では消えない。
+#:   ★ 見つけ方は「名簿」と「実装」を突き合わせただけ ── 名簿を目で読んでも気づけない。
+#: ★ 数え方は 2 通り在る（どちらも「自分で外す」の実装）:
+#:     _skip_rows を生成関数に渡す … AGGREGATE / EXTRACT / SET_WHERE
+#:     _sort_end_row で末尾を切る  … SORT（別の腕 SortByColumnUpTo を呼ぶ）
+#:   ★ これは tests/test_op_completeness.py の番人が**実装から導いて等号で縛る**。
+#:     だから増やす時はここを直せば足りる ── 直し忘れれば番人が赤くなる。
+_OPS_THAT_SKIP_NON_DATA_ROWS = frozenset({"SORT", "EXTRACT", "SET_WHERE", "AGGREGATE"})
 
 
 def too_many_placements(plan) -> str | None:

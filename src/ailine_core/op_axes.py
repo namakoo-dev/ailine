@@ -52,12 +52,18 @@ class Axis:
     has:   いま持っている値（人に見せる。「合計」）
     lacks: {依頼文に現れる語: 人に見せる名前} ── ★ **まだ**持っていないもの
     since: いつ・なぜ保留にしたか（発火条件つきで残す）
+    not_when: その語を含むが**別の意味**になる、より長い語（実測で足す閉じた集合）
     """
 
-    __slots__ = ("name", "has", "lacks", "note")
+    __slots__ = ("name", "has", "lacks", "note", "not_when")
 
-    def __init__(self, name: str, has: tuple, lacks: dict, note: str = ""):
+    def __init__(self, name: str, has: tuple, lacks: dict, note: str = "",
+                 not_when: tuple = ()):
         self.name, self.has, self.lacks, self.note = name, tuple(has), dict(lacks), note
+        #: ★★ 2026-09-16 実測で必要になった ──「最大手の取引先ごとに集計して」が
+        #:   『最大』を拾って断られた。ここは**開集合にしない**（Namakoo が 2026-08-22 に
+        #:   却下したのは「持たない機能の全列挙」の側）。実際に外した語だけを足す。
+        self.not_when = tuple(not_when)
 
 
 AXES = {
@@ -68,7 +74,29 @@ AXES = {
         note="★ 保留（2026-09-05・Namakoo）: 平均などは**後に扱う可能性がある**。"
              "扱えるようになったら has へ動かすだけでよい。"
              "発火条件: 実需で平均/最大/最小が来たら、または合計以外の集約が"
-             "語彙に入ったとき。"),
+             "語彙に入ったとき。",
+        not_when=("最大手",)),
+    # ★★ 2026-09-16 の掃き出しで足した。集計もピボットも**合計しか計算しない**
+    #   （SummaryTable / PivotSum）のに、軸を宣言していなかった。
+    #   実機で確かめた事故: 「部門ごとの平均金額を出して」→ 合計が計算され、
+    #   出力の見出しは『合計 - 金額』、値は青果 400（平均なら 200）、それで **✓** が出た。
+    #   ★ 間違った答えに ✓ ── 黙って別の数字を返すのが、この道具でいちばん重い壊れ方。
+    #   ★ 件数の家系（件数/何件/回数/人数…）はここに入れない ── AGGREGATE 側に
+    #     「合計する列を依頼文が名指ししていれば通す」という**測って決めた逃げ道**が在り、
+    #     軸の判定はその形を持たない。畳むなら別途測ってからにする（未処置・理由つき）。
+    "AGGREGATE": Axis(
+        name="集約関数", has=("合計",),
+        lacks={"平均": "平均", "平均値": "平均", "最大": "最大", "最大値": "最大",
+               "最小": "最小", "最小値": "最小", "中央値": "中央値"},
+        note="★ 保留（2026-09-16）: APPEND_TOTAL と同じ軸・同じ穴。"
+             "扱えるようになったら has へ動かすだけでよい。",
+        not_when=("最大手",)),
+    "PIVOT": Axis(
+        name="集約関数", has=("合計",),
+        lacks={"平均": "平均", "平均値": "平均", "最大": "最大", "最大値": "最大",
+               "最小": "最小", "最小値": "最小", "中央値": "中央値"},
+        note="★ 保留（2026-09-16）: PivotSum が合計固定。AGGREGATE と同じ軸。",
+        not_when=("最大手",)),
     "COMPUTE_COLUMN": Axis(
         name="演算子", has=("足し算", "引き算", "掛け算", "割り算"),
         lacks={"累乗": "累乗", "べき乗": "累乗", "剰余": "剰余"},
@@ -95,8 +123,12 @@ def judge_axis(op: str | None, task: str, headers=None) -> tuple:
     if axis is None or not task:
         return "ok", None
     cols = [str(h) for h in (headers or []) if h]
+    # ★ 別の意味になる長い語を先に伏せる（「最大手」の中の『最大』を拾わない）。
+    probe = task
+    for s in axis.not_when:
+        probe = probe.replace(s, "")
     for word, shown in axis.lacks.items():
-        if word not in task:
+        if word not in probe:
             continue
         # ★ その語を含む列名が、依頼文に**そのまま**現れているか
         named = [h for h in cols if word in h and h in task]

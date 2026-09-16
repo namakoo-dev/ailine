@@ -27,6 +27,7 @@ SET_COLUMN_VALUE は battery 検体0件・APPEND_TOTAL は1件（どちらも看
    reason/unlock が空のエントリも赤。
 """
 import ast
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -70,46 +71,68 @@ def _scan_target_files() -> list:
     return [REPO / "src" / "ailine" / "__init__.py"] + sorted((REPO / "src" / "ailine_core").glob("*.py"))
 
 
-def discover_op_tables(min_hits: int = 3) -> dict:
-    """ailine.py / ailine_core/*.py を ast で走査し、「dict リテラルを値に持つ単純代入
-    （`X = {...}`）で、キーの文字列集合が OP_SCHEMA の op 名を min_hits 件以上含むもの」を
-    全部見つける。戻り値: {"相対パス:変数名": {ヒットした op 名の集合}}。
+def discover_op_rosters(min_hits: int = 1) -> dict:
+    """ailine.py / ailine_core/*.py を ast で走査し、**op 名を並べた名簿**を全部見つける。
+    戻り値: {"相対パス:変数名": {"kind": 種別, "ops": ヒットした op 名の集合}}。
 
-    ★ 判定条件（誤検知対策・実測 2026-08-20 で確認した通りに絞ってある）:
-      - 対象は ast.Assign かつ value が ast.Dict のみ。dict 内包表記(DictComp)は対象外
-        ―― キーが文字列リテラルでなく式のため機械的に op 名の集合を取り出せない
-        （例: `OP_LABELS = {op: meta["label"] for op, meta in OP_META.items()}` は
-        キーが変数 op であり静的には拾えない。OP_LABELS は OP_META の派生物として
-        FULL_DOMAIN_TABLES 側で個別に完全性を見る）。
-      - キーは ast.Constant(str) のみ数える（f-string・変数キー等は無視）。
-      - 代入先が単純な Name（`X = {...}`）のものだけを対象にする。
-      - 変数名が "OP_SCHEMA" のものは対象外（op 名そのものを列挙する基底表であり、
-        比較の基準そのものなので自分自身は目録に含めない）。
-      - ast.walk でモジュール内の全ノード（関数内のローカル変数も含む）を走査するが、
-        実測（2026-08-20・ailine.py + ailine_core/*.py 全ファイル）ではモジュール直下の
-        8件（OP_SCHEMA を含む）以外に該当は無く、誤検知は出なかった。将来ローカル変数の
-        辞書が誤検知したら、ここに絞り込み条件（例: 関数内を除外）を追記すること。
+    ★★ 2026-09-16 の掃き出しでここを広げた。それまでは「dict リテラルで op 3 つ以上」
+      だけを見ていて、**23 件の名簿のうち 9 件が不可視**だった:
+        frozenset PLAN_CHAIN_CONSUMER_OPS(12) / _OPS_THAT_SKIP_NON_DATA_ROWS(3) /
+        ROW_REDUCING_OPS(3)、tuple DEFAULT_SUGGESTIONS(3) / PLAN_CHAIN_WARNING_OPS(2) /
+        KEEP_FOR_COLUMN_REQUEST(2)、dict OP_DECLARED_SHEET_NAME(2) /
+        PLAN_CHAIN_UNNAMED_PRODUCERS(2) / MACHINE_DERIVED_ARGS(1)。
+      ★ 見えない名簿は「部分なのは意図か」を誰にも問われない ── そこに片配線が溜まる。
+        実際 _OPS_THAT_SKIP_NON_DATA_ROWS は AGGREGATE を落としていて、
+        「合計行を除いて集計して」が利用者の合計行を**実際に消していた**。
+      ★ 種別（dict/set/frozenset/tuple/list）と個数の下限（1）を広げただけで、
+        判定条件そのものは前と同じ ── キーは文字列リテラルのみ・代入先は単純な Name のみ。
+
+    ★ 判定条件（誤検知対策・実測どおりに絞ってある）:
+      - 対象は ast.Assign。値は Dict / Set / List / Tuple / frozenset(...) / set(...)。
+        dict 内包表記(DictComp)は対象外 ―― キーが式のため静的に op 名を取れない
+        （例: `OP_LABELS = {op: meta["label"] ...}`。OP_LABELS は FULL_DOMAIN_TABLES 側で見る）。
+      - 要素/キーは ast.Constant(str) のみ数える（f-string・変数キー等は無視）。
+      - 変数名が "OP_SCHEMA" のものは対象外（比較の基準そのもの）。
     """
     found = {}
     for path in _scan_target_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         rel = path.relative_to(REPO).as_posix()
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)):
+            if not isinstance(node, ast.Assign):
                 continue
             names = [t.id for t in node.targets if isinstance(t, ast.Name)]
             if not names:
                 continue
-            keys = {k.value for k in node.value.keys
-                    if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            value, kind, items = node.value, None, []
+            if isinstance(value, ast.Dict):
+                kind, items = "dict", list(value.keys)
+            elif isinstance(value, (ast.Set, ast.List, ast.Tuple)):
+                kind, items = type(value).__name__.lower(), list(value.elts)
+            elif (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                    and value.func.id in ("frozenset", "set")):
+                kind = value.func.id
+                for arg in value.args:
+                    if isinstance(arg, (ast.Set, ast.List, ast.Tuple)):
+                        items += list(arg.elts)
+            if kind is None:
+                continue
+            keys = {n.value for n in items
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)}
             hit = keys & OP_SET
             if len(hit) < min_hits:
                 continue
             for name in names:
                 if name == "OP_SCHEMA":
                     continue
-                found[f"{rel}:{name}"] = hit
+                found[f"{rel}:{name}"] = {"kind": kind, "ops": hit}
     return found
+
+
+def discover_op_tables(min_hits: int = 3) -> dict:
+    """★ 旧名（dict・op 3 つ以上だけ）。①の目録が守ってきた範囲をそのまま残す。"""
+    return {k: v["ops"] for k, v in discover_op_rosters(min_hits=min_hits).items()
+            if v["kind"] == "dict" and len(v["ops"]) >= min_hits}
 
 
 def battery_op_counts() -> dict:
@@ -262,4 +285,120 @@ def test_stale_exemptions_are_removed():
     assert not stale, (
         "実体が既に要求を満たしているのに免除簿に残っている免除がある（免除を消せ）: "
         + ", ".join(f"{e['op']}/{e['requirement']}" for e in stale)
+    )
+
+
+# ---------------------------------------------------------------------------
+# ④ 被覆の宣言（2026-09-16 の掃き出しで新設）
+#
+# ★ なぜ在るか: op の名簿が**部分**であること自体は正しい場合が多い。悪いのは
+#   「部分なのは意図か、それとも足し忘れか」を誰も問わないまま置かれることである。
+#   実測: 23 件の名簿のうち 9 件は番人にそもそも見えておらず、その中の
+#   _OPS_THAT_SKIP_NON_DATA_ROWS は AGGREGATE を落としていた（合計行が消える実害）。
+#   ★ だから「全域」か「部分＋理由＋解除条件」を**全名簿に宣言させる**。
+#     新しい名簿を足した人は、必ずどちらかを書く ── 書かなければ赤くなる。
+# ---------------------------------------------------------------------------
+
+def _load_coverage(register: dict) -> dict:
+    return register.get("op_roster_coverage", {})
+
+
+def test_every_op_roster_declares_its_coverage():
+    """見つけた名簿は全部、被覆の宣言を持つこと（新しい名簿を足した瞬間に赤くなる）。"""
+    register = _load_register()
+    declared = set(_load_coverage(register))
+    discovered = set(discover_op_rosters())
+    missing = sorted(discovered - declared)
+    assert not missing, (
+        "op の名簿が見つかったのに op_roster_coverage に宣言が無い"
+        f"（部分被覆が意図か足し忘れかを誰も問うていない）: {missing}。"
+        " tests/op_completeness_register.json の op_roster_coverage に"
+        ' {"coverage": "full"} か {"coverage": "partial", "reason": ..., "unlock": ...} を書くこと。'
+    )
+
+
+def test_coverage_declarations_are_not_stale():
+    """宣言に在るのに実体が見つからない名簿（リネーム/削除）を赤にする。"""
+    register = _load_register()
+    ghosts = sorted(set(_load_coverage(register)) - set(discover_op_rosters()))
+    assert not ghosts, f"op_roster_coverage に在るが実体が見つからない名簿: {ghosts}"
+
+
+def test_full_coverage_declarations_are_true():
+    """「全域」と宣言した名簿は、本当に全 op を持つこと。"""
+    rosters = discover_op_rosters()
+    bad = {}
+    for name, decl in _load_coverage(_load_register()).items():
+        if decl.get("coverage") != "full" or name not in rosters:
+            continue
+        miss = sorted(OP_SET - rosters[name]["ops"])
+        if miss:
+            bad[name] = miss
+    assert not bad, f"「全域」と宣言したのに欠けている op がある: {bad}"
+
+
+def test_partial_coverage_declarations_have_reason_and_unlock():
+    """「部分」と宣言した名簿は、正直な理由と解除条件を書くこと（免除簿と同じ作法）。"""
+    bad = [name for name, d in _load_coverage(_load_register()).items()
+           if d.get("coverage") == "partial"
+           and (not str(d.get("reason", "")).strip() or not str(d.get("unlock", "")).strip())]
+    assert not bad, f"「部分」の宣言に reason または unlock が無い: {sorted(bad)}"
+
+
+def test_coverage_kind_is_known():
+    known = {"full", "partial"}
+    bad = sorted({d.get("coverage") for d in _load_coverage(_load_register()).values()
+                  if d.get("coverage") not in known})
+    assert not bad, f"未知の coverage 種別: {bad}（許される: {sorted(known)}）"
+
+
+def test_a_partial_roster_that_became_full_must_be_redeclared():
+    """「部分」と宣言した名簿が全 op を覆うようになったら、宣言を直させる（腐り防止）。"""
+    rosters = discover_op_rosters()
+    stale = [name for name, d in _load_coverage(_load_register()).items()
+             if d.get("coverage") == "partial" and name in rosters
+             and not (OP_SET - rosters[name]["ops"])]
+    assert not stale, f"「部分」と宣言したが実体は全 op を覆っている（宣言を full に直せ）: {sorted(stale)}"
+
+
+# ---------------------------------------------------------------------------
+# ⑤ 「自分で外す op」の名簿を**実装から導いて等号で縛る**
+#
+# ★ 2026-09-16: 手書きの名簿 _OPS_THAT_SKIP_NON_DATA_ROWS が AGGREGATE を落としており、
+#   「合計行を除いて部署別に集計して」が、先頭の行削除の段を落とせずに
+#   **利用者の台帳から合計行を実際に消していた**（同じ言い方でも並べ替え・抽出では消えない）。
+#   ★ 名簿を目で読んでも気づけない ── 実装と突き合わせて初めて出た。だから機械に縛らせる。
+# ★ 「自分で外す」の実装は 2 通りある。どちらも数える（片方だけ見ると SORT を見落とす）:
+#     _skip_rows を生成関数に渡す … AGGREGATE / EXTRACT / SET_WHERE
+#     _sort_end_row で末尾を切る  … SORT（別の腕 SortByColumnUpTo を呼ぶ）
+# ---------------------------------------------------------------------------
+
+SKIP_MARKERS = ("_skip_rows", "_sort_end_row")
+
+
+def ops_that_skip_non_data_rows_derived_from_codegen() -> set:
+    """生成関数の本体を**名前から**引いて、自分で非データ行を外す op を導く。
+
+    tests/test_guard_ledger.py の台帳: 本体を**場所で決め打ちしない**
+    （ファイルを分割すると空振りする）。inspect.getsource で関数から引く。
+    """
+    out = set()
+    for op, fn in ailine.CODEGEN_BY_OP.items():
+        try:
+            body = inspect.getsource(fn)
+        except (OSError, TypeError):
+            continue
+        if any(m in body for m in SKIP_MARKERS):
+            out.add(op)
+    return out
+
+
+def test_skip_roster_equals_what_the_codegen_actually_does():
+    declared = set(ailine._OPS_THAT_SKIP_NON_DATA_ROWS)
+    derived = ops_that_skip_non_data_rows_derived_from_codegen()
+    assert declared == derived, (
+        "名簿 _OPS_THAT_SKIP_NON_DATA_ROWS が実装と食い違っている。"
+        f"名簿に無いのに実際は外している: {sorted(derived - declared)} / "
+        f"名簿に在るのに実装が外していない: {sorted(declared - derived)}。"
+        "★ 名簿に無いと「合計行を除いて…」の行削除の段が落ちず、合計行が実際に消える。"
     )

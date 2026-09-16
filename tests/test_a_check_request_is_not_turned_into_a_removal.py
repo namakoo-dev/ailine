@@ -102,3 +102,19 @@ def test_the_gate_sits_where_both_routes_pass():
 def test_no_task_means_no_gate():
     ok, _r, _i, err = ailine.verify_dsl_args("DEDUP", {"keys": ["品番"]}, META, task="")
     assert ok, err
+
+
+def test_every_reducing_op_has_its_own_way_to_ask():
+    """★ 名簿の全 op に「減らしてよいときの通る書き方」が在ること。
+
+    ★★ 2026-09-16 の掃き出しで見つけた**番人の芽**: `refuse_reducing_a_check` は
+      `REDUCING_EXAMPLES.get(op, '…を削除して')` と**黙って一般文に落ちる**ので、
+      `ROW_REDUCING_OPS` に op を足して文例を足し忘れても、どこも赤くならなかった。
+      断り文だけが「…を削除して」という、その人の依頼と噛み合わない案内に痩せる。
+    ★ 等号で縛る（⊇ ではなく ==）── 使われない文例が残るのも腐りなので両方向を見る。
+    """
+    from ailine_core import intent as intent_mismatch
+    assert set(intent_mismatch.REDUCING_EXAMPLES) == set(intent_mismatch.ROW_REDUCING_OPS), (
+        "減らす op の名簿と、その通る書き方の名簿がずれている: "
+        f"文例だけ在る={sorted(set(intent_mismatch.REDUCING_EXAMPLES) - set(intent_mismatch.ROW_REDUCING_OPS))} / "
+        f"文例が無い={sorted(set(intent_mismatch.ROW_REDUCING_OPS) - set(intent_mismatch.REDUCING_EXAMPLES))}")

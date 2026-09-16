@@ -81,6 +81,20 @@ PROJECTIONS = {
         keeps=(VALUES, COLUMN_NAMES, COLUMN_ORDER, ROW_IDENTITY, SOURCE_SHEET),
         drops=(ROW_COUNT, FORMULAS, FORMATTING),
         why={FORMULAS: "抜き出した先には元の列が無いので、式は値に落とします"}),
+    # 重複削除: 抽出の兄弟（非破壊形）── 残った行はそのまま運び、消えた分だけ行数が減る。
+    # ★★ 2026-09-16 の掃き出しで**抜けていた**のを見つけた。宣言（OP_WRITE_TARGET）は
+    #   EXTRACT と一字一句同じで、生成する Basic の行コピー部（DedupRows / ExtractRows）も
+    #   同じ（値と数値書式だけ・式は運ばない）。事後条件も自分を「EXTRACT の兄弟・非破壊形」
+    #   と呼んでいる。それでもここに無かったので、式入りの表を重複削除すると
+    #   **何を失うか一言も告げずに式が値へ固まっていた**。
+    # ★ 漏れた理由: 番人の分母 _DERIVE_OPS が「postconditions/derive.py の対象」で
+    #   定義されていて、check_dedup だけ move.py に置かれている ──
+    #   **意味ではなくファイルの置き場が分母になっていた**。
+    "DEDUP": Projection(
+        keeps=(VALUES, COLUMN_NAMES, COLUMN_ORDER, ROW_IDENTITY, SOURCE_SHEET),
+        drops=(ROW_COUNT, FORMULAS, FORMATTING),
+        why={ROW_COUNT: "重複と判定した行は残りません（残った行はそのまま運びます）",
+             FORMULAS: "写した先には元の列が無いので、式は値に落とします"}),
     # 列抽出: 選んだ列だけを新しいシートへ。行は全部運ぶ。
     "EXTRACT_COLUMNS": Projection(
         keeps=(VALUES, COLUMN_NAMES, ROW_IDENTITY, ROW_COUNT, SOURCE_SHEET),

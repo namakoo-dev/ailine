@@ -74,11 +74,20 @@ def test_the_declaration_matches_what_the_machine_actually_skips():
 
     ★ 実体の目印は「データ行でないため…ません」を出す解決関数。宣言だけが増えると、
       合計行を外さない op の削除段まで落として**本当に必要な削除を消す**。
+
+    ★★ 2026-09-16: ここは名簿の中身を**手書きで凍結**していた
+      （`== frozenset({"SORT","EXTRACT","SET_WHERE"})`）。宣言を書き写しただけなので
+      **実体とのずれは原理的に見えない** ── 実際 AGGREGATE が名簿から抜けていて
+      「合計行を除いて部署別に集計して」が利用者の合計行を消していたのに、ここは緑だった。
+      ★ 手書きをやめ、**実装から導いた集合**と突き合わせる番人へ畳んだ
+        （tests/test_op_completeness.py の⑤）。縛りは 1 本にして、こちらは委譲する。
     """
     import pathlib
+    from test_op_completeness import ops_that_skip_non_data_rows_derived_from_codegen
     src = pathlib.Path(ailine.__file__).read_text(encoding="utf-8")
     assert src.count("データ行でないため") >= 3, "実体側の目印が減っている"
-    assert ailine._OPS_THAT_SKIP_NON_DATA_ROWS == frozenset({"SORT", "EXTRACT", "SET_WHERE"})
+    assert (ailine._OPS_THAT_SKIP_NON_DATA_ROWS
+            == ops_that_skip_non_data_rows_derived_from_codegen())
 
 
 # --- 実機（両方向）----------------------------------------------------------

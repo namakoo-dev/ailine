@@ -29,13 +29,29 @@ import ailine  # noqa: E402
 from ailine_core.projection import (  # noqa: E402
     ALL_INVARIANTS, FORMULAS, PROJECTIONS, projection_for, render_projection_notice)
 
-#: 新しい表を作る 7 op（postconditions/derive.py の対象）。
-_DERIVE_OPS = ("AGGREGATE", "PIVOT", "EXTRACT", "EXTRACT_COLUMNS",
-               "REPORT_PER_ROW", "FORMAT_MAP", "LOOKUP_FILL")
+#: 値を写して新しい表を作る op（＝「この写し方で保存されないもの」を告げるべき op）。
+#: ★★ 2026-09-16: この分母は「postconditions/**derive.py** の対象」という**置き場**で
+#:   定義されていて、事後条件が move.py に在る **DEDUP が丸ごと漏れていた**。
+#:   おかげで式入りの表を重複削除しても、何を失うか一言も出ないまま式が値に固まっていた。
+#:   ★ 手書きをやめ、**宣言から導く**（OP_WRITE_TARGET が「新しいシートを作る」と言う op）。
+#:     op を足した人がここを直し忘れても穴が開かない。
+#:   ★ LOOKUP_FILL だけは新しいシートを作らない（その場で列を埋める）が、値を写すので対象。
+def _deriving_ops() -> tuple:
+    writes_new_sheet = {op for op in ailine.OP_SCHEMA
+                        if ailine._op_writes(op, ailine.WRITE_NEW_SHEET)}
+    return tuple(sorted(writes_new_sheet | {"LOOKUP_FILL"}))
+
+
+_DERIVE_OPS = _deriving_ops()
+
+
+def test_the_denominator_is_not_empty():
+    """★ 分母が空でも他の試験は全部緑になる（空回りの検出）。"""
+    assert len(_DERIVE_OPS) >= 8, _DERIVE_OPS
 
 
 def test_every_deriving_op_declares_its_projection():
-    """★ 7 op すべてが宣言していること（FORMAT_MAP だけにしない ── 変分法の轍）。"""
+    """★ 値を写す op すべてが宣言していること（FORMAT_MAP だけにしない ── 変分法の轍）。"""
     missing = [op for op in _DERIVE_OPS if projection_for(op) is None]
     assert not missing, f"投影法を宣言していない op: {missing}"
 

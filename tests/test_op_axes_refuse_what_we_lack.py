@@ -119,13 +119,19 @@ def test_the_judgement_needs_the_real_table():
 
 
 def test_callers_pass_the_headers():
-    """★ 呼び出し側が実表の見出しを渡していること。"""
+    """★ 呼び出し側が実表の見出しを渡していること（渡さないと誤爆する ── 実測 5/6）。
+
+    ★★ 2026-09-16: ここは **変数名**（`_ax_head` / `_ax_headers`）で配線を見ていた。
+      実表を `headers.get(first_sheet)` と直接渡す 4 本目の配線が入ったとき、
+      渡しているのに名前が違うだけで赤くなった ── 番人が**意味でなく綴りを見ていた**。
+      ★ 見るものを「引数が見出しに由来すること」へ変えた。空や None は今も赤い。
+    """
     src = Path(ailine.__file__).read_text(encoding="utf-8")
     n = src.count("judge_axis(")
-    assert n >= 2, "配線が足りない"
+    assert n >= 3, "配線が足りない（成功経路の関所を含めて 3 本以上）"
     for chunk in src.split("judge_axis(")[1:]:
-        head = chunk[:120]
-        assert "_ax_head" in head or "_ax_headers" in head, f"実表を渡していない: {head[:60]}"
+        args = chunk.split(")")[0][:160]
+        assert "header" in args or "_ax_head" in args, f"実表を渡していない: {args[:70]}"
 
 
 @pytest.mark.local

@@ -175,8 +175,17 @@ def test_a_real_row_addition_still_passes_this_gate(task):
 
 def test_the_refusal_names_the_words_the_person_actually_wrote():
     """★ 断り文は、人が**自分の依頼文の中に見つけられる**語を名指しすること
-       （初版は「…より後の行のチェック列に」を丸ごと拾って読めなかった）。"""
+       （初版は「…より後の行のチェック列に」を丸ごと拾って読めなかった）。
+
+    ★ 2026-09-16 に助詞を落とした（「チェック列に」→「チェック列」）── 断り文が
+       「『チェック列に』に値を入れる形」と二重になって日本語が壊れていたため。
+       人が自分の依頼文の中に見つけられる、という趣旨は変わらない。
+    """
     from ailine_core import intent as intent_mismatch
-    got = intent_mismatch.names_a_column_to_write_into(
-        "納期が2026/09/30より後の行のチェック列に★を入れて")
-    assert got == "チェック列に", got
+    for task, want in (
+        ("納期が2026/09/30より後の行のチェック列に★を入れて", "チェック列"),
+        ("納期が2026/09/30より後の行だけ、チェック列を★に書き換えて", "チェック列"),
+        ("状態が未手配の行の備考列に「至急」と入れて", "備考列"),
+    ):
+        got = intent_mismatch.names_a_column_to_write_into(task)
+        assert got == want, f"{task} → {got}"
