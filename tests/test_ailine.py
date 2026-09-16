@@ -5344,20 +5344,36 @@ def test_codegen_dsl_compute_column_formula_has_no_semicolon_or_sheet_dot():
 
 # --- _scan_last_row_basic: header_row 対応の走査開始/ガード閾値 -------------------
 
-def test_scan_last_row_basic_default_matches_legacy_output():
-    assert ailine._scan_last_row_basic() == (
-        "    lastRow = 1\n"
-        "    Do While oSheet.getCellByPosition(0, lastRow).getString() <> \"\"\n"
-        "        lastRow = lastRow + 1\n"
-        "    Loop\n"
-        "    lastRow = lastRow - 1\n"
-        "    If lastRow < 1 Then Exit Sub\n")
+def test_scan_last_row_basic_asks_the_single_place():
+    """★★ 2026-09-16: ここは**旧い生成文字列をそのまま**凍結していた。
+
+    生成側が吐く走査を `TableLastRow`（helpers に畳んだ 1 本）へ寄せたとき、
+    この検体だけが赤く残った ── 縛っていたのが**振る舞い**でなく**綴り**だったから。
+    ★ 畳むたびに書き換わる検体は、契約ではなく写しでしかない。
+      縛るのは「どこから数え始め、どこで止まるか」の 2 つ。
+    """
+    out = ailine._scan_last_row_basic()
+    assert "TableLastRow(oSheet, 0)" in out, out
+    assert "If lastRow < 1 Then Exit Sub" in out, out
+    assert "Do While" not in out, "自前の走査に戻っている（左端が空の行に届かなくなる）"
+
 
 def test_scan_last_row_basic_custom_start_row_and_min_ok():
+    """★ 見出しが 1 行目でない帳票 ── 数え始めと止まる境界が、渡した値になること。"""
     out = ailine._scan_last_row_basic(start_row="3", min_ok="2")
-    assert "lastRow = 3\n" in out
-    assert "If lastRow < 2 Then Exit Sub\n" in out
+    assert "TableLastRow(oSheet, 2)" in out, out   # 見出し行 = start_row - 1
+    assert "If lastRow < 2 Then Exit Sub" in out, out
 
+
+def test_scan_last_row_basic_keeps_its_own_walk_for_another_key_column():
+    """★ 反対側の検算 ── A 列以外で数えろと言われた回は、畳んだ 1 本を使わない。
+
+    ★ `TableLastRow` は「見出しの幅のどこかに値が在るか」で数える。
+      「この列を見て数えろ」とは意味が違うので、そこまで畳むと嘘になる。
+    """
+    out = ailine._scan_last_row_basic(key_col="2")
+    assert "TableLastRow" not in out, out
+    assert "getCellByPosition(2, lastRow)" in out, out
 
 # ===========================================================================
 # W6: APPEND_TOTAL 語彙昇格（監査3回連続失敗の実測による昇格経済学）

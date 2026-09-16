@@ -6979,9 +6979,30 @@ def _scan_last_row_basic(var: str = "oSheet", key_col: str = "0",
        物理1行目でない帳票でも正しい行から走査する（既定 "1" は旧挙動と同一）。
        min_ok（"lastRow がこの値未満なら Exit Sub"の閾値）を渡すと保存境界を調整できる
        （既定は start_row と同じ＝『データ0行なら何もしない』。見出しを含めて範囲を
-       スタイリングする操作は min_ok に start_row-1 相当を渡す＝データ0行でも見出しは扱える）。"""
+       スタイリングする操作は min_ok に start_row-1 相当を渡す＝データ0行でも見出しは扱える）。
+
+    ★★ 2026-09-16（掃き出しの続き・その日のうちに踏んだ穴）:
+      同じ「表の終わり」の判断を helpers/*.bas の **11 か所**から `TableLastRow` へ畳んだが、
+      **生成側が組み立てて埋め込むこちら**を数えていなかった（ここ 1 本から 7 箇所へ吐く）。
+      当たる op は 6 つ ── APPEND_TOTAL / BOLD / CENTER_ALIGN / COMPUTE_COLUMN /
+      FILL_COLOR / SET_COLUMN_VALUE。実測した症状:
+
+          合計行（左端が空）のある表で「取引先の列を太字にして」
+            → 見出しとデータ行だけ太字になり、合計行に届かず
+              「列『取引先』に太字でないセルがある」で ×（原本は無傷だが操作できない）
+
+      ★ 朝に「測定がデータを落とす形を 1 つ見つけたら、他の形を列挙してから閉じる」と
+        書いた当人が、同じ日に 1 つ直して満足した。★ 畳む時は **生成する側も数える**。
+    ★ ここは既に 1 本に畳まれていたので、直しはこの関数の中だけで 6 op 全部に届く。
+    ★ key_col を渡された回（A 列でない列で数える指定）は従来どおり自前で走査する ──
+      TableLastRow は「見出しの幅のどこかに値が在るか」で数えるので、意味が違う。
+    """
     if min_ok is None:
         min_ok = start_row
+    if key_col == "0":
+        # ★ 見出しの幅で数える（左端が空の行にも届く）。判断は helpers の 1 本に任せる。
+        return (f"    lastRow = TableLastRow({var}, {int(start_row) - 1})\n"
+                f"    If lastRow < {min_ok} Then Exit Sub\n")
     return (f"    lastRow = {start_row}\n"
             f"    Do While {var}.getCellByPosition({key_col}, lastRow).getString() <> \"\"\n"
             f"        lastRow = lastRow + 1\n"

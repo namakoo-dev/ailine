@@ -149,3 +149,69 @@ def test_the_total_row_is_still_left_out_of_the_sort(tmp_path):
         "合計行が並べ替えに巻き込まれた\n" + r.stdout[-800:])
     got = [ws.cell(row=i, column=4).value for i in range(2, 5)]
     assert got == sorted(got, reverse=True), (got, r.stdout[-600:])
+
+
+# ---------------------------------------------------------------------------
+# ★★ 掃き出しの続き（2026-09-16 夜・同じ日に踏んだ穴）
+#
+# helpers/*.bas の 11 か所を TableLastRow に畳んだが、**生成側が組み立てて埋め込む**
+# 走査（_scan_last_row_basic）を数えていなかった。1 本から 7 箇所へ吐いていて、
+# 当たる op は 6 つ（APPEND_TOTAL / BOLD / CENTER_ALIGN / COMPUTE_COLUMN /
+# FILL_COLOR / SET_COLUMN_VALUE）。実測した症状:
+#
+#     合計行（左端が空）のある表で「取引先の列を太字にして」
+#       → 見出しとデータ行だけ太字になり、合計行に届かず × （原本は無傷だが操作できない）
+#
+# ★ 朝に「1 つ直して満足しない・他の形を列挙してから閉じる」と書いた当人が、
+#   その日のうちに 1 つ直して満足した。だから番人を**数える側**にも置く。
+# ---------------------------------------------------------------------------
+
+def test_the_generated_basic_also_asks_the_single_place():
+    """★★ 生成側が吐く走査も、畳んだ 1 本を呼ぶこと。
+
+    ★ `.bas` の中だけを見ていると、この経路は**丸ごと視界の外**に出る
+      （走査は Python の文字列として組み立てられ、helpers には存在しない）。
+    """
+    import inspect
+    import sys as _sys
+    _sys.path.insert(0, str(REPO / "src"))
+    import ailine
+    src = inspect.getsource(ailine._scan_last_row_basic)
+    assert "TableLastRow" in src, (
+        "生成側の走査が畳んだ 1 本を呼んでいない ── "
+        "左端が空の行を持つ表で、その先が見えなくなります")
+
+
+def test_no_op_generates_its_own_a_column_walk():
+    """★ 生成関数のどれも、A 列だけを見る走査を**自前で**書いていないこと。"""
+    import ast
+    import sys as _sys
+    _sys.path.insert(0, str(REPO / "src"))
+    import ailine
+    src = (REPO / "src" / "ailine" / "__init__.py").read_bytes().decode("utf-8")
+    bodies = {n.name: (ast.get_source_segment(src, n) or "")
+              for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef)}
+    bad = []
+    for op in sorted(ailine.OP_SCHEMA):
+        fn = ailine.CODEGEN_BY_OP.get(op)
+        body = bodies.get(getattr(fn, "__name__", ""), "")
+        if _A_COLUMN_WALK.search(body):
+            bad.append(op)
+    assert not bad, (
+        f"生成関数が A 列だけの走査を自前で書いている: {bad} ── "
+        "_scan_last_row_basic（畳んだ 1 本を呼ぶ）を使うこと")
+
+
+@pytest.mark.local
+@pytest.mark.parametrize("task, want", [
+    ("取引先の列を太字にして", "B3"),          # ★ 合計行のセルまで届くこと
+    ("取引先の列を黄色で塗って", "B3"),
+])
+def test_a_column_operation_reaches_the_total_row(tmp_path, task, want):
+    """★ 実機 ── 列を対象にする操作が、左端の空いた合計行にも届くこと。"""
+    book = _book(tmp_path, [("A-001", "丸山工業", "2026-09-20", 1250000),
+                             (None, None, "合計", 1250000)])
+    r = _run(book, task)
+    assert r.returncode == 0, r.stdout[-800:]
+    assert f"  {want}:" in r.stdout, (
+        f"合計行のセル {want} に届いていない\n{r.stdout[-800:]}")
