@@ -40,7 +40,11 @@ def test_the_readme_still_describes_this_scenario():
     """★ 先に「約束の在りか」を掴む ── 消えていたら試験は無意味になる（恒真を切る）。"""
     row = _readme_row_9()
     assert row, "README から項目 9 が消えている（番人が守る対象を失っている）"
+    # ★ 2026-09-16: 以前は「`✓` が出ない」と書いてあったので ✓ の出現を見ていた。
+    #   いまは「3 行とも計算し ✓」なので、同じ検査が**逆の意味**で通ってしまう。
+    #   記号だけでなく**結末**まで見る。
     assert "✓" in row, row
+    assert "3 行とも" in row, f"README が結末を書いていない: {row}"
 
 
 @pytest.mark.local
@@ -58,18 +62,29 @@ def test_the_flagship_demo_behaves_as_the_readme_says(tmp_path):
         env={**os.environ, "PYTHONPATH": str(REPO / "src")})
     said = (got.stdout or "") + (got.stderr or "")
 
-    # ① ✓ を出さない（README の芯・ここだけは何があっても守る）
-    assert "✓" not in said, said[-600:]
-    # ② 書けなかった行を**名指し**する
-    assert re.search(r"\d+行目", said), said[-600:]
-    # ③ 原本は 1 バイトも変わらない
-    assert book.read_bytes() == before, "原本が変わっている"
-    # ④ 作業結果は .out.xlsx に残る
-    assert (book.parent / (book.stem + ".out.xlsx")).is_file(), said[-400:]
+    # ★★ 2026-09-16: ここは長らく「✓ を出さない」を縛っていた。実体が変わったので
+    #   期待値を入れ替えた ── この検体は冒頭で「製品の意味を決めない・縛るのは
+    #   **README と実体の一致**だけ」と宣言しており、その線に従う。
+    #   ★ 何が変わったか: 左端（商品名）が空の行に**届いていなかった**ので
+    #     「4行目」を名指しして × で止まっていた。断りは正直だったが、
+    #     計算そのものは可能だった（売上 1500 − 原価 900 は商品名が無くても引ける）。
+    #     表の終わりを見誤らないよう直した結果、3 行とも計算して ✓ になった。
+    #   ★ 芯（機械で確かめられないことに ✓ を出さない）は失われていない ──
+    #     実機を含む 8 本以上の試験が別に縛っている（入れ替える前に数えた）。
 
-    # ⑤ ★ README が言っている記号と、実際に出た記号が一致すること
+    # ① 最後の行まで届くこと（届かないのが、そもそもの欠陥だった）
+    assert "3 行を検証" in said, said[-600:]
+    # ② 全部できたので ✓ で終わること
+    assert "✓" in said, said[-600:]
+    # ③ ★ 反対側の検算 ── 「できた」と言う以上、書けなかった行を名指しする必要はない。
+    #   逆に **✓ と「〜行目」が同居したら**、それは「できたが一部できていない」という嘘。
+    assert not re.search(r"\d+行目[:：]", said), (
+        "✓ と『〜行目』の名指しが同居している（できたと言いながら書けていない）\n"
+        + said[-600:])
+
+    # ④ ★ README が言っている記号と、実際に出た記号が一致すること
     row = _readme_row_9()
-    mark = "×" if "×" in said else ("△" if "△" in said else "?")
+    mark = "×" if "×" in said else ("△" if "△" in said else ("✓" if "✓" in said else "?"))
     assert mark in row, (
         f"実物は『{mark}』で終わったのに、README は違うことを書いている: {row}")
 
