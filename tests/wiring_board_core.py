@@ -146,6 +146,19 @@ def derivations(ops, codegen) -> dict:
              - set(ailine.PLAN_CHAIN_UNNAMED_PRODUCERS)),
             "新しいシートを作ると宣言し、実行時に名前を積まず、"
             "『名前が決まらない作り手』にも宣言されていない op"),
+        "PLAN_CHAIN_CONSUMER_OPS": (
+            # ★★ 2026-09-17（仕分け⑤）: ここは**機械に決まらない**列だが、既定までは引ける。
+            #   「新しい表・行・列を作る」と宣言し、「行をずらす」と宣言していない op。
+            #   ★ 既定と名簿の差は 3 つで、どれも人の意図の話（絞り込んだ結果に掛けたいか、
+            #     元の表に掛けたいか）── だから**食い違いとして出す**のが正しい。
+            #     消すのではなく、3 つを名指しで台帳に書く
+            #     （どの op かは tests/test_plan_chain_consumers_are_decided.py が等号で縛る）。
+            {op for op in ops
+             if (set(getattr(ailine.OP_WRITE_TARGET.get(op), "writes", ()) or ())
+                 & {"new_sheet", "new_row_at_end", "new_column"})
+             and not (set(getattr(ailine.OP_WRITE_TARGET.get(op), "writes", ()) or ())
+                      & {"row_shift"})},
+            "『新しい表・行・列を作る』と宣言し、『行をずらす』とは宣言していない op"),
     }
 
 
@@ -174,8 +187,6 @@ NO_DERIVATION_REASON = {
                         "機械が決める」の形）。足すのは実測で誤訳した op だけ ── "
                         "第二段に op を文字どおり渡す 5 op の決めと理由を "
                         "test_op_schema_notes_are_decided.py の台帳が持つ",
-    "PLAN_CHAIN_CONSUMER_OPS": "★ 未調査 ── 「絞り込んだ結果に掛けたいか元表か」は"
-                               "機械に決まらない、という理由だけが書かれている",
 }
 
 
