@@ -387,11 +387,18 @@ def test_a_dry_plan_whose_steps_all_fail_does_not_claim_success(tmp_path, monkey
     book = _book(tmp_path, [["商品", "売上"], ["a", 900], ["b", 1300]])
     # ★ 段は**別々**にする ── 同じ args を 2 つ並べると道具が畳んで単発の経路へ落ち、
     #   計画の経路を測れない（初版はこれで空振りした）。
+    # ★★ 2026-09-17: その「別々」が **cmp 違い**では足りなくなった。機械が依頼文から
+    #   取り直す引数（MACHINE_DERIVED_ARGS）に cmp が入り、cmp だけ違う 2 段は畳まれる。
+    #   ★ 乗り物を**取り直さない引数**（col）の側へ移す ── 検体の意図（全段が落ちる計画）は
+    #     不変で、そこへ至る道だけを替える。下の「畳まれていないこと」の確認が命綱
+    #     ── これが無かったので、畳まれた日に**この検体が測っている場所が黙って変わった**。
     plan = [{"op": "EXTRACT", "args": {"col": "売上", "cmp": "gte", "value": 800}},
-            {"op": "EXTRACT", "args": {"col": "売上", "cmp": "lt", "value": 1200}}]
+            {"op": "EXTRACT", "args": {"col": "商品", "cmp": "lt", "value": 1200}}]
     monkeypatch.setattr(ailine, "translate_task",
                         lambda model, task, book_meta, temperature=0.1: {"plan": plan})
     rc, out = _run_main(["run", str(book), "売上が800以上1200未満の行を抜き出して", "--dry"], capsys)
+    assert "まとめました" not in out, (
+        "★ 2 段が畳まれて単発の経路に落ちた ── この検体は計画の経路を測れていない\n" + out)
     assert "未対応" in out, out
     assert rc == 3, f"全段が未対応なのに exit {rc}（0 は『成功』の意味 ── 自動化が成功と読む）\n{out}"
 

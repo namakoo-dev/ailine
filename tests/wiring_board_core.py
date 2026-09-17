@@ -100,8 +100,10 @@ NO_DERIVATION_REASON = {
     "ROW_REDUCING_OPS": "盲検 9/9 の実測で**狭くした**線。実装からは導けない",
     "KEEP_FOR_COLUMN_REQUEST": "「中身のある列を作る」op の allowlist。"
                                "除外側を数えると op が増えるたび穴が開くため手書き",
-    "MACHINE_DERIVED_ARGS": "★ 未調査 ── EXTRACT を入れた理由は書かれているが、"
-                            "他の op を入れない理由が書かれていない",
+    "MACHINE_DERIVED_ARGS": "届く op は 7 つだけ（fold_identical_steps が"
+                            "WRITE_NEW_SHEET の段しか通さない）。その 7 op すべての"
+                            "決めと理由を test_machine_derived_args_is_decided.py の"
+                            "台帳が持ち、分母は宣言から導いて等号で縛る",
     "OP_DECLARED_SHEET_NAME": "★ 未調査 ── helpers が固定名で書き出す op の対応表。"
                               "helpers 側から導ける可能性は測っていない",
     "_OP_SCHEMA_NOTES": "★ 未調査 ── 第二段翻訳に 1 行足す op の選び方が書かれていない",
