@@ -191,12 +191,32 @@ def _state(a_count: int, b_count: int, diff: float) -> str:
 def side_pair(g) -> str:
     """『A 186300 / B 0』の 0 が **金額 0** なのか **1 行も無い** のか読めなかった
     （2026-08-24 第三波 S5）。片側が 0 行なら『なし』と書いて区別する
-    ── 出ないことは信号でないので、出ていないと書く。★ 実装は 1 つ（2 箇所が呼ぶ）。"""
+    ── 出ないことは信号でないので、出ていないと書く。★ 実装は 1 つ（2 箇所が呼ぶ）。
+
+    ★★ 2026-09-17（盲検 3 体目・製造業の購買）: **同じ読めなさが別の形で残っていた**。
+      『A 10000』が **1 件の 10000** なのか **2 件の合計** なのか読めない。
+      買い手は単価を突き合わせ、エポキシ接着剤（9 月に 2 回発注・4800 と 5200）に
+      『+5200』と出された ── 知りたいのは「1 本あたり +400 円」で、+5200 は
+      **仕入先に文句を言いに行ったら恥をかく数字**（買い手の言葉）。
+      件数は出力シートには在るが**画面に無かった**。同じ品目を月に 2 回買うのは
+      普通なので、この誤読は毎月出る。
+    ★ 直しは 0 の時と同じ作法 ── **数の作りを書く**。1 件の時だけ今までどおり黙る
+      （毎回『1件 計』と書くと、読む理由の無い語が全行に増える）。"""
     def one(label, count, total):
         if count == 0:
             return f"{label} なし（0 行）"
+        if count > 1:
+            return f"{label} {count}件 計{inspection.fmt_num(total)}"
         return f"{label} {inspection.fmt_num(total)}"
     return f"{one('A', g.a_count, g.a_sum)} / {one('B', g.b_count, g.b_sum)}"
+
+
+def sums_more_than_one_row(g) -> list:
+    """片側でも 2 行以上を足しているなら、その側の名前（['A'] / ['A','B'] など）。
+
+    ★ ここが空でない時、差額は **1 件あたりの差ではない** ── 呼び手はそう言うこと。
+    """
+    return [name for name, count in (("A", g.a_count), ("B", g.b_count)) if count > 1]
 
 
 def _clean_num(v):
@@ -466,12 +486,20 @@ def build_findings(groups: list, key_to_detail_row: dict, total_notes: list,
                           "名義不明の入金・請求が無いか、明細シートで確認してください。",
                 link=link))
         elif abs(g.diff) > TOLERANCE:
+            # ★★ 2026-09-17（盲検 3 体目）: 片側でも 2 行以上を足しているなら、この差額は
+            #   **1 件あたりの差ではない**。それを言わずに『+5200』とだけ出していた。
+            #   ★ 「明細を見てください」では足りない ── 買い手は ⚠ を「明細で内訳を見ろ」と
+            #     読み、数字そのものは正しいと信じた。**何を足したのかを画面で言う。**
+            multi = sums_more_than_one_row(g)
+            tail = ("明細シートで内訳を確認してください。" if not multi else
+                    f"★ この差額は 1 件あたりの差ではありません"
+                    f"（{'と'.join(multi)} は複数行の合計）。"
+                    "明細シートで 1 行ずつ比べてください。")
             findings.append(inspection.finding(
                 kind=KIND_DIFF, file=f"{book_a_name} / {book_b_name}",
                 sheet=DETAIL_SHEET_NAME, cell=cell_ref,
                 source_value=_clean_num(g.a_sum), output_value=_clean_num(g.b_sum),
-                next_step=f"{g.key_display}: {g.state}（{side_pair(g)}）。"
-                          "明細シートで内訳を確認してください。",
+                next_step=f"{g.key_display}: {g.state}（{side_pair(g)}）。" + tail,
                 link=link))
     unknown_detail_row = key_to_detail_row.get(UNKNOWN_KEY_LABEL)
     unknown_link = ((None, inspection.hyperlink_location(
