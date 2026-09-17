@@ -106,7 +106,10 @@ NO_DERIVATION_REASON = {
                             "台帳が持ち、分母は宣言から導いて等号で縛る",
     "OP_DECLARED_SHEET_NAME": "★ 未調査 ── helpers が固定名で書き出す op の対応表。"
                               "helpers 側から導ける可能性は測っていない",
-    "_OP_SCHEMA_NOTES": "★ 未調査 ── 第二段翻訳に 1 行足す op の選び方が書かれていない",
+    "_OP_SCHEMA_NOTES": "注記は説明でなく**分担の宣言**（4 本すべてが「これは入れない・"
+                        "機械が決める」の形）。足すのは実測で誤訳した op だけ ── "
+                        "第二段に op を文字どおり渡す 5 op の決めと理由を "
+                        "test_op_schema_notes_are_decided.py の台帳が持つ",
     "PLAN_CHAIN_CONSUMER_OPS": "★ 未調査 ── 「絞り込んだ結果に掛けたいか元表か」は"
                                "機械に決まらない、という理由だけが書かれている",
 }
