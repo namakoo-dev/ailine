@@ -59,12 +59,37 @@ def test_a_name_on_several_rows_is_resolved_not_refused(book):
     assert "ヤマノ食品" in said and "2 行" in said and "3、4行目" in said, said
 
 
-def test_a_name_on_one_row_is_unchanged(book):
-    """★ 対で縛る ── 1 行しか当たらない回は今までどおり（聞かずに進む）。"""
+def test_a_name_on_one_row_does_not_take_the_ambiguity_path(book):
+    """★ 対で縛る ── 1 行しか当たらない回は、**曖昧さの関所**には載せない。
+
+    ★★ 2026-09-17（Namakoo 決裁 B）: 初版はここで「聞かずに進む」を縛っていた。
+      当時それが正しかったのは、**削除に関所が 1 つも無かった**から ──「今までどおり」は
+      「素通り」と同義だった。今日その土台が動いた: 盲検 3 体目が
+      「上書きより削除の方が怖いのに、厳しい方が緩い」と指し、消えるものが在る削除は
+      すべて関所に載せた（tests/test_deleting_data_asks_first.py）。
+    ★ だからこの検体が縛るものを**言い直す** ──「聞くか聞かないか」ではなく
+      **どちらの理由で聞くか**。関所は 1 つだが、鳴る理由は 2 つある:
+        ① 名前が複数行に当たった（＝どれを消すか決まらない）  ← _delete_rows が立つ
+        ② 消えるものが在る（＝取り返しがつかない）            ← 全部の削除に掛かる
+      1 行しか当たらない回に ① の文を出したら、それは**嘘の理由**になる。
+    ★ 名前で 1 行を指した削除だけ ② を素通りさせる案（A）は採らなかった ── 消える量は
+      行番号で指した時と 1 バイトも変わらないのに、**指し方だけで守りが変わる**形になる。
+    ★★ どの assert が効いているかを測ってある（変異が 1 本緑だったので追いかけた）:
+      ①と②の分かれ目は**構造**で、条件式ではない ── 名前が 1 行に解けると
+      `resolve_row_anchor` が行番号を返す（実測: 北斗精機→5 / ヤマノ食品→None）ので、
+      ①の枝（`_at_anchor is None`）には**入りようがない**。
+      よって効いている assert は `_delete_rows` が立たないこと。下の 2 つ
+      （名前が出ない・件数の文である）は**通れない道の見張り**で、意図の記録として置く
+      ── 「変異で赤くなる assert」と「読む人のための assert」を混ぜたまま数えない。
+    """
     ok, res, _inf, err = _resolve(book, "北斗精機の行を消して")
     assert ok, err
-    assert not res.get("_delete_rows"), res.get("_delete_rows")
-    assert not res.get("_confirm_delete")
+    assert not res.get("_delete_rows"), (
+        f"1 行しか当たらないのに『複数行に当たった』側の道に入った: {res.get('_delete_rows')}")
+    said = res.get("_confirm_delete") or ""
+    assert said, "値の入った行を、聞かずに消そうとしている（② が配線されていない）"
+    assert "北斗精機" not in said, f"1 行なのに『名前が複数行に当たった』の文が出た: {said}"
+    assert "件あります" in said, f"② の文（消えるものの件数）になっていない: {said}"
 
 
 def test_the_generator_deletes_from_the_bottom_up(book):

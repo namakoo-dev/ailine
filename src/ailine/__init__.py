@@ -5648,6 +5648,22 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
             if not (cs.isdigit() and int(cs) >= 1):
                 return False, resolved, inferred, f"削除行数『{c}』が不正です（1以上の整数）"
             resolved["count"] = int(cs)
+        # ★★ 2026-09-17（盲検 3 体目から辿った・同じ家系の片割れ）: 上の「名前が複数行に
+        #   当たった」回だけが関所に載っていて、**行番号で指した削除は素通り**していた
+        #   （実測:「3行目を削除して」で値 11 個が消えて exit 0）。
+        #   ★ 2026-09-07 の決裁「削除は取り返しがつかないので必ず聞く」を、宣言
+        #     （WRITE_REMOVE）の家系ぜんぶに配線する ── 片方だけ直すと次の片配線を作る。
+        #   ★ 鳴る条件は上書き・列削除と対称: **消えるものが在る時だけ**（空行は黙って消す）。
+        if not resolved.get("_confirm_delete"):
+            _lost = _rows_existing_value_count(
+                book_meta.get("path"), _sheet, int(resolved["at"]), int(resolved["count"]))
+            if _lost > 0:
+                _n = int(resolved["count"])
+                _where = (f"{resolved['at']}行目"
+                          if _n == 1 else
+                          f"{resolved['at']}行目から {_n} 行")
+                resolved["_confirm_delete"] = (
+                    f"{_where}には値が {_lost} 件あります（その行ごと削除します）")
     else:
         # ★ 値は**列名で**受ける。実在しない列名はここで弾く（幻覚の封鎖）。
         vals = resolved.get("values")
@@ -6181,6 +6197,23 @@ def _verify_delete_column(resolved, inferred, book_meta, sheets, headers):
         return False, resolved, inferred, "列が 1 本しかないので削除できません"
     resolved["col"] = name
     resolved["_headers"] = [str(h) for h in headers]
+    # ★★ 2026-09-17（盲検 3 体目・製造業の購買）: 「検収日の列を消して」で、値の入った
+    #   15 件が**確認なしに** exit 0 の ✓ で消えた。買い手の言葉:
+    #   「上書きより削除の方が怖いのに、厳しい方が緩い」。
+    #   ★ 関所（破壊の関所）も、削除用の聞き文（「削除しますか？」）も**既に在った** ──
+    #     配線されていたのは DELETE_ROWS の「名前が複数行に当たった」1 ケースだけで、
+    #     列の削除はどれだけ値が入っていても素通りしていた（器官は在るが配線が無い）。
+    #   ★ 2026-09-07 の決裁は「削除は取り返しがつかないので**必ず聞く**」。目の前に在った
+    #     1 ケースにだけ配線された形なので、同じ数え方（上書きの関所が使う件数）を借りる。
+    #   ★ 鳴る条件は上書きと対称にする ── **消えるものが在る時だけ**（空の列は黙って消す）。
+    _sheet_d = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    if book_meta.get("path") and _sheet_d:
+        _lost = _column_existing_value_count(
+            Path(book_meta["path"]), _sheet_d, name,
+            header_row=int((book_meta.get("header_rows") or {}).get(_sheet_d, 1) or 1))
+        if _lost > 0:
+            resolved["_confirm_delete"] = (
+                f"列『{name}』には値が {_lost} 件あります（この列ごと削除します）")
     return None
 
 
@@ -13795,6 +13828,35 @@ def _column_existing_value_count(book_path: Path, sheet_name: str, col_name: str
                     if ws.cell(row=r, column=idx).value not in (None, ""))
         wb.close()
         return count
+    except Exception:
+        return 0
+
+
+def _rows_existing_value_count(book_path, sheet_name: str, at: int, count: int = 1) -> int:
+    """消そうとしている行に、値の入っているセルが何個あるか（削除の関所の件数）。
+
+    ★★ 2026-09-17（盲検 3 体目）: 列の上書きには関所が在り、**削除には無かった**。
+      買い手の言葉:「上書きより削除の方が怖いのに、厳しい方が緩い」。
+    ★ 列側（_column_existing_value_count）と**同じ作法**で書く ── 読めなければ 0 を返し、
+      誤って止めない。鳴るのは「消えるものが在る」と数えられた時だけ。
+    ★ 数えるのは**値の個数**であって行数ではない ── 事後の表示が「消した中身（15 行）」と
+      空行まで数えて出していたのを、関所の側では繰り返さない。
+    """
+    if not book_path or not sheet_name:
+        return 0
+    try:
+        wb = openpyxl.load_workbook(book_path, read_only=True)
+        if sheet_name not in wb.sheetnames:
+            wb.close()
+            return 0
+        ws = wb[sheet_name]
+        n = 0
+        for r in range(int(at), int(at) + max(1, int(count))):
+            for c in range(1, (ws.max_column or 0) + 1):
+                if ws.cell(row=r, column=c).value not in (None, ""):
+                    n += 1
+        wb.close()
+        return n
     except Exception:
         return 0
 

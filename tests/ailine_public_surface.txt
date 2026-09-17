@@ -389,6 +389,7 @@ def _row_as_shown(bv, sheet_name: 'str', row: 'int', last_col: 'int') -> 'list'
 def _row_char_stats(ws, start_row: 'int', end_row: 'int', start_col: 'int', end_col: 'int') -> 'dict'
 def _row_named_anywhere_in_task(task: 'str', rows: 'dict', headers: 'list', require_possessive: 'bool' = False)
 def _row_word_number(word: 'str') -> 'int'
+def _rows_existing_value_count(book_path, sheet_name: 'str', at: 'int', count: 'int' = 1) -> 'int'
 def _rows_matching(book_meta: 'dict', sheet: 'str | None', cond_col: 'str', cmp: 'str', threshold, header_row: 'int' = 1)
 def _run_dsl_plan_step(i: 'int', op: 'str', raw_args: 'dict', *, task: 'str', current_meta: 'dict', original_headers: 'dict', first_sheet: 'str | None', out_book: 'Path', workdir: 'Path', helper_files, apply_timeout, use_formula: 'bool', header_rows: 'dict', before_charts: 'int', a: 'argparse.Namespace', vocab: 'dict', book_name: 'str', subject_sink: 'dict | None' = None, suspicion_sink: 'list | None' = None, derived_sheets: 'list | None' = None, before_chart_paths: 'frozenset | None' = None) -> 'tuple'
 def _run_folder_refuse(op: 'str', plan_len: 'int') -> 'int'
