@@ -90,7 +90,6 @@ NO_DERIVATION_REASON = {
                      "（番人 test_the_example_actually_runs が 1 例につき実走行 1 本を打つ）",
     "DEFAULT_SUGGESTIONS": "曖昧な依頼に見せる**表示用の並び**。上限 3 で、"
                            "実装から導ける性質のものではない",
-    "PLAN_CHAIN_WARNING_OPS": "★ 読み手が消えた**死んだ名前**。導出ではなく削除が答え",
     "_OP_VERBS": "日本語の**活用形**の手書き。無い op はラベル+する/した に落ちる"
                  "（免除簿に 5 op 宣言済み）",
     "POSTCONDITIONS": "op → チェッカーの辞書そのもの。導出元が存在しない"

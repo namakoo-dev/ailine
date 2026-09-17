@@ -59,10 +59,6 @@
       "kind": "leftover",
       "why": "「同じ名前が 2 行以上あれば**断る**」という設計の名残。2026-08-28 の設計査読で『断ってはいけない（領収書・納品書は取引ごとに 1 枚）』と決まり、呼び出し側にはその理由がコメントで残っている。判断が反転したので呼ばれなくなった。"
     },
-    "src/ailine/__init__.py:PLAN_CHAIN_WARNING_OPS": {
-      "kind": "leftover",
-      "why": "2026-09-15 に唯一の読み手が宣言駆動の plan_chain_sheet_of に置き換わり、名前だけが残った。★ 危ないのは『連鎖の警告対象はこの 2 つ』と読めるのに**何も制御していない**こと。消すには tests/ailine_public_surface.txt からも外す。"
-    },
     "ailine_core.intent:refuse_row_add_that_is_really_a_write": {
       "kind": "leftover",
       "why": "2026-09-16 に関所を 9 op へ広げたとき、既存の検体のために残した旧名。呼ぶのは検体 1 本だけ。検体を新しい名前に寄せたら消す。"

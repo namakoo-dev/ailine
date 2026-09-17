@@ -6696,7 +6696,6 @@ _CONFIRM_FIELDS = {
 #     REPORT_PER_ROW（N 枚作る）と FORMAT_MAP（名前が決まらない）は**自然に外れる** ──
 #     手で選んでいない。名前が取れるかどうかが判定。
 #   ★ 名簿は `tests/test_plan_chaining.py` が宣言と突き合わせる（新しい op は分類するまで赤）。
-PLAN_CHAIN_WARNING_OPS = ("EXTRACT", "DEDUP")
 
 #: ★ 「新しいシートに書く」と宣言しているのに、**連鎖の作り手にしない** op と、その理由。
 #:   ★ ここに書くのは「名前が 1 つに決まらない」ものだけ ── 決まるなら必ず作り手になる。

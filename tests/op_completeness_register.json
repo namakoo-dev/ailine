@@ -135,11 +135,6 @@
       "reason": "前段が作った派生シートを対象として引き継ぐ op。書式だけを触る op は元表に掛けたい場合も多いので外してある（__init__.py:3280 が明記）。",
       "unlock": "『絞り込んだ結果に掛けたいのか元表に掛けたいのか』を機械が決められるようになったとき。★ 2026-09-16 の掃き出しの所見（未処置・証拠つき）: EXTRACT_COLUMNS は『EXTRACT と同じ・新しいシートを作るだけ』と宣言され作り手としては配線済みなのに使い手として載っていない（作り手 yes・使い手 no の片配線）。SET_WHERE も_OPS_THAT_SKIP_NON_DATA_ROWS に SORT/EXTRACT/AGGREGATE と並んで載るのにここに無く、2 段目が**元の台帳の既存列に書き込む**。どちらも ★ 助言と △ は出るが、原本は書き換わった後。"
     },
-    "src/ailine/__init__.py:PLAN_CHAIN_WARNING_OPS": {
-      "coverage": "partial",
-      "reason": "★ 未調査あらため **死んだ名前** ── src に読み手が無い（2026-09-15 の eb10631 で唯一の読み手が宣言駆動の plan_chain_sheet_of に置き換わった）。在る/無いで挙動は変わらない。★ 危険なのは名前が残っていること自体 ── 『連鎖の警告対象はこの 2 つ』と読めるのに何も制御していない。",
-      "unlock": "削除すること。tests/ailine_public_surface.txt:67 から外し、tests/test_plan_chaining.py:36 の hasattr ガードを実在する名前に付け替えれば消せる。"
-    },
     "src/ailine/__init__.py:PLAN_CHAIN_UNNAMED_PRODUCERS": {
       "coverage": "partial",
       "reason": "新しいシートを作ると宣言する 7 op のうち、**出力シート名が 1 つに決まらない**ものだけを連鎖の作り手から外す（__init__.py:6683-6685 が明記）。母数は構造上その 7 op に限られる。",

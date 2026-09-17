@@ -32,8 +32,13 @@ import ailine  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
 
+# ★★ 2026-09-17: ここは `PLAN_CHAIN_WARNING_OPS` の有無を見ていたが、その名簿は
+#   2026-09-15 に読み手を失い、**何も制御しない名前**として残っていただけだった
+#   （製品コードからの参照 0 を実測）。在否を見る先を、実際に連鎖を決めている
+#   後継 `plan_chain_sheet_of` に付け替える ── 死んだ名前を生かしておくと、
+#   次に読む人が「連鎖の警告対象はこの 2 つ」と読んで調べ直す。
 needs_impl = pytest.mark.xfail(
-    not hasattr(ailine, "PLAN_CHAIN_WARNING_OPS"),
+    not hasattr(ailine, "plan_chain_sheet_of"),
     reason="連鎖の番人 未実装（契約は凍結済み・実装が来たら自動実測化）",
     strict=True,
 )
