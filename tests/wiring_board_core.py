@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import inspect
 import json
 import re
@@ -52,6 +53,56 @@ def _codegen_source(op: str) -> str:
         return inspect.getsource(ailine.CODEGEN_BY_OP.get(op))
     except (OSError, TypeError):
         return ""
+
+
+def _main_tree():
+    return ast.parse((SRC / "ailine" / "__init__.py").read_bytes().decode("utf-8"))
+
+
+def _verify_fn_by_op() -> dict:
+    """op → その op の枝で呼ばれる検算関数の名前（verify_dsl_args の分岐から引く）。
+
+    ★★ 初版は `ast.walk(if_node)` で呼び出しを拾い、**elif の続き（orelse）まで
+      同じ枝に数えて**いた ── 全 op が全部の検算関数を呼んでいることになり、
+      導出が空集合になった。枝の body だけを見る。
+      （2026-09-17: 導出が合わないので名簿を疑いかけたが、間違っていたのは測る側）。
+    """
+    out: dict = {}
+    fns = {n.name: n for n in _main_tree().body if isinstance(n, ast.FunctionDef)}
+    for node in ast.walk(fns["verify_dsl_args"]):
+        if not isinstance(node, ast.If):
+            continue
+        ops = {cmp_.comparators[0].value for cmp_ in ast.walk(node.test)
+               if isinstance(cmp_, ast.Compare) and isinstance(cmp_.left, ast.Name)
+               and cmp_.left.id == "op" and isinstance(cmp_.comparators[0], ast.Constant)
+               and isinstance(cmp_.comparators[0].value, str)}
+        if not ops:
+            continue
+        called = set()
+        for stmt in node.body:            # ★ orelse には入らない
+            for n in ast.walk(stmt):
+                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                        and n.func.id.startswith("_verify_")):
+                    called.add(n.func.id)
+        for op in ops:
+            out.setdefault(op, set()).update(called)
+    return out
+
+
+def _ops_that_name_their_own_sheet() -> set:
+    """出力シート名を**実行時に**決める op（検算が resolved["_new_sheet"] を積む）。"""
+    fns = {n.name: n for n in _main_tree().body if isinstance(n, ast.FunctionDef)}
+
+    def names(fname: str) -> bool:
+        fn = fns.get(fname)
+        return bool(fn) and any(
+            isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+            and t.value.id == "resolved" and isinstance(t.slice, ast.Constant)
+            and t.slice.value == "_new_sheet"
+            for n in ast.walk(fn) if isinstance(n, ast.Assign) for t in n.targets)
+
+    by_op = _verify_fn_by_op()
+    return {op for op, fs in by_op.items() if any(names(f) for f in fs)}
 
 
 def derivations(ops, codegen) -> dict:
@@ -80,6 +131,21 @@ def derivations(ops, codegen) -> dict:
             #   盤が「食い違い 1 列」と嘘を表示した。**呼ぶ**こと。
             set(_column_arg_keys_derived()),
             "列のスロットのうち書き込み先を外し、削除する op も外す（＋CHART の例外）"),
+        "OP_DECLARED_SHEET_NAME": (
+            # ★★ 2026-09-17（仕分け④）: 新しいシートを作る 7 op は、出力名の出どころで
+            #   ちょうど 3 つに分かれる ──
+            #     実行時に決める（検算が _new_sheet を積む）: EXTRACT / EXTRACT_COLUMNS / DEDUP
+            #     静的な名前が要る                          : AGGREGATE / PIVOT  ← この名簿
+            #     名前が 1 つに決まらないと宣言済み          : FORMAT_MAP / REPORT_PER_ROW
+            #   だから名簿は「差」で導ける。新しくシートを作る op が来て、名前の出どころが
+            #   どれでもなければ**食い違いとして出る** ── そこが穴になる。
+            # ★ helpers 側から導けるか（盤の理由が未測定にしていた点）は測って**否**:
+            #   生成関数にシート名のリテラルは 1 つも無く、名前は resolved から渡っている。
+            ({op for op in ops if ailine._op_writes(op, ailine.WRITE_NEW_SHEET)}
+             - _ops_that_name_their_own_sheet()
+             - set(ailine.PLAN_CHAIN_UNNAMED_PRODUCERS)),
+            "新しいシートを作ると宣言し、実行時に名前を積まず、"
+            "『名前が決まらない作り手』にも宣言されていない op"),
     }
 
 
@@ -104,8 +170,6 @@ NO_DERIVATION_REASON = {
                             "WRITE_NEW_SHEET の段しか通さない）。その 7 op すべての"
                             "決めと理由を test_machine_derived_args_is_decided.py の"
                             "台帳が持ち、分母は宣言から導いて等号で縛る",
-    "OP_DECLARED_SHEET_NAME": "★ 未調査 ── helpers が固定名で書き出す op の対応表。"
-                              "helpers 側から導ける可能性は測っていない",
     "_OP_SCHEMA_NOTES": "注記は説明でなく**分担の宣言**（4 本すべてが「これは入れない・"
                         "機械が決める」の形）。足すのは実測で誤訳した op だけ ── "
                         "第二段に op を文字どおり渡す 5 op の決めと理由を "
