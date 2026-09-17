@@ -4,7 +4,7 @@ usage: ailine run [-h] [--show-basic] [--model MODEL] [--refs REFS]
                   [--json] [--timeout TIMEOUT] [--ask]
                   [--keep-backups KEEP_BACKUPS] [--values]
                   [--header-row HEADER_ROW] [--sheet SHEET] [--accept-loss]
-                  [--copy] [--overwrite] [--allow-freeform]
+                  [--copy] [--out ファイル] [--overwrite] [--allow-freeform]
                   [--allow-remote-model]
                   book task [task ...]
 
@@ -37,6 +37,9 @@ options:
   --accept-loss         往復忠実度ゲートが検出した喪失を承知の上で原本への反映を続行する（ailine undo で戻せる）
   --copy                原本には触らず <book>.out に結果を作る（既定の原本直接適用をしない・旧 --inplace
                         無指定と同じ挙動。往復忠実度ゲートも走らせない）
+  --out ファイル            --copy の書き出し先を指定する（省略時は
+                        <book>.out.xlsx）。同じ原本に複数の作業結果を残したい時に使う。★ 原本直接（--copy
+                        無し）とは併用できません
   --overwrite           破壊の関所（既存データを持つ列への上書き確認）を承知の上で続行する（ailine undo で戻せる）
   --allow-freeform      （廃止・後方互換のため受理のみ）自由生成は提供していません。指定しても語彙外の断り +
                         廃止告知が出るだけです（機械検証できない操作は行わない方針）

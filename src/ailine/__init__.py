@@ -12780,9 +12780,19 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
     if blocked is not None:
         return blocked
 
+    # ★★ 2026-09-17: --out は --copy の時だけ効く。原本直接モードの `.out` は
+    #   作業ファイルなので、人に付け替えさせない（黙って無視もしない ── 断る）。
+    #   ★ 判定元は --copy そのもの ── `a.inplace` が立つのはこの先（12812 付近）で、
+    #     ここで見ると**必ず False**になり検査が素通りする（実測で踏んだ）。
+    if getattr(a, "out", None) and not getattr(a, "copy", False):
+        print("？ --out は --copy と一緒に指定してください"
+              "（原本に直接反映する時は、書き先は原本そのものです）")
+        return 3
     # ★ 2026-08-25（復元の致命2）: 出力先に**人のファイル**が在れば、触る前に止める。
     #   LO 起動・翻訳より前 ── ロック検出と同じ位置に置く（壊してから気づかない）。
-    conflict = refuse_if_output_is_someone_elses(book)
+    conflict = refuse_if_output_is_someone_elses(
+        book, getattr(a, "task", "") or "",
+        chosen=(run_output_path(a, book) if getattr(a, "out", None) else None))
     if conflict is not None:
         return conflict
 
@@ -14191,7 +14201,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
-    out_book = out_book_path(book)
+    out_book = run_output_path(a, book)
     apply_timeout = a.timeout if a.timeout else None   # 0 で無効化（旧挙動 = 無制限）
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     _helper_catalog, helper_files = load_helpers(helpers_dir)
@@ -14397,7 +14407,7 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
-    out_book = out_book_path(book)
+    out_book = run_output_path(a, book)
     apply_timeout = a.timeout if a.timeout else None
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     _helper_catalog, helper_files = load_helpers(helpers_dir)
@@ -14568,7 +14578,7 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
-    out_book = out_book_path(book)
+    out_book = run_output_path(a, book)
     apply_timeout = a.timeout if a.timeout else None
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     _helper_catalog, helper_files = load_helpers(helpers_dir)
@@ -15647,7 +15657,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
-    out_book = out_book_path(book)
+    out_book = run_output_path(a, book)
     apply_timeout = a.timeout if a.timeout else None
     helpers_dir = Path(a.helpers).resolve() if a.helpers else DEFAULT_HELPERS
     refs_dir = Path(a.refs).resolve() if a.refs else DEFAULT_REFS
@@ -15994,13 +16004,33 @@ def out_book_path(book: Path) -> Path:
     return book.with_name(book.stem + ".out" + book.suffix)
 
 
-def refuse_if_output_is_someone_elses(book: Path) -> int | None:
+def run_output_path(a, book: Path) -> Path:
+    """`run` が書き出す先 ── `--out` が在ればそこ、無ければ `<book>.out.<拡張子>`。
+
+    ★★ 2026-09-17（盲検 3 体目）: 行き先を決める式 `out_book_path(book)` が **4 箇所に
+      書き写されて**いた。そこへ `--out` を配ると、配り忘れた経路だけが黙って
+      `.out` に書く ── 今日ずっと潰している片配線を自分で作る形になる。
+      だから**決めるのはここ 1 箇所**にして、呼び出し側は材料（a と book）を渡すだけにする。
+    ★ 名前だけを渡されたら**原本の隣**に置く（2 冊の照合が `book_a.parent` に置くのと同じ）。
+      人が打つのは「集計.xlsx」であって、作業ディレクトリの話ではない。
+    ★ `--out` は `--copy` の時だけ効く（原本直接モードの `.out` は作業ファイルなので
+      人に付け替えさせない）。その検査は入口（cmd_run）で 1 回だけ行う。
+    """
+    chosen = getattr(a, "out", None)
+    if not chosen:
+        return out_book_path(book)
+    p = Path(str(chosen))
+    return p if p.parent != Path(".") else book.parent / p.name
+
+
+def refuse_if_output_is_someone_elses(book: Path, task: str = "",
+                                       chosen: Path | None = None) -> int | None:
     """出力先に**人のファイル**が在れば exit 7 で止める。無ければ None。
 
     ★ ailine 産（前回の .out）は従来どおり黙って作り直す ── 印で見分ける
       （フォルダ経路の関所と同じ規則・同じ出口）。
     """
-    out = out_book_path(book)
+    out = out_book_path(book) if chosen is None else Path(str(chosen))
     # ★ 2026-08-26（復元の致命1）: 入口と出口で同じことを 2 度判断させない。
     #   ここは run の一番最初に必ず通る ── 「始まる前から在ったか」をここで控える。
     #   出口（atomic_replace_inplace の後始末）はこの控えだけを見て消すかを決める。
@@ -16029,6 +16059,21 @@ def refuse_if_output_is_someone_elses(book: Path) -> int | None:
             if stamped is None:
                 return None      # 指紋を残す前の古い記録 ── 従来どおり（判定材料が無い）
             if stamped == _file_digest(out):
+                # ★★ 2026-09-17（盲検 3 体目）: ここは「俺が置いたまま＝作り直してよい」で
+                #   **黙って**上書きしていた。買い手は --copy で 3 つの作業をして 2 つ失った
+                #   （1 回目の『集計』シートが 2 回目で消え、警告は 1 行も出ない）。
+                #   ★ この損は**いちばん用心深い人に当たる** ── 原本反映は undo が世代を持つので
+                #     何も失われない。原本を壊すのが怖くて --copy を選んだ人だけが成果を失う。
+                #   ★ 言える材料は既に手元に在る: 履歴の項目に**前回の依頼文**が入っている。
+                #     置き換える物が**別の依頼**で作られた時だけ言う ── 同じ依頼の作り直しで
+                #     毎回鳴らすと、1 体目が言った「★ が毎回出るので読まなくなった」を繰り返す。
+                #   ★ 2 冊の照合はこの作法を既に持っている（「前回の照合出力『…』を
+                #     作り直しました」）。単一ブックの経路に来ていなかっただけ（片配線）。
+                _prev = str(entry.get("task") or "").strip()
+                if _prev and _prev != str(task or "").strip():
+                    print(f"（前回の --copy の結果を置き換えます: {out.name} ── "
+                          f"別の依頼「{_prev}」で作った物です。"
+                          f"残すなら --out <名前.xlsx> で別の名前に出してください）")
                 return None      # 俺が置いたまま ── 作り直してよい
             return _refuse_edited_output(out)
     except Exception:
@@ -18834,6 +18879,17 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--copy", action="store_true",
                    help="原本には触らず <book>.out に結果を作る（既定の原本直接適用をしない・"
                         "旧 --inplace 無指定と同じ挙動。往復忠実度ゲートも走らせない）")
+    # ★★ 2026-09-17（盲検 3 体目・製造業の購買）: --copy の行き先は必ず <book>.out.xlsx で、
+    #   2 回目の run が 1 回目の成果を**黙って**置き換えていた（買い手:「3 つの作業をしたら
+    #   2 つ失います」）。買い手は逃げ道として --out を**在ると思って打ち**、
+    #   「× 知らない指定があります: --out」で行き止まりになった。
+    #   ★ 2 冊の照合は名前に依頼の条件を埋め込んで同じ問題を解いている ── 単一ブックの
+    #     経路に来ていなかっただけ。ただし .out の名前は 118 の検体と原本反映の作業ファイルが
+    #     依存しているので**既定は変えない**。行き先を選べる口だけを足す。
+    r.add_argument("--out", default=None, metavar="ファイル",
+                   help="--copy の書き出し先を指定する（省略時は <book>.out.xlsx）。"
+                        "同じ原本に複数の作業結果を残したい時に使う。"
+                        "★ 原本直接（--copy 無し）とは併用できません")
     r.add_argument("--overwrite", action="store_true",
                    help="破壊の関所（既存データを持つ列への上書き確認）を承知の上で"
                         "続行する（ailine undo で戻せる）")
