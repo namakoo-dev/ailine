@@ -1,130 +1,177 @@
 {
   "_meta": {
-    "purpose": "画面に『？』を出す断りの台帳。断りは**ガード兼フロンティア候補**なので、『なぜ断るか』だけでなく『何が変われば到達になるか（unlock）』を必ず書く。番人は tests/test_refusals_are_classified.py。",
+    "purpose": "画面に『？』を出す断りの台帳。★★ これは維持する目録ではなく**縮める在庫**である（Namakoo 2026-09-17:「断りは仕方なく断るにすぎない」）── 断りは成果ではなく、まだ作れていないものの数。だから『なぜ断るか』だけでなく『何が変われば到達になるか（unlock）』を必ず書く。番人は tests/test_refusals_are_classified.py。",
     "why": "Namakoo 2026-09-17:「後に断りから到達にできるものもあるかもしれないからね」。断りの一覧は UX の点検ではなく**在庫**。棚の線と同じ（DEAD_END の二読法: 断定で刻むと未来が拾えない）。",
     "denominator": "分母は機械で出す ── src/ の print/say に渡る文字列で『？』から始まるもの。分類と unlock は人が書く（機械に決まらない）。",
     "keys": "func#N（その関数の中で上から N 番目）。★ 途中に断りを差し込むと番号がずれて赤くなる ── それは正しい挙動（差し込んだ人に分類を書かせる）。",
     "why_values": "vocab=語彙に無い（実需で動く） / precondition=前提が満たせない（道具が自分で満たせる場合がある） / ambiguous=曖昧で決められない（聞けば決まるなら関所へ動かせる） / dangerous=危険だから断る（動かさない）",
     "measured_fields": "escape（選べる指定を並べているか）と example（『例:』で通る書き方を見せているか）は**機械が見た値**。人が書き換えない ── ずれたら番人が赤にする。",
     "known_blind_spot": "example の検出は『例:』という語だけを見る。_cmd_run_body#1 のように『（1冊だけの依頼なら…）』と実質の通る書き方を示していても false になる。数は機械の見たまま、含みは note に書く。",
-    "generated": "2026-09-17（盲検 3 体目の後）"
+    "generated": "2026-09-17（盲検 3 体目の後）",
+    "direction": "到達を増やす道は 3 つだけ ── vocab=能力を足す / ambiguous=聞けば決まるものを関所へ動かす / precondition=道具が自分で前提を満たす。dangerous だけは動かさない。★ 確信度を下げて断りを減らす道は採らない（それは『見えずに間違う』側へ倒れる）。"
   },
   "refusals": {
     "_cmd_run_body#1": {
       "text": "2冊目として指定した『…』が見つかりません",
-      "escape": false, "example": false, "why": "precondition",
+      "escape": false,
+      "example": false,
+      "why": "precondition",
       "unlock": "無い ── パスの打ち間違いは人しか直せない。道具にできるのは言い方の改善だけ",
       "note": "★ 機械は example=false と見るが、本文に『1冊だけの依頼なら、依頼文だけを1つの引数として渡してください』と通る書き方が入っている（検出器の盲点）"
     },
     "_cmd_run_body#2": {
       "text": "--out は --copy と一緒に指定してください",
-      "escape": false, "example": false, "why": "precondition",
+      "escape": false,
+      "example": false,
+      "why": "precondition",
       "unlock": "無い ── 原本直接モードの .out は作業ファイルで、書き先は原本そのもの。意図して断る",
       "note": "2026-09-17 に --out を足した時に一緒に置いた関所"
     },
     "_cmd_run_dispatch#1": {
       "text": "対象シートが決まらない（resolve_target_sheet の理由をそのまま）",
-      "escape": true, "example": false, "why": "ambiguous",
+      "escape": true,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "★ 未調査 ── 『聞けば決まる』形かを測っていない。⑦で削除を関所へ動かしたのと同じ判断ができるかもしれない"
     },
     "_reread_the_plan#1": {
       "text": "どのセルかを決められませんでした。列全体は勝手に書き換えません ── どちらか選んでください",
-      "escape": true, "example": false, "why": "ambiguous",
+      "escape": true,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "無い（既に到達済み）── 2026-08-29 に『本物の 2 択』として選べる形にした。断りでなく分岐"
     },
     "_reread_the_plan#2": {
       "text": "入れる値を依頼文から決められません",
-      "escape": true, "example": false, "why": "ambiguous",
+      "escape": true,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "★ 一部到達済み ── 2026-09-07 に『空の列なら「」を外す』まで緩めた。データの在る列は賭け金が大きいので断りのまま"
     },
     "_reread_the_plan#3": {
       "text": "この道具は『…』に対応していません ── 近い操作で代わりに実行することはしません",
-      "escape": true, "example": false, "why": "vocab",
+      "escape": true,
+      "example": false,
+      "why": "vocab",
       "unlock": "実需が来た語彙を足す。★ 近い操作で代用しない線は動かさない（それは嘘の ✓ を作る道）"
     },
     "_translate_and_dispatch#1": {
       "text": "聞き返し（clarify_q）",
-      "escape": false, "example": false, "why": "ambiguous",
+      "escape": false,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "★ 未調査 ── 聞き返しの中身がどれだけ『聞けば決まる』形かを数えていない"
     },
     "_translate_and_dispatch#2": {
       "text": "そんな操作はありません: 『…』（一覧: ailine ops）",
-      "escape": false, "example": false, "why": "vocab",
+      "escape": false,
+      "example": false,
+      "why": "vocab",
       "unlock": "実需が来た語彙を足す。★ 買い手 1 体目が『ops に書いてあるのに一覧に無いと断られる』と言った場所の近く ── 断り文が本当の理由を言っていない可能性がある（③④と同じ形）"
     },
     "_translate_and_dispatch#3": {
       "text": "『…』として読み取れませんでした（依頼文に、対象の列や値が書かれているか確かめてください）",
-      "escape": false, "example": false, "why": "ambiguous",
+      "escape": false,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "★ 未調査 ── 何が読み取れなかったのかを名指ししていない。③④で直したのと同じ形が残っている疑い"
     },
     "_translate_and_dispatch#4": {
       "text": "『…』はその列のデータ行を**全部**書き換えます。1 か所だけ直すなら『1セル書換』を選んでください",
-      "escape": false, "example": false, "why": "dangerous",
+      "escape": false,
+      "example": false,
+      "why": "dangerous",
       "unlock": "無い ── 列ぜんぶを黙って書き換えないための線。動かさない"
     },
     "_translate_and_dispatch#5": {
       "text": "同じ軸に位置を作る段が 2 つ以上ある計画は実行しない（too_many_placements）",
-      "escape": false, "example": false, "why": "dangerous",
+      "escape": false,
+      "example": false,
+      "why": "dangerous",
       "unlock": "無い ── 2026-08-29 の設計判断『当て物でなく関所にする』。壊す前に止まる"
     },
     "_translate_and_dispatch#6": {
       "text": "聞き返し（question・実測で通る例に差し替え済み）",
-      "escape": false, "example": false, "why": "ambiguous",
+      "escape": false,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "★ 未調査 ── 2026-09-05 に例文を実測で通るものへ替えた。到達側へ動かせるかは測っていない"
     },
     "_run_folder_refuse#1": {
       "text": "複数の操作をまとめた依頼（N 段）はフォルダに対応していません。フォルダに頼めるのは抽出だけです",
-      "escape": false, "example": false, "why": "vocab",
+      "escape": false,
+      "example": false,
+      "why": "vocab",
       "unlock": "★★ 在庫の筆頭候補 ── 買い手 3 体目の MISSING 筆頭は『2 冊をまたいだ転記』で『購買の月次はこれが本体』『これが在れば月額 3,000〜5,000 円』。需要の記憶（上位案件は複数ファイル）とも向きが合う"
     },
     "_run_folder_refuse#2": {
       "text": "『…』は複数ファイル（フォルダ）に対応していません。フォルダに頼めるのは抽出だけです",
-      "escape": false, "example": false, "why": "vocab",
+      "escape": false,
+      "example": false,
+      "why": "vocab",
       "unlock": "★★ 上と同じ在庫。どの op をフォルダへ広げるかは実需で決める（語彙は増やすほど本流が濁る ── OPS_DOC に 16 行足して op 一致が 98.1%→94.2% になった実測が在る）"
     },
     "cmd_run_folder#1": {
       "text": "確認が必要です（CLARIFY・末尾に『頼める操作の一覧: ailine ops』）",
-      "escape": false, "example": false, "why": "ambiguous",
+      "escape": false,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "★ 未調査"
     },
     "cmd_run_folder#2": {
       "text": "比較の語が 2 つあります／否定（辞書が ambiguous を返した理由をそのまま）",
-      "escape": false, "example": false, "why": "ambiguous",
+      "escape": false,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "無い ── 2026-09-15 に『黙って反転・黙って片方を捨てる』を塞ぐために入れた線。意図して断る"
     },
     "cmd_run_folder#3": {
       "text": "比較『…』は …/… のどれでもありません（例つき）",
-      "escape": false, "example": true, "why": "vocab",
+      "escape": false,
+      "example": true,
+      "why": "vocab",
       "unlock": "比較語の辞書に語を足す。★ 足す前に引き方を測る（1 語 1 レコード・出所と検体が必須）"
     },
     "cmd_run_folder#4": {
       "text": "列『…』が基準ファイル『…』にありません。ある列: …",
-      "escape": false, "example": false, "why": "precondition",
+      "escape": false,
+      "example": false,
+      "why": "precondition",
       "unlock": "無い ── 在る列を並べているので、人が言い直せる"
     },
     "cmd_run_folder#5": {
       "text": "抽出する値が依頼文から読み取れません（例つき）",
-      "escape": false, "example": true, "why": "ambiguous",
+      "escape": false,
+      "example": true,
+      "why": "ambiguous",
       "unlock": "★ 未調査"
     },
     "cmd_run_folder#6": {
       "text": "『…』は数値として読めないので … の比較ができません",
-      "escape": false, "example": false, "why": "precondition",
+      "escape": false,
+      "example": false,
+      "why": "precondition",
       "unlock": "★ 未調査 ── 『数値として読めない』理由（式のまま／文字列混在／全角）を名指ししていない。2026-09-17 に照合側で同じ形を直した（③④）"
     },
     "cmd_run_folder#7": {
       "text": "辞書に当たらない数値の比較は LLM の不等号だけで通さない（compare_words.unconfirmed）",
-      "escape": false, "example": false, "why": "ambiguous",
+      "escape": false,
+      "example": false,
+      "why": "ambiguous",
       "unlock": "比較語の辞書に語を足せば到達側へ動く。★ 2026-09-15 の規則 ④"
     },
     "cmd_run_match#1": {
       "text": "…の…列が依頼文から決まりません。候補: …（例つき）",
-      "escape": false, "example": true, "why": "ambiguous",
+      "escape": false,
+      "example": true,
+      "why": "ambiguous",
       "unlock": "★★ 2026-09-17 に理由の 1 行を足した（式のままで計算結果が無い列を名指し）。次の一手は**道具が自分で値を作る** ── ailine は LibreOffice を持っているので、人に『開いて保存してください』と言う必要は本当は無い。前提を道具が満たせる例"
     },
     "cmd_run_match#2": {
       "text": "…に…に使える列が見つかりません",
-      "escape": false, "example": false, "why": "precondition",
+      "escape": false,
+      "example": false,
+      "why": "precondition",
       "unlock": "★ 上と同じ ── 式のままの列はここにも効く。到達候補"
     }
   }
