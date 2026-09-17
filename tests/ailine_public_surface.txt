@@ -288,6 +288,7 @@ def _fmt_cell_value(v) -> 'str'
 def _fmt_elapsed(seconds: 'float') -> 'str'
 def _format_extract_value(value) -> 'str'
 def _format_offending_records(parsed, header_offset: 'int', rec_indices: 'list', col_idx: 'int') -> 'str'
+def _formula_columns_without_values(path: 'Path', header_row: 'int', headers: 'list') -> 'set'
 def _gather_backups(directory: 'Path', stem: 'str', suffix: 'str') -> 'list'
 def _ground_via_fixed_op(a: 'argparse.Namespace', task: 'str', book_meta: 'dict', op: 'str')
 def _group_step_advisories(entries: 'list') -> 'list'

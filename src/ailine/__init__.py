@@ -16521,6 +16521,51 @@ def _unreadable_book_for_match_message(path: Path) -> str:
     return f"？ {path.name} を読めませんでした。壊れていないか、.xlsx 形式か確認してください。"
 
 
+def _formula_columns_without_values(path: Path, header_row: int, headers: list) -> set:
+    """計算結果を持たない**式の列**（照合の読みでは丸ごと空に見える列）。
+
+    ★★ 2026-09-17（盲検 3 体目・製造業の購買）: 買い手が突き合わせたい第一候補は
+      『金額』だったのに候補に一度も現れず、**理由も言われなかった**。
+      買い手の言葉:「**なぜ金額が選べないのか**が最後まで分かりませんでした」。
+    ★ 実体は `=E2*F2` のままで計算結果が保存されておらず、照合の読み（data_only=True・
+      計算結果が要るので正しい）では**空のセル**に見える。だから数値の列と認められない。
+      ★ 直すのは断る条件ではなく**断り方**。計算結果の無い列を金額として足したら、
+        それこそ嘘の数字を出すことになる ── 緩める方向へは倒さない。
+    ★ 冊を 2 度読むのは**断る時だけ**（通る回に余計な読みを増やさない）。
+    ★ どこから来るか: Excel/LibreOffice が保存した冊にはキャッシュ値が入るので普通は起きない。
+      起きるのは**他の道具（python 製の書き出しなど）が作った冊**。
+    """
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True)   # ★ data_only を付けない＝式が読める
+    except Exception:
+        return set()
+    try:
+        ws = wb.worksheets[0]
+        out = set()
+        for i, name in enumerate(headers):
+            if not name:
+                continue
+            seen = False
+            for r, row in enumerate(ws.iter_rows(min_row=header_row + 1, max_row=MAX_ROWS,
+                                                  values_only=True), start=header_row + 1):
+                v = row[i] if i < len(row) else None
+                if isinstance(v, str) and v.lstrip().startswith("="):
+                    seen = True
+                elif v not in (None, ""):
+                    seen = False
+                    break
+            if seen:
+                out.add(name)
+        return out
+    except Exception:
+        return set()
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
+
+
 def _peek_match_book(path: Path):
     """M3 専用の軽い読み: 見出し行推定（既存の StructDump ヒューリスティクスを1回だけ）+
        全データ行の読み取り。戻り値 (header_row, headers, rows) ── 読めなければ
@@ -16612,15 +16657,30 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
     resolution = multifile_match.resolve_columns(task, headers_a, rows_a, headers_b, rows_b)
     if not resolution.ok:
         say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
+        # ★★ 2026-09-17（盲検 3 体目）: 「依頼文に列名を含めて（例:『品目をキーに』）」と
+        #   案内していたが、買い手は**既にそう書いていた** ── 本当の理由は別に在り
+        #   （『金額』が式のままで計算結果を持たない）、道具はそれを**持っていたのに
+        #   言っていなかった**。見たものと、その解釈を分けて、両方言う。
+        _formula_only = {
+            "A": _formula_columns_without_values(book_a, header_row_a, headers_a),
+            "B": _formula_columns_without_values(book_b, header_row_b, headers_b)}
         for side, role, candidates in resolution.unresolved:
             label = "キー" if role == "key" else "金額"
             book_label = book_a.name if side == "A" else book_b.name
+            # ★ 依頼文が名指ししているのに候補に出てこない列を、理由つきで挙げる。
+            _named_formula = [h for h in sorted(_formula_only[side])
+                              if h and str(h) in (task or "") and h not in (candidates or [])]
             if candidates:
                 cand_txt = "、".join(str(c) for c in candidates)
                 say(f"？ {book_label} の{label}列が依頼文から決まりません。候補: {cand_txt}。"
                     f"依頼文に列名を含めて（例:『{candidates[0]}を{label}に』）もう一度実行してください。")
             else:
                 say(f"？ {book_label} に{label}に使える列が見つかりません。")
+            # ★ 理由は候補の有無に関わらず言う（上の if/else の**外**に置く ──
+            #   中に入れると片方の枝でだけ出る形になり、まさに片配線になる）。
+            if _named_formula:
+                say(f"　★『{"』『".join(str(h) for h in _named_formula)}』は**式のままで計算結果が入っていない**ため、"
+                    f"{label}の列として使えません（Excel か LibreOffice で一度開いて保存すると値が入ります）。")
         return 3
     key_a, key_b, amount_a, amount_b = (resolution.key_a, resolution.key_b,
                                          resolution.amount_a, resolution.amount_b)
