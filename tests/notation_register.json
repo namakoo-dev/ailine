@@ -1,0 +1,128 @@
+{
+ "_meta": {
+  "purpose": "依頼文が『どこを指しているか』の記法の台帳。★★ 三項（依頼・宣言・実体）のうち**依頼**の項に、これまで分母が無かった。番人は tests/test_notation_board.py、盤は scripts/notation_board.py。",
+  "why": "2026-09-18・盲検 4 体目 ④:「セル E1 に 借方金額 と入力して」が一括書換として走り、D2〜D7 を潰して exit 0。根は A1 形式が読めないこと ── task_points_at_one_row が None を返し、それが『依頼は 1 か所を指していない』と**同じ顔**をした。★ 読めないことと、指していないことが画面上で区別できない（棚: 出ないことは信号でない）。",
+  "how_to_read": "points_at（この記法は意味として どこを指すか）だけが人の決める事実 ── 機械に導けない。status は points_at と**実測**から盤が導き直す。名簿の status を手で書き換えても、実物が変わらなければ番人が赤くなる。",
+  "points_at": {
+   "one_place": "意味として 1 か所を指す（読めるべき）",
+   "narrower_than_column": "列より狭い範囲を指す（一括書換は依頼より広い）",
+   "whole_column": "列全体を指す（一括書換で正しい）"
+  },
+  "statuses": {
+   "reads": "器官が読む。1 か所へ落とせなければ断る（列全体には落とさない）",
+   "gap": "★ 1 か所を指しているのに読めない ── 一括書換を止める材料が無い（④ と同じ形）",
+   "narrower_than_column": "★ 列より狭い範囲を指しているのに読めない ── 依頼より広く書く恐れ",
+   "by_design": "もともと列全体を指している。読まなくてよい"
+  },
+  "inventory_note": "★ status が reads でないものは**在庫**であって仕様ではない（Namakoo 2026-09-17:「断りは仕方なく断るにすぎない」）。減らす向きにしか動かさない。"
+ },
+ "notations": {
+  "a1_cell": {
+   "label": "A1 形式で 1 セル（E1 / b3）",
+   "points_at": "one_place",
+   "status": "reads",
+   "organ": "task_names_a1_cell",
+   "specimens": [
+    {"task": "セル E1 に 借方金額 と入力して", "reads": true,
+     "note": "★ 盲検 4 体目 ④ の実文。これが読めず D2〜D7 を潰した"},
+    {"task": "b3 に 1000 と入れて", "reads": true, "note": "小文字も同じ 1 か所"},
+    {"task": "ABC123 の担当を「佐藤」にして", "reads": false,
+     "note": "★ 陰性対照: 品番を座標と読まない（前後が英数字なら拾わない）"},
+    {"task": "B2 と C3 を「済」にして", "reads": false,
+     "note": "★ 陰性対照: 2 か所あるなら決めない（黙って 1 つ選ばない）"}
+   ]
+  },
+  "row_number": {
+   "label": "行番号（3行目 / ３行目）",
+   "points_at": "one_place",
+   "status": "reads",
+   "organ": "task_names_a_row_number",
+   "specimens": [
+    {"task": "3行目の担当を「佐藤」にして", "reads": true,
+     "note": "★ 2026-08-28 の事故（担当列が全行『佐藤』）を止めた検体"},
+    {"task": "３行目の担当を「佐藤」にして", "reads": true, "note": "全角も同じ"}
+   ]
+  },
+  "row_name": {
+   "label": "表に在る行の名前（大東金属）",
+   "points_at": "one_place",
+   "status": "reads",
+   "organ": "_task_names_a_row",
+   "specimens": [
+    {"task": "大東金属の担当を「佐藤」にして", "reads": true},
+    {"task": "丸山重工の担当を「佐藤」にして", "reads": true,
+     "note": "★ 同名が 2 行ある時も『指してはいる』── 決められないだけ。ここを落とすと同名 2 行で列が潰れる"}
+   ]
+  },
+  "table_end": {
+   "label": "表の末尾（最終行 / 一番下 / 末尾）",
+   "points_at": "one_place",
+   "status": "gap",
+   "organ": "_ANCHOR_BOTTOM（在るが task_points_at_one_row へ未配線）",
+   "unlock": "_ANCHOR_BOTTOM は 2026-09-08 に列側と対称化するため既に在る。行の住所を解く側（_resolve_named_row / data_extent）へ繋ぐだけで到達になる",
+   "specimens": [
+    {"task": "最終行の担当を「佐藤」にして", "reads": false},
+    {"task": "一番下の担当を「佐藤」にして", "reads": false},
+    {"task": "末尾の担当を「佐藤」にして", "reads": false}
+   ]
+  },
+  "table_start": {
+   "label": "表の先頭（一番上 / 先頭）",
+   "points_at": "one_place",
+   "status": "gap",
+   "organ": "_ANCHOR_TOP（在るが task_points_at_one_row へ未配線）",
+   "unlock": "table_end と同じ配線で同時に到達する",
+   "specimens": [
+    {"task": "一番上の担当を「佐藤」にして", "reads": false},
+    {"task": "先頭の担当を「佐藤」にして", "reads": false}
+   ]
+  },
+  "column_and_row": {
+   "label": "列と行の組（E列の3行目）",
+   "points_at": "one_place",
+   "status": "reads",
+   "organ": "task_names_a_row_number（行の側だけ）",
+   "note": "★ 測っているのは『1 か所を指すと認めるか』まで。**どの列に書くか**は別の器官が解く ── ここが YES でも列の側が当たっている証拠にはならない",
+   "specimens": [
+    {"task": "E列の3行目を「済」にして", "reads": true}
+   ]
+  },
+  "a1_range": {
+   "label": "A1 形式の範囲（A1:C5）",
+   "points_at": "narrower_than_column",
+   "status": "narrower_than_column",
+   "organ": "無い",
+   "unlock": "範囲を書く op が語彙に無い（SET_CELL_VALUE は 1 セル）。新しい op が要るので、到達には Namakoo の判断が要る",
+   "specimens": [
+    {"task": "A1:C5 を「済」にして", "reads": false}
+   ]
+  },
+  "column_letter": {
+   "label": "列の文字（E列）",
+   "points_at": "whole_column",
+   "status": "by_design",
+   "organ": "─",
+   "specimens": [
+    {"task": "E列を「済」にして", "reads": false, "note": "列全体を指している ── 一括書換で正しい"}
+   ]
+  },
+  "column_header": {
+   "label": "列の見出し（担当）",
+   "points_at": "whole_column",
+   "status": "by_design",
+   "organ": "─",
+   "specimens": [
+    {"task": "担当を「佐藤」にして", "reads": false, "note": "列全体を指している ── 一括書換で正しい"}
+   ]
+  },
+  "column_edge": {
+   "label": "列の端（右端の列）",
+   "points_at": "whole_column",
+   "status": "by_design",
+   "organ": "_COL_TAIL / _COL_HEAD（列を足す側で使う）",
+   "specimens": [
+    {"task": "右端の列を「済」にして", "reads": false, "note": "列全体を指している ── 一括書換で正しい"}
+   ]
+  }
+ }
+}

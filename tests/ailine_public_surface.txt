@@ -346,6 +346,7 @@ def _preview_dsl_plan(a: 'argparse.Namespace', plan: 'list', book_meta: 'dict', 
 def _pruned_marker_path(book: 'Path') -> 'Path'
 def _rate_explained(value: 'float', task: 'str', vocab: 'dict') -> 'bool'
 def _raw_target_not_embedded_in_task(raw_target: 'str', task: 'str') -> 'bool'
+value _re_a1_cell
 value _re_a1_col_word
 value _re_add_col_ask
 value _re_after_position
@@ -800,6 +801,7 @@ def task_asks_for_number_format(task: 'str') -> 'bool'
 def task_asks_for_one_cell(task: 'str') -> 'bool'
 def task_asks_to_add_a_column(task: 'str') -> 'bool'
 def task_asks_to_extract_columns(task: 'str') -> 'bool'
+def task_names_a1_cell(task: 'str') -> 'tuple | None'
 def task_names_a_row_number(task: 'str') -> 'int | None'
 def task_names_real_values(task: 'str', book_meta: 'dict', sheet: 'str | None', col: 'str', header_row: 'int' = 1) -> 'list'
 def task_places_a_new_row(task: 'str', after_words, before_words, between=None) -> 'bool'
