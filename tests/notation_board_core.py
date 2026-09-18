@@ -91,6 +91,10 @@ def measure() -> dict:
                 said = ailine.task_points_at_one_row(sp["task"], meta, sheet)
                 rows.append({"task": sp["task"], "declared": bool(sp["reads"]),
                               "measured": said is not None, "said": said or "",
+                              # ★★ 2026-09-18: 「読めたか」だけを測ると、**どこを指したか**が
+                              #   ずれる退行（表の端で _last+1 を返す等）が緑のまま通る。
+                              #   says を書いた検体は、理由の文にその語が在ることまで見る。
+                              "says": sp.get("says", ""),
                               "note": sp.get("note", "")})
             out[key] = rows
     return out
@@ -131,6 +135,11 @@ def mismatches(data: dict) -> list:
                         else "読まないはずが読んだ")
                 out.append({"key": n["key"], "task": sp["task"], "kind": kind,
                              "declared": sp["declared"], "measured": sp["measured"]})
+            elif sp["says"] and sp["says"] not in sp["said"]:
+                # ★ 読めてはいるが**別の場所**を指した（行が 1 つずれる退行が在りうる）。
+                out.append({"key": n["key"], "task": sp["task"],
+                             "kind": "指した場所が違う", "declared": sp["says"],
+                             "measured": sp["said"]})
         # ★ status は検体の実測から**導き直せる**。名簿の手書きと突き合わせる。
         derived = _derive_status(n)
         if derived != n["status"]:

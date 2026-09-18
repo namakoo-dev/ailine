@@ -23,7 +23,7 @@
    "status": "reads",
    "organ": "task_names_a1_cell",
    "specimens": [
-    {"task": "セル E1 に 借方金額 と入力して", "reads": true,
+    {"task": "セル E1 に 借方金額 と入力して", "reads": true, "says": "『E1』",
      "note": "★ 盲検 4 体目 ④ の実文。これが読めず D2〜D7 を潰した"},
     {"task": "b3 に 1000 と入れて", "reads": true, "note": "小文字も同じ 1 か所"},
     {"task": "ABC123 の担当を「佐藤」にして", "reads": false,
@@ -38,7 +38,7 @@
    "status": "reads",
    "organ": "task_names_a_row_number",
    "specimens": [
-    {"task": "3行目の担当を「佐藤」にして", "reads": true,
+    {"task": "3行目の担当を「佐藤」にして", "reads": true, "says": "『3行目』",
      "note": "★ 2026-08-28 の事故（担当列が全行『佐藤』）を止めた検体"},
     {"task": "３行目の担当を「佐藤」にして", "reads": true, "note": "全角も同じ"}
    ]
@@ -49,7 +49,7 @@
    "status": "reads",
    "organ": "_task_names_a_row",
    "specimens": [
-    {"task": "大東金属の担当を「佐藤」にして", "reads": true},
+    {"task": "大東金属の担当を「佐藤」にして", "reads": true, "says": "『大東金属』"},
     {"task": "丸山重工の担当を「佐藤」にして", "reads": true,
      "note": "★ 同名が 2 行ある時も『指してはいる』── 決められないだけ。ここを落とすと同名 2 行で列が潰れる"}
    ]
@@ -57,24 +57,35 @@
   "table_end": {
    "label": "表の末尾（最終行 / 一番下 / 末尾）",
    "points_at": "one_place",
-   "status": "gap",
-   "organ": "_ANCHOR_BOTTOM（在るが task_points_at_one_row へ未配線）",
-   "unlock": "_ANCHOR_BOTTOM は 2026-09-08 に列側と対称化するため既に在る。行の住所を解く側（_resolve_named_row / data_extent）へ繋ぐだけで到達になる",
+   "status": "reads",
+   "organ": "task_names_a_table_edge_row",
+   "note": "★ 語では拾わない ── 『端の語 + の + 実表に在る列名』で切る。既存の _ANCHOR_BOTTOM 2 箇所は _last+1（表の終わりの次＝行を足す側）を返すので、ここは別の解き方として置いた（指す行が 1 つずれる）",
    "specimens": [
-    {"task": "最終行の担当を「佐藤」にして", "reads": false},
-    {"task": "一番下の担当を「佐藤」にして", "reads": false},
-    {"task": "末尾の担当を「佐藤」にして", "reads": false}
+    {"task": "最終行の担当を「佐藤」にして", "reads": true, "says": "5行目（表の最後の行）"},
+    {"task": "一番下の担当を「佐藤」にして", "reads": true, "says": "5行目（表の最後の行）"},
+    {"task": "末尾の担当を「佐藤」にして", "reads": true, "says": "5行目（表の最後の行）"},
+    {"task": "商品の列を末尾に移動して", "reads": false,
+     "note": "★ 陰性対照: 検体に実在する**列**の依頼。語だけ拾うと行と読む（語彙の共食い）"},
+    {"task": "税込み合計を一番下に出して（消費税10%）", "reads": false,
+     "note": "★ 陰性対照: APPEND_TOTAL の検体。『に』で繋がる追加の依頼は行を指していない"},
+    {"task": "一番下に行を足して", "reads": false,
+     "note": "★ 陰性対照: 足す先は表の終わりの**次**の行で、最後の既存行ではない"},
+    {"task": "最後の列を「済」にして", "reads": false,
+     "note": "★ 陰性対照: 『列』は実表の列名ではないので行の話ではない"},
+    {"task": "一番下に担当を入れて", "reads": false,
+     "note": "★★ 陰性対照（変異試験が名指しした穴）: 実在する列名『担当』が後ろに在るので、助詞『の』を要求しないと最終行と読む。2026-09-18 の変異 1 本がここで緑を通り、検体の側が甘いと分かった"}
    ]
   },
   "table_start": {
    "label": "表の先頭（一番上 / 先頭）",
    "points_at": "one_place",
-   "status": "gap",
-   "organ": "_ANCHOR_TOP（在るが task_points_at_one_row へ未配線）",
-   "unlock": "table_end と同じ配線で同時に到達する",
+   "status": "reads",
+   "organ": "task_names_a_table_edge_row",
    "specimens": [
-    {"task": "一番上の担当を「佐藤」にして", "reads": false},
-    {"task": "先頭の担当を「佐藤」にして", "reads": false}
+    {"task": "一番上の担当を「佐藤」にして", "reads": true, "says": "2行目（見出しの次）"},
+    {"task": "先頭の担当を「佐藤」にして", "reads": true, "says": "2行目（見出しの次）"},
+    {"task": "先頭に行を足して", "reads": false,
+     "note": "★ 陰性対照: 『に』で繋がる追加の依頼"}
    ]
   },
   "column_and_row": {

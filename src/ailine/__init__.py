@@ -9426,6 +9426,58 @@ def task_names_a_row_number(task: str) -> int | None:
     return nums.pop() if len(nums) == 1 else None
 
 
+def task_names_a_table_edge_row(task: str, book_meta: dict,
+                                 sheet: str | None) -> tuple | None:
+    """依頼文が**表の端の 1 行**を指していれば (行番号, 説明)。指していなければ None。
+
+    ★★ 2026-09-18（記法の盤の在庫 2 件）: `_ANCHOR_TOP` / `_ANCHOR_BOTTOM` は
+      2026-09-08 に列側と対称化するため既に在ったが、**この番人へは未配線**だった。
+      ただし既存の 2 箇所はどちらも `_last + 1`（表の終わりの**次**）を返す ──
+      あれは行を**足す**側の意味で、ここが要るのは `_last`（最後の**既存**行）。
+      ★ 語は同じでも**指す行が 1 つずれる**。配線ではなく別の解き方として置く。
+
+    ★★ 語で拾わない ── 「商品の列を**末尾**に移動して」が検体に実在する（列の依頼）。
+      素朴に端の語を拾うと、列の依頼を行と読む（棚: 語彙は共食いする）。
+      だから**接地した形**で切る: 「端の語 ＋ の ＋ **実表に在る列名**」。
+        最終行の担当を「佐藤」にして   → 最終行 + の + 担当（実在）→ 採る
+        一番下に行を足して             → 「に」なので採らない
+        税込み合計を一番下に出して     → 同上（APPEND_TOTAL の検体）
+        商品の列を末尾に移動して       → 同上
+        最後の列を「済」にして         → 「列」は実表の列名ではない → 採らない
+      ★ 判定の材料が三項そろっている（端の語・助詞「の」・実在する列名）。
+    """
+    text = str(task or "").replace("　", " ")
+    heads = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or []) if h]
+    if not heads or not text:
+        return None
+    hr = int((book_meta.get("header_rows") or {}).get(sheet, 1) or 1)
+    for words, top in ((_ANCHOR_TOP, True), (_ANCHOR_BOTTOM, False)):
+        for w in words:
+            i = text.find(w + "の")
+            if i < 0:
+                continue
+            rest = text[i + len(w) + 1:]
+            # ★ 「最終行の**行**の担当」のような言い方も受ける（1 語だけ読み飛ばす）。
+            if rest.startswith("行の"):
+                rest = rest[2:]
+            if not any(h in rest for h in heads):
+                continue          # ★ 続くのが実表の列名でないなら、行の話ではない
+            if top:
+                return hr + 1, f"依頼文が『{w}』＝{hr + 1}行目（見出しの次）を指しています"
+            path = book_meta.get("path")
+            if not path:
+                return None
+            try:
+                with BookView(Path(path)) as bv:
+                    last, _c = data_extent(bv.sheet(sheet), hr)
+            except Exception:
+                return None
+            if last <= hr:
+                return None       # ★ データが 0 行なら端も無い（決めない）
+            return last, f"依頼文が『{w}』＝{last}行目（表の最後の行）を指しています"
+    return None
+
+
 _re_quoted_value = re.compile(r"[「『\"“]([^」』\"”]{1,40})[」』\"”]")
 
 
@@ -9474,6 +9526,12 @@ def task_points_at_one_row(task: str, book_meta: dict, sheet: str | None) -> str
     _a1 = task_names_a1_cell(task)
     if _a1:
         return f"依頼文が『{_a1[0]}{_a1[1]}』と 1 つのセルを指しています"
+    # ★★ 2026-09-18（記法の盤の在庫）: 表の端（最終行・一番下・一番上…）も 1 行を指す。
+    #   ★ ここは**断る材料**であると同時に、下の読み直しで**到達**の材料にもなる
+    #     ── 同じ器官を 2 か所が呼ぶ（判断を書き写さない）。
+    _edge = task_names_a_table_edge_row(task, book_meta, sheet)
+    if _edge:
+        return _edge[1]
     if _task_names_a_row(task, book_meta, sheet):
         return f"依頼文が『{_task_names_a_row(task, book_meta, sheet)}』の行を指しています"
     # ★ 名前が**複数行に在る**時も「行を指している」── 決められないだけで、指してはいる。
@@ -13255,6 +13313,12 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     if not _reread_done and not _wants_new_row and plan_writes_beyond_one_cell(plan):
         _row_no = task_names_a_row_number(a.task)
         _named = _task_names_a_row(a.task, book_meta, _sheet_h)
+        # ★★ 2026-09-18: 表の端（「最終行の担当を…」）も**行番号で解ける** ──
+        #   断るだけにせず、ここで 1 セルへ落として**到達**させる
+        #   （Namakoo「断りは仕方なく断るにすぎない」）。
+        _edge = task_names_a_table_edge_row(a.task, book_meta, _sheet_h)
+        if _edge and not _row_no:
+            _row_no = _edge[0]
         _wide = any((st or {}).get("op") == "SET_COLUMN_VALUE" for st in plan)
         _one_cell = False
         _points = task_points_at_one_row(a.task, book_meta, _sheet_h) if _wide else None
@@ -13265,7 +13329,11 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
                 _args = dict(_fx["args"])
                 if _row_no:
                     _args["row_number"] = _row_no
-                    _why = f"依頼文が『{_row_no}行目』と行を指しています"
+                    # ★★ 2026-09-18: 端で解いた回に「『5行目』と指しています」と言うと
+                    #   **人が書いていない語**を引用することになる（依頼は「最終行」）。
+                    #   合格線の「断りの文言が正確であること」は、通した回の説明にも効く。
+                    _why = (_edge[1] if _edge and _edge[0] == _row_no
+                            else f"依頼文が『{_row_no}行目』と行を指しています")
                 else:
                     # ★ 2026-08-29（実測）: 第二段は row に**シート名**を返すことがある
                     #   （'8月請求'）。機械が実表で解いた名前で**上書きする**

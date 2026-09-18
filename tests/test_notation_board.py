@@ -96,3 +96,19 @@ def test_the_specimen_book_keeps_a_duplicate_name():
     """
     names = [n for n, _ in board.SPECIMEN_ROWS]
     assert len(names) != len(set(names)), "★ 検体の冊から同名の行が消えている"
+
+
+def test_the_edge_organ_is_wired_to_both_the_refusal_and_the_reach():
+    """★★ 片配線を作らない ── 表の端の器官は**断る側と到達する側の両方**が呼ぶ。
+
+    ★ 片方だけ外れると、この repo が何度も踏んだ形になる:
+        断る側だけ  → 読めているのに毎回「どちらか選んでください」（到達しない）
+        到達側だけ  → 1 セルへ落とせなかった回に列全体を潰す（④ そのもの）
+    ★ 場所で決め打ちしない（tests/test_guard_ledger.py が「本体を場所で決め打ちする
+      番人が増えた」と鳴る）── 製品の出所を配線経由で読む。
+    """
+    sys.path.insert(0, str(REPO / "tests"))
+    from _product_source import count_in_product
+    assert count_in_product("task_names_a_table_edge_row(") == 3, (
+        "★ 表の端の器官の呼び出しが 2 箇所（＋定義 1）でない ── "
+        "断る側か到達側のどちらかが外れた疑い")
