@@ -12012,6 +12012,18 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         #   ★ 番人が通した理由の方が重い: 検体が history の行を**手で書いて**いて、
         #     本番の書き手（この関数）を一度も通っていなかった ── 継ぎ目を跨いでいない。
         "out_sha": result.get("out_sha"),
+        # ★★ 2026-09-18（盲検 4 体目 ①）: 画面が **△**（⚠ つき）を出した run が、
+        #   `ailine history` では **✓** として並んでいた。表が見ていたのは `ok`
+        #   （＝適用が通ったか）で、**機械検証済みかどうか**ではなかった。
+        #   ★ 買い手（記帳代行）の言葉:「顧問先の帳簿を触る道具で、**作業記録が嘘を
+        #     つく**のは致命的です。税務調査で根拠を説明する時、私はこの履歴を見ます」
+        #     ── **この 1 点だけで所長に導入を提案できない**、と名指しされた項目。
+        #   ★★ 根は片配線: verdict は _finish_apply が**1 箇所で正しく決めて**おり、
+        #     コメントにも「決めるのは 1 箇所・映すのは何箇所でも」と書いてある。
+        #     ところが**台帳に一度も書かれていなかった**ので、映す側は読みようが無く、
+        #     別の真偽値（ok）で二値に潰していた。決めた所を運ぶ。
+        "verdict": result.get("verdict"),
+        "warning_count": result.get("warning_count"),
         # ★ 原本直接の run が作業に使って残した .out（在れば）。次の run が
         #   「人が変えた」と誤断しないための実体の項（2026-09-18・⑥）。
         "scratch_out": result.get("scratch_out"),
@@ -12130,6 +12142,29 @@ def _last_task_for_book(book: Path) -> str:
     return ""
 
 
+#: 台帳の「結果」欄。★ 画面と**同じ語**を出す（✓ / △ / ⚠ / ×）── 2 値に潰さない。
+#:   verdict の意味は _finish_apply が決める 1 箇所に書いてある:
+#:     verified … 機械検証済み（✓）／warned … 検証したが疑わしい ⚠ が在る（△）
+#:     unverified … 機械保証なし（⚠）／unobservable … 適用したが読み戻せなかった（⚠）
+HISTORY_MARKS = {"verified": "✓", "warned": "△", "unverified": "⚠",
+                 "unobservable": "⚠", "not_applied": "×"}
+
+
+def _history_mark(entry: dict) -> str:
+    """1 行分の「結果」欄。
+
+    ★★ 2026-09-18（盲検 4 体目 ①）: ここは `"✓" if e.get("ok") else "×"` だった ──
+      画面が △ を出した run を台帳が ✓ と記録していた。`ok` は「適用が通ったか」で、
+      「機械検証済みか」ではない。**画面と台帳で別の判断をしていた**。
+    ★ verdict を持たない**古い行**は、判定材料が無いので従来どおり ok で読む
+      （後方互換 ── 過去の台帳を遡って書き換えない）。
+    """
+    v = entry.get("verdict")
+    if v in HISTORY_MARKS:
+        return HISTORY_MARKS[v]
+    return "✓" if entry.get("ok") else "×"
+
+
 def format_history_table(entries: list, base=None) -> str:
     """人が読める表形式。履歴が無ければ「履歴はまだ無い」を返す。
        ★ W8a 項目1: dry(下見・未適用)の行は末尾に「(下見)」を付けて実適用と区別する
@@ -12140,7 +12175,7 @@ def format_history_table(entries: list, base=None) -> str:
     header = f"{'日時':<20} {'結果':<4} {'試行':<4} {'モデル':<20} {'文書':<20} タスク"
     lines = [header]
     for e in entries:
-        mark = "✓" if e.get("ok") else "×"
+        mark = _history_mark(e)
         ts = str(e.get("ts", ""))
         attempts = str(e.get("attempts", ""))
         # ★ 2026-09-14: モデルを使っていない回（規則で書けた回）を「None」と読ませない。
