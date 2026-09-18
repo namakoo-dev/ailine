@@ -689,5 +689,59 @@ def _verify_match(out_path, book_a, book_b, key_a, key_b, amount_a, amount_b,
 
     a_total_sum = sum(v["sum"] for v in a_stats.values())
     b_total_sum = sum(v["sum"] for v in b_stats.values())
+    # ★★ 2026-09-18（盲検 3 体目 ②）: ここは `ok` と数字だけを返し、報告の側が
+    #   「合格なら Σ を並べるだけ」にしていた ── 買い手の言葉:
+    #   **「✓ も × も無い。『検算した』のか『合格した』のか分からない」**。
+    #   README は「取り逃し・二重・元に無い値を見ます」と約束しているのに、
+    #   画面には判定も分母も出ていなかった（`keys` は**計算済みで一度も表示していない**）。
+    # ★ 直しは器を増やさず**共有の器に載る形**を返すこと ── 他の 4 経路
+    #   （分けた冊／科目の候補／帳票の一覧／stack・extract）は
+    #   render_independent_verify_report と _independent_verify_exit を共有している。
+    #   照合だけが 3 本目の写しで、✓ の行・空虚な合格の禁止・分母の 3 つを落としていた。
     return {"ok": not mismatches, "mismatches": mismatches,
-            "sums": {"A": a_total_sum, "B": b_total_sum}, "keys": len(out_rows)}
+            "sums": {"A": a_total_sum, "B": b_total_sum}, "keys": len(out_rows),
+            # ↓ 共有の器が読む形（facts / breaks / mismatch / vacuous）
+            "mismatch": bool(mismatches),
+            "facts": {"照合したキー": f"{len(out_rows)} 件",
+                      "Σ A（独立再集計）": _fmt_sum(a_total_sum),
+                      "Σ B（独立再集計）": _fmt_sum(b_total_sum)},
+            "breaks": [_match_break(m) for m in mismatches],
+            # ★ 0 件で ✓ を出さない（空虚な合格の禁止・2026-09-13 B8 と同じ線）。
+            #   ✓ は「測って破れが無かった」の印で、「測るものが無かった」の印ではない。
+            "vacuous": ("照合の出力に行がありません" if not out_rows else None)}
+
+
+def _fmt_sum(v) -> str:
+    """整数なら整数で見せる（650.0 でなく 650）。
+
+    ★ cli_render._fmt_num と**同じ見え方**にする（桁区切りは入れない）。
+      ★ 2026-09-18 に一度カンマを入れて既存の検体を赤にした ── ②「判定が出ない」を直す回に、
+        頼まれていない見た目まで変えていた（スコープを勝手に広げない）。
+      ★ 共有せず**別実装**なのはこの module の方針: 本体の書き込み経路と同じ道具を
+        検算に混ぜない（module の docstring）。だから「同じに見えること」は目で揃える。
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(f)) if f.is_integer() else str(f)
+
+
+def _match_break(m: dict) -> tuple:
+    """食い違い 1 件を、共有の器が出せる (種類, 中身) にする。
+
+    ★ 文言は照合専用の器に書かれていたものをそのまま運ぶ ── 畳む時に言葉を痩せさせない。
+    """
+    kind = m["kind"]
+    if kind == "count":
+        return (f"{m['side']}側の件数", f"{m['key']}: 独立再集計 {m['expected']} / 出力 {m['written']}")
+    if kind == "sum":
+        return (f"{m['side']}側の合計",
+                f"{m['key']}: 独立再集計 {_fmt_sum(m['expected'])} / 出力 {_fmt_sum(m['written'])}")
+    if kind == "diff":
+        return ("差額", f"{m['key']}: 算出 {_fmt_sum(m['expected'])} / 出力 {_fmt_sum(m['written'])}")
+    if kind == "missing_key":
+        return ("取り逃し", f"{m['key']}: 元帳にあるキーが照合の出力に見当たりません")
+    if kind == "extra_key":
+        return ("元に無い値", f"{m['key']}: 出力にあるキーが元帳の独立再集計に見当たりません（捏造の可能性）")
+    return (kind, str(m))

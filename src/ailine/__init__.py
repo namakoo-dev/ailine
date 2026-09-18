@@ -133,7 +133,6 @@ from ailine_core.cli_render import (   # ★ C8: 複数経路が同じ形を手�
     render_accounts_report,   # ★ 需要③: `ailine accounts`（科目の候補）
     render_split_report,   # ★ 担当者別に分けて配る: `ailine split`
     render_folder_routes,
-    render_verify_match_report,   # ★ M3: `ailine verify <出力> <元A> <元B>`（照合出力の検算）
     NO_MODEL, history_place, history_scope_line,   # ★ 履歴の『文書』は場所まで出す（2026-09-14）
 )
 from ailine_core.filetypes import (BOOKLIKE_SUFFIXES, CSV_SUFFIX,
@@ -18823,9 +18822,14 @@ def cmd_verify(a: argparse.Namespace) -> int:
         if result.get("unsupported"):
             print(f"× {result['unsupported']}")
             return 4
-        for ln in render_verify_match_report(str(out), str(book_a), str(book_b), result):
+        # ★★ 2026-09-18（盲検 3 体目 ②）: ここは照合専用の器と、判定の**4 本目の写し**
+        #   （`0 if ok else 5`）を持っていた。他の 4 経路が共有している器官へ畳む ──
+        #   _independent_verify_exit の docstring に「3 経路が書き写していた」と
+        #   書いてあるが、照合だけ畳み残していた（片配線）。
+        for ln in render_independent_verify_report(
+                "照合", str(out), f"{book_a} / {book_b}", result):
             print(ln)
-        return 0 if result.get("ok") else 5
+        return _independent_verify_exit(result)
     print("× verify の引数は「元フォルダ1個」または「元A 元B の2冊」のどちらかです"
           f"（{len(sources)} 個渡されました）。")
     return 1   # ★ f6_exit_codes.md: 2 は argparse 予約・ailine 自身は使わない（汎用失敗の1を使う）
