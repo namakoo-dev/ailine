@@ -12294,6 +12294,49 @@ def _record_history(a: argparse.Namespace, book: Path, result: dict, failure_kin
         print(f"WARN: 履歴の記録に失敗した: {e}", file=sys.stderr)
 
 
+def _record_side_command_history(path_kind: str, book: Path, task: str, out: Path | None,
+                                 ok: bool, failure_kind: str | None = None,
+                                 stamp_out: bool = True) -> None:
+    """run の DSL 経路を通らない道（csv 変換・export-csv・**2 冊の照合**）の履歴を 1 行残す。
+
+    ★★ 2026-09-18（盲検 3 体目 ⑨）: 買い手「**2 冊照合の履歴が `ailine history` に
+      1 件も出ない。月次の証跡として使えない**」。単一ブックの run は全部残るのに、
+      照合だけ記録の呼び出しが無かった。
+    ★ `_record_history` の docstring が既に言っている ──「記録する処理を 2 箇所に書くと
+      片方だけ直る（この repo の系譜）。1 本に畳んで呼び出し側に持たせない」。
+      ところが csv の 2 経路が**手で同じ dict を組んで**いて、案の定**食い違っていた**:
+      変換の側には out_sha（2026-09-13 に買い手の致命で足した出力の指紋）が在り、
+      export-csv の側には**無い**。だから照合を 3 本目の写しにせず、ここへ畳む。
+    ★ 畳む時に挙動は変えない ── stamp_out=False で export-csv の現状（指紋なし）を保つ。
+      その食い違いを直すかは別の判断（勝手に広げない）。
+    ★ 履歴は付帯情報 ── 書けなくても本体の結果（rc・出力）は変えない。
+    """
+    try:
+        append_history({
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "book": str(book),
+            "task": task,
+            "model": None,
+            "ok": bool(ok),
+            "dry": False,
+            "attempts": 1,
+            "failure_kind": failure_kind,
+            "error_detail": None,
+            "changes": [],
+            "out": str(out) if out is not None else None,
+            **({"out_sha": (_file_digest(out) if (stamp_out and out is not None
+                                                   and Path(out).exists()) else None)}
+               if stamp_out else {}),
+            "path": path_kind,
+            "command": None,
+            "postcondition": None,
+            "provenance": None,
+            "fidelity": None,
+        })
+    except OSError:
+        pass
+
+
 def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: str,
                  error_detail: str | None = None) -> None:
     """--json 出力・成功時の注意書き・履歴の記録。cmd_refuse_vocab_miss / cmd_run_dsl /
@@ -16680,6 +16723,11 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
             if _named_formula:
                 say(f"　★『{"』『".join(str(h) for h in _named_formula)}』は**式のままで計算結果が入っていない**ため、"
                     f"{label}の列として使えません（Excel か LibreOffice で一度開いて保存すると値が入ります）。")
+        # ★ 断った回も残す ── 単一ブックの run は語彙外も台帳に残している。
+        #   「何を頼んで通らなかったか」は月次の証跡として成功と同じだけ要る
+        #   （2026-09-05 に CLARIFY が台帳に 1 行も無かったのと同じ線）。
+        _record_side_command_history("match", book_a, task, None, False,
+                                      failure_kind="match_columns_unresolved")
         return 3
     key_a, key_b, amount_a, amount_b = (resolution.key_a, resolution.key_b,
                                          resolution.amount_a, resolution.amount_b)
@@ -16834,6 +16882,10 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
             "amount_b": amount_b, "a_rows": len(rows_a), "b_rows": len(rows_b),
             "keys": len(groups), "mismatched": len(mismatched),
         }, ensure_ascii=False))
+    # ★★ 2026-09-18（盲検 3 体目 ⑨）: 買い手「**2 冊照合の履歴が 1 件も出ない。
+    #   月次の証跡として使えない**」。単一ブックの run は全部残るのに、照合だけ
+    #   記録の呼び出しが無かった（器官は在るが配線が無い・今日 7 度目）。
+    _record_side_command_history("match", book_a, task, out, True)
     return 0
 
 
@@ -17132,35 +17184,12 @@ def cmd_run_csv(a: argparse.Namespace) -> int:
 
 
 def _record_csv_conversion_history(csv_path: Path, out_path: Path, ok: bool) -> None:
-    """★ 第二波 ①(AILINE_HOME): `ailine csv` の変換も history.jsonl に残す（run と同じ
-       HISTORY_FILE・AILINE_HOME 配下）。build_history_entry は DSL の run 向けの形
-       （task/model/command/postcondition 等）なので流用せず、csv 変換に要る最小限の
-       形で直接 append する。書き込みに失敗しても csv 変換自体の結果（rc・出力ファイル）
-       は変えない（履歴は付帯情報）。"""
-    try:
-        append_history({
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "book": str(csv_path),
-            "task": f"csv: {csv_path.name} → {out_path.name}",
-            "model": None,
-            "ok": ok,
-            "dry": False,
-            "attempts": 1,
-            "failure_kind": None if ok else "csv_transfer_failed",
-            "error_detail": None,
-            "changes": [],
-            "out": str(out_path),
-            # ★ 出力の指紋（2026-09-13・3 回目の買い手役の致命）── 次に同じ CSV を指された時、
-            #   この xlsx が**そのあと人や run に変えられていないか**を見分けるため（extract と同じ線）。
-            "out_sha": _file_digest(out_path) if out_path.exists() else None,
-            "path": "csv",
-            "command": None,
-            "postcondition": None,
-            "provenance": None,
-            "fidelity": None,
-        })
-    except OSError:
-        pass
+    """`ailine csv` の変換を history.jsonl に残す（★ 2026-09-18: 記録の組み立ては
+       _record_side_command_history 1 箇所へ畳んだ ── 手で組んでいた 2 経路は
+       out_sha の有無で既に食い違っていた）。"""
+    _record_side_command_history(
+        "csv", csv_path, f"csv: {csv_path.name} → {out_path.name}", out_path, ok,
+        failure_kind=None if ok else "csv_transfer_failed")
 
 
 def _cmd_run_csv_prestage(a: argparse.Namespace) -> int:
@@ -17207,29 +17236,22 @@ def _cmd_run_csv_prestage(a: argparse.Namespace) -> int:
 
 
 def _record_csv_export_history(book_path: Path, out_path: Path, sheet: str, ok: bool) -> None:
-    """★ `ailine csv`（_record_csv_conversion_history）と対で history.jsonl に残す。
-       書き込みに失敗しても export-csv 自体の結果は変えない（履歴は付帯情報）。"""
-    try:
-        append_history({
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "book": str(book_path),
-            "task": f"export-csv: {book_path.name}[{sheet}] → {out_path.name}",
-            "model": None,
-            "ok": ok,
-            "dry": False,
-            "attempts": 1,
-            "failure_kind": None if ok else "csv_export_roundtrip_mismatch",
-            "error_detail": None,
-            "changes": [],
-            "out": str(out_path),
-            "path": "export-csv",
-            "command": None,
-            "postcondition": None,
-            "provenance": None,
-            "fidelity": None,
-        })
-    except OSError:
-        pass
+    """`ailine export-csv` を history.jsonl に残す。
+
+    ★★ 2026-09-18（Namakoo 決裁 A）: この経路は前から out_sha（出力の指紋）を
+      残していなかった ── 変換の側には 2026-09-13 に買い手の致命で足したのに、
+      **片方だけ直っていた**（`_record_history` の docstring が予言していた形）。
+      畳んだ回には挙動を変えず、決裁を取ってから揃えた。
+    ★★ 到達の記録: この指紋には**まだ読み手が居ない**（2026-09-18 時点）──
+      `_csv_output_edited_since` は path=="csv"（CSV 検疫）だけを見ており、
+      書き出し系の関所 `_export_out_path` は「在れば --overwrite を要求する」だけで
+      指紋を見ない。つまり今日の時点では**材料が揃っただけで、効いてはいない**。
+      ★ 「指紋が在るから守られている」と読まないこと。読み手を配線するかは別の判断。
+    """
+    _record_side_command_history(
+        "export-csv", book_path,
+        f"export-csv: {book_path.name}[{sheet}] → {out_path.name}", out_path, ok,
+        failure_kind=None if ok else "csv_export_roundtrip_mismatch")
 
 
 def _export_out_path(a: argparse.Namespace, default_path: Path) -> tuple:
