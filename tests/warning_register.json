@@ -1,0 +1,193 @@
+{
+ "_meta": {
+  "purpose": "画面に『⚠』を出して ✓ を △ に落とす家系の台帳。★ 家系そのものは tests/warning_families_core.py が実装から導く（手書きしない）。番人は tests/test_warning_families.py。",
+  "why": "Namakoo 2026-09-18:「三項全ては正しく成り立っているか？ 漏れはない？」── この repo には事後条件・読み直し・断り・配線・記法の台帳が在るのに、⚠ の家系だけ数える物が無く、増えても減っても誰も気づかない形だった。★ 置いた瞬間に手勘定が 1 つ直った（人は 6 と数え、実装は 7 だった）。",
+  "terms": "三項（依頼・宣言・実体）のうち、その家系が実際に持っている項。true / false / \"partial\"。",
+  "blind_spots": "その家系が**見られない形**。status は measured（見えないと実測した）か assumed（そう思っているだけ・まだ調べていない）。★ assumed は「安全」ではなく「未調査」── 配線盤が 2026-09-17 に学んだ線（未調査を調べ終えた色と同じにしない）。",
+  "not_a_defect": "どの家系も 2 項しか持たないが、それ自体は欠陥ではない。棚の処方「運べない項があるなら主張の範囲を狭める」に従い、どれも ✓ を名乗らず ⚠ だけを出す。欠陥かどうかは blind_spots を 1 つずつ検体で確かめて決める。",
+  "audited": "2026-09-18: assumed だった 8 件を全部調べた。本物の穴 3 件（引用値の 2 つ目 / 引用値の部分一致 / 行の矛盾の 1 文字★新発見）・穴でない 3 件・塞ぐと悪化 1 件・揺れによる実害あり 1 件。★ 『漏れ』と『欠陥』は別物だと実測で確かめた。"
+ },
+ "families": {
+  "unaccounted_request_words": {
+   "label": "依頼にある列名が解釈に出ていない",
+   "since": "2026-09-06",
+   "terms": {
+    "request": true,
+    "declaration": true,
+    "artifact": "partial"
+   },
+   "artifact_note": "実表の列名（headers）だけを接地に使う。書いた後の冊は見ない",
+   "evidence": "本物の走行 3,179 件で 28 件（0.88%）鳴り、全部が本物の欠陥（誤爆 0）。再現 bench/residue_gate_on_history.py",
+   "blind_spots": [
+    {
+     "what": "落ちたのが値だけの時（列名は宣言に在る）",
+     "status": "measured",
+     "specimen": "bench/residue_gate_sensitivity.py の BLIND 側",
+     "note": "「取引先が東西商事の行を消して」── 列名『取引先』は宣言に在り、落ちたのは値。関所は列名しか見ないので原理的に見えない"
+    },
+    {
+     "what": "否定の反転（『営業以外』を『営業』と読む）",
+     "status": "measured",
+     "specimen": "~/.ailine/history.jsonl 09-05 06:06 の実走行",
+     "note": "本物の誤りだが語は 1 つも落ちないので黙る"
+    },
+    {
+     "what": "宣言の語に部分一致して消える（依頼の『利益』が宣言の『利益率』に食われる）",
+     "status": "measured",
+     "specimen": "2026-09-08 の実測",
+     "note": "新しい列の名前が依頼の語を含む回は原理的に黙る。式の食い違いは ailine_core/arith.py が隣で受け持つ"
+    },
+    {
+     "what": "1 文字の値（内容語が漢字 2 文字以上の定義）",
+     "status": "measured",
+     "specimen": "tests/test_the_quoted_value_must_appear.py::test_the_old_gate_really_is_blind_to_one_character",
+     "note": "★ 2026-09-18 に別の家系（unaccounted_quoted_value）で塞いだ"
+    }
+   ]
+  },
+  "unaccounted_quoted_value": {
+   "label": "依頼が書くと言った値が解釈に出ていない",
+   "since": "2026-09-18",
+   "terms": {
+    "request": true,
+    "declaration": true,
+    "artifact": "partial"
+   },
+   "artifact_note": "実表の列名は「値ではなく対象」を外すためだけに使う。書いた後の冊は見ない",
+   "evidence": "本物の走行 16,039 件の成功回のうち引用値を持つ 1,682 件で 1 件（0.06%）鳴り、それが事故そのもの（A1:C5 を「済」にして → 罫線 → ✓）",
+   "blind_spots": [
+    {
+     "what": "引用符を使わない値（「担当を済にして」）",
+     "status": "measured",
+     "specimen": "bare_value_from_task を検体 1,955 件へ当てた実測（2026-09-18）",
+     "note": "★ 穴は在る（関所は黙る）が、いまの手段で塞ぐと**悪化する**。器官は在る（bare_value_from_task が「担当を済にして」から『済』を取れる）── だが引き算なので 1,955 件中 170 件 8.7% で値を出し、中身は『削除』『並べ替えて』『太く』『足』のような動詞・位置語。★ 引用符という**依頼者自身の名指し**に限るのが正しいと実測で確定。発火条件: 値を機械で確かめられる別の接地（実表の値との一致など）が入ったら再測定"
+    },
+    {
+     "what": "値が 2 つ以上ある依頼（task_quotes_a_value は最初の 1 つだけ返す）",
+     "status": "measured",
+     "specimen": "2026-09-18 の実測",
+     "note": "★ **本物の穴**。「チェック列の『◎』を『合格』にして」→ 引用値は『◎』だけ。2 つ目が宣言から落ちても黙る。直すなら全部返す形へ広げるが、共食いを測ってから"
+    },
+    {
+     "what": "宣言の語に部分一致して消える（『済』が宣言の『未済』に含まれる）",
+     "status": "measured",
+     "specimen": "2026-09-18 の実測",
+     "note": "★ **本物の穴**。宣言が『値:未済』でも、列名が『済み対応』でも黙る。未済・決済・返済・済み は帳簿の普通語なので現実味がある。直すなら宣言を**語の塊**で見る（誤爆を測り直す要あり）"
+    }
+   ]
+  },
+  "op_effect_mismatch": {
+   "label": "依頼の効果と実行した操作が違う（削除を頼んで抽出した）",
+   "since": "2026-09-07",
+   "terms": {
+    "request": true,
+    "declaration": true,
+    "artifact": false
+   },
+   "artifact_note": "見るのは op の宣言（OP_WRITE_TARGET）であって、書いた後の冊ではない",
+   "evidence": "5,045 件の実走行で 21 件（0.42%）・全部が本物（誤爆 0）",
+   "blind_spots": [
+    {
+     "what": "効果の種類が同じ op どうしの取り違え（拒否②が明示的に黙る）",
+     "status": "measured",
+     "specimen": "~/.ailine/history.jsonl 15,651 件の成功回（2026-09-18 に集計）",
+     "note": "★ **78 件 0.50% が黙る。**多くは正しい（ADD_COLUMN を名指しして COMPUTE_COLUMN が走る等）が、**本物の欠陥が 2 件**混じっていた ── 「税込み金額の順番を逆にして」→ 操作:入れ替え（税込み金額 ↔ 締め日・列を入れ替えた）／「件数の合計も合計行に入れて」→ 操作:行追加（値は文字列『合計』）。★ どちらも 1〜2 分後の再実行では正しく（SORT 降順 / APPEND_TOTAL 既存の合計行）、**揺れによる誤り**。壊れた回に ✓ が出ている ── 棚の線「運次第の壊れは査定を下げる」"
+    }
+   ]
+  },
+  "calculation_mismatch": {
+   "label": "依頼の計算と実行した計算が違う",
+   "since": "2026-09-08",
+   "terms": {
+    "request": true,
+    "declaration": true,
+    "artifact": false
+   },
+   "artifact_note": "解釈行の式を見る。実際に入った数式は見ない",
+   "blind_spots": [
+    {
+     "what": "解釈行の式と、生成した Basic が書いた式が違う回",
+     "status": "measured",
+     "specimen": "tests/test_the_formula_you_wrote_is_the_formula_we_ran.py の test 名と POSTCONDITIONS",
+     "note": "★ **穴ではない** ── 実体の項は**家系の外**（op の事後条件）が 宣言↔実体 を受け持つ。三項は 1 つの関所でなく **2 つの機構にまたがって**揃っている。★ ただし番人の**名前が実力を上回っている**: ファイル名は『書いた式が走った式』だが、中の試験は ..._is_compared_with_the_one_declared（依頼 vs 宣言）で、実際に入った数式は見ていない"
+    }
+   ]
+  },
+  "empty_new_sheets": {
+   "label": "新しく作ったシートに中身がない（見出しだけ）",
+   "since": "2026-09-10",
+   "terms": {
+    "request": false,
+    "declaration": false,
+    "artifact": true
+   },
+   "artifact_note": "★ 依頼文を 1 文字も読まない構造判定（2026-09-10 の設計判断）。読む側に寄せると値の残差ゲートになり、誤爆地帯に入ると実測されている",
+   "evidence": "実害 4/4 → 0/4・誤爆 6/6 で 0・ゴールデン 697 件で他 op の出力は 1 件も動かず",
+   "blind_spots": [
+    {
+     "what": "中身が在るが**間違っている**回",
+     "status": "measured",
+     "note": "空かどうかしか見ないので当然見えない。意図した狭さであって欠陥ではない（他の家系が受け持つ）"
+    },
+    {
+     "what": "新しいシートを作らない op で結果が空になる回",
+     "status": "measured",
+     "specimen": "tests/test_an_empty_result_is_not_a_result.py の掃き出し（4 op を実際に呼んだ）",
+     "note": "★ **穴ではない** ── EXTRACT 0 行だけが欠陥で、この関所が塞いだ。既存シートへ 0 行の形（SET_WHERE / AGGREGATE）は事後条件が既に fail、DEDUP 0 件は正常（除くものが無いのは異常でない）"
+    }
+   ]
+  },
+  "value_not_in_the_named_row": {
+   "label": "依頼が名前と行番号の両方を指していて、その行にその名前がない",
+   "since": "2026-09-09",
+   "terms": {
+    "request": true,
+    "declaration": false,
+    "artifact": true
+   },
+   "artifact_note": "依頼文と**実表**を直に突き合わせる（宣言を経由しない）",
+   "blind_spots": [
+    {
+     "what": "名前だけ・行番号だけの依頼（矛盾のしようがない）",
+     "status": "measured",
+     "note": "二つ書いてある時だけの関所。意図した狭さ"
+    },
+    {
+     "what": "名前が表の別の列に在る回",
+     "status": "measured",
+     "specimen": "src/ailine_core/row_conflict.py の _values_by_row を読んだ（2026-09-18）",
+     "note": "★ **穴ではない（俺の思い違い）** ── iter_rows が列を絞らず、行の全セルを見ている"
+    },
+    {
+     "what": "★ 1 文字の値を見ない（len(v) >= 2）",
+     "status": "measured",
+     "specimen": "2026-09-18 の実測（「2行目の記号を B にして」→ 黙る／「AA」→ 鳴る）",
+     "note": "★★ **本物の穴・この監査で新しく見つかった**。今日 unaccounted_quoted_value で塞いだのと**同じ 1 文字の盲点**が、別の関所に残っていた。◎ ○ × A B は帳簿の普通値。★ 『1 文字を落とす』は repo に 3 箇所在り（残差ゲート・引用値・行の矛盾）、うち 2 つを塞いだ状態"
+    }
+   ]
+  },
+  "count_suspicious_advisories": {
+   "label": "出力の忠実性が落ちた（元にあったものが結果に無い）",
+   "since": "2026-08-22（決裁③）",
+   "terms": {
+    "request": false,
+    "declaration": false,
+    "artifact": true
+   },
+   "artifact_note": "元の冊と出力の冊を比べる。依頼も宣言も見ない",
+   "blind_spots": [
+    {
+     "what": "この家系そのものが台帳に無かった",
+     "status": "measured",
+     "note": "★ 2026-09-18: 人が warning_count += 1 を grep して 6 と数えた時、+= count_suspicious_advisories(...) の形だけ落ちていた。実装から導いて初めて 7 と分かった"
+    },
+    {
+     "what": "印（★ / ⚠）を付け忘れた助言は数えられない",
+     "status": "measured",
+     "specimen": "src/ailine_core/claim.py の docstring（2026-08-22 の検分）",
+     "note": "★ 新しい判定基準を作らず、助言生成側が既に付けた印を読むだけの設計。だから**付け忘れると黙る**。実際に一度起きている ── ★ だけを数える規則から複合計画の見出し警告（⚠ 前置）が漏れ、⚠ と ✓ が同居した。片配線の形"
+    }
+   ]
+  }
+ }
+}

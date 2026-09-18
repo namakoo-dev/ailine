@@ -129,6 +129,42 @@ def unaccounted_request_words(task: str, declaration: str, pool_phrases, headers
     return list(dict.fromkeys(out))
 
 
+def unaccounted_quoted_value(value, declaration: str, headers) -> str | None:
+    """依頼が**引用符で名指しした値**が、解釈行のどこにも出ていないなら、その値。
+
+    ★★ なぜ要るか（2026-09-18・実測）: 上の関所は**列名**しか見ない。その穴は
+      この関数の隣の docstring が既に自白していた ──「落ちたのが**値だけ**の時」。
+      実際に起きた形:
+
+          依頼: A1:C5 を「済」にして
+          解釈: 操作:けい線                  ← ★ 罫線を引いた
+          → 12 セルに罫線を引いて **✓ 機械検証済み**・exit 0・原本を書き換えた
+
+    ★★ なぜ列名の関所が拾えなかったか: 内容語の定義が「漢字 2 文字以上／カタカナ
+      2 文字以上／英字 2 文字以上」で、**1 文字の値は依頼文から丸ごと消える**。
+      『完了』なら鳴り、『済』は黙る。日本語の帳簿で 1 文字の印（◎ ○ × 済 可）は
+      いちばん普通の値で、検体 313 件中 68 件がそれだった。
+    ★ 語の長さを変えて直さない（消費される語が減り、誤爆する側へ倒れる）──
+      **引用符という依頼者自身の名指し**を項として渡す。三項の形にする。
+
+    ★★ 実表の列名を引用している回は見ない ── それは**値ではなく対象**の名指し。
+      実測でここが効いた: 「「商品」セルに色を付けて」→「対象:cell:1,1」は
+      正しい動作で、外さないと ✓ が △ に落ちる（オオカミ少年になる）。
+
+    ★ 本物の走行記録で測った（`~/.ailine/history.jsonl` 16,039 件の成功回）:
+        引用値を持つ回 1,682 件 → 鳴ったのは **1 件（0.06%）** で、それが上の事故。
+      ★ 過去に却下された「全ての値へ広げる」案（誤爆 21%・`residue_gate_sensitivity.py`
+        の冒頭）とは別物。広げたのは語の種類ではなく、**依頼者が引用符で括った 1 つ**だけ。
+    """
+    v = str(value or "").strip()
+    if not v or v in (declaration or ""):
+        return None
+    # ★ 引用が**列の名前**なら、それは書く値ではなく対象（上の実測で外した家系）。
+    if v in {str(h).strip() for h in (headers or ()) if h}:
+        return None
+    return v
+
+
 def find_unconsumed_words(task: str, resolved_args: dict, pool_phrases) -> list:
     """依頼文 task のうち、resolved_args の文字列値・pool_phrases・数字のどれにも
        消費されなかった内容語を、出現順・重複除去で返す（無ければ空リスト）。
