@@ -19199,6 +19199,31 @@ def main(argv=None) -> int:
             _stream.reconfigure(errors="replace")
         except Exception:
             pass
+    # ★★ 2026-09-18（盲検の分母・Namakoo 決裁）: 盲検の回だけ、打たれた**全コマンド**を
+    #   1 ファイルに控える。既定は無効（環境変数が無ければ 1 バイトも書かない）。
+    #   ★ なぜ history でないか: history は**買い手の月次の証跡**で、`ops` や `doctor` の
+    #     ような読むだけのコマンドが並ぶと雑音になる（2026-09-18 ⑨の決裁と同じ線）。
+    #     測定の分母と証跡は別の物なので、口を分ける。
+    #   ★ なぜ要るか: 凍結した合格線は「**どんな指示に対しても**到達するか適切な断りか」
+    #     を分母にしている。ところが history に残るのは run 系だけで、`doctor` / `ops` /
+    #     `scan` / `verify` / `--help` は 1 行も残らない（実測）── 買い手が**入口で詰まった**
+    #     話が丸ごと分母から落ちる。1 体目の「PDF は案内どおり打つと必ず止まる」が
+    #     まさにその形だった。さらに --copy / --dry / --out などの**引数も残らない**ので、
+    #     そのままでは流し直せない。だから argv をそのまま控える。
+    #   ★ 書き先はローカルのファイルだけ。外へは出さない。書けなくても run は止めない
+    #     （測定の口が製品の動きを変えてはいけない）。
+    _trace = os.environ.get("AILINE_TRACE")
+    if _trace:
+        try:
+            _p = Path(_trace)
+            _p.parent.mkdir(parents=True, exist_ok=True)
+            with _p.open("a", encoding="utf-8") as _f:
+                _f.write(json.dumps(
+                    {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                     "argv": list(sys.argv[1:] if argv is None else argv),
+                     "cwd": str(Path.cwd())}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
     a = build_parser().parse_args(argv)
     # ★★ 2026-09-05: 外部の ollama は**既定で拒む**（盲検の査定・Namakoo 決裁）。
     #   許した回は黙らない ── 何がどこへ出るかを 1 行で開示してから走る。
