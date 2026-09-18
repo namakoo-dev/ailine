@@ -11483,7 +11483,10 @@ def atomic_replace_inplace(book: Path, out_book: Path, workdir: Path,
             pass
     elif out_book.exists():
         # ★ 消さなかったことを黙らない（出ないことは信号でない）。
-        print(f"（{out_book.name} は今回の run より前から在ったので消していません）")
+        # ★ 2026-09-18（⑥）:「消していません」だけだと**中身も無事**と読める。
+        #   実際はこの run の作業ファイルに使ったので中身は入れ替わっている。
+        print(f"（{out_book.name} は消していませんが、今回の run の作業に使ったので"
+              "中身は今回の結果に変わっています）")
     return True, None
 
 
@@ -12009,6 +12012,10 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         #   ★ 番人が通した理由の方が重い: 検体が history の行を**手で書いて**いて、
         #     本番の書き手（この関数）を一度も通っていなかった ── 継ぎ目を跨いでいない。
         "out_sha": result.get("out_sha"),
+        # ★ 原本直接の run が作業に使って残した .out（在れば）。次の run が
+        #   「人が変えた」と誤断しないための実体の項（2026-09-18・⑥）。
+        "scratch_out": result.get("scratch_out"),
+        "scratch_out_sha": result.get("scratch_out_sha"),
         # ★ M2b: DSL 経路(path="dsl")では命令言語の確認文(command)と事後条件の合否を残す。
         #   自由生成経路(path="freeform")では両方 None のまま（既存キーは不変）。
         "path": result.get("path", "freeform"),
@@ -12361,6 +12368,27 @@ def _finish_run(a: argparse.Namespace, book: Path, result: dict, failure_kind: s
     #   判定には三項が要る（依頼/宣言/実体）── 実体の項として、書いた物の指紋を残す。
     if result.get("out"):
         result["out_sha"] = _file_digest(Path(result["out"]))
+    # ★★ 2026-09-18（盲検 3 体目 ⑥・Namakoo 決裁 A）: 原本直接モードは
+    #   `<stem>.out.xlsx` を**作業ファイルに使う**。前から在った物（前回の --copy の
+    #   成果物）はその場に残すが、**中身は今回の run の物に変わっている**。
+    #   ところが履歴には原本のパスしか残らないので、次の run が古い指紋と比べて
+    #   「**そのあと変更されています**」と断っていた ── **変えたのはこの道具自身**で、
+    #   人は読んだだけ。買い手の「同じ状況で通ったり止まったり」もこれで説明がつく。
+    #   ★ 2026-08-26 に「印が無い＝**人のファイル**」と断定して間違えたのと同じ誤りの
+    #     2 回目 ── **見たものと、その解釈を分ける**。分かるのは「指紋が違う」まで。
+    #   ★ 直しは文言を緩めるのでなく**実体を記録する**。履歴の行は増やさない
+    #     （証跡に雑音を足さない）── この run の記録に欄を足す。
+    #   ★ 条件は「まだ在るか」だけでよい ── 自分で作った .out は
+    #     atomic_replace_inplace が最後に消すので、ここまで残っているのは
+    #     **前から在った物**（前回の --copy の成果物か人の物）だけ。
+    #     ★ 初版は `not _is_our_scratch_output(...)` も見ていたが、変異試験で
+    #       赤にならなかった（消える順序で既に保証されている＝判別に効いていない）。
+    #       通れない道の見張りは残さない（2026-09-18 に同じ線で 1 つ整理した）。
+    if getattr(a, "inplace", False):
+        _scratch = out_book_path(book)
+        if _scratch.exists():
+            result["scratch_out"] = str(_scratch)
+            result["scratch_out_sha"] = _file_digest(_scratch)
     if a.json:
         print("\n" + json.dumps(result, ensure_ascii=False))
     if result.get("path") not in ("dsl", "plan"):
@@ -16089,7 +16117,12 @@ def refuse_if_output_is_someone_elses(book: Path, task: str = "",
         for entry in read_history(max_n=HISTORY_RECALL_MAX):
             if not isinstance(entry, dict):
                 continue
-            recorded = entry.get("out")
+            # ★ 2026-09-18（⑥）: 原本直接の run は out に**原本**を記録し、作業に
+            #   使った .out は scratch_out に残す。どちらの欄で当たっても「この道具が
+            #   書いた記録」であることに変わりはない ── 両方見る。
+            recorded, stamped_key = entry.get("out"), "out_sha"
+            if not (recorded and str(Path(recorded).resolve()) == target):
+                recorded, stamped_key = entry.get("scratch_out"), "scratch_out_sha"
             if not (recorded and str(Path(recorded).resolve()) == target):
                 continue
             # ★ 2026-08-25（復元の致命③・**今朝入れたこの関所そのものの穴**）:
@@ -16097,7 +16130,7 @@ def refuse_if_output_is_someone_elses(book: Path, task: str = "",
             #   `--copy` の成果物は、書いた**後**に人が手を入れて育てる物で、
             #   それが原本反映 1 回で警告なしに消えていた。
             #   ★ 三項目（実体）で見る: いま在る物が、俺が置いた物のままか。
-            stamped = entry.get("out_sha")
+            stamped = entry.get(stamped_key)
             if stamped is None:
                 return None      # 指紋を残す前の古い記録 ── 従来どおり（判定材料が無い）
             if stamped == _file_digest(out):
