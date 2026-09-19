@@ -8,7 +8,8 @@
   "measured_fields": "escape（選べる指定を並べているか）と example（『例:』で通る書き方を見せているか）は**機械が見た値**。人が書き換えない ── ずれたら番人が赤にする。",
   "known_blind_spot": "example の検出は『例:』という語だけを見る。_cmd_run_body#1 のように『（1冊だけの依頼なら…）』と実質の通る書き方を示していても false になる。数は機械の見たまま、含みは note に書く。",
   "generated": "2026-09-17（盲検 3 体目の後）",
-  "direction": "到達を増やす道は 3 つだけ ── vocab=能力を足す / ambiguous=聞けば決まるものを関所へ動かす / precondition=道具が自分で前提を満たす。dangerous だけは動かさない。★ 確信度を下げて断りを減らす道は採らない（それは『見えずに間違う』側へ倒れる）。"
+  "direction": "到達を増やす道は 3 つだけ ── vocab=能力を足す / ambiguous=聞けば決まるものを関所へ動かす / precondition=道具が自分で前提を満たす。dangerous だけは動かさない。★ 確信度を下げて断りを減らす道は採らない（それは『見えずに間違う』側へ倒れる）。",
+  "walk": "★ 導通: 断りが示した道を**実際に歩いて**着くかを機械で確かめる（Namakoo 2026-09-19:「漏らした依頼を適切に判断しユーザを正解に導いてやることまでやる」）。合格線の『通る道を示す』は文言の性質だったが、示した道が通るかは誰も確かめていなかった── 宣言 vs 実体の隙間。verdict は**書かない**（道具が歩いて決める）。判定 5 つ: walked / by_design / vague（理由が粗くて道を示せていない）/ no_path（本当に道が無い）/ path_fails（歩いたが着かない・最悪）。★ 1 件目を手で歩いた時点で path_fails が 1 件出た（--op ADD_ROW → 事実と違う文言）。"
  },
  "refusals": {
   "_cmd_run_body#1": {
@@ -103,21 +104,77 @@
    "escape": false,
    "example": false,
    "why": "vocab",
-   "unlock": "★★ 在庫の筆頭候補 ── 買い手 3 体目の MISSING 筆頭は『2 冊をまたいだ転記』で『購買の月次はこれが本体』『これが在れば月額 3,000〜5,000 円』。需要の記憶（上位案件は複数ファイル）とも向きが合う"
+   "unlock": "★★ 在庫の筆頭候補 ── 買い手 3 体目の MISSING 筆頭は『2 冊をまたいだ転記』で『購買の月次はこれが本体』『これが在れば月額 3,000〜5,000 円』。需要の記憶（上位案件は複数ファイル）とも向きが合う",
+   "walk": {
+    "kind": "folder",
+    "plan": [
+     {
+      "op": "EXTRACT",
+      "args": {
+       "col": "金額",
+       "cmp": "gte",
+       "value": 100
+      }
+     },
+     {
+      "op": "SORT",
+      "args": {
+       "col": "金額",
+       "order": "desc"
+      }
+     }
+    ],
+    "task": "金額が100以上の行を抜き出して金額順に並べ替えて",
+    "path": {
+     "kind": "single_book",
+     "note": "1 冊を指定すればそのまま頼める"
+    }
+   }
   },
   "_run_folder_refuse#2": {
    "text": "『…』は複数ファイル（フォルダ）に対応していません。フォルダに頼めるのは抽出だけです",
    "escape": false,
    "example": false,
    "why": "vocab",
-   "unlock": "★★ 上と同じ在庫。どの op をフォルダへ広げるかは実需で決める（語彙は増やすほど本流が濁る ── OPS_DOC に 16 行足して op 一致が 98.1%→94.2% になった実測が在る）"
+   "unlock": "★★ 上と同じ在庫。どの op をフォルダへ広げるかは実需で決める（語彙は増やすほど本流が濁る ── OPS_DOC に 16 行足して op 一致が 98.1%→94.2% になった実測が在る）",
+   "walk": {
+    "kind": "folder",
+    "plan": [
+     {
+      "op": "SORT",
+      "args": {
+       "col": "金額",
+       "order": "desc"
+      }
+     }
+    ],
+    "task": "金額で降順に並べ替えて",
+    "path": {
+     "kind": "single_book",
+     "note": "1 冊を指定すればそのまま頼める"
+    }
+   }
   },
   "cmd_run_folder#1": {
    "text": "確認が必要です（CLARIFY・末尾に『頼める操作の一覧: ailine ops』）",
    "escape": false,
    "example": false,
    "why": "ambiguous",
-   "unlock": "★ 未調査"
+   "unlock": "★ 未調査",
+   "walk": {
+    "kind": "folder",
+    "plan": [
+     {
+      "op": "CLARIFY",
+      "question": "何をしますか"
+     }
+    ],
+    "task": "いい感じにして",
+    "path": {
+     "kind": "none"
+    },
+    "why": "★ 一覧を見ても、この依頼が通る形は分からない（vague/no_path の候補）"
+   }
   },
   "cmd_run_folder#2": {
    "text": "比較の語が 2 つあります／否定（辞書が ambiguous を返した理由をそのまま）",
@@ -131,7 +188,25 @@
    "escape": false,
    "example": true,
    "why": "vocab",
-   "unlock": "比較語の辞書に語を足す。★ 足す前に引き方を測る（1 語 1 レコード・出所と検体が必須）"
+   "unlock": "比較語の辞書に語を足す。★ 足す前に引き方を測る（1 語 1 レコード・出所と検体が必須）",
+   "walk": {
+    "kind": "folder",
+    "plan": [
+     {
+      "op": "EXTRACT",
+      "args": {
+       "col": "金額",
+       "cmp": "まんなか",
+       "value": 100
+      }
+     }
+    ],
+    "task": "金額がまんなかの行を抜き出して",
+    "path": {
+     "kind": "example",
+     "task": "金額が100以上の行を抜き出して"
+    }
+   }
   },
   "cmd_run_folder#4": {
    "text": "列『…』が基準ファイル『…』にありません。ある列: …",
@@ -145,21 +220,76 @@
    "escape": false,
    "example": true,
    "why": "ambiguous",
-   "unlock": "★ 未調査"
+   "unlock": "★ 未調査",
+   "walk": {
+    "kind": "folder",
+    "plan": [
+     {
+      "op": "EXTRACT",
+      "args": {
+       "col": "金額",
+       "cmp": "gte"
+      }
+     }
+    ],
+    "task": "金額が以上の行を抜き出して",
+    "path": {
+     "kind": "example",
+     "task": "金額が100以上の行を抜き出して"
+    }
+   }
   },
   "cmd_run_folder#6": {
    "text": "『…』は数値として読めないので … の比較ができません",
    "escape": false,
    "example": false,
    "why": "precondition",
-   "unlock": "★ 未調査 ── 『数値として読めない』理由（式のまま／文字列混在／全角）を名指ししていない。2026-09-17 に照合側で同じ形を直した（③④）"
+   "unlock": "★ 未調査 ── 『数値として読めない』理由（式のまま／文字列混在／全角）を名指ししていない。2026-09-17 に照合側で同じ形を直した（③④）",
+   "walk": {
+    "kind": "folder",
+    "plan": [
+     {
+      "op": "EXTRACT",
+      "args": {
+       "col": "金額",
+       "cmp": "gte",
+       "value": "たくさん"
+      }
+     }
+    ],
+    "task": "金額がたくさん以上の行を抜き出して",
+    "path": {
+     "kind": "example",
+     "task": "金額が100以上の行を抜き出して"
+    },
+    "why": "★ 『数値として読めない』理由（式のまま／文字列混在／全角）を名指ししていない"
+   }
   },
   "cmd_run_folder#7": {
    "text": "辞書に当たらない数値の比較は LLM の不等号だけで通さない（compare_words.unconfirmed）",
    "escape": false,
    "example": false,
    "why": "ambiguous",
-   "unlock": "比較語の辞書に語を足せば到達側へ動く。★ 2026-09-15 の規則 ④"
+   "unlock": "比較語の辞書に語を足せば到達側へ動く。★ 2026-09-15 の規則 ④",
+   "walk": {
+    "kind": "folder",
+    "plan": [
+     {
+      "op": "EXTRACT",
+      "args": {
+       "col": "金額",
+       "cmp": "gte",
+       "value": 100
+      }
+     }
+    ],
+    "task": "金額が100をこえる行を抜き出して",
+    "path": {
+     "kind": "example",
+     "from": "message"
+    },
+    "why": "辞書に当たらない不等号 ── 断り文の例をそのまま歩く"
+   }
   },
   "cmd_run_match#1": {
    "text": "…の…列が依頼文から決まりません。候補: …（例つき）",
