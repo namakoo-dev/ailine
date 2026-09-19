@@ -49,6 +49,31 @@ REGISTER = REPO / "tests" / "refusal_register.json"
 BOOKS = {"4月.xlsx": [["商品", "金額"], ["ボルト", 120], ["ナット", 80]],
          "5月.xlsx": [["商品", "金額"], ["ボルト", 150], ["ワッシャー", 300]]}
 
+#: 同じ見出しのシートを 2 枚持つ冊（対象シートが決まらない断りの引き金）。
+TWO_SHEETS = {"4月": [["商品", "金額"], ["ボルト", 120], ["ナット", 80]],
+              "5月": [["商品", "金額"], ["ボルト", 150], ["ワッシャー", 300]]}
+
+
+def _make_book(root: Path, sheets: dict | None = None) -> Path:
+    """1 冊の冊を作る（sheets を渡せば複数シート）。"""
+    root.mkdir(parents=True, exist_ok=True)
+    p = root / "在庫.xlsx"
+    wb = openpyxl.Workbook()
+    if sheets:
+        wb.remove(wb.active)
+        for name, rows in sheets.items():
+            ws = wb.create_sheet(name)
+            for r in rows:
+                ws.append(r)
+    else:
+        ws = wb.active
+        ws.title = "在庫"
+        for r in BOOKS["4月.xlsx"]:
+            ws.append(r)
+    wb.save(p)
+    wb.close()
+    return p
+
 
 def load_register() -> dict:
     return json.loads(REGISTER.read_bytes().decode("utf-8"))
@@ -67,12 +92,21 @@ def _make_folder(root: Path) -> Path:
     return d
 
 
-def _run(argv: list, plan) -> tuple:
-    """製品を 1 回走らせ、(exit, 画面) を返す。plan を渡せば翻訳をそれに固定する。"""
+def _run(argv: list, plan, second=None) -> tuple:
+    """製品を 1 回走らせ、(exit, 画面) を返す。plan を渡せば翻訳をそれに固定する。
+
+    ★ second を渡すと **2 回目の読みだけ別の計画**にする（読みの割れを再現するため）。
+    """
     buf = io.StringIO()
-    real = ailine.translate_task
+    real, real_fixed = ailine.translate_task, ailine.translate_task_fixed_op
+    calls = []
     if plan is not None:
-        ailine.translate_task = lambda *a, **k: {"plan": plan}
+        def fake(*a, **k):
+            calls.append(1)
+            return {"plan": second if (second and len(calls) == 2) else plan}
+        ailine.translate_task = fake
+        ailine.translate_task_fixed_op = lambda model, op, task, meta, **k: {
+            "op": op, "args": dict((plan[0] or {}).get("args") or {})}
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             try:
@@ -80,7 +114,7 @@ def _run(argv: list, plan) -> tuple:
             except SystemExit as e:
                 rc = e.code
     finally:
-        ailine.translate_task = real
+        ailine.translate_task, ailine.translate_task_fixed_op = real, real_fixed
     return rc, buf.getvalue()
 
 
@@ -94,48 +128,77 @@ def _example_in(text: str) -> str | None:
     return None
 
 
+def _trigger(w: dict, root: Path) -> tuple:
+    """引き金を引く ── (exit, 画面, 引数の組み立てに使う土台)。"""
+    kind = w.get("kind")
+    extra = list(w.get("argv_extra") or [])
+    if kind == "folder":
+        folder = _make_folder(root)
+        argv = ["run", str(folder), w["task"], "--out", str(root / "結果.xlsx")]
+        return (*_run(argv, w.get("plan"), w.get("second")), folder)
+    if kind == "two_sheets":
+        book = _make_book(root, TWO_SHEETS)
+        return (*_run(["run", str(book), w["task"], "--copy"] + extra,
+                      w.get("plan"), w.get("second")), book)
+    book = _make_book(root)
+    return (*_run(["run", str(book), w["task"], "--copy"] + extra,
+                  w.get("plan"), w.get("second")), book)
+
+
+def _walk_path(w: dict, path: dict, base, root: Path) -> tuple:
+    """示された道を歩く ── (exit, 画面)。歩けない種類なら (None, 理由)。"""
+    kind, extra = path.get("kind"), list(path.get("argv_extra") or [])
+    plan = path.get("plan") or w.get("plan")
+    if kind == "single_book":
+        one = base / next(iter(BOOKS))
+        return _run(["run", str(one), w["task"], "--copy"], plan)
+    if kind == "example":
+        task2 = path.get("task") or _example_in(_LAST_SCREEN[0])
+        if not task2:
+            return None, "例を示していると数えられているが、歩ける文が取り出せない"
+        if w.get("kind") == "folder":
+            return _run(["run", str(base), task2, "--out", str(root / "結果2.xlsx")], plan)
+        return _run(["run", str(base), task2, "--copy"] + extra, plan)
+    if kind == "forced_op":
+        return _run(["run", str(base), w["task"], "--copy", "--op", path["op"]], plan)
+    if kind == "sheet":
+        return _run(["run", str(base), w["task"], "--copy", "--sheet", path["sheet"]], plan)
+    return None, f"歩き方が不明: {kind}"
+
+
+#: ★ 例を断り文から拾う時に使う（直前の画面）。引数で回すと walk_one の形が崩れるので棚に置く。
+_LAST_SCREEN = [""]
+
+
 def walk_one(key: str, entry: dict, root: Path) -> dict:
     """1 件の断りを出させ、示された道を歩く。戻り値に verdict を入れる（台帳は読まない）。"""
     w = entry.get("walk")
     if not w:
         return {"key": key, "verdict": "未記入", "detail": "walk 欄が無い"}
-    folder = _make_folder(root)
-    argv = ["run", str(folder), w["task"], "--out", str(root / "結果.xlsx")]
-    rc, out = _run(argv, w.get("plan"))
+    if w.get("kind") == "match_unwalkable":
+        # ★ 突き合わせは 2 冊と実表が要る ── この器では歩けないと**書いて残す**。
+        #   「歩いていない」を walked と混ぜない（見ていないものを見たことにしない）。
+        return {"key": key, "verdict": "未調査", "detail": w.get("why") or "この器では歩けない"}
+
+    rc, out, base = _trigger(w, root)
+    _LAST_SCREEN[0] = out
     if rc == 0:
         return {"key": key, "verdict": "引き金が引けない",
                 "detail": "断りが出ずに到達した（検体が古い）", "screen": out[-200:]}
 
     path = w.get("path") or {}
-    kind = path.get("kind")
-    if kind == "none":
+    if path.get("kind") == "none":
         # ★ 道を示していない ── 理由が粗いのか、本当に道が無いのかは人が仕分ける。
         return {"key": key, "verdict": "vague" if w.get("why") else "no_path",
-                "detail": w.get("why") or "示す道が無い", "screen": out.strip()[-160:]}
+                "detail": w.get("why") or "示す道が無い（機能・語彙が無い）",
+                "screen": out.strip()[-160:]}
 
-    if kind == "single_book":
-        one = folder / next(iter(BOOKS))
-        rc2, out2 = _run(["run", str(one), w["task"], "--copy"], w.get("plan"))
-    elif kind == "example":
-        task2 = path.get("task") or _example_in(out)
-        if not task2:
-            return {"key": key, "verdict": "vague",
-                    "detail": "例を示していると数えられているが、歩ける文が取り出せない",
-                    "screen": out.strip()[-160:]}
-        # ★★ 2026-09-19（最初の実行で踏んだ測定器の穴）: ここで plan=None にすると
-        #   **本物の LLM へ投げる**ことになり、ollama に届かない回は FREEFORM が返って
-        #   「道が通らない」と誤判定した（盤を手で回した時はたまたま通り、番人では落ちた
-        #   ── 測定器が揺れていた）。
-        #   ★ 歩く時も計画を固定する。確かめたいのは「**この例文で、示された操作に届くか**」
-        #     であって、LLM がその例文をどう読むかではない（それは別の測定）。
-        rc2, out2 = _run(["run", str(folder), task2, "--out", str(root / "結果2.xlsx")],
-                          path.get("plan") or [{"op": "EXTRACT",
-                                                "args": {"col": "金額", "cmp": "gte", "value": 100}}])
-    else:
-        return {"key": key, "verdict": "未記入", "detail": f"歩き方が不明: {kind}"}
-
+    rc2, out2 = _walk_path(w, path, base, root)
+    if rc2 is None:
+        return {"key": key, "verdict": "vague", "detail": out2, "screen": out.strip()[-160:]}
     if rc2 == 0:
-        return {"key": key, "verdict": "walked", "detail": f"道を歩いて到達（{kind}）"}
+        return {"key": key, "verdict": "walked",
+                "detail": f"道を歩いて到達（{path.get('kind')}）"}
     return {"key": key, "verdict": "path_fails",
             "detail": f"道を歩いたが exit {rc2}", "screen": out2.strip()[-200:]}
 
@@ -156,7 +219,8 @@ def survey() -> list:
     return rows
 
 
-ORDER = ["path_fails", "vague", "no_path", "未記入", "引き金が引けない", "walked", "by_design"]
+ORDER = ["path_fails", "vague", "no_path", "未調査", "未記入", "引き金が引けない",
+         "walked", "by_design"]
 
 
 def render(rows: list) -> str:
