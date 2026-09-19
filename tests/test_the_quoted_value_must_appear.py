@@ -35,6 +35,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tests"))
 
+import pytest  # noqa: E402
 from ailine_core import residue  # noqa: E402
 import ailine  # noqa: E402
 
@@ -88,6 +89,71 @@ def test_nothing_quoted_never_rings():
     assert ailine.task_quotes_a_value("みかんの利益を計算して") is None
     assert residue.unaccounted_quoted_value(None, "解釈: 操作:計算列", HEADS) is None
     assert residue.unaccounted_quoted_value("", "解釈: 操作:計算列", HEADS) is None
+
+
+def test_a_value_hidden_inside_another_word_still_rings():
+    """★★ 監査で「本物の穴」と確定した 2 つ目（2026-09-19 に塞いだ）。
+
+    ★ 初版は `v in declaration` だったので、宣言の別の語に紛れて黙っていた。
+      未済・決済・返済・済み は帳簿の普通語なので、現実に起きる形。
+    """
+    assert residue.unaccounted_quoted_value(
+        "済", "解釈: 操作:一括書換 列:担当 値:未済", HEADS) == "済"
+    assert residue.unaccounted_quoted_value(
+        "済", "解釈: 操作:一括書換 列:済み対応 値:x", HEADS) == "済"
+
+
+@pytest.mark.parametrize("decl", [
+    "解釈: 操作:1セル書換 行:3 列:担当 値:済",
+    "解釈: 操作:行追加 挿入位置:3 入れる値:担当=済",
+    "解釈: シート:『売上』(1枚目) 操作:1セル書換 書き込む値:済 入れる位置:7行目",
+])
+def test_a_value_written_as_its_own_field_stays_silent(decl):
+    """★★ 拾いすぎ殺し: 値が**塊として**出ている回は黙る。
+
+    ★ `入れる値:担当=済` のように `=` の右に出る形も「出ている」── ここを落とすと
+      本物の走行 1,682 件で誤爆が 0.18% → 3.51% へ膨らむ（実測して捨てた案）。
+    """
+    assert residue.unaccounted_quoted_value("済", decl, HEADS) is None
+
+
+@pytest.mark.parametrize("value, decl", [
+    ("2026/08/31", "解釈: 操作:1セル書換 対象列:締め日 書き込む値:2026/08/31 入れる位置:7行目"),
+    ("{{合計:税込金額}}", "解釈: 操作:1セル書換 対象列:御中 書き込む値:{{合計:税込金額}} 入れる位置:7行目"),
+    ("売上 (2026)", "解釈: シート:『売上 (2026)』(2枚目) 操作:並べ替え 対象:単価 順:降順"),
+])
+def test_values_that_contain_separators_are_not_torn_apart(value, decl):
+    """★★ 区切りを含む値（日付・差し込み語・空白入りのシート名）を壊さない。
+
+    ★ 「空白と : と = で割って比べる」案は、この 3 形を壊して誤爆を 20 倍にした。
+      だから**割らずに境界で見る**（実測で選んだ設計）。
+    """
+    assert residue.unaccounted_quoted_value(value, decl, HEADS) is None
+
+
+def test_every_quoted_value_is_checked_not_just_the_first():
+    """★★ 監査で「本物の穴」と確定した 3 つ目（2026-09-19 に塞いだ）。
+
+    ★ 「チェック列の『◎』を『合格』に書き換えて」で 2 つ目が宣言から落ちても黙っていた。
+    ★ 1 つ目を返す task_quotes_a_value は**そのまま残す** ── あちらは「1 セルのつもりの
+      依頼か」を見分ける項で、値を 1 つに決める必要がある（別の仕事）。
+    ★ 実測: 引用が 2 つ以上ある依頼は 16,067 件中 4 件（0.02%）。全部を関所に掛けても
+      誤爆は 1 件も増えなかった（0.18% のまま）── 増えると測れていたら入れなかった。
+    """
+    assert ailine.task_quotes_values("チェック列の「◎」を「合格」に書き換えて") == ["◎", "合格"]
+    assert ailine.task_quotes_values("担当を「佐藤」にして") == ["佐藤"]
+    assert ailine.task_quotes_values("利益を計算して") == []
+    # ★ 同じ値を 2 回書いても 1 つに畳む（同じ ⚠ を 2 行出さない）
+    assert ailine.task_quotes_values("「済」を「済」に") == ["済"]
+
+
+def test_the_second_value_is_wired_into_the_gate():
+    """★ 配線: 本体が**全部を返す側**を呼んでいること（1 つ目だけに戻っていない）。"""
+    from _product_source import product_text
+    i = product_text().index("unaccounted_quoted_value(")
+    seg = product_text()[max(0, i - 500):i + 500]
+    assert "task_quotes_values(" in seg, (
+        "★ 関所が引用値を 1 つしか受け取っていない（2 つ目の穴が戻る）")
 
 
 def test_the_judgement_lives_in_one_place():

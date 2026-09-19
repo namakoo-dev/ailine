@@ -814,6 +814,7 @@ def task_names_real_values(task: 'str', book_meta: 'dict', sheet: 'str | None', 
 def task_places_a_new_row(task: 'str', after_words, before_words, between=None) -> 'bool'
 def task_points_at_one_row(task: 'str', book_meta: 'dict', sheet: 'str | None') -> 'str | None'
 def task_quotes_a_value(task: 'str') -> 'str | None'
+def task_quotes_values(task: 'str') -> 'list'
 def task_says_except(task: 'str') -> 'bool'
 class timezone(?)
 def too_many_placements(plan) -> 'str | None'

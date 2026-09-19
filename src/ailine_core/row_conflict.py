@@ -26,9 +26,52 @@
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ailine_core.book_view import BookView
+
+#: 1 文字の値の「隣」に来てはいけない文字（同じ文字種が続くなら、それは別の語の一部）。
+#:   数字の値 → 前後が数字 ／ 英字の値 → 前後が英字。半角と全角の両方を見る。
+_SAME_KIND = {"digit": "0-9０-９", "alpha": "A-Za-zＡ-Ｚａ-ｚ"}
+
+
+def mentions_value(task: str, value: str) -> bool:
+    """依頼文が**この値そのもの**を言っているか（部分文字列の巻き添えを外す）。
+
+    ★★ 2026-09-19（⚠ の家系を監査していて見つけた穴）: ここは長らく
+      `len(v) >= 2 and v in task` で、**1 文字の値を一度も見ていなかった**:
+
+          表     2行目 記号=A ／ 3行目 記号=B
+          依頼   「2行目の記号を B にして」    ← B は 3 行目に在る（依頼が自己矛盾）
+          関所   黙る                        ← ★ 1 文字なので見ていない
+
+      ◎ ○ × 済 可 A B は帳簿でいちばん普通の値（引用値 313 件のうち 68 件が 1 文字）。
+      同じ日に『済』で塞いだ残差ゲートの盲点と**同じ形**で、repo に 3 箇所あった最後の 1 つ。
+
+    ★★ `len(v) >= 2` は無意味な制限ではなかった ── **外す前に理由を測った**:
+
+          表の 3 行目に 値 '0' が在る状態で 「2行目の数量を**10**にして」
+            → 素朴に 1 文字を許すと '0' が '10' の部分文字列として一致し、**誤爆**する
+
+      だから「1 文字を許す」のではなく **文字種の境界で切る**（A1 記法の読みと同じ形）:
+      数字は前後が数字でない時だけ／英字は前後が英字でない時だけ 言及とみなす。
+      記号（◎ ○ × 済）は境界を持たないので、そのまま一致する。
+
+    ★ 測って**直さないと決めた限界**: 「3行目の**C**コードを見て」のように英字 1 文字へ
+      カタカナが続く形は拾ってしまう。依頼文 1,942 件を調べて**この形は 0 件**だった ──
+      発明した検体に合わせて規則を曲げると、実在しうる『Bコース』のような値を落とす方が高くつく。
+    """
+    v = str(value or "")
+    if not v or v not in (task or ""):
+        return False
+    if len(v) >= 2:
+        return True
+    kind = "digit" if v.isdigit() else ("alpha" if v.isascii() and v.isalpha() else None)
+    if kind is None:
+        return True                 # ★ 記号・漢字・かなは境界を持たない
+    cls = _SAME_KIND[kind]
+    return re.search(f"(?<![{cls}]){re.escape(v)}(?![{cls}])", task) is not None
 
 
 def _values_by_row(path, sheet: str | None, header_row: int) -> dict:
@@ -65,6 +108,6 @@ def value_not_in_the_named_row(task: str, row_no, path, sheet=None,
             elsewhere |= vals
     # ★ 長い値から当てる（「青りんご」と「りんご」が両方在る表で短い方だけ当たるのを防ぐ）
     for v in sorted(elsewhere - here, key=len, reverse=True):
-        if len(v) >= 2 and v in task:
+        if mentions_value(task, v):
             return v
     return None

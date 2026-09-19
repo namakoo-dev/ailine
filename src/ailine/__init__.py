@@ -9491,6 +9491,21 @@ def task_quotes_a_value(task: str) -> str | None:
     return m.group(1) if m else None
 
 
+def task_quotes_values(task: str) -> list:
+    """依頼文が引用符で名指しした値を**全部**（出現順・重複除去）。
+
+    ★★ なぜ在るか（2026-09-19・監査で「本物の穴」と確定した 3 件の 3 つ目）:
+      `task_quotes_a_value` は**最初の 1 つ**しか返さないので、
+      「チェック列の『◎』を『合格』に書き換えて」で **2 つ目が宣言から落ちても黙る**。
+    ★ 1 つ目を返す側は**そのまま残す** ── あちらは「1 セルのつもりの依頼か」を
+      見分ける三項目の 1 つで、値を 1 つに決める必要がある（別の仕事）。
+    ★ 実測: 引用が 2 つ以上ある依頼は本物の走行 16,067 件中 **4 件（0.02%）**。
+      ★ 全部を関所に掛けても**誤爆は 1 件も増えなかった**（0.18% のまま）── だから入れた。
+        増えないと測れていなければ、0.02% のために広げる価値は無かった。
+    """
+    return list(dict.fromkeys(_re_quoted_value.findall(task or "")))
+
+
 def plan_writes_beyond_one_cell(plan) -> bool:
     """この計画は**1 セルより広く**書くと宣言しているか。
 
@@ -12653,9 +12668,12 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         #   ★ 『完了』なら鳴り『済』は黙る。◎ ○ × 済 可 は帳簿でいちばん普通の値。
         #   ★ 語の長さを広げて直さない（誤爆する側へ倒れる）── 依頼者自身が引用符で
         #     括った 1 つを**項として渡す**。判定は residue.py に 1 つだけ置く。
-        _qv = suggest_residue.unaccounted_quoted_value(
-            task_quotes_a_value(getattr(a, "task", "") or ""), scope, _heads)
-        if _qv:
+        # ★ 2026-09-19: 引用値は**全部**見る（「『◎』を『合格』に」の 2 つ目が落ちる穴）。
+        #   本物の走行 1,682 件で誤爆は 1 件も増えなかったので広げた。
+        for _qv in (suggest_residue.unaccounted_quoted_value(_q, scope, _heads)
+                    for _q in task_quotes_values(getattr(a, "task", "") or "")):
+            if not _qv:
+                continue
             print(f"⚠ 依頼が書くと言っている『{_qv}』が、実行した解釈のどこにも出ていません"
                   " ── この値を書いたとは言えないため、機械保証は出しません")
             warning_count += 1
@@ -13187,7 +13205,9 @@ def _sheet_looks_like_template(source_book: Path, sheet_name: str) -> bool:
 def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tuple:
     """一段目の翻訳が取り違えた計画を、**実表と依頼文に聞いて読み直す**層（15 塊）。
 
-    戻り値 (plan, rc)。rc が None なら続行、数字ならその終了コードで**止まる**
+    戻り値 (plan, rc, decided)。rc が None なら続行、数字ならその終了コードで**止まる**
+    （decided ＝ この層が**機械の判断で計画を決め直したか**。揺れの受け皿が
+     「機械が自分で決めた回は断らない」を判じるのに使う ── 判定を書き写さないため）
     （1 セルに絞れなかった回・入れる値が決まらなかった回は、壊す前に断る）。
 
     ★★ なぜ切り出したか（2026-09-05・盲検の査定）: `_translate_and_dispatch` が
@@ -13375,7 +13395,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
                  f"『{_col_hint}』列のデータ行を**全部**書き換える"
                  if _col_hint else "その列のデータ行を**全部**書き換える"),
             ]))
-            return plan, 3
+            return plan, 3, _reread_done
 
     # ★★ 2026-08-27（Namakoo「原価が500以上の項目に◎を付ける」）:
     #   実測 4/4 で OUT_OF_VOCAB（しかも「条件付き書式」と誤って読まれていた ──
@@ -13747,7 +13767,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
             print(f"？ この道具は『{_attr}』に対応していません "
                   "── 近い操作で代わりに実行することはしません。")
             print("  （頼める操作の一覧: ailine ops）")
-            return plan, 3
+            return plan, 3, _reread_done
 
     if plan and not getattr(a, "_forced_op", None):
         _rules = {_o: (_m["requires_word"], _m.get("without_the_word"),
@@ -13757,8 +13777,8 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
         for _ln in _wlines:
             print(_ln)
         if _wrefuse:
-            return plan, 3
-    return plan, None
+            return plan, 3, _reread_done
+    return plan, None, _reread_done
 
 
 def _answer_before_asking(a: argparse.Namespace, book: Path, book_meta: dict,
@@ -13952,6 +13972,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #   だけを埋め直させる ── 既に在る器官（translate_task_fixed_op）へ配線するだけ。
     #   ★ 揺れを 1 つずつ矯正しても、別の言い方でまた外れる。人が「これだ」と言える道を
     #     常設するのが構造的な答えで、画面の「こう読みました→選び直す」もここを通る。
+    # ★ `--op` 固定の枝では 2 回目を引かない ── その回もここを通るので先に None を置く
+    #   （置き忘れて UnboundLocalError を出した・2026-09-19）。
+    _second = None
     forced_op = getattr(a, "op", None)
     if forced_op:
         if forced_op not in OP_SCHEMA:
@@ -13990,8 +14013,6 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         #   `--op` で固定した回はこの枝に来ないので、人の選択に別案を当てることはない。
         _second = recheck_translation(a.model, a.task, book_meta, translation)
         progress_end(t0)
-        if _second is not None:
-            return _refuse_split_reading(translation, _second)
     a._last_translation = translation
 
     plan = translation.get("plan") if isinstance(translation, dict) else None
@@ -14020,9 +14041,19 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     #     （OPS_DOC は 1 文字も増やさない ── 第二段は op を固定してスキーマだけ見せる）
     # ★ 読み直しの塊はすべて**対象シート**で解く（1 枚目を仮定しない・上の _sheet_hint と同じ）。
     # ★ 読み直しの層（15 塊）は _reread_the_plan が持つ。ここは結果を受けるだけ。
-    plan, _rr_rc = _reread_the_plan(a, book_meta, plan)
+    plan, _rr_rc, _machine_decided = _reread_the_plan(a, book_meta, plan)
     if _rr_rc is not None:
         return _rr_rc
+
+    # ★★ 2026-09-19（実機 4 本を落として分かった・設計の直し）: 揺れの受け皿は
+    #   **読み直しの後**に置く。生の翻訳を見て断っていた初版は、**製品が正しく扱える
+    #   依頼を断っていた**:
+    #     「原価の右に備考の列を追加して」→ 生の翻訳は **85% が セル分割**（20 回で実測）
+    #      だが `task_asks_to_add_a_column` が依頼文だけで軸を決め、列追加へ直している。
+    #   ★ 機械が自分で決めた回は、モデルが何を返そうと結果は同じ ── 断る理由が無い。
+    #   ★ 判定は書き写さない ── 読み直し層に「自分が決めたか」を言わせる（第 3 の戻り値）。
+    if _second is not None and not _machine_decided:
+        return _refuse_split_reading(translation, _second)
 
     # ★★ 2026-08-30: 中身がまったく同じ段は 1 回にまとめる（連鎖で 2 段目が 1 段目の
     #   出力を食う前に畳む ── 順番が意味を持つ）。黙って畳まず、落とした数を言う。

@@ -155,14 +155,40 @@ def unaccounted_quoted_value(value, declaration: str, headers) -> str | None:
         引用値を持つ回 1,682 件 → 鳴ったのは **1 件（0.06%）** で、それが上の事故。
       ★ 過去に却下された「全ての値へ広げる」案（誤爆 21%・`residue_gate_sensitivity.py`
         の冒頭）とは別物。広げたのは語の種類ではなく、**依頼者が引用符で括った 1 つ**だけ。
+    ★★ 2026-09-19（監査で「本物の穴」と確定した 3 件の 2 つ目）: 初版は `v in declaration`
+      で見ていたので、**宣言の別の語に紛れて消えて**いた:
+
+          依頼『済』・宣言 `値:未済`      → 黙る（『未済』に『済』が含まれる）
+          依頼『済』・宣言 `列:済み対応`  → 黙る
+
+      未済・決済・返済・済み は帳簿の普通語なので、現実に起きる。
+    ★ 直しは**語の塊で見る**（`_stands_alone`）── 値の前後が区切り文字か端であること。
+      ★ 割って比べる案は実測で捨てた: 空白と `:` `=` で割ると日付 `2026/08/31` や
+        `{{合計:税込金額}}` が壊れ、誤爆が 0.18% → 3.51% へ膨らんだ。
+      ★ 境界で見る形は本物の走行 1,682 件で **誤爆が 1 件も増えず**（0.18% のまま）、
+        狙った 2 形だけが鳴るようになった。
     """
     v = str(value or "").strip()
-    if not v or v in (declaration or ""):
+    if not v or _stands_alone(v, declaration or ""):
         return None
     # ★ 引用が**列の名前**なら、それは書く値ではなく対象（上の実測で外した家系）。
     if v in {str(h).strip() for h in (headers or ()) if h}:
         return None
     return v
+
+
+#: 解釈行で値の「切れ目」になる文字。★ 発明でなく実物から数えた（16,067 件の解釈行で
+#:   `:` 21,155 / 空白 17,705 / 全角かっこ 3,328 / `＝` 2,951 …）。
+_DECL_SEP = r"\s　:：=＝「」『』\"“”（）()\[\]【】,，、/／"
+
+
+def _stands_alone(value: str, declaration: str) -> bool:
+    """宣言の中に、その値が**1 つの塊として**出ているか（他の語の一部ではなく）。
+
+    ★ 「未済」の中の「済」、「済み対応」の中の「済」を『出ている』と数えないための境界。
+    """
+    return re.search(f"(?<![^{_DECL_SEP}]){re.escape(value)}(?![^{_DECL_SEP}])",
+                      declaration) is not None
 
 
 def find_unconsumed_words(task: str, resolved_args: dict, pool_phrases) -> list:

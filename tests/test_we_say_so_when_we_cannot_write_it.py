@@ -105,10 +105,11 @@ def test_the_gate_actually_stops_the_plan():
     meta = {"headers": {"見積": ["品名", "単価"]}, "sheets": ["見積"]}
     fill = [{"op": "FILL_COLOR", "args": {"target": "col:品名", "color": "red"}}]
 
-    _plan, rc = ailine._reread_the_plan(
+    # ★ 2026-09-19: 第 3 の戻り値（機械が自分で決めたか・揺れの受け皿が使う）が増えた。
+    _plan, rc, _decided = ailine._reread_the_plan(
         argparse.Namespace(task="品名の文字色を赤にして"), meta, fill)
     assert rc == 3, "書けない属性を頼まれたのに、計画がそのまま通った"
 
-    _plan, rc = ailine._reread_the_plan(
+    _plan, rc, _decided = ailine._reread_the_plan(
         argparse.Namespace(task="品名に背景色を付けて"), meta, fill)
     assert rc is None, "出来る依頼まで止めている（能力を殺す番人になっている）"

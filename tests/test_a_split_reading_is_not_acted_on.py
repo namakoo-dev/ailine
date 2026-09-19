@@ -13,7 +13,17 @@
     連続 2 回は独立（食い違い 45%・独立なら 35.9%）なので、2 回目を引けば揺れる依頼で
     22〜38% 鳴る。易しい依頼（battery 20 種 × 10 回）は揺れ 0 ── そこでは鳴らない。
 
-★ 何を守るか: 読み方が分かれた回に**黙ってどちらかで実行しない**こと。
+★★ 2026-09-19（実機 4 本を落として直した）: 受け皿は**読み直しの後**に置く。
+  初版は生の翻訳を見て断っており、**製品が正しく扱える依頼を断っていた**:
+
+      「原価の右に備考の列を追加して」→ 生の翻訳は **85% が セル分割**（20 回で実測）
+       だが task_asks_to_add_a_column が依頼文だけで軸を決め、列追加へ直している。
+
+  ★ 機械が自分で決めた回は、モデルが何を返そうと結果は同じ ── 断る理由が無い。
+  ★ 「機械が決めたか」は読み直し層に言わせる（第 3 の戻り値）── 判定を書き写さない。
+
+★ 何を守るか: **機械が自分で決められず**、かつ読み方が分かれた回に、
+  黙ってどちらかで実行しないこと。
 ★ 何を守らないか: 揺れそのもの（これは受け皿であって治療ではない）。
 """
 from __future__ import annotations
@@ -28,9 +38,9 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tests"))
 import ailine  # noqa: E402
 
-MOVE = {"plan": [{"op": "MOVE_COLUMN", "args": {"col": "分類", "to": "right"}}]}
+MOVE = {"plan": [{"op": "MOVE_COLUMN", "args": {"col": "分類"}}]}
 SPLIT = {"plan": [{"op": "SPLIT_CELL", "args": {"col": "分類", "sep": "の"}}]}
-META = {"sheets": ["Sheet"], "headers": {"Sheet": ["分類", "金額"]}}
+META = {"sheets": ["Sheet"], "headers": {"Sheet": ["分類", "金額", "原価"]}}
 
 
 def _book(tmp_path: Path) -> Path:
@@ -38,9 +48,9 @@ def _book(tmp_path: Path) -> Path:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Sheet"
-    ws.append(["分類", "金額"])
-    ws.append(["みかん", 100])
-    ws.append(["ぶどう", 200])
+    ws.append(["分類", "金額", "原価"])
+    ws.append(["みかん", 100, 60])
+    ws.append(["ぶどう", 200, 120])
     wb.save(p)
     wb.close()
     return p
@@ -60,7 +70,10 @@ def _run(monkeypatch, tmp_path, argv_tail, answers, calls):
     monkeypatch.setattr(ailine, "translate_task", _fake_translate(answers, calls))
     book = _book(tmp_path)
     before = book.read_bytes()
-    rc = ailine.main(["run", str(book), "みかんの右に東棟", "--dry", *argv_tail])
+    # ★ 依頼は 2 つの条件を満たすものを実測で選んだ:
+    #   ① 読み直し層が claim しない（「みかんの右に東棟」は 1 セル書換へ直されてしまう）
+    #   ② 位置が機械に解ける（「右へ」は解けず、一致した回まで別の理由で断られる）
+    rc = ailine.main(["run", str(book), "分類の列を末尾に移して", "--dry", *argv_tail])
     return rc, book.read_bytes() == before
 
 
@@ -107,7 +120,7 @@ def test_a_forced_op_is_not_rechecked(monkeypatch, tmp_path, capsys):
     calls = []
     monkeypatch.setattr(ailine, "translate_task_fixed_op",
                         lambda model, op, task, book_meta, **kw:
-                        {"op": "MOVE_COLUMN", "args": {"col": "分類", "to": "right"}})
+                        {"op": "MOVE_COLUMN", "args": {"col": "分類"}})
     _run(monkeypatch, tmp_path, ["--op", "MOVE_COLUMN"], [MOVE, SPLIT], calls)
     assert len(calls) == 0, f"--op 固定なのに素の翻訳を引いた: {len(calls)}"
 
@@ -118,7 +131,7 @@ def test_the_opt_out_is_honored(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setenv("AILINE_SINGLE_READ", "1")
     monkeypatch.setattr(ailine, "translate_task", _fake_translate([MOVE, SPLIT], calls))
-    ailine.main(["run", str(_book(tmp_path)), "みかんの右に東棟", "--dry"])
+    ailine.main(["run", str(_book(tmp_path)), "分類の列を末尾に移して", "--dry"])
     assert len(calls) == 1
 
 
@@ -159,6 +172,40 @@ def test_same_head_op_offers_no_false_choice(capsys):
 
 
 # --- 配線 ----------------------------------------------------------------------------------
+
+def test_the_machine_deciding_for_itself_beats_the_split(monkeypatch, tmp_path, capsys):
+    """★★ 実機 4 本を落とした形: 読み直し層が計画を決め直した回は、割れても断らない。
+
+    ★ 「原価の右に備考の列を追加して」は生の翻訳が 85% セル分割（実測）だが、
+      task_asks_to_add_a_column が依頼文だけで軸を決めて列追加へ直す ── そこでは
+      モデルが何を返そうと結果は同じで、断ると**動く機能をコイン投げの断りに変える**。
+    """
+    calls = []
+    split = {"plan": [{"op": "SPLIT_CELL", "args": {"col": "原価", "sep": "-"}}]}
+    monkeypatch.setattr(ailine, "translate_task_fixed_op",
+                        lambda model, op, task, book_meta, **kw:
+                        {"op": "ADD_COLUMN", "args": {"name": "備考"}})
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.delenv("AILINE_SINGLE_READ", raising=False)
+    monkeypatch.setattr(ailine, "translate_task",
+                        _fake_translate([split, {"plan": [{"op": "ADD_COLUMN",
+                                                            "args": {"name": "備考"}}]}], calls))
+    book = _book(tmp_path)
+    rc = ailine.main(["run", str(book), "原価の右に備考の列を追加して", "--dry"])
+    out = capsys.readouterr().out
+    assert len(calls) == 2, f"2 回読んでいない: {len(calls)}"
+    assert "読み方が分かれました" not in out, (
+        "★ 機械が列追加へ決め直したのに断っている（動く機能を潰す）: " + out)
+    assert rc != 3, out
+
+
+def test_the_reread_layer_reports_whether_it_decided():
+    """★ 第 3 の戻り値が在ること ── ここが消えると受け皿が判定を書き写す側へ戻る。"""
+    from _product_source import count_in_product
+    assert count_in_product("_reread_the_plan(") == 2, "★ 定義 1 + 呼び出し 1 でない"
+    assert count_in_product("_machine_decided") == 2, (
+        "★ 読み直し層の『自分で決めたか』が受け皿へ渡っていない")
+
 
 def test_both_translation_call_sites_are_wired():
     """★★ 片配線を作らない ── 翻訳の呼び口は 2 つ（1 冊の run と N 冊の run）。両方が呼ぶ。
