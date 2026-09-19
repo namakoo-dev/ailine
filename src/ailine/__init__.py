@@ -14159,7 +14159,15 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         # ★★ 人の選択は尊重する ── 別の op へ**黙って読み直さない**。
         #   ただし「1 行を指す依頼」を列ぜんぶ書き換える op で実行するのは、
         #   画面に出した「こう読みました」と結果が食い違う ── 断って選び直させる。
-        if plan_writes_beyond_one_cell([{"op": forced_op}]) and task_quotes_a_value(a.task):
+        # ★★ 2026-09-19（導通試験の最初の本物）: ここは `plan_writes_beyond_one_cell` で
+        #   絞っていたが、その集合には**行や列を足すだけの op**（行追加・行挿入・列追加・
+        #   合計追加・セル分割）も入る ── 9 op 中 5 つで「その列のデータ行を全部書き換えます」
+        #   という文言が**事実と違う**まま出ていた。
+        #   ★ 実害: 案 D が「行追加 か 行挿入か」を選ばせた後、示した道（--op ADD_ROW）を
+        #     歩くとこの断りに当たり、**通らない道を示した**ことになっていた（path_fails）。
+        #   ★ 絞りは宣言から取る ── 既存の列を書き換えると自分で言っている op だけ。
+        if (_op_writes(forced_op, WRITE_EXISTING_COLUMN)
+                and task_quotes_a_value(a.task)):
             _pts = task_points_at_one_row(a.task, book_meta, target_sheet)
             if _pts:
                 print(f"？ {_pts}が、『{OP_LABELS[forced_op]}』は"

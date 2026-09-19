@@ -122,10 +122,18 @@ def test_a_forced_op_skips_every_reread():
 
 def test_pointing_at_one_row_with_a_column_wide_op_is_refused():
     """★ ④: 人が『一括書換』を選んでも、依頼が 1 行を指しているなら断る
-       （画面に出した読みと結果が食い違う唯一の道を塞ぐ）。"""
-    seg = window_around('forced_op = getattr(a, "op", None)', after=1600)
-    assert "plan_writes_beyond_one_cell" in seg and "task_points_at_one_row" in seg, seg[:400]
-    assert "1セル書換" in seg, "選び直す先を名指ししていない"
+       （画面に出した読みと結果が食い違う唯一の道を塞ぐ）。
+
+    ★★ 2026-09-19: ここは絞りの**関数名**（plan_writes_beyond_one_cell）で縛っていたが、
+      その門は「行や列を足すだけの op」まで含み、9 op 中 5 つに**事実と違う文言**
+      （「その列のデータ行を全部書き換えます」）を出していた。宣言で絞り直した日に
+      この番人が赤くなった ── 守っている不変は同じなので、**意味で縛る**形へ直す:
+      「1 行を指す依頼」を「既存列を書き換える op」で実行しない、という 3 つの部品。
+    """
+    seg = window_around('forced_op = getattr(a, "op", None)', after=1800)
+    assert "task_points_at_one_row" in seg, seg[:400]        # 依頼が 1 行を指すか
+    assert "WRITE_EXISTING_COLUMN" in seg, seg[:400]          # その op は既存列を書き換えるか
+    assert "1セル書換" in seg, "選び直す先を名指ししていない"  # 通る道を示すか
 
 
 # --- ⑤ 画面（薄い殻のまま）-------------------------------------------------------------

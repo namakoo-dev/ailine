@@ -81,7 +81,8 @@
    "escape": false,
    "example": false,
    "why": "dangerous",
-   "unlock": "無い ── 列ぜんぶを黙って書き換えないための線。動かさない"
+   "unlock": "無い ── 列ぜんぶを黙って書き換えないための線。動かさない（why=dangerous）",
+   "note": "★ 2026-09-19（導通試験の最初の本物）: 断る**範囲**を直した。旧版は plan_writes_beyond_one_cell で絞っており、行や列を足すだけの op（行追加・行挿入・列追加・合計追加・セル分割＝9 op 中 5 つ）にまで「その列のデータ行を全部書き換えます」という**事実と違う文言**を出していた。案 D が示した道（--op ADD_ROW）を歩くとここに当たり、**通らない道を示した**ことになっていた。いまは WRITE_EXISTING_COLUMN を宣言する op だけ。★ 断り自体は危険側のまま（unlock は無い）── 直したのは誤爆であって線ではない。番人 tests/test_a_forced_op_refusal_tells_the_truth.py・実機の導通は tests/test_the_row_below_is_below.py"
   },
   "_translate_and_dispatch#5": {
    "text": "同じ軸に位置を作る段が 2 つ以上ある計画は実行しない（too_many_placements）",

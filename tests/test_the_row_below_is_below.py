@@ -114,12 +114,21 @@ def test_it_really_lands_below_on_real_libreoffice(tmp_path):
         ws.append(r)
     wb.save(book)
 
-    r = subprocess.run(
-        [sys.executable, "-m", "ailine", "run", str(book),
-         "北斗精機の行の下に、取引先「西村工業」の行を追加して、項目は事務机、"
-         "件数は2、単価は15000にして", "--copy", "--sheet", "請求", "--timeout", "300"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
-        env={**os.environ, "PYTHONPATH": str(repo / "src")})
+    argv = [sys.executable, "-m", "ailine", "run", str(book),
+            "北斗精機の行の下に、取引先「西村工業」の行を追加して、項目は事務机、"
+            "件数は2、単価は15000にして", "--copy", "--sheet", "請求", "--timeout", "300"]
+    env = {**os.environ, "PYTHONPATH": str(repo / "src")}
+    r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=900, env=env)
+    # ★★ 2026-09-19（揺れの受け皿・案 D）: この依頼は読みが割れる ── 実測の差分:
+    #     読み 1（行追加）      A5: みどり建設 → 西村工業   ＝ 値が入る
+    #     読み 2（行挿入→行追加）A5: みどり建設 → (空)      ＝ 空行が挿さる
+    #   冊に起きることが本当に違うので、製品は**書く前に止めて候補を示す**（正しい）。
+    #   ★ 示された道を歩いて到達すれば、それも到達（導通）── 試験の側が
+    #     「1 回引いた読みで実行する」前提だったのを直す。
+    if r.returncode == 3 and f"{ailine.CHOICE_PREFIX}ADD_ROW" in r.stdout:
+        r = subprocess.run(argv + ["--op", "ADD_ROW"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=900, env=env)
     assert r.returncode == 0, r.stdout[-800:]
     assert "行を 2 回足そう" not in r.stdout, r.stdout[-800:]
     out = openpyxl.load_workbook(book.with_name(book.stem + ".out.xlsx"))["請求"]
