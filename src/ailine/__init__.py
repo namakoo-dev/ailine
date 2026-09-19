@@ -13797,6 +13797,81 @@ def _answer_before_asking(a: argparse.Namespace, book: Path, book_meta: dict,
     return False
 
 
+#: 2 回目の読みを**引かない**先頭 op ── どれも行動しない（聞き返す／断る／退避）。
+#: 検知器が守るのは行動なので、行動しない回に 3 秒足しても何も守れない。
+_NON_ACTING_OPS = frozenset({"CLARIFY", "OUT_OF_VOCAB", "FREEFORM"})
+
+#: OP_LABELS に無い読みの、人向けの言い方（op 名は人が知らない）。
+_READING_LABELS = {"CLARIFY": "聞き返す", "OUT_OF_VOCAB": "できないと断る",
+                    "FREEFORM": "自由生成へ退避する"}
+
+
+def plan_ops(translation) -> tuple:
+    """翻訳の結果を『op の並び』へ畳む（後方互換の {"op": ...} 形も受ける）。"""
+    plan = translation.get("plan") if isinstance(translation, dict) else None
+    if not isinstance(plan, list) or not plan:
+        plan = [translation] if isinstance(translation, dict) and translation.get("op") else []
+    return tuple(str((s or {}).get("op") or "") for s in plan if isinstance(s, dict))
+
+
+def describe_reading(translation) -> str:
+    """読み方を人の語で 1 行に（「列移動」「行挿入 → 聞き返す」）。"""
+    return " → ".join(OP_LABELS.get(op) or _READING_LABELS.get(op) or op
+                       for op in plan_ops(translation)) or "（読めなかった）"
+
+
+def recheck_translation(model: str, task: str, book_meta: dict, first: dict):
+    """同じ依頼を**もう一度**翻訳し、読み方（op の並び）が分かれたら 2 回目を返す。
+
+    ★★ なぜ在るか（2026-09-19・Namakoo「揺れだと判定できるかどうかも重要だ」→「1で
+      設計して実装してほしい」）: HEAD を固定して同じ依頼を 40 回振ったら、
+
+          みかんの右に東棟    列移動 75% ／ セル分割 25%
+          担当者に分類して    集計 87.5% ／ ピボット 12.5%
+
+      **まったく違う操作が、同じ依頼に 4 回に 1 回返る。**しかもその割合は日によって動く
+      （別の走行では セル分割 9/10 だった ── p=0.25 なら確率 0.003%）。
+      ★ だから開発側で検体を足しても出荷後の挙動は保証できない。**走行時に自分で気づく**
+        しかない。連続 2 回は独立だと実測した（食い違い 45%・独立なら 35.9%）ので、
+        2 回目を引けば揺れる依頼では 22〜38% で鳴る。易しい依頼は 200 走行で揺れ 0 ──
+        そこでは鳴らず、3 秒だけ払う（Namakoo「応答速度より信頼性を取りたい」）。
+
+    ★ 比べるのは **op の並びだけ**。引数は見ない ── CLARIFY の質問文は毎回言い回しが
+      変わる（生応答 4/10）ので、引数まで見ると聞き返しで誤爆する。
+    ★ 1 回目が行動しない読み（聞き返す／断る／退避）なら引かない（守る行動が無い）。
+    ★ `AILINE_SINGLE_READ=1` で切れる（速度を取りたい人・試験用）。
+    ★ これは受け皿であって治療ではない ── 揺れそのものは消えない。
+    """
+    if os.environ.get("AILINE_SINGLE_READ") == "1":
+        return None
+    ops1 = plan_ops(first)
+    if not ops1 or ops1[0] in _NON_ACTING_OPS:
+        return None
+    second = translate_task(model, task, book_meta, temperature=0.1)
+    return second if plan_ops(second) != ops1 else None
+
+
+def _refuse_split_reading(first: dict, second: dict) -> int:
+    """読み方が分かれた回の断り ── 勝手にどちらかで実行しない。選べる形で返す（exit 3）。
+
+    ★ 候補は各読みの**先頭の op**（`--op` は 1 つの op を固定する仕組み）。先頭が同じで
+      段数だけ違う時は候補を出せないので、読み方だけ見せて言い直しを頼む。
+    """
+    print("？ この依頼を 2 回読んだところ、読み方が分かれました "
+          "── どちらかを勝手に選んで実行はしません")
+    print(f"  読み方 1: {describe_reading(first)}")
+    print(f"  読み方 2: {describe_reading(second)}")
+    heads = [plan_ops(first)[:1], plan_ops(second)[:1]]
+    ops = [h[0] for h in heads if h and h[0] in OP_SCHEMA]
+    if len(set(ops)) == 2:
+        print("  片方を選ぶなら、その候補を --op で固定して再実行してください")
+        print(render_choices([(op, f"『{OP_LABELS.get(op, op)}』として実行する")
+                              for op in ops]))
+    else:
+        print("  どちらの意味かが分かるように、言い直してください")
+    return 3
+
+
 def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path,
                              struct_dump: dict, sheets: list) -> int:
     """対象シートが決まった後の残り（見出し行 → 翻訳 → 計画の振り分け）。
@@ -13910,7 +13985,13 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     elif translation is None:
         t0 = progress_start(f"⏳ 翻訳中 ({a.model})…")
         translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
+        # ★★ 2026-09-19: 同じ依頼をもう一度読み、読み方が分かれたら実行しない
+        #   （揺れの受け皿・根拠は recheck_translation の docstring）。
+        #   `--op` で固定した回はこの枝に来ないので、人の選択に別案を当てることはない。
+        _second = recheck_translation(a.model, a.task, book_meta, translation)
         progress_end(t0)
+        if _second is not None:
+            return _refuse_split_reading(translation, _second)
     a._last_translation = translation
 
     plan = translation.get("plan") if isinstance(translation, dict) else None
@@ -16393,6 +16474,10 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     book_meta = {"sheets": [base_sheet], "headers": {base_sheet: base_headers},
                  "header_rows": {base_sheet: header_row}}
     translation = translate_task(a.model, a.task, book_meta, temperature=0.1)
+    # ★ 2026-09-19: 1 冊の run と同じ受け皿（翻訳の呼び口は 2 つ ── 片配線を作らない）。
+    _second = recheck_translation(a.model, a.task, book_meta, translation)
+    if _second is not None:
+        return _refuse_split_reading(translation, _second)
     plan = translation.get("plan") if isinstance(translation, dict) else None
     if plan is None and isinstance(translation, dict) and translation.get("op"):
         plan = [translation]          # ★ 後方互換: "plan" で包まない旧形式

@@ -150,6 +150,7 @@ value _MOVED_ROWS_WHY
 value _NEW_COL_MAKE_TAILS
 value _NEW_COL_TAILS
 value _NEW_SHEET_MENTION_RE
+value _NON_ACTING_OPS
 value _NUMFMT_WORDS
 value _OPS_THAT_SKIP_NON_DATA_ROWS
 value _OP_SCHEMA_NOTES
@@ -163,6 +164,7 @@ value _RATE_LITERAL_RE
 value _RATE_PCT_RE
 value _RATE_SIGNAL_RE
 value _RATE_WARI_RE
+value _READING_LABELS
 value _REMOVAL_WORDS
 value _REPAIR_SCOPE_GUARD
 value _RE_COL_KANJI_NUM
@@ -381,6 +383,7 @@ def _record_misclass_suspect(signal: 'str', task: 'str', plan, book) -> 'None'
 def _record_side_command_history(path_kind: 'str', book: 'Path', task: 'str', out: 'Path | None', ok: 'bool', failure_kind: 'str | None' = None, stamp_out: 'bool' = True) -> 'None'
 def _refuse_edited_output(out: 'Path') -> 'int'
 def _refuse_output_conflict(out: 'Path', mark: 'str | None') -> 'int'
+def _refuse_split_reading(first: 'dict', second: 'dict') -> 'int'
 def _refuse_unresolved_args(a, book, op, raw_args, err) -> 'int'
 def _release_os_lock(fd) -> 'None'
 def _removal_was_declared(op: 'str | None') -> 'bool'
@@ -601,6 +604,7 @@ def date_to_serial(d: 'dt.date') -> 'int'
 class datetime(?)
 def describe_book(path: 'Path') -> 'str'
 def describe_cell_change(before: 'tuple | None', after: 'tuple | None') -> 'str'
+def describe_reading(translation) -> 'str'
 def describe_target_sheet(sheets: 'list', target_sheet: 'str | None', source: 'str') -> 'str | None'
 def describe_the_loss(messages: 'list', prompt_eval_count, num_ctx: 'int') -> 'str'
 def detect_first_column_gap(ws, header_row: 'int' = 1, look_ahead: 'int' = 200) -> 'str | None'
@@ -706,6 +710,7 @@ def placements_in_plan(plan) -> 'dict'
 def plan_chain_sheet_of(op: 'str', resolved: 'dict') -> 'str | None'
 def plan_is_all_giving_up(plan) -> 'bool'
 def plan_only_inserts_a_bare_row(plan) -> 'bool'
+def plan_ops(translation) -> 'tuple'
 def plan_writes_beyond_one_cell(plan) -> 'bool'
 def print_dsl_confirmation(op: 'str', resolved: 'dict', inferred: 'set', task: 'str', *, meta: 'dict', warn_book: 'Path', new_cols: 'list | None', a, deps: 'DslStepDeps', step_prefix: 'str' = '') -> 'DslConfirmResult'
 def progress_end(start: 'float') -> 'None'
@@ -713,6 +718,7 @@ def progress_start(label: 'str') -> 'float'
 def prune_backups(book: 'Path', keep: 'int' = 10, shelf: 'bool' = False) -> 'list'
 def pruned_generations_note(book: 'Path', keep: 'int') -> 'str | None'
 def read_history(path: 'Path | None' = None, max_n: 'int' = 10) -> 'list'
+def recheck_translation(model: 'str', task: 'str', book_meta: 'dict', first: 'dict')
 def redo_last_undo(book: 'Path') -> 'Path'
 def reference_drift_warning(book_meta: 'dict', sheet: 'str | None', *, row_lo: 'int' = 1, row_hi: 'int' = 10000000, col_lo: 'int' = 1, col_hi: 'int' = 10000, rewritten=None, unit: 'str' = '行') -> 'str | None'
 def refuse_if_locked(book: 'Path') -> 'int | None'
