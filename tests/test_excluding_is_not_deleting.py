@@ -121,6 +121,24 @@ def test_it_behaves_on_real_libreoffice(tmp_path, task, keeps_total):
          "--sheet", "売上表", "--timeout", "300"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
         env={**os.environ, "PYTHONPATH": str(repo / "src")})
+    # ★★ 2026-09-20: ここは `returncode == 0` だけを見ており、**製品が持っていない
+    #   決定性**を暗に要求していた。実測: 同じ HEAD ・同じ冊・同じ文で 5 回振って
+    #   **4 回は exit 0、1 回は exit 3**（読みが分かれた断り）だった。
+    #   断った回の二つの読みは**本当に違う**:
+    #       読み 1: 並べ替え → 行削除  （合計行は残る）
+    #       読み 2: 行削除 → 並べ替え  （A5 '合計'→空）
+    #   ★ つまりこれは**検出器が正しく働いた**回であって、退行ではない。
+    #     黙って片方を選ぶのが一番悪い形 ── それを塞ぐために入れた番人だ。
+    #
+    # ★★ だから縛り方を分ける（緑にするために緩めない）:
+    #   ① 硬い契約（どちらの回でも破ってはいけない）: **黙って合計行を消さない**。
+    #   ② 断った回は、**両方の読みを見せて選ばせている**ことまで確かめる
+    #     （合格線②「適切な断り」の形。ただ断って終わりならここは赤いまま）。
+    if r.returncode == 3 and "読み方が分かれました" in r.stdout:
+        assert "読み方 1:" in r.stdout and "読み方 2:" in r.stdout, r.stdout[-800:]
+        assert "--op" in r.stdout, "★ 選び方（通る道）を示していない: " + r.stdout[-800:]
+        assert not book.with_name(book.stem + ".out.xlsx").exists(),             "★ 断ったのに .out を残している（合格線⑤: 1 バイトも書かない）"
+        return
     assert r.returncode == 0, r.stdout[-800:]
     out = openpyxl.load_workbook(book.with_name(book.stem + ".out.xlsx"))["売上表"]
     names = [out.cell(i, 1).value for i in range(1, out.max_row + 1)]
