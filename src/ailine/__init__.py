@@ -11960,10 +11960,67 @@ def machine_free_routes() -> list:
     return [name for name, needs in NEEDS_MACHINE.items() if not needs]
 
 
+def _pyproject_version() -> str | None:
+    """作業木から走っている時の版（`pyproject.toml` が正）。配られた版では None。
+
+    ★ 配られた版（wheel）に pyproject.toml は同梱されない ── 在れば作業木、無ければ配布物。
+    """
+    try:
+        here = Path(__file__).resolve()
+        for up in (2, 3):
+            cand = here.parents[up] / "pyproject.toml"
+            if cand.exists():
+                m = re.search(r'(?m)^version\s*=\s*"([^"]+)"',
+                              cand.read_bytes().decode("utf-8", "replace"))
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _installed_version() -> str | None:
+    """pip が記録している版（インストール記録）。入っていなければ None。"""
+    try:
+        import importlib.metadata as _md
+        return _md.version("ailine")
+    except Exception:
+        return None
+
+
+def version_report() -> tuple:
+    """(ok, 詳細文) ── いま走っている版と、その出所。食い違えば ok=False。
+
+    ★★ なぜ在るか（2026-09-18・盲検 4 体目の汚染から出た唯一の本物）: 買い手に渡した
+      `ailine` が **v0.1.0（古い版）**で、README に在るコマンドが無く 30 分溶けた。
+      こちらは `doctor` を見せて「環境は整っている」と言ったが、**doctor は版を一言も
+      言わなかった**ので、どちらも気づけなかった。
+
+    ★★ 版の正は**実体の在り処で決める** ── 実測（2026-09-19）:
+        作業木から実行中     importlib.metadata は **0.1.1**（インストール側の古い記録）
+        走っているコード      作業木 ＝ pyproject.toml の 0.2.5
+      ★ metadata だけを出すと **doctor が嘘をつく**。だから作業木では pyproject を正とする。
+    ★ 両方在って食い違う回は、**食い違いそのものを言う** ── それが 4 体目の事故の形で、
+      これを言えていれば買い手も俺たちも即座に気づけた。
+    """
+    src, inst = _pyproject_version(), _installed_version()
+    running = src or inst
+    if running is None:
+        return False, "版が分かりません（インストール記録も pyproject.toml も読めません）"
+    if src and inst and src != inst:
+        return False, (f"{src} が走っていますが、インストール記録は {inst} です"
+                       " ── `pip install -e .` で入れ直すと揃います")
+    where = f"作業木 {Path(__file__).resolve().parents[2]}" if src else "インストール済み"
+    return True, f"{running}（{where}）"
+
+
 def doctor_checks(model: str = DEFAULT_MODEL) -> list:
     """(項目名, ok, 詳細/直し方) のリスト。判定ロジックだけを持ち、副作用(print)は
        cmd_doctor 側に置く（テストしやすくするため分離）。"""
     return [
+        # ★ 2026-09-18（盲検 4 体目）: 版は**一番上**に置く ── 買い手が README と
+        #   突き合わせる最初の 1 行であり、渡した側が汚染に気づく唯一の手掛かり。
+        ("ailine 版", *version_report()),
         (f"python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+", *_check_python_version()),
         ("openpyxl", *_check_openpyxl()),
         (f"ollama 到達 ({OLLAMA})", *_check_ollama_reachable()),
@@ -11982,6 +12039,7 @@ def doctor_checks(model: str = DEFAULT_MODEL) -> list:
 #   prefix 一致（name には URL/モデル名など動的な値が混ざるため完全一致にしない）。
 #   ★ ダミー名（テストの "a"/"b" 等）はどれにも一致しないため従来どおり内部名のみ表示する。
 _DOCTOR_BUSINESS_NOTES = (
+    ("ailine 版", "この道具の版です（README の記載と合っているか確かめてください）"),
     (f"python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+", "実行に必要なプログラム言語が使えます"),
     ("openpyxl", "Excel ファイルを読み書きする部品が使えます"),
     ("ollama 到達", "AI エンジン (ollama) に接続できています"),

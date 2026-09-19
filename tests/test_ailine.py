@@ -561,11 +561,13 @@ def test_format_doctor_report_has_failure_and_fix_hint():
     assert all_ok is False
     assert "× b — 直せ" in text
 
-def test_doctor_checks_returns_eight_items():
+def test_doctor_checks_returns_nine_items():
     # ①python ②openpyxl ③ollama ④モデル ⑤LibreOffice ⑥basrun.py ⑦demo/
     # ★ W10a 項目2: ⑧既定動作の告知（原本直接・v2〜）を追加。
+    # ★ 2026-09-19（盲検 4 体目 ⑥）: ⑨ ailine 版 を**先頭**に追加。
+    #   古い版が入ったまま渡され、doctor が版を一言も言わず 30 分溶けた事故の直し。
     results = ailine.doctor_checks()
-    assert len(results) == 8
+    assert len(results) == 9
     for name, ok, detail in results:
         assert isinstance(name, str)
         assert isinstance(ok, bool)
