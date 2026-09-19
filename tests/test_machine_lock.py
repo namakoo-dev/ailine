@@ -88,8 +88,13 @@ def test_the_prepush_script_runs_the_machine_tests_through_the_key():
     text = (REPO / "scripts" / "pre-push.sh").read_text(encoding="utf-8")
     # ★ 物差しの失敗を 1 件: 最初は本文全体の出現位置で測り、冒頭のコメントの「-m local」を
     #   拾って赤くなった。**起動している行だけ**を見る（説明文は起動ではない）。
+    # ★★ 2026-09-20: 起動行を `-m local` の**字面**で探していたが、重い 1 本を daily へ
+    #   移した日に `-m "local and not daily"` へ変わって**探せなくなった**（赤くなった）。
+    #   守る不変は同じ「実機を走らせる行は鍵を通す」── 印の名前でなく **-m と pytest**
+    #   が在る起動行を見る（説明文は起動ではないのでコメント行は外す）。
     runs = [ln for ln in text.splitlines()
-            if not ln.lstrip().startswith("#") and "pytest" in ln and "-m local" in ln]
+            if not ln.lstrip().startswith("#") and "pytest" in ln and "-m " in ln
+            and "local" in ln]
     assert runs, "★ pre-push が実機テストを走らせていない"
     for ln in runs:
         assert "machine_lock.py" in ln, f"★ 鍵を通さずに実機テストを起動している: {ln.strip()}"

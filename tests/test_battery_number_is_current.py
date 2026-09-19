@@ -226,8 +226,16 @@ def test_the_matrix_record_names_how_it_was_measured():
 
 
 @pytest.mark.local
+@pytest.mark.daily
 def test_the_matrix_record_still_matches_the_machine():
-    """② 記録 vs 実測（実物の LLM と LibreOffice が要る・13 分ほど掛かる）。"""
+    """② 記録 vs 実測（実物の LLM と LibreOffice が要る）。
+
+    ★★ 2026-09-20 に daily へ移した。実測で **2147 秒（35.8 分）** かかり、
+      push 全体 65 分の **55%** を 1 本で占めていた（Namakoo「走行が長い」→「日次でいい」）。
+      pre-push は `-m "local and not daily"` を走らせるので、push は 65 分 → 29 分になる。
+    ★ 外すだけだと**誰も測らなくなる**ので、下の「記録が古くなっていない」が
+      measured_on を見て赤くする ── 在っても鳴らない、を作らない。
+    """
     r = subprocess.run(
         [sys.executable, str(REPO / "bench" / "basic_ops_matrix.py")],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -365,3 +373,21 @@ def test_without_a_center_the_guard_falls_back_to_the_recorded_triple():
     rec = dict(_matrix())
     rec.pop("tolerance_center", None)
     assert _tolerance_center(rec) == rec["intended"]
+
+def test_the_matrix_record_is_not_stale():
+    """★★ 日次へ移した数字が**古くならない**こと（2026-09-20）。
+
+    ★ matrix の実測は 35.8 分かかるので push のたびには走らせない（daily 印）。
+      だが外すだけだと「誰も測らなくなる」── この repo が何度も踏んだ
+      「在っても鳴らない」を、外した本人が作ることになる。
+    ★ だから**記録の日付**を見る。7 日を越えたら赤にして、日次を回すよう促す。
+      ★ 7 日の根拠: 毎日は現実的でなく、2 週間だと README に出る数字が古くなりすぎる。
+        走らせ方は `pytest -m daily`（実機ロックを取ること）。
+    """
+    import datetime
+    on = _matrix().get("measured_on")
+    assert on, "★ matrix の記録に measured_on が無い"
+    days = (datetime.date.today() - datetime.date.fromisoformat(on)).days
+    assert days <= 7, (
+        f"★ matrix の実測が {days} 日前（{on}）── `pytest -m daily` で測り直して "
+        "tests/battery_recorded.json を更新すること")

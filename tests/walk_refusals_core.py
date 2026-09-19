@@ -223,6 +223,24 @@ ORDER = ["path_fails", "vague", "no_path", "未調査", "未記入", "引き金�
          "walked", "by_design"]
 
 
+def broken_paths(survey_fn=None) -> list:
+    """★★ 通らない道を示している断り ── **2 回歩いて再現したものだけ**返す。
+
+    ★ 2026-09-20（前夜に偽の赤を踏んだ）: 盤は道を歩く時に LibreOffice を使うので、
+      実機が過負荷だと道が歩けず path_fails と誤判定する（その回だけ赤く、空いた環境では
+      0 件だった）。機械ロックを見る形は使えないと実装して確かめた ── conftest が
+      AILINE_HOME をテストごとに差し替えるのでテストからロックが見えず、しかもロックを
+      握られていても盤は歩けた（ロックは作法の取り決めで soffice を排他していない）。
+    ★ だから 1 回の失敗では断定しない。判定はここ 1 箇所に置く（番人が書き写さない）。
+    """
+    run = survey_fn or survey
+    first = [r for r in run() if r["verdict"] == "path_fails"]
+    if not first:
+        return []
+    again = {r["key"] for r in run() if r["verdict"] == "path_fails"}
+    return [r for r in first if r["key"] in again]
+
+
 def render(rows: list) -> str:
     from collections import Counter
     c = Counter(r["verdict"] for r in rows)
@@ -252,7 +270,8 @@ def main(argv=None) -> int:
     rows = survey()
     print(json.dumps(rows, ensure_ascii=False, indent=1) if a.json else render(rows))
     # ★ path_fails が在る回だけ落とす ── vague/no_path は在庫であって赤ではない。
-    return 1 if any(r["verdict"] == "path_fails" for r in rows) else 0
+    #   ★ 判定は broken_paths 1 箇所（再現したものだけ）。ここで書き写さない。
+    return 1 if broken_paths(lambda: rows) else 0
 
 
 if __name__ == "__main__":

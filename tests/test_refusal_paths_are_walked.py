@@ -31,9 +31,32 @@ def test_no_refusal_shows_a_path_that_does_not_work():
 
     ★ ここが赤くなったら、買い手に嘘の案内をしている（返金の話に直結する形）。
     """
-    bad = [r for r in walk.survey() if r["verdict"] == "path_fails"]
-    assert not bad, "★ 通らない道を示している:\n" + "\n".join(
+    bad = walk.broken_paths()
+    assert not bad, "★ 通らない道を示している（2 回とも）:\n" + "\n".join(
         f"  {r['key']}: {r['detail']}\n    画面: {r.get('screen','')[:120]}" for r in bad)
+
+
+def test_a_one_off_failure_is_not_called_a_broken_path():
+    """★★ 再現しない失敗を赤にしないこと（前夜の偽の赤の直し）。
+
+    ★ いま path_fails は 0 件なので、「1 回で赤／2 回で赤」の違いが**実データでは出ない**
+      ── 変異試験がそこを緑で通した（2026-09-20）。だから偽の結果を注入して直接縛る。
+    """
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        v = "path_fails" if len(calls) == 1 else "walked"
+        return [{"key": "★対照", "verdict": v, "detail": "偽", "screen": ""}]
+
+    assert walk.broken_paths(flaky) == [], "★ 1 回だけの失敗を『通らない道』と断定している"
+    assert len(calls) == 2, f"★ 2 回歩いていない: {len(calls)}"
+
+
+def test_a_repeated_failure_is_called_a_broken_path():
+    """★ 逆側: 2 回とも出たら、ちゃんと赤にすること（緩めすぎていない）。"""
+    always = lambda: [{"key": "★対照", "verdict": "path_fails", "detail": "偽", "screen": ""}]
+    assert walk.broken_paths(always), "★ 再現した失敗を見逃している"
 
 
 def test_the_tool_can_actually_report_a_broken_path():
@@ -82,6 +105,47 @@ def test_every_walkable_refusal_keeps_its_trigger_fresh():
     stale = [r for r in walk.survey() if r["verdict"] == "引き金が引けない"]
     assert not stale, "★ 断りが出なくなった検体がある（検体を直すこと）:\n" + "\n".join(
         f"  {r['key']}: {r['detail']}" for r in stale)
+
+
+def test_the_pass_line_and_the_board_do_not_drift():
+    """★★ 合格線の 3 条目が「歩いて確かめる」と言う以上、盤が無ければ**文書が嘘**になる。
+
+    ★ 2026-09-19 に 3 条目を書き換えた（Namakoo GO）。条が指す道具と、その道具が
+      実際に出す verdict の語が、文書と機械でずれないことを縛る。
+    ★ 導通率は**合格条件ではない**（実測で決めた: 買い手が導入を断る理由として名指しした
+      5 件はすべて「嘘の到達」で、導通は 1 件も入っていない）。本質は path_fails が 0。
+    """
+    doc = (REPO / "docs" / "FROZEN-20260917-盲検の合格線.md").read_bytes().decode("utf-8")
+    assert "その道が通ることを機械で歩いて確かめてある" in doc, "★ 3 条目が書き換わっていない"
+    # ★ 道具を指す箇所は**条の表**と**説明**の 2 つ。片方だけ消えても気づくよう数で縛る
+    #   （1 箇所しか見ていない番人は、もう片方を消す変異を緑で通した・2026-09-19）。
+    assert doc.count("scripts/walk_refusals.py") == 2, (
+        f"★ 条が指す道具の記載が 2 箇所でない: {doc.count('scripts/walk_refusals.py')}")
+    assert "path_fails" in doc, "★ 本質（通らない道を示さない）が文書に出ていない"
+    # ★★ verdict の顔ぶれは**両方向で**縛る（2026-09-19・変異試験が 2 度穴を指した）:
+    #   ① 初版は文書側の 5 語しか見ておらず、「未調査」を道具から落とす変異が緑で通った
+    #   ② 次は walk.ORDER を回したが、**道具から語を減らすと検査そのものが緩む**
+    #      （空集合を回して常に真＝恒真の形）── だから顔ぶれを凍結して突き合わせる。
+    VERDICTS = {"path_fails", "vague", "no_path", "未調査", "未記入",
+                "引き金が引けない", "walked", "by_design"}
+    assert set(walk.ORDER) == VERDICTS, (
+        f"★ 道具の verdict の顔ぶれが変わった: {sorted(set(walk.ORDER) ^ VERDICTS)} "
+        "── 文書（合格線）と一緒に動かすこと")
+    for word in VERDICTS:
+        assert word in doc, f"★ verdict が文書に無い: {word}"
+
+
+def test_the_rate_is_recorded_but_not_a_threshold():
+    """★ 導通率で合否を決めていないこと ── 落ちるのは path_fails が在る回だけ。
+
+    ★ ここが閾値判定に変わると、買い手が一度も不満を言っていない理由で不合格になる。
+    """
+    import inspect
+    body = inspect.getsource(walk.main)
+    assert "broken_paths(" in body, "★ 合否の根拠が『再現した path_fails』でない"
+    judge = inspect.getsource(walk.broken_paths)
+    assert '"path_fails"' in judge, "★ 判定が path_fails を見ていない"
+    assert "walked" not in judge.split("return")[-1], "★ 件数や率で合否を決めている疑い"
 
 
 def test_the_inventory_is_visible():

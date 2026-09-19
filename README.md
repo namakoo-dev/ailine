@@ -271,13 +271,26 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q -m "not local"
 ```
 
-期待: 全件緑（<!-- TOTAL_TESTS -->5013<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
+期待: 全件緑（<!-- TOTAL_TESTS -->5018<!-- /TOTAL_TESTS --> 本のうち、実機（LibreOffice /
 ollama）が要るものは `-m "not local"` が自動的に外します。外れた本数は実行結果の
 `deselected` に出ます）。
 ★ 総数は `tests/test_local_test_count.py` が実測と突き合わせています ──
 文書の数字を、人の記憶で守らないためです。実機側の本数は
 [docs/ENGINEERING.md](docs/ENGINEERING.md) に 1 箇所だけ置いて機械が守っています
 （同じ数を 2 箇所に書くと、片方だけ古くなるからです）。
+
+★ 実機のテストは 2 つに分かれています。
+**push のたびに走るもの**（`-m "local and not daily"`・104 本）と、
+**日次で回すもの**（`-m daily`・1 本）です。
+
+```bash
+# 日次（245 件の検体で精度を測り直す・35 分ほど）
+PYTHONPATH=src python scripts/machine_lock.py --what daily -- python -m pytest tests -q -m daily
+```
+
+分けた理由は、この 1 本だけで push 全体（65 分）の **55%** を占めていたからです。
+外した数字が古くならないよう、記録の日付が **7 日**を越えると
+`-m "not local"` の側が赤くなります（測らなくなるのを防ぐためです）。
 
 B. 実機で確かめられること（LibreOffice + ollama が要る・「5. セットアップ」の後で）
 

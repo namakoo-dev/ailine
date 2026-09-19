@@ -29,7 +29,12 @@ echo "▶ pre-push: 実機テスト(-m local)を走らせます（CI では走�
 #   実測: 単独なら soffice は 1 個のまま 84 passed。2 本同時で 49 個・F が 20 件（本物の赤は 0）。
 #   同じ家系を 1 日 4 回踏んだので「気をつける」をやめて手順を機械にした。
 #   ★ 鍵が取れなければ **push を止める**（fail closed ── 上の「走らせられなかった時も止める」と同じ線）。
-PYTHONPATH=src python scripts/machine_lock.py --what "pre-push の実機テスト" --     python -m pytest tests -q -m local
+# ★★ 2026-09-20: daily（1 本で 30 分超）は毎 push では走らせない。実測で matrix が
+#   2147 秒 ＝ push 全体 65 分の 55% を 1 本で占めていた（Namakoo「走行が長い」→「日次でいい」）。
+#   ★ 外した数字が腐らないよう、記録の measured_on が 7 日を越えたら
+#     tests/test_battery_number_is_current.py が**素の環境で**赤くする（在っても鳴らない、を作らない）。
+#   ★ 日次は `PYTHONPATH=src python scripts/machine_lock.py --what daily -- python -m pytest tests -q -m daily`。
+PYTHONPATH=src python scripts/machine_lock.py --what "pre-push の実機テスト" --     python -m pytest tests -q -m "local and not daily"
 rc=$?
 if [ $rc -eq 2 ]; then
     echo "" >&2
