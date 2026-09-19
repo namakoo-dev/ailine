@@ -64,10 +64,31 @@ def _fake_translate(answers: list, calls: list):
     return fake
 
 
-def _run(monkeypatch, tmp_path, argv_tail, answers, calls):
+def _fake_preview(previews: list):
+    """下書き当ての偽物（単体では LibreOffice を回さない）。
+
+    ★ 差分は**計画の op の並び**で決める ── 同じ op なら同じ差分、違えば違う差分。
+      エンジンの外の op（CLARIFY 等）は本物と同じく None（測れない）。
+    """
+    def fake(a, book, source_book, book_meta, plan):
+        ops = tuple(str((s or {}).get("op") or "") for s in plan)
+        previews.append(ops)
+        if any(o not in ailine.CODEGEN_BY_OP for o in ops):
+            return None
+        # ★ 現実に寄せる: 同じ op を続けて 2 回当てても冊は 1 回分しか変わらない
+        #   （列を末尾へ 2 回移す → 2 回目は空振り）。本物の証明は実機の
+        #   tests/test_two_readings_are_compared_on_the_book.py が LibreOffice で行う。
+        key = tuple(dict.fromkeys(ops))
+        return ("＊変更: " + "+".join(key),)
+    return fake
+
+
+def _run(monkeypatch, tmp_path, argv_tail, answers, calls, previews=None):
     monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.delenv("AILINE_SINGLE_READ", raising=False)
     monkeypatch.setattr(ailine, "translate_task", _fake_translate(answers, calls))
+    monkeypatch.setattr(ailine, "preview_plan_changes",
+                        _fake_preview(previews if previews is not None else []))
     book = _book(tmp_path)
     before = book.read_bytes()
     # ★ 依頼は 2 つの条件を満たすものを実測で選んだ:
@@ -171,6 +192,89 @@ def test_same_head_op_offers_no_false_choice(capsys):
     assert "言い直して" in out
 
 
+# --- 案 D: 宣言でなく実体（冊の差分）で比べる ---------------------------------------------------
+
+def test_readings_that_change_the_book_the_same_way_are_one_reading(monkeypatch, tmp_path, capsys):
+    """★★ 案 D の要（実機を 2 度落とした形）: 列移動→列移動 と 列移動 は冊に起きることが同じ。
+
+    ★ 宣言（op の並び）で比べると断り、効果の語彙で比べると粗すぎて素通りする ──
+      両方を下書きに当てて差分で比べれば、書き方が違うだけの同じ読みは**断らずに通る**。
+    """
+    calls, previews = [], []
+    # ★ push3 で実機を落とした形そのもの:「列移動 → 列移動」vs「列移動」。
+    #   読み直し層はこの依頼を claim せず（実測）、畳みで 2 段目が消えて同じ計画になる。
+    two = {"plan": [MOVE["plan"][0], dict(MOVE["plan"][0])]}
+    rc, _ = _run(monkeypatch, tmp_path, [], [two, MOVE], calls, previews)
+    out = capsys.readouterr().out
+    assert "読み方が分かれました" not in out, out
+    assert rc != 3, out
+    assert len(previews) == 2, "両方を下書きに当てていない: " + str(previews)
+
+
+def test_readings_that_change_the_book_differently_stop_with_the_effects(monkeypatch, tmp_path, capsys):
+    """★ 差分が違えば**書く前に**止まり、候補に『冊に起きること』を添える（op 名だけにしない）。"""
+    calls, previews = [], []
+    rc, unchanged = _run(monkeypatch, tmp_path, [], [MOVE, SPLIT], calls, previews)
+    out = capsys.readouterr().out
+    assert rc == 3 and unchanged, out
+    assert len(previews) == 2
+    assert "冊に起きること" in out, "差分の言葉が無い（op 名だけで選ばせている）: " + out
+
+
+def test_an_unmeasurable_reading_falls_to_the_refusing_side(monkeypatch, tmp_path, capsys):
+    """★★ 測れなかった回（None）は**断る側**へ倒す ── 黙って通す方向には倒さない。"""
+    calls = []
+    monkeypatch.setattr(ailine, "HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.delenv("AILINE_SINGLE_READ", raising=False)
+    monkeypatch.setattr(ailine, "translate_task", _fake_translate([MOVE, SPLIT], calls))
+    monkeypatch.setattr(ailine, "preview_plan_changes", lambda *a, **k: None)
+    rc = ailine.main(["run", str(_book(tmp_path)), "分類の列を末尾に移して", "--dry"])
+    out = capsys.readouterr().out
+    assert rc == 3 and "読み方が分かれました" in out, out
+
+
+def test_asking_versus_acting_is_never_reconciled_by_a_preview(monkeypatch, tmp_path, capsys):
+    """★★ 「片方は聞き返し・片方は実行」は下書きでは比べられない ── 必ず止まる。
+
+    ★ 実測（40 回振り）で 8 割は確認を求め 2 割は黙って実行する依頼が在った。
+      黙って実行する側を引いた回にだけ書いてしまうのが、いちばん怖い形。
+    """
+    calls, previews = [], []
+    # ★ 読み 1 は読み直し層が claim しない依頼で**実行に届く**もの（MOVE）にする ──
+    #   INSERT_ROWS だと読み直し層が「入れる値が無い」と自前で断り、割れに届かない。
+    acts = MOVE
+    asks = {"plan": [MOVE["plan"][0], {"op": "CLARIFY", "question": "どの列の右ですか"}]}
+    rc, unchanged = _run(monkeypatch, tmp_path, [], [acts, asks], calls, previews)
+    out = capsys.readouterr().out
+    assert rc == 3 and unchanged, out
+    assert "読み方が分かれました" in out
+
+
+def test_the_preview_never_touches_the_original_or_the_out(tmp_path):
+    """★ 下書き当ては原本にも .out にも触らない ── 工房の中だけで済ませ、消して帰る。"""
+    from _product_source import window_around
+    body = window_around("def preview_plan_changes(", after=3600)
+    assert "run_output_path(" not in body, "★ 下書き当てが .out の場所を使っている"
+    assert "scratch.unlink()" in body, "★ 下書きを消していない"
+    assert "redirect_stdout" in body, "★ 下書き当てが画面に出す（判定の材料が実行に見える）"
+
+
+def test_a_second_reading_that_would_stop_is_a_split(monkeypatch, tmp_path, capsys):
+    """★★ 変異試験が名指しした穴: 2 つ目の読みが**読み直し層で止まる**回は「片方は止まり、
+    片方は実行する」── 黙って実行してはいけない形なので分かれた側へ倒す。
+
+    ★ 読み 2 の INSERT_ROWS は、この依頼文だと読み直し層が「入れる値を依頼文から
+      決められません」と自前で止める（実測）。下書きに当てる前に決まる。
+    """
+    calls, previews = [], []
+    stops = {"plan": [{"op": "INSERT_ROWS", "args": {"at": 3}}]}
+    rc, unchanged = _run(monkeypatch, tmp_path, [], [MOVE, stops], calls, previews)
+    out = capsys.readouterr().out
+    assert rc == 3 and unchanged, out
+    assert "読み方が分かれました" in out, out
+    assert previews == [], "★ 止まる読みを下書きに当てている（比べる前に分かる）: " + str(previews)
+
+
 # --- 配線 ----------------------------------------------------------------------------------
 
 def test_the_machine_deciding_for_itself_beats_the_split(monkeypatch, tmp_path, capsys):
@@ -202,7 +306,8 @@ def test_the_machine_deciding_for_itself_beats_the_split(monkeypatch, tmp_path, 
 def test_the_reread_layer_reports_whether_it_decided():
     """★ 第 3 の戻り値が在ること ── ここが消えると受け皿が判定を書き写す側へ戻る。"""
     from _product_source import count_in_product
-    assert count_in_product("_reread_the_plan(") == 2, "★ 定義 1 + 呼び出し 1 でない"
+    # ★ 案 D で 2 つ目の読みも同じ層を通すようになった: 定義 1 + 呼び出し 2。
+    assert count_in_product("_reread_the_plan(") == 3, "★ 定義 1 + 呼び出し 2 でない"
     assert count_in_product("_machine_decided") == 2, (
         "★ 読み直し層の『自分で決めたか』が受け皿へ渡っていない")
 

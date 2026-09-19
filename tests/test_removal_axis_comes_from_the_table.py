@@ -118,6 +118,16 @@ def test_a_plain_delete_request_reaches_row_deletion(tmp_path):
                         "ナットを削除して", "--copy", "--sheet", "在庫", "--timeout", "120"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
                        cwd=str(repo), env={**os.environ, "PYTHONPATH": str(repo / "src")})
+    # ★★ 2026-09-19（揺れの受け皿・案 D）: 平らな削除依頼にモデルが 2 回に 1 回「列削除」を
+    #   返すことが実測で分かった。読みが割れた回は**書く前に止まり**、候補を示す ──
+    #   その道（--op DELETE_ROWS）を歩いて到達すれば、それも到達（導通）。
+    #   ★ 1 回引いた読みで実行することを前提にしていたのが、この試験の側の古さだった。
+    if p.returncode == 3 and f"{ailine.CHOICE_PREFIX}DELETE_ROWS" in p.stdout:
+        p = subprocess.run([sys.executable, "-m", "ailine", "run", str(src),
+                            "ナットを削除して", "--copy", "--sheet", "在庫", "--timeout", "120",
+                            "--op", "DELETE_ROWS"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           cwd=str(repo), env={**os.environ, "PYTHONPATH": str(repo / "src")})
     assert p.returncode == 0, p.stdout[-500:]
     assert "行削除" in p.stdout, p.stdout[-500:]
 

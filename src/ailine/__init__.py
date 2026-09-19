@@ -47,6 +47,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import re
@@ -13742,7 +13744,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
                 print("  （値と列を言ってください: 例「3行目の下に新品を追加して」"
                        "「みかんの下に梨を追加して。売上は600」）")
                 print("  （空の行が欲しいなら: 例「3行目の下に1行挿入して」）")
-                return plan, 3
+                return plan, 3, _reread_done
 
     # ★★ 2026-09-08（Namakoo「使い方の広い操作に出る不具合が怖い」から辿った）:
     #   「分類ごとの売上を出して」が **4/4 でピボット**になり ✓ を出していた。
@@ -13871,16 +13873,119 @@ def recheck_translation(model: str, task: str, book_meta: dict, first: dict):
     return second if plan_ops(second) != ops1 else None
 
 
-def _refuse_split_reading(first: dict, second: dict) -> int:
+def preview_plan_changes(a: argparse.Namespace, book: Path, source_book: Path,
+                         book_meta: dict, plan: list):
+    """計画を**下書きに当てて**、原本との差分（変更点の行）を返す。判定はしない。
+
+    ★★ なぜ在るか（2026-09-19・Namakoo「C の弱点は不恰好だ」→ 案 D「GOだな」）:
+      2 つの読みが割れた時、**宣言（op の並び）を比べると断りすぎる**:
+          行挿入 → 行追加   vs   行追加        ← 冊に起きることは同じ
+      効果の語彙（OP_WRITE_TARGET）で比べると**粗すぎて素通り**する（実測: 行削除 vs 列削除も
+      「聞く vs 黙って実行」も同じに見えた）。だから**実体を比べる** ── 両方を下書きに当て、
+      冊の差分が同じなら同じ読みとみなす。判定に語彙を 1 つも足さない。冊が答えを出す。
+
+    ★ 測れなかった回は None（段が接地できない／エンジンの外の op／適用に失敗）。
+      呼び出し側は None を「分かれた」側に倒す（黙って通す方向には倒さない）。
+    ★ 画面には何も出さない（確認行も変更点も飲み込む）── これは判定の材料であって実行ではない。
+    ★ 下書きは workdir の中に作り、必ず消す。原本と .out には触れない。
+    """
+    steps = [st for st in (plan or []) if isinstance(st, dict) and st.get("op")]
+    if not steps or any(st["op"] not in CODEGEN_BY_OP for st in steps):
+        return None
+    workdir = book.parent / f".ailine_{book.stem}"
+    workdir.mkdir(exist_ok=True)
+    scratch = workdir / f"_reading_{os.getpid()}_{id(plan)}{source_book.suffix}"
+    sink = io.StringIO()
+    try:
+        shutil.copy2(source_book, scratch)
+        vocab, deps = load_vocab(), _make_dsl_step_deps()
+        header_rows = book_meta.get("header_rows", {}) or {}
+        helpers_dir = Path(a.helpers).resolve() if getattr(a, "helpers", None) else DEFAULT_HELPERS
+        _cat, helper_files = load_helpers(helpers_dir)
+        apply_timeout = a.timeout if getattr(a, "timeout", None) else None
+        use_formula = not getattr(a, "values", False)
+        first_sheet = getattr(a, "_target_sheet", None) or (
+            book_meta["sheets"][0] if book_meta.get("sheets") else None)
+        original_headers = {k: list(v) for k, v in (book_meta.get("headers") or {}).items()}
+        current_meta, lines = book_meta, []
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            for st in steps:
+                op, raw = st["op"], dict(st.get("args") or {})
+                ground = resolve_dsl_step_args(op, raw, a.task, current_meta, vocab,
+                                               original_headers=original_headers,
+                                               first_sheet=first_sheet, deps=deps)
+                if not ground.ok:
+                    return None
+                resolved = ground.resolved
+                sheet = resolved.get("_target_sheet") or first_sheet
+                header_row = header_rows.get(sheet, 1) if sheet else 1
+                code = codegen_dsl(op, resolved, current_meta, use_formula=use_formula)
+                before = snapshot(scratch)
+                r = apply_dsl_step(
+                    op, resolved, code, apply_target=scratch, before=before,
+                    before_charts=before["charts"], before_chart_paths=_chart_paths(scratch),
+                    workdir=workdir, helper_files=helper_files, apply_timeout=apply_timeout,
+                    header_row=header_row, use_formula=use_formula, source_book=source_book,
+                    deps=deps, apply_progress_label="", print_changes=False)
+                if r.runtime_error is not None:
+                    return None
+                lines += list(r.changes or [])
+                current_meta = build_book_meta(scratch, header_rows=header_rows)
+        return tuple(lines)
+    except Exception:
+        return None
+    finally:
+        try:
+            scratch.unlink()
+        except OSError:
+            pass
+
+
+def _readings_agree_on_the_book(a: argparse.Namespace, book: Path, source_book: Path,
+                                book_meta: dict, plan: list, second: dict) -> tuple:
+    """2 つ目の読みも**製品と同じ手順**（読み直し → 畳み）に通し、両方を下書きに当てて比べる。
+
+    戻り値 (agree, diff1, diff2)。agree は True / False / None（測れなかった）。
+    ★ 2 つ目の読みが読み直しで**止まる**（rc あり）なら「片方は止まり片方は実行する」
+      ── これは黙って実行してはいけない形なので False にする。
+    ★ 「聞く vs 黙って実行」（片方に CLARIFY 等）は下書きに当てられないので None → 断る側へ。
+    """
+    plan2 = second.get("plan") if isinstance(second, dict) else None
+    if not isinstance(plan2, list) or not plan2:
+        plan2 = [second] if isinstance(second, dict) and second.get("op") else []
+    sink = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            plan2, rc2, _d2 = _reread_the_plan(a, book_meta, list(plan2))
+            if rc2 is not None:
+                return False, None, None
+            if plan2 and len(plan2) > 1:
+                plan2, _f = fold_identical_steps(plan2)
+    except Exception:
+        return None, None, None
+    d1 = preview_plan_changes(a, book, source_book, book_meta, plan)
+    d2 = preview_plan_changes(a, book, source_book, book_meta, plan2)
+    if d1 is None or d2 is None:
+        return None, d1, d2
+    return d1 == d2, d1, d2
+
+
+def _refuse_split_reading(first: dict, second: dict, effects=None) -> int:
     """読み方が分かれた回の断り ── 勝手にどちらかで実行しない。選べる形で返す（exit 3）。
 
     ★ 候補は各読みの**先頭の op**（`--op` は 1 つの op を固定する仕組み）。先頭が同じで
       段数だけ違う時は候補を出せないので、読み方だけ見せて言い直しを頼む。
+    ★ effects＝(差分1, 差分2) が渡された回は、**冊に起きること**を人の言葉で添える
+      （op 名は人が知らない ── 「＋シート追加: ['集計']」の方が読める）。
     """
     print("？ この依頼を 2 回読んだところ、読み方が分かれました "
           "── どちらかを勝手に選んで実行はしません")
-    print(f"  読み方 1: {describe_reading(first)}")
-    print(f"  読み方 2: {describe_reading(second)}")
+    d1, d2 = (effects or (None, None))[:2] if effects else (None, None)
+    for n, reading, d in ((1, first, d1), (2, second, d2)):
+        print(f"  読み方 {n}: {describe_reading(reading)}")
+        if d:
+            print(f"    → 冊に起きること: {' / '.join(str(x).strip() for x in d[:3])}"
+                  + (" …" if len(d) > 3 else ""))
     heads = [plan_ops(first)[:1], plan_ops(second)[:1]]
     ops = [h[0] for h in heads if h and h[0] in OP_SCHEMA]
     if len(set(ops)) == 2:
@@ -14045,15 +14150,6 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     if _rr_rc is not None:
         return _rr_rc
 
-    # ★★ 2026-09-19（実機 4 本を落として分かった・設計の直し）: 揺れの受け皿は
-    #   **読み直しの後**に置く。生の翻訳を見て断っていた初版は、**製品が正しく扱える
-    #   依頼を断っていた**:
-    #     「原価の右に備考の列を追加して」→ 生の翻訳は **85% が セル分割**（20 回で実測）
-    #      だが `task_asks_to_add_a_column` が依頼文だけで軸を決め、列追加へ直している。
-    #   ★ 機械が自分で決めた回は、モデルが何を返そうと結果は同じ ── 断る理由が無い。
-    #   ★ 判定は書き写さない ── 読み直し層に「自分が決めたか」を言わせる（第 3 の戻り値）。
-    if _second is not None and not _machine_decided:
-        return _refuse_split_reading(translation, _second)
 
     # ★★ 2026-08-30: 中身がまったく同じ段は 1 回にまとめる（連鎖で 2 段目が 1 段目の
     #   出力を食う前に畳む ── 順番が意味を持つ）。黙って畳まず、落とした数を言う。
@@ -14081,6 +14177,24 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             plan, a.task, lambda _op: _op in _OPS_THAT_SKIP_NON_DATA_ROWS)
         if _drop_note:
             print(_drop_note)
+
+    # ★★ 2026-09-19（実機 4 本を落として分かった・設計の直し）: 揺れの受け皿は
+    #   **読み直しと畳みの後**に置く（製品が実際に走らせる計画どうしを比べる ──
+    #   畳みの手前に居た時は、読み 1 は 2 段のまま・読み 2 は畳んだ後、と非対称だった）。生の翻訳を見て断っていた初版は、**製品が正しく扱える
+    #   依頼を断っていた**:
+    #     「原価の右に備考の列を追加して」→ 生の翻訳は **85% が セル分割**（20 回で実測）
+    #      だが `task_asks_to_add_a_column` が依頼文だけで軸を決め、列追加へ直している。
+    #   ★ 機械が自分で決めた回は、モデルが何を返そうと結果は同じ ── 断る理由が無い。
+    #   ★ 判定は書き写さない ── 読み直し層に「自分が決めたか」を言わせる（第 3 の戻り値）。
+    if _second is not None and not _machine_decided:
+        # ★★ 案 D（2026-09-19・Namakoo「GOだな」）: 宣言でなく**実体**を比べる。
+        #   両方を下書きに当てて冊の差分が同じなら、書き方が違うだけの同じ読み ── 通す。
+        #   違うなら**書く前に**止め、候補を冊に起きることの言葉で見せる。
+        #   測れなかった回（None）は断る側へ倒す（黙って通す方向には倒さない）。
+        _agree, _d1, _d2 = _readings_agree_on_the_book(
+            a, book, source_book, book_meta, plan, _second)
+        if _agree is not True:
+            return _refuse_split_reading(translation, _second, effects=(_d1, _d2))
 
     # ★★ 関所（2026-08-29・Namakoo の設計判断）: 同じ軸に位置を作る段が 2 つ以上ある
     #   計画は実行しない。上の読み直しで 1 本に畳めていればここは通る ── 畳めなかった
