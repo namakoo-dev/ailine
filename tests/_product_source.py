@@ -61,6 +61,45 @@ def window_around(anchor: str, after: int = 4000, before: int = 0) -> str:
     i = text.index(anchor)
     return text[max(0, i - before): i + after]
 
+def branch_source(test_snippet: str) -> str:
+    """`if <test_snippet ...>:` の**枝の中身**を丸ごと返す（AST で切る）。
+
+    ★★ なぜ在るか（2026-09-20）: 番人が `window_around(anchor, after=1800)` のように
+      **バイト距離**で窓を切っていると、その枝にコメントを 14 行足しただけで
+      契約が窓から押し出されて赤くなる。守っている不変は 1 文字も変わっていない。
+      ★ 今週 4 件目の「番人を字面（や距離）で書いた」事故 ── 関数名・印の字面・
+        `-m local` の字面に続いて、今度は**窓の広さ**だった。
+    ★ 枝は構文の単位なので、中身が増えても縮んでも同じものを指し続ける。
+
+    ★ 見つからない／2 つ以上あるときは AssertionError（空回りさせない）。
+    """
+    import ast
+    hits, exact = [], []
+    for path in product_files():
+        src = path.read_bytes().decode("utf-8")
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:          # ★ 製品でない断片は読み飛ばす（HTML 混じり等）
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            cond = (ast.get_source_segment(src, node.test) or "").strip()
+            if test_snippet not in cond:
+                continue
+            body = chr(10).join(
+                ast.get_source_segment(src, st) or "" for st in node.body)
+            hits.append(body)
+            if cond == test_snippet.strip():
+                exact.append(body)
+    # ★ 完全一致が在ればそれを採る ── `forced_op` のような短い条件は、それを含む
+    #   別の条件（`forced_op not in OP_SCHEMA` 等）にも当たってしまう。
+    hits = exact or hits
+    assert hits, f"その条件の枝が製品に無い: {test_snippet!r}"
+    assert len(hits) == 1, f"枝が {len(hits)} 箇所ある（1 つに絞れない）: {test_snippet!r}"
+    return hits[0]
+
+
 def product_text() -> str:
     """製品コード全体を 1 つの文字列として返す（★ 「どこかに在るか」を見る用）。
 

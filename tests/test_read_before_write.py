@@ -26,7 +26,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
-from _product_source import product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
+from _product_source import branch_source, product_text, window_around  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
 
 
 def _fresh_env(tmp_path):
@@ -129,8 +129,14 @@ def test_pointing_at_one_row_with_a_column_wide_op_is_refused():
       （「その列のデータ行を全部書き換えます」）を出していた。宣言で絞り直した日に
       この番人が赤くなった ── 守っている不変は同じなので、**意味で縛る**形へ直す:
       「1 行を指す依頼」を「既存列を書き換える op」で実行しない、という 3 つの部品。
+
+    ★★ 2026-09-20: 今度は窓の**広さ**で赤くなった ── 同じ枝にコメントを 14 行足したら
+      契約が `window_around(..., after=1800)` の外へ押し出された。守っている不変は
+      1 文字も変わっていない。★ 今週 4 件目の「番人を字面（や距離）で書いた」事故
+      （関数名・印の字面・`-m local` の字面・そして窓の広さ）。
+      ★ だから **枝そのもの**を AST で切って見る ── 中身が増減しても同じ所を指す。
     """
-    seg = window_around('forced_op = getattr(a, "op", None)', after=1800)
+    seg = branch_source("forced_op")
     assert "task_points_at_one_row" in seg, seg[:400]        # 依頼が 1 行を指すか
     assert "WRITE_EXISTING_COLUMN" in seg, seg[:400]          # その op は既存列を書き換えるか
     assert "1セル書換" in seg, "選び直す先を名指ししていない"  # 通る道を示すか

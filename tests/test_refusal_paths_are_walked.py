@@ -89,6 +89,46 @@ def test_a_specimen_that_stopped_triggering_is_not_counted_as_walked():
     assert got["verdict"] == "引き金が引けない", got
 
 
+def test_a_busy_machine_is_not_called_a_broken_path():
+    """★★ 測れなかった回を「通らない道」と言わないこと（2026-09-20）。
+
+    ★ 出所: 別の走行が実行ロックを握っている間に盤を回したら、**10 件が一度に**
+      `path_fails` になった。画面は全部「別の ailine が実行中です」＝ exit 6。
+      道の良し悪しは一切測れていないのに、盤は「通らない道を示した」と主張していた。
+    ★ 2 回歩く形では防げない（ロックは数分握られたまま）。読むのは製品の終了コード。
+    ★ pytest 側は conftest が AILINE_HOME を差し替えるので**緑のまま**だった ──
+      盤が**走らせ方によって別の答えを出す**、より悪い形。だからここで直接縛る。
+
+    ★ 対照は **6 を直に書く** ── `walk.BUSY` を使うと、定数を変える変異に対照が
+      ついて回って必ず緑になる（恒真。変異試験が実際にそれを指した）。
+      6 は製品が宣言している番号なので、下の試験で宣言と突き合わせる。
+    ★ 引き金の側と道の側を**別々に**測る ── 片方ずつ塞ぐ。まとめて塞ぐと、
+      残った片方が拾ってしまい、どちらを消しても緑になる（これも変異試験が指した）。
+    """
+    spec = {"kind": "book", "plan": [{"op": "CLARIFY", "question": "？"}],
+            "task": "いい感じにして", "path": {"kind": "example", "task": "けい線を引いて"}}
+    real = walk._run
+    for where, codes in (("引き金", [6, 0]), ("道", [3, 6])):
+        seq = list(codes)
+        walk._run = lambda *a, **k: (seq.pop(0), "× 別の ailine が実行中です（pid=1）")
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                got = walk.walk_one("★対照", {"walk": spec}, Path(td))
+        finally:
+            walk._run = real
+        assert got["verdict"] == "歩けなかった", (where, got)
+
+
+def test_the_busy_code_is_the_one_the_product_declares():
+    """★ 盤が見ている番号が、製品の宣言（終了コードの表）と同じであること。
+
+    ★ 数を 2 箇所に持つと片方だけ動く ── だから**宣言の側**と突き合わせる。
+    """
+    assert walk.BUSY == 6, walk.BUSY
+    doc = (REPO / "docs" / "ENGINEERING.md").read_bytes().decode("utf-8")
+    assert "| 6 | 並行実行の拒否 |" in doc, "★ 終了コードの宣言が動いた（盤の BUSY を合わせること）"
+
+
 def test_the_verdict_is_never_written_in_the_register():
     """★★ 恒真殺し: 台帳に verdict を書かない ── 歩いた結果から決める。"""
     reg = walk.load_register()
@@ -126,8 +166,10 @@ def test_the_pass_line_and_the_board_do_not_drift():
     #   ① 初版は文書側の 5 語しか見ておらず、「未調査」を道具から落とす変異が緑で通った
     #   ② 次は walk.ORDER を回したが、**道具から語を減らすと検査そのものが緩む**
     #      （空集合を回して常に真＝恒真の形）── だから顔ぶれを凍結して突き合わせる。
+    #   ③ 2026-09-20 に `歩けなかった` が増えた（機械が塞がっていた回を path_fails と
+    #     読んでいた ── 測れなかったのに「通らない」と主張していた形）。
     VERDICTS = {"path_fails", "vague", "no_path", "未調査", "未記入",
-                "引き金が引けない", "walked", "by_design"}
+                "引き金が引けない", "walked", "by_design", "歩けなかった"}
     assert set(walk.ORDER) == VERDICTS, (
         f"★ 道具の verdict の顔ぶれが変わった: {sorted(set(walk.ORDER) ^ VERDICTS)} "
         "── 文書（合格線）と一緒に動かすこと")

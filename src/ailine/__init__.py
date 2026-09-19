@@ -175,7 +175,8 @@ from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run �
 from ailine_core import csv_export   # ★ CSV_EXPORT: `ailine export-csv`（検疫の逆方向）の本体
 from ailine_core import date_compare   # ★ EXTRACT の日付範囲比較（台帳 DATE_RANGE_AGG の正体）
 from ailine_core import split_cell   # ★ SPLIT_CELL: 1セルの複数値を右の列へ割る（台帳2件）
-from ailine_core.examples import render_example_line, replace_examples_in_question  # ★ 導線に出す例は実測で通るものだけ
+from ailine_core.examples import (DEFAULT_SUGGESTIONS, render_example_line,  # ★ 導線に出す例は実測で通るものだけ
+                                  render_examples_for, replace_examples_in_question)
 from ailine_core.op_axes import AXES, judge_axis, render_axis_ambiguity, render_axis_refusal  # ★ 軸の上でまだ扱えないものを宣言する
 from ailine_core import pdf_export   # ★ PRINT/EXPORT_DOC: `ailine export-pdf`（台帳4件）
 from ailine_core.date_compare import (   # noqa: F401  ← 試験と呼び出し側が ailine. で引く
@@ -8792,6 +8793,41 @@ def render_refusal(op: str, resolved_or_args, reason: str) -> list:
     lines.append("  読み方そのものが違うなら、言い直してください（頼める操作の一覧: ailine ops）")
     return lines
 
+
+def _print_clarify_exit(question: str, ops=None) -> None:
+    """★★ 聞き返しの行き止まりに、**そのまま打てる文**を置く（2026-09-20）。
+
+    ★★ 出所（導通の盤が vague と判定した 3 件のうち 2 件 ── 本と フォルダ の聞き返し）:
+      行き止まりに置いてあったのは「（頼める操作の一覧: ailine ops）」だけだった。
+      一覧は**操作の名前**の並びであって、**そのまま打てる依頼文**ではない。
+      買い手は「一覧を見ても、この依頼が通る形が分からない」ところで止まる ──
+      合格線の 3 条目（通る道を示す）を満たしていない。
+
+    ★ 機械は通る文を持っている（`examples.py`・実機の番人が毎回打って確かめている）。
+      在るのに、この 2 つの行き止まりだけが使っていなかった ── 器官は在るが配線が無い形。
+
+    ★ 質問文が既に「（例: …）」を持つ回は足さない ── `replace_examples_in_question` が
+      そこへ実測の例を入れてある。同じものを 2 度見せない。
+
+    ★★ なぜ 1 関数か: 同じ判断を 2 箇所に書くと片方だけ直る（この repo が何度も踏んだ）。
+      フォルダ側に渡す op は **`OP_META` の folder 宣言から導く** ── 手書きの対応表を
+      作らない（ずれる表を持たない）。
+    """
+    if "（例" not in (question or ""):
+        examples = render_examples_for(ops or DEFAULT_SUGGESTIONS, limit=3)
+        if examples:
+            print("  そのまま打てます: " + "／".join(examples))
+    # ★ 行き止まりに出口を置く（盲検査定 A: 語彙外の依頼を 4 回言い直して 4 回とも
+    #   質問返しになり「普通の購入検討者ならここで評価を終える」）。聞き返しは
+    #   「言い方が悪い」と「そもそも対応していない」を区別できない ── 区別する手段を添える。
+    print("  （頼める操作の一覧: ailine ops）")
+
+
+def _folder_example_ops() -> list:
+    """フォルダで通る op（例を出す先）。★ 宣言が唯一の出どころ ── 手で並べない。"""
+    return [op for op, meta in OP_META.items() if (meta or {}).get("folder")]
+
+
 def _refuse_unresolved_args(a, book, op, raw_args, err) -> int:
     """引数が解けなかった断りを画面に出し、**台帳にも残して** exit 3 を返す。
 
@@ -14147,8 +14183,23 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         fixed = translate_task_fixed_op(a.model, forced_op, a.task, book_meta)
         progress_end(t0)
         if not fixed:
+            # ★★ 2026-09-20（導通の盤が vague と判定した 3 件の 1 つ）: 旧版は
+            #   「対象の列や値が書かれているか確かめてください」とだけ言い、**何が足りないか**を
+            #   名指ししていなかった ── 人は自分の書き方の何を直せばいいか分からない。
+            #   ★ 機械は OP_SCHEMA でその op が要る項目を知っている。言えるのに言っていなかった。
+            #   ★ 通る例も既に在る（ailine_core/examples.py）── 文面を発明せず、その 1 箇所を使う。
+            #   ★ 人が読む名前は _CONFIRM_FIELDS（op ごとの (表示名, 鍵, 整形) の組）が正。
+            #   ★★ 表示名を持たない鍵は**出さない** ── `values` のような内部の鍵を見せても
+            #     人には伝わらない（実測で該当するのは ADD_ROW の values だけ）。
+            #     第三の対応表を作らず、言える分だけ言う。全部言えない回は項目を並べない。
+            _shown = {k: n for n, k, _f in (_CONFIRM_FIELDS.get(forced_op) or ())}
+            _need = ([_shown[f] for f in OP_SCHEMA[forced_op]]
+                     if all(f in _shown for f in OP_SCHEMA[forced_op]) else [])
             print(f"？ 『{OP_LABELS[forced_op]}』として読み取れませんでした"
-                   "（依頼文に、対象の列や値が書かれているか確かめてください）")
+                  + (f"（この操作には {('・'.join(_need))} が要ります）" if _need else ""))
+            _ex = render_example_line(forced_op, OP_LABELS.get(forced_op))
+            if _ex:
+                print(_ex)
             return 3
         _fargs = dict(fixed.get("args") or {})
         # ★ 人が固定した回でも、**依頼文から機械が読める事実**は足す（A' 原則）。
@@ -14292,11 +14343,9 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             #   （「太字にする」→「対象『all』は 太字 では未対応です」）。
             question = replace_examples_in_question(question)
             print(f"？ {question}")
-            # ★ 行き止まりに出口を置く（盲検査定 A の実測: 語彙外の依頼を 4 回言い直して
-            #   4 回とも質問返しになり「普通の購入検討者ならここで評価を終える」）。
-            #   聞き返しは「言い方が悪い」場合と「そもそも対応していない」場合を
-            #   区別できない ── 区別する手段を毎回そえる。
-            print("  （頼める操作の一覧: ailine ops）")
+            # ★★ 2026-09-20: 出口は `_print_clarify_exit` 1 箇所に畳んだ（フォルダ側と同じ形）。
+            #   旧版はここで一覧だけを出しており、**そのまま打てる文**が無かった。
+            _print_clarify_exit(question)
             # ★★ 2026-09-05: ここは**行き止まり**なのに台帳に残っていなかった。
             #   語彙外（234 件）とどちらが多いのかが分からず、「属性の問いは 1% に効く」
             #   のような数字を、見えていない分母の上で言うことになっていた。
@@ -16698,8 +16747,13 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     step = plan[0] if isinstance(plan[0], dict) else {}
     op = str(step.get("op") or "")
     if len(plan) == 1 and op == "CLARIFY":
-        print(f"？ {step.get('question') or '確認が必要です'}")
-        print("  （頼める操作の一覧: ailine ops）")
+        # ★★ 2026-09-20: ここは `replace_examples_in_question` すら呼んでいなかった
+        #   ── 本の経路は呼んでいたので、**同じ判断の片配線**（この repo が何度も踏んだ形）。
+        #   ★ フォルダで通るのは抽出だけ ── 見せる例も `OP_META` の folder 宣言から導く。
+        _q = replace_examples_in_question(
+            step.get("question") or "確認が必要です", ops=_folder_example_ops())
+        print(f"？ {_q}")
+        _print_clarify_exit(_q, ops=_folder_example_ops())
         return 3
     if len(plan) != 1 or not OP_META.get(op, {}).get("folder"):
         return _run_folder_refuse(op, len(plan))

@@ -130,7 +130,7 @@
    "escape": false,
    "example": false,
    "why": "ambiguous",
-   "unlock": "★ 未調査 ── 聞き返しの中身がどれだけ『聞けば決まる』形かを数えていない",
+   "unlock": "★ 2026-09-20: 行き止まりに**そのまま打てる文**を置いた（`_print_clarify_exit`）。旧版は『頼める操作の一覧: ailine ops』だけで、一覧は操作の**名前**の並びであって依頼文ではなかった。例は examples.py（実機の番人が毎回打って確かめている）から出す。★ 残る在庫は『聞き返しの中身がどれだけ聞けば決まる形か』を数えていないこと。",
    "walk": {
     "kind": "book",
     "plan": [
@@ -141,11 +141,18 @@
     ],
     "task": "いい感じにして",
     "path": {
-     "kind": "none"
+     "kind": "example",
+     "from": "message",
+     "plan": [
+      {
+       "op": "DRAW_BORDERS",
+       "args": {}
+      }
+     ]
     },
-    "why": "★ 一覧を見ても、この依頼が通る形は分からない",
-    "inventory": "★ 在庫（vague）: 聞き返しに『一覧』しか添えていない ── その依頼が通る形を示していない"
-   }
+    "why": "★ 断りが掲げた『そのまま打てます』の先頭の文をそのまま歩く"
+   },
+   "note": "★ example=False は**測り方の限界**（この print の文字列に「例:」が無いだけ）── 実際は examples.py の器官から通る文を見せており、導通の盤が walked と判定している。指標を広げて True にするのは、例を見せていない断りまで True にする過大報告になるのでしない。"
   },
   "_translate_and_dispatch#2": {
    "text": "そんな操作はありません: 『…』（一覧: ailine ops）",
@@ -189,16 +196,16 @@
    }
   },
   "_translate_and_dispatch#3": {
-   "text": "『…』として読み取れませんでした（依頼文に、対象の列や値が書かれているか確かめてください）",
+   "text": "『…』として読み取れませんでした（この操作には 対象の行・対象列 が要ります）",
    "escape": false,
    "example": false,
    "why": "ambiguous",
-   "unlock": "★ 未調査 ── 何が読み取れなかったのかを名指ししていない。③④で直したのと同じ形が残っている疑い",
+   "unlock": "★ 2026-09-20 に**何が足りないか**を名指しするよう直した（OP_SCHEMA が要る項目を知っていて、_CONFIRM_FIELDS が人の語を持っているのに、この断りだけが使っていなかった── 器官は在るが配線が無い形）。★ 残る在庫は**例が無い op**（実測 13/30）── 例が在る op では通る書き方まで示せる。番人 tests/test_a_forced_op_says_what_is_missing.py",
    "walk": {
     "kind": "book",
     "argv_extra": [
      "--op",
-     "SET_CELL_VALUE"
+     "EXTRACT"
     ],
     "plan": [
      {
@@ -210,11 +217,26 @@
     ],
     "task": "なにかして",
     "path": {
-     "kind": "none"
+     "kind": "example",
+     "from": "message",
+     "argv_extra": [
+      "--op",
+      "EXTRACT"
+     ],
+     "plan": [
+      {
+       "op": "EXTRACT",
+       "args": {
+        "col": "金額",
+        "cmp": "gte",
+        "value": 1000
+       }
+      }
+     ]
     },
-    "why": "★ 何が読み取れなかったのかを名指ししていない（vague の筆頭候補）",
-    "inventory": "★ 在庫（vague・筆頭）: 『読み取れませんでした』が**何を**読み取れなかったかを名指ししていない"
-   }
+    "why": "★ 断り文が示した『こう頼めます』の文をそのまま歩く"
+   },
+   "note": "★ 旧版は「依頼文に、対象の列や値が書かれているか確かめてください」とだけ言い、何が読み取れなかったのかを名指ししていなかった（導通の盤が vague と判定した 3 件の筆頭）。 ★ example=False は**測り方の限界**（この print の文字列に「例:」が無いだけ）── 実際は examples.py の器官から通る文を見せており、導通の盤が walked と判定している。指標を広げて True にするのは、例を見せていない断りまで True にする過大報告になるのでしない。"
   },
   "_translate_and_dispatch#4": {
    "text": "『…』はその列のデータ行を**全部**書き換えます。1 か所だけ直すなら『1セル書換』を選んでください",
@@ -322,7 +344,7 @@
    "escape": false,
    "example": false,
    "why": "ambiguous",
-   "unlock": "★ 未調査",
+   "unlock": "★ 2026-09-20: フォルダ側の聞き返しも出口を持つようにした。ここは`replace_examples_in_question` すら呼んでいなかった（本の経路は呼んでいた ── 同じ判断の片配線）。見せる例は OP_META の folder 宣言から導く（実測で EXTRACT のみ）。",
    "walk": {
     "kind": "folder",
     "plan": [
@@ -333,11 +355,22 @@
     ],
     "task": "いい感じにして",
     "path": {
-     "kind": "none"
+     "kind": "example",
+     "from": "message",
+     "plan": [
+      {
+       "op": "EXTRACT",
+       "args": {
+        "col": "金額",
+        "cmp": "gte",
+        "value": 100
+       }
+      }
+     ]
     },
-    "why": "★ 一覧を見ても、この依頼が通る形は分からない（vague/no_path の候補）",
-    "inventory": "★ 在庫（vague）: フォルダの聞き返しも一覧だけ ── フォルダで通る形（抽出）を示していない"
-   }
+    "why": "★ フォルダで通る形（抽出）の例を掲げるようになった ── その文を歩く"
+   },
+   "note": "★ example=False は**測り方の限界**（この print の文字列に「例:」が無いだけ）── 実際は examples.py の器官から通る文を見せており、導通の盤が walked と判定している。指標を広げて True にするのは、例を見せていない断りまで True にする過大報告になるのでしない。"
   },
   "cmd_run_folder#2": {
    "text": "比較の語が 2 つあります／否定（辞書が ambiguous を返した理由をそのまま）",

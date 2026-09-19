@@ -6,13 +6,22 @@
   機械が **escape（逃げ道の語が本文に在る）/ example（例が在る）** しか見ていなかった。
   **その道が通るか**は誰も確かめていない ── 今日ずっと潰してきた「宣言 vs 実体」の隙間。
 
-★★ 判定は 5 つ（Namakoo 承認・2026-09-19）:
+★★ 判定の芯は 5 つ（Namakoo 承認・2026-09-19）:
 
     walked      示した道を歩いたら着いた
     by_design   意図して行き止まり（パスの打ち間違い等・unlock が「無い」）
     vague       ★ 理由が粗くて道を示せていない（直せる見込みが高い）
     no_path     本当に道が無い（機能・語彙が無い）
     path_fails  ★★ 歩いたが着かなかった ── **通らない道を示した**（最悪）
+
+  ★ 測れなかった回を**別に持つ**（判定と混ぜない ── 見ていないものを見たことにしない）:
+
+    未調査        この器では歩けない（2 冊と実表が要る等）
+    未記入        歩き方を台帳に書いていない
+    引き金が引けない  断りが出ずに到達した（検体が古い ── 直すのは検体の側）
+    歩けなかった   ★★ 機械が塞がっていた（exit 6）── 2026-09-20 に足した。
+                 旧版はこれを path_fails と読み、**測れなかったのに「通らない」と
+                 主張していた**（一度に 10 件が偽の赤）。
 
   ★ `path_fails` は `no_path` より重い。道が無いのは不足だが、通らない道を示すのは誤情報。
   ★ 道具を作る前に 1 件を手で歩いた時点で `path_fails` が 1 件出ている
@@ -118,9 +127,25 @@ def _run(argv: list, plan, second=None) -> tuple:
     return rc, buf.getvalue()
 
 
+#: ★ 製品が「ここに通る書き方を並べる」と宣言している行の頭（`examples.py` 側の文面）。
+_EXAMPLE_LINES = ("そのまま打てます:", "はこう頼めます:", "（例:", "（例：")
+
+
 def _example_in(text: str) -> str | None:
-    """断り文が見せている「通る書き方」を取り出す（『…』か「…」の中で、依頼文らしいもの）。"""
+    """断り文が見せている「通る書き方」を取り出す。
+
+    ★★ 2026-09-20 の直し: 旧版は**画面じゅうの「…」を語で当てて**拾っていた。
+      だから製品が例として掲げた行が増えると、拾う文が黙って別のものに変わる
+      （盤の判定が製品の文面の並びに依存する ── 番人を字面で書いた形）。
+    ★ いまは**例として掲げた行**を先に見つけ、その行の先頭の「…」を取る。
+      掲げた行が無い回だけ、昔のやり方に落ちる（後方互換）。
+    """
     import re
+    for line in text.splitlines():
+        if any(h in line for h in _EXAMPLE_LINES):
+            m = re.search(r"「([^」]{4,60})」", line)
+            if m:
+                return m.group(1)
     for m in re.finditer(r"[『「]([^』」]{6,60})[』」]", text):
         s = m.group(1)
         if any(w in s for w in ("抜き出", "並べ替え", "追加", "にして", "消して", "入れて")):
@@ -182,6 +207,11 @@ def walk_one(key: str, entry: dict, root: Path) -> dict:
 
     rc, out, base = _trigger(w, root)
     _LAST_SCREEN[0] = out
+    if rc == BUSY:
+        # ★★ 2026-09-20: 引き金すら引けていない ── 断りが出たのではなく機械が塞がっていた。
+        #   rc != 0 で「断りが出た」と数えると、その先の判定が全部この上に乗る。
+        return {"key": key, "verdict": "歩けなかった",
+                "detail": "機械が塞がっていて引き金が引けない（exit 6）", "screen": out[-160:]}
     if rc == 0:
         return {"key": key, "verdict": "引き金が引けない",
                 "detail": "断りが出ずに到達した（検体が古い）", "screen": out[-200:]}
@@ -196,6 +226,9 @@ def walk_one(key: str, entry: dict, root: Path) -> dict:
     rc2, out2 = _walk_path(w, path, base, root)
     if rc2 is None:
         return {"key": key, "verdict": "vague", "detail": out2, "screen": out.strip()[-160:]}
+    if rc2 == BUSY:
+        return {"key": key, "verdict": "歩けなかった",
+                "detail": "道の途中で機械が塞がっていた（exit 6）", "screen": out2.strip()[-160:]}
     if rc2 == 0:
         return {"key": key, "verdict": "walked",
                 "detail": f"道を歩いて到達（{path.get('kind')}）"}
@@ -219,8 +252,14 @@ def survey() -> list:
     return rows
 
 
-ORDER = ["path_fails", "vague", "no_path", "未調査", "未記入", "引き金が引けない",
-         "walked", "by_design"]
+#: ★ 製品が「機械が塞がっている」と言う終了コード（別の ailine が実行中）。
+#:   ★★ 2026-09-20: ロックの**ファイルを見る**形は使えないと実装して確かめた
+#:     （conftest が AILINE_HOME を差し替えるのでテストからは見えない）。
+#:     ここは**製品自身の終了コード**を読む ── 走らせ方によらず同じ答えになる。
+BUSY = 6
+
+ORDER = ["path_fails", "vague", "no_path", "未調査", "歩けなかった", "未記入",
+         "引き金が引けない", "walked", "by_design"]
 
 
 def broken_paths(survey_fn=None) -> list:

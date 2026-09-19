@@ -19,6 +19,7 @@ value DEFAULT_HELPERS
 value DEFAULT_KEEP_BACKUPS
 value DEFAULT_MODEL
 value DEFAULT_REFS
+value DEFAULT_SUGGESTIONS
 value DEFAULT_VOCAB_MAX_ENTRIES
 value DEFAULT_VOCAB_MAX_TERM_LEN
 class DslStepDeps(format_confirmation_line: 'Callable', maybe_warn_header_col_mismatch: 'Callable', maybe_warn_target_overwrite: 'Callable', interpretation_summary_line: 'Callable', confirm_overwrite_or_gate: 'Callable', basrun_apply: 'Callable', stop_office: 'Callable', snapshot: 'Callable', why_output_is_unusable: 'Callable', diff_snapshots: 'Callable', run_postcondition: 'Callable', progress_start: 'Callable', progress_end: 'Callable', pivot_caveat: 'str', verify_dsl_args: 'Callable', apply_new_column_fallback: 'Callable', build_advisories: 'Callable', structural_advisories: 'Callable', unrequested_new_sheet_advisory: 'Callable', classify_subject_provenance: 'Callable | None' = None, sheet_conflict_gate: 'Callable | None' = None) -> None
@@ -289,6 +290,7 @@ def _flush_pending_sheet_announce(a: 'argparse.Namespace') -> 'None'
 def _fmt_amount(v) -> 'str'
 def _fmt_cell_value(v) -> 'str'
 def _fmt_elapsed(seconds: 'float') -> 'str'
+def _folder_example_ops() -> 'list'
 def _format_extract_value(value) -> 'str'
 def _format_offending_records(parsed, header_offset: 'int', rec_indices: 'list', col_idx: 'int') -> 'str'
 def _formula_columns_without_values(path: 'Path', header_row: 'int', headers: 'list') -> 'set'
@@ -346,6 +348,7 @@ def _pid_alive(pid: 'int', expect_image: 'str | None' = None) -> 'bool'
 def _prepare_book_for_print(src: 'Path', dst: 'Path', sheet: 'str', orientation=None, fit_to_width: 'bool' = False, keep_only_sheet: 'bool' = False) -> 'None'
 def _preview_and_run_on_alternative_sheet(a: 'argparse.Namespace', conflict) -> 'int'
 def _preview_dsl_plan(a: 'argparse.Namespace', plan: 'list', book_meta: 'dict', vocab: 'dict', book_name: 'str') -> 'list'
+def _print_clarify_exit(question: 'str', ops=None) -> 'None'
 def _pruned_marker_path(book: 'Path') -> 'Path'
 def _pyproject_version() -> 'str | None'
 def _rate_explained(value: 'float', task: 'str', vocab: 'dict') -> 'bool'
@@ -747,6 +750,7 @@ def render_basic_block(header: 'str', code: 'str', step_prefix: 'str' = '', show
 def render_choices(choices) -> 'str'
 def render_code_block(header: 'str', code: 'str', step_prefix: 'str' = '') -> 'list'
 def render_example_line(op: 'str | None', label: 'str | None' = None) -> 'str | None'
+def render_examples_for(ops, labels: 'dict | None' = None, limit: 'int' = 3) -> 'list'
 def render_excluded_lines(excluded: 'dict') -> 'list'
 def render_folder_routes(subcommands, multi) -> 'list'
 def render_forms_report(folder_label: 'str', out_label: 'str', result: 'dict') -> 'list'
