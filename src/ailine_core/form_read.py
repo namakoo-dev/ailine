@@ -130,6 +130,31 @@ def _looks_like_org(text: str) -> bool:
     return any(k in t for k in _CORP)
 
 
+#: ★★ **組織にしか付かない**敬称（2026-09-20・盲検 4 体目 ②）。
+#:   「様」は人に付くが、「御中」は人に付かない ── 日本語の商習慣の硬い規則。
+#:   ★ だから「御中」のセルは、**そのセルが組織を指している**という証拠そのもの。
+#:     法人格（株式会社…）が書かれていなくても、屋号ならそれが宛先の名前になりうる。
+_ORG_ONLY_HONORIFIC = ("御中",)
+
+#: 組織の**下部組織**を表す語尾。★ ここで終わるなら、組織の名前はその上に在る。
+#:   ★ 2026-09-18 の案 A（敬称が付けば名前）は、ここを見なかったので「総務課 御中」を
+#:     宛先として採り、**225 冊が悪化**した。元の規則（敬称セルが部署なら上を見る）は
+#:     正しかった ── 足りなかったのは「部署か、組織そのものか」の見分けだけ。
+_SUBUNIT_SUFFIX = ("部", "課", "室", "係", "支店", "営業所", "センター", "本部",
+                   "事業部", "事業所", "工場", "局", "科", "チーム", "グループ", "班")
+
+
+def _looks_like_subunit(text: str) -> bool:
+    """組織の**下部組織**の名前か（『経理部』『総務課』）。★ 語尾だけで見る。
+
+    ★ ここは語彙なので**漏れる** ── 「購買 御中」のような語尾の無い部署は拾えない。
+      漏れた時に出るのは誤値なので、`_ORG_ONLY_HONORIFIC` と**併せてしか**使わない
+      （敬称が組織を指していない限り、この判定は走らない）。
+    """
+    t = norm(text)
+    return any(t.endswith(norm(s)) for s in _SUBUNIT_SUFFIX)
+
+
 #: 名前の行ではないと分かる語。★ その行は連絡先・役割であって、社名そのものではない。
 #: ★ 敬称（御中・様）はここに入れない ── 宛先の側では**敬称の付いた行こそが名前**。
 #:   請求元の側で敬称つきを避けたいなら、呼ぶ前に弾く（read_issuer がそうしている）。
@@ -172,7 +197,7 @@ def is_placeholder(name: str) -> bool:
     return all(ch in _PLACEHOLDER for ch in body)
 
 
-def clean_org_name(raw) -> tuple:
+def clean_org_name(raw, honorific_says_org: bool = False) -> tuple:
     """1 セルの中身から**組織の名前**を取り出す。★ 名前を作る道はここ 1 本だけ。
 
     ★★ なぜ 1 本に畳むか（2026-09-11、一度も測っていない実物の雛形 15 冊で踏んだ）:
@@ -189,6 +214,14 @@ def clean_org_name(raw) -> tuple:
     #   守りが二重になり、片方を壊しても緑のままになる（番人が何も見なくなる）。
     #   実測: 敬称の扱いを 3 か所に重ねていて、どれを壊しても試験が通った。
     lines = [ln for ln in name_lines(raw) if _looks_like_org(ln)]
+    if not lines and honorific_says_org:
+        # ★★ 2026-09-20（盲検 4 体目 ②）: 「御中」は**組織にしか付かない**ので、
+        #   法人格が書かれていなくても、その行は組織の名前になりうる（屋号）。
+        #   ★ ただし**下部組織**（総務課・経理部）は除く ── 組織の名前はその上に在る。
+        #     2026-09-18 の案 A はここを見ずに 225 冊を悪化させた。
+        #   ★ 呼び出し側が「この敬称は組織を指す」と言った時だけ走る ── 請求元の側では
+        #     走らない（あちらは敬称の付いた行を先に弾いている）。
+        lines = [ln for ln in name_lines(raw) if not _looks_like_subunit(ln)][:1]
     if not lines:
         return "", "組織の名前の行が見つかりません（連絡先や役割の行だけです）"
     name = lines[0]
@@ -697,7 +730,9 @@ def read_addressee(grid: Grid) -> Record:
         if not any(h in raw for h in _HONORIFIC):
             continue
         # ★ 名前を作るのは `clean_org_name` 一本（プレースホルダの番人もその中）
-        name, why = clean_org_name(raw)
+        #   ★ 「御中」なら**そのセルが組織を指している**と伝える（2026-09-20・②）。
+        name, why = clean_org_name(
+            raw, honorific_says_org=any(h in raw for h in _ORG_ONLY_HONORIFIC))
         if name:
             evid.append(Evidence(rule="敬称と同じセル", value=name, at=t.at,
                                  how=f"{t.at} の「{raw[:18]}」から敬称を除いた"))
