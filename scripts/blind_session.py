@@ -27,6 +27,13 @@ import blind_session_core as core  # noqa: E402
 SHELF = Path.home() / ".claude" / "projects" / "C--Windows-system32" / "library-blind"
 
 
+def cmd_check(a) -> int:
+    """★ 買い手に渡す前の環境確認 ── 「設定した」でなく「効いている」を測る。"""
+    rows = core.check(a.name)
+    print(core.render_check(a.name, rows))
+    return 0 if all(ok for _k, ok, _t in rows) else 1
+
+
 def _load(name: str) -> tuple:
     d = core.CORPUS / name
     data = json.loads((d / "requests.json").read_bytes().decode("utf-8"))
@@ -114,6 +121,9 @@ def main(argv=None) -> int:
     p.add_argument("name")
     p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_prepare)
+    p = sub.add_parser("check", help="買い手に渡す前に、環境が効いていることを測る")
+    p.add_argument("name")
+    p.set_defaults(fn=cmd_check)
     p = sub.add_parser("freeze", help="セッション後に依頼文と冊を固める")
     p.add_argument("name")
     p.set_defaults(fn=cmd_freeze)

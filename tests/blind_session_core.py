@@ -130,7 +130,11 @@ def prepare(name: str, force: bool = False) -> list:
         "  継承されておらず『環境を整えてある』が嘘になりました）:",
         "",
         f'    $env:AILINE_HOME = "{home}"',
-        '    $env:AILINE_TRACE = "1"',
+        # ★★ 2026-09-20: AILINE_TRACE は**フラグではなくパス**（製品は開いて追記する）。
+        #   初版は "1" を渡しており、買い手のカレントに `1` という名のファイルを作っていた
+        #   ── 「環境を整えてある」がまた嘘になるところだった（4 体目の汚染 2 と同じ形）。
+        #   ★ 見つけたのは `check`（この道具自身の環境確認）。設定した、で終わらせない。
+        f'    $env:AILINE_TRACE = "{d / "argv.jsonl"}"',
         "",
         "★ 買い手に渡すのは README だけ。src/ tests/ bench/ docs/ は見せません。",
     ]
@@ -286,3 +290,134 @@ def shelf_node(name: str, results: list, v: dict, meta: dict) -> str:
             f"- 合格線: `{REPO / 'docs' / 'FROZEN-20260917-盲検の合格線.md'}`",
             "", "関連: [[blind-how-we-score]]", ""]
     return "\n".join(out)
+
+
+# ── 環境確認 ────────────────────────────────────────────────────────────────
+#
+# ★★ なぜ在るか（4 体目の汚染 1・2 ── どちらもこちらの落ち度）:
+#   ・入っていた `ailine` が古く、買い手は「README に在るコマンドが無い」で **30 分**溶かした
+#   ・`AILINE_TRACE` が買い手のシェルに継承されておらず、「環境を整えてある」が嘘になった
+#   ★ どちらも「設定したつもり」で止まっていた。**効いていることを測る**装置にする
+#     （この repo の古い線: 設定≠動く／直した≠反映／調べた≠確かめた）。
+
+
+def readme_commands() -> set:
+    """README が買い手に打たせるサブコマンド（`ailine <語>`）。"""
+    text = (REPO / "README.md").read_bytes().decode("utf-8")
+    return set(re.findall(r"ailine ([a-z][a-z-]+)", text))
+
+
+def parser_commands() -> set:
+    """製品が実際に持つサブコマンド ── **argparse から導く**（手で並べない）。"""
+    sys.path.insert(0, str(REPO / "src"))
+    import ailine as _a
+    import argparse as _ap
+    out = set()
+    for act in _a.build_parser()._actions:
+        if isinstance(act, _ap._SubParsersAction):
+            out |= set(act.choices)
+    return out
+
+
+def _count_lines(p: Path) -> int:
+    if not p.exists():
+        return 0
+    return len([l for l in p.read_text(encoding="utf-8").splitlines() if l.strip()])
+
+
+def check(name: str, run_fn=None) -> list:
+    """買い手に渡す前の環境確認 ── 各項は **(鍵, ok, 一行)** を返す。
+
+    ★★ 鍵を持たせる理由（2026-09-20）: 初版は (ok, 一行) だけで、番人は一行の**文面**から
+      鍵を切り出していた。赤い回は文面が変わるので、番人が拾えなくなる ──
+      今週 5 件目の「番人を字面で書いた」形。**鍵は機械が持つ**（文面は人向け）。
+
+    ★★ 測る順は「渡す前に潰せる順」── 版 → README → 隔離 → 控え → 前提。
+    ★ 3 番目と 4 番目は**実際に 1 回走らせて**確かめる。設定を読んで安心しない。
+    """
+    d = CORPUS / name
+    home = d / "home"
+    trace = d / "argv.jsonl"
+    rows = []
+
+    # ① 版 ── 作業木と導入済みが揃っているか（4 体目はここで 30 分溶けた）
+    v = _version_line()
+    rows.append(("版", v.startswith("✓"), f"版: {v[:110]}"))
+
+    # ② README が言うコマンドが**実際に在る**か（買い手が最初に触るのは README だけ）
+    missing = sorted(readme_commands() - parser_commands())
+    rows.append(("README", not missing,
+                 "README のコマンド: 全部在る" if not missing
+                 else f"★ README に在って製品に無い: {missing}"))
+
+    if not home.exists():
+        rows.append(("未用意", False, f"★ 先に prepare を走らせてください（{home} が無い）"))
+        return rows
+
+    # ③④ 実際に 1 回走らせて、隔離と控えが**効いている**ことを見る
+    #   ★ 買い手が使う**その設定のまま**打つ（別の器で確かめても、その設定の証拠にならない）。
+    #   ★★ ただし測定が対象を汚さないよう、**終わったら元のバイトに戻す** ──
+    #     戻さないと、この試し打ちが冊の無い依頼として corpus に混ざる（実測で気づいた）。
+    hist = home / "history.jsonl"
+    default_home = Path.home() / ".ailine" / "history.jsonl"
+    keep = {f: (f.read_bytes() if f.exists() else None) for f in (hist, trace)}
+    before_here, before_default = _count_lines(hist), _count_lines(default_home)
+    before_trace = _count_lines(trace)
+    try:
+        ok_run, tail = (run_fn or _probe)(home, trace)
+        after_here, after_default = _count_lines(hist), _count_lines(default_home)
+        after_trace = _count_lines(trace)
+    finally:
+        for f, b in keep.items():
+            if b is None:
+                f.unlink(missing_ok=True)
+            else:
+                f.write_bytes(b)
+
+    rows.append(("試し打ち", ok_run,
+                 f"試し打ち: {'通った' if ok_run else '★ 落ちた ── ' + tail[:90]}"))
+    # ★★ 両側から見る ── 「こちらに増えた」だけでは隔離の証拠にならない。
+    #   **本体の履歴が増えていない**ことまで確かめて、はじめて隔離が効いている。
+    rows.append(("AILINE_HOME", after_here > before_here and after_default == before_default,
+                 f"AILINE_HOME: この回 +{after_here - before_here} / "
+                 f"本体 +{after_default - before_default}"
+                 + ("" if after_default == before_default else "  ★ 本体に漏れている")))
+    rows.append(("AILINE_TRACE", after_trace > before_trace,
+                 f"AILINE_TRACE: 控え +{after_trace - before_trace} 行（{trace.name}）"))
+    rows.append(("後始末",
+                 _count_lines(hist) == before_here and _count_lines(trace) == before_trace,
+                 "後始末: 試し打ちの跡を消した（corpus を汚さない）"))
+    return rows
+
+
+def _probe(home: Path, trace: Path) -> tuple:
+    """環境確認のための 1 回（★ 製品を素の形で打つ ── 特別扱いしない）。"""
+    import openpyxl
+    with tempfile.TemporaryDirectory() as td:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "表"
+        ws.append(["品名", "金額"])
+        ws.append(["机", 12000])
+        book = Path(td) / "確認.xlsx"
+        wb.save(book)
+        wb.close()
+        env = _env(home)
+        env["AILINE_TRACE"] = str(trace)
+        r = subprocess.run([sys.executable, "-m", "ailine", "run", str(book),
+                            "金額の大きい順に並べ替えて", "--copy", "--sheet", "表",
+                            "--timeout", "150"],
+                           cwd=str(REPO), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env)
+    return r.returncode == 0, (r.stdout or "")[-200:]
+
+
+def render_check(name: str, rows: list) -> str:
+    lines = [f"盲検 {name} ── 買い手に渡す前の環境確認", ""]
+    for _key, ok, text in rows:
+        lines.append(f"  {'✓' if ok else '×'} {text}")
+    lines.append("")
+    bad = [t for _k, ok, t in rows if not ok]
+    lines.append("★ 渡してよい" if not bad
+                 else f"★★ まだ渡さない ── {len(bad)} 件が効いていない")
+    return "\n".join(lines)
