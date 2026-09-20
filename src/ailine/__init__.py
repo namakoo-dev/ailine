@@ -10561,6 +10561,82 @@ def normalize_book(book: Path, workdir: Path,
     return normalized
 
 
+def read_with_values_filled_in(book: Path, workdir: Path, timeout=None) -> tuple:
+    """★★ 式のままで計算結果が無い冊を、**道具が自分で** LibreOffice に開かせて値を入れる。
+
+    戻り値 `(値の入ったコピー, None)` ／ 入れられなければ `(None, 理由)`。
+
+    ★★ なぜ在るか（盲検 3 体目・製造業の購買が踏んだ形）: 『金額』が式のままで値を持たない
+      冊に対して、道具は「Excel か LibreOffice で一度開いて保存してください」と**人に
+      頼んでいた**。ところが ailine は LibreOffice を持っている ── `normalize_book` が
+      「コピーを開いて保存する」器官そのもので、単一ブックの run は既に毎回そこを通っている。
+      **在るのに、この断りだけが人に頼んでいた**（器官は在るが配線が無い・何度も踏んだ形）。
+
+    ★ 原本には触らない（`normalize_book` が最初にコピーを作る）。
+    ★ **落ちない** ── LibreOffice が無い／開けない環境では `(None, 理由)` を返し、
+      呼び出し側はこれまでどおり人に頼む（前提を満たせないのに黙って進まない）。
+      `normalize_book` は失敗時に `SystemExit(9)` を投げるので、ここで受け止める。
+    ★ 値は **LibreOffice が計算したもの**。呼び出し側は必ずそう言う（誰が計算したかを隠さない）。
+    """
+    try:
+        return normalize_book(book, workdir, timeout=timeout or DEFAULT_APPLY_TIMEOUT), None
+    except SystemExit as e:
+        return None, f"LibreOffice で開けませんでした（exit {e.code}）"
+    except Exception as e:                      # noqa: BLE001 ── 前提の話でここでは落とさない
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _match_after_filling_values(book_a: Path, book_b: Path, formula_only: dict,
+                                 task: str, timeout=None) -> dict | None:
+    """照合で式のままの列が邪魔をした時、**道具が自分で値を入れて**読み直す。
+
+    戻り値 `{"A": 読み, "B": 読み, "resolution": 解決, "notes": 画面に出す行}`。
+    1 冊も入れられなければ `None`（呼び出し側は従来どおり断る）。
+
+    ★ 読み直した行はメモリに載るので、コピーは読み終わったら消してよい
+      （この先で原本を読み直す箇所は無い ── 名前と出力先にしか使っていない）。
+    """
+    import tempfile as _tf
+    reads, notes, grids, filled_any = {}, [], {}, False
+    with _tf.TemporaryDirectory(prefix="ailine_fill_") as td:
+        for side, book, header_row, headers in (
+                ("A", book_a, None, None), ("B", book_b, None, None)):
+            cols = sorted(formula_only.get(side) or ())
+            if not cols:
+                reads[side] = _peek_match_book(book)
+                continue
+            wd = Path(td) / side
+            wd.mkdir(parents=True, exist_ok=True)
+            filled, why = read_with_values_filled_in(book, wd, timeout=timeout)
+            if filled is None:
+                notes.append(f"　★『{book.name}』の値を入れられませんでした（{why}）")
+                reads[side] = _peek_match_book(book)
+                continue
+            filled_any = True
+            _names = "』『".join(str(c) for c in cols)
+            # ★★ 誰が計算した値かを言う（観測していないことを主張しない）。
+            #   ★ 原本を変えていないことも言う ── 黙って直すと「何をされたか」が消える。
+            notes.append(f"　★『{book.name}』の『{_names}』は式のままで計算結果が"
+                          "入っていなかったので、**LibreOffice で開いて計算させました**"
+                          "（原本は変えていません／この値は LibreOffice が計算したものです）")
+            reads[side] = _peek_match_book(filled)
+            # ★ 検算が読む格子も**ここで**取る ── コピーは with を出ると消えるので、
+            #   ファイルの寿命に頼らず中身を持って回る（読み手は本番と同じ独立実装）。
+            grids[side] = xml_readback.read_grid(filled)
+        # ★★ 2026-09-20（自分の番人が掴んだ穴）: **1 冊も入れられなかった回も返す**。
+        #   初版はここで None を返していたので、呼び出し側は「試していない」ことになり、
+        #   断り文が「Excel か LibreOffice で一度開いて保存すると値が入ります」と言った ──
+        #   **こちらが試して失敗した直後に、同じことを人に頼む**形（通らない道を示す）。
+        if not filled_any:
+            return {"filled_any": False, "notes": notes}
+        if any(r[1] is None for r in reads.values()):
+            return {"filled_any": False, "notes": notes}
+        resolution = multifile_match.resolve_columns(
+            task, reads["A"][1], reads["A"][2], reads["B"][1], reads["B"][2])
+    return {"filled_any": True, "A": reads["A"], "B": reads["B"],
+            "resolution": resolution, "notes": notes, "grids": grids}
+
+
 def success_message(result: dict) -> str | None:
     """★ の注意書きは『変化を検出して適用が成功した』ときだけ出す。
        失敗(exit 1)や --dry（何も適用していない）で出すのは不誠実（P1）。"""
@@ -17231,8 +17307,36 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
     # ★ 列対応（機械3段・LLM ゼロ）: 依頼文の名指し → 型で絞る → 曖昧なら exit 3（候補つき）。
     #   ★ 一括検出: 決まらなかった役割を全部集めてから報告する（1件目で止めない）。
     resolution = multifile_match.resolve_columns(task, headers_a, rows_a, headers_b, rows_b)
+    # ★★ 2026-09-20（②「前提を道具が満たす」）: 人に「開いて保存して」と頼む前に、
+    #   **道具が自分でやる**。ailine は LibreOffice を持っているのに、ここだけが
+    #   人に頼んでいた（器官は在るが配線が無い）。
+    #   ★ 払うのは**邪魔をした時だけ** ── 決まらなかった回にしか LO 往復は起きない。
+    #   ★ 入れられなければ従来どおり断る（黙って進まない）。
+    _tried_filling = False
+    _filled_grids: dict = {}
     if not resolution.ok:
-        say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
+        _blockers = {
+            "A": _formula_columns_without_values(book_a, header_row_a, headers_a),
+            "B": _formula_columns_without_values(book_b, header_row_b, headers_b)}
+        if any(_blockers.values()):
+            _retry = _match_after_filling_values(book_a, book_b, _blockers, task,
+                                                  timeout=getattr(a, "timeout", None))
+            if _retry is not None:
+                # ★ 試した以上、断り文は「開いて保存して」と言わない（通らない道を示さない）。
+                #   ★ 入れられなかった回も**試したことに変わりはない** ── ここで分けない。
+                _tried_filling = True
+                # ★ 見出しは 1 回だけ ── 埋めた注記の前に出す（この後の経路では出さない）
+                say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
+                for _ln in _retry["notes"]:
+                    say(_ln)
+                if _retry["filled_any"]:
+                    _filled_grids = _retry["grids"]
+                    header_row_a, headers_a, rows_a = _retry["A"]
+                    header_row_b, headers_b, rows_b = _retry["B"]
+                    resolution = _retry["resolution"]
+    if not resolution.ok:
+        if not _tried_filling:
+            say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
         # ★★ 2026-09-17（盲検 3 体目）: 「依頼文に列名を含めて（例:『品目をキーに』）」と
         #   案内していたが、買い手は**既にそう書いていた** ── 本当の理由は別に在り
         #   （『金額』が式のままで計算結果を持たない）、道具はそれを**持っていたのに
@@ -17255,8 +17359,13 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
             # ★ 理由は候補の有無に関わらず言う（上の if/else の**外**に置く ──
             #   中に入れると片方の枝でだけ出る形になり、まさに片配線になる）。
             if _named_formula:
+                # ★★ 2026-09-20: **こちらが既に開いて計算させた回**は、同じことを人に
+                #   頼まない ── それは「通らない道を示す」形（この盤で一番重い失敗）。
+                _how = ("LibreOffice で開いて計算させましたが、それでも値が入りませんでした"
+                        if _tried_filling
+                        else "Excel か LibreOffice で一度開いて保存すると値が入ります")
                 say(f"　★『{"』『".join(str(h) for h in _named_formula)}』は**式のままで計算結果が入っていない**ため、"
-                    f"{label}の列として使えません（Excel か LibreOffice で一度開いて保存すると値が入ります）。")
+                    f"{label}の列として使えません（{_how}）。")
         # ★ 断った回も残す ── 単一ブックの run は語彙外も台帳に残している。
         #   「何を頼んで通らなかったか」は月次の証跡として成功と同じだけ要る
         #   （2026-09-05 に CLARIFY が台帳に 1 行も無かったのと同じ線）。
@@ -17289,7 +17398,9 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
         else:
             return _refuse_output_conflict(out, mark)
 
-    say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
+    # ★ 見出しは 1 回だけ ── 値を埋めた回は、その注記の前に既に出している。
+    if not _tried_filling:
+        say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
     say(f"出力先: {out}")
     say(f"キー: {key_a}(A) / {key_b}(B)　金額: {amount_a}(A) / {amount_b}(B)")
 
@@ -17342,11 +17453,16 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
         col_a_count, col_b_count, col_diff, col_a_sum, col_b_sum = 2, 4, 6, 3, 5
         a_count_out = sum(grid.get((r, col_a_count), 0) or 0 for r in out_rows)
         b_count_out = sum(grid.get((r, col_b_count), 0) or 0 for r in out_rows)
-        data_a = xml_readback.read_grid(book_a)
+        # ★★ 2026-09-20: 埋めた回は**埋めた冊の格子**で検算する。原本（値が入っていない）を
+        #   読み直すと、こちらが使ったデータと違うものを検算することになり、必ず破れる
+        #   （実測: 『A側合計の独立再集計(ナット) 元 0 / 出力 80』）。
+        #   ★ 独立性は**読み手の実装が別**（xml_readback ≠ openpyxl）であることで担保される。
+        #     読む冊は「実際に使ったもの」でなければ、検算が別の問いに答えてしまう。
+        data_a = _filled_grids.get("A") or xml_readback.read_grid(book_a)
         a_headers_x = xml_readback.header_names(data_a, header_row=header_row_a)
         a_rows_x = [r for r in xml_readback.data_row_numbers(data_a, header_row_a)
                     if xml_readback.row_has_any_value(data_a, r, len(a_headers_x))]
-        data_b = xml_readback.read_grid(book_b)
+        data_b = _filled_grids.get("B") or xml_readback.read_grid(book_b)
         b_headers_x = xml_readback.header_names(data_b, header_row=header_row_b)
         b_rows_x = [r for r in xml_readback.data_row_numbers(data_b, header_row_b)
                     if xml_readback.row_has_any_value(data_b, r, len(b_headers_x))]

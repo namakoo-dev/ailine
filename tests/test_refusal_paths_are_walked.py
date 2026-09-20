@@ -25,6 +25,11 @@ sys.path.insert(0, str(REPO / "tests"))
 
 import walk_refusals_core as walk  # noqa: E402
 
+#: ★ 名指しの機構を生かすための陽性対照（実在する実機の試験を指す）。
+#:   ★ ここが腐ったら下の検査が自分で赤くなる ── 対照そのものも突き合わせる。
+CONTROL_POINTER = ("tests/test_the_tool_fills_in_missing_values.py"
+                   "::test_the_tool_fills_in_the_values_itself")
+
 
 def test_no_refusal_shows_a_path_that_does_not_work():
     """★★ いちばん重い契約: **通らない道を示していない**こと。
@@ -141,8 +146,19 @@ def test_every_pointer_to_the_real_machine_actually_exists():
                for k, v in reg["refusals"].items()
                if (v.get("walk") or {}).get("path", {}).get("kind")
                == "walked_on_the_real_machine"]
-    assert pointed, "★ 名指しが 1 件も無い（この検査が空回りしている）"
-    for key, ref in pointed:
+
+    # ★★ 2026-09-20: 名指しの**使い手がゼロになった**（照合の 1 件が到達へ動いたため）。
+    #   初版は「1 件も無ければ赤」だったが、それだと使い手が居なくなった日に、
+    #   正しい状態が赤になる。かといって空集合を回すと**恒真**（この repo が何度も踏んだ形）。
+    #   ★ だから**陽性対照を常に回す** ── 作り物の 1 件で、機構が今も動くことを確かめる。
+    control = {"walk": {"kind": "match", "books": "no_usable_amount",
+                        "task": "金額で突き合わせて",
+                        "path": {"kind": "walked_on_the_real_machine",
+                                 "walked_by": CONTROL_POINTER}}}
+    with tempfile.TemporaryDirectory() as td:
+        got = walk.walk_one("★対照", control, Path(td))
+    assert got["verdict"] == "実機で歩く", got
+    for key, ref in [("★対照", CONTROL_POINTER)] + pointed:
         assert ref and "::" in ref, f"{key}: 名指しの形が違う: {ref!r}"
         path, func = ref.split("::", 1)
         f = REPO / path

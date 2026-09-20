@@ -135,9 +135,20 @@ def test_the_detector_lives_where_the_formulas_can_be_read():
 
 @pytest.mark.parametrize("role,label", [("key", "キー"), ("amount", "金額")])
 def test_both_roles_can_carry_the_reason(role, label):
-    """★ 理由はキー側・金額側の**どちらの断りでも**出せること（片方だけ直さない）。"""
+    """★ 理由はキー側・金額側の**どちらの断りでも**出せること（片方だけ直さない）。
+
+    ★★ 2026-09-20: ここは**文面まるごと**（末尾の「Excel か LibreOffice で一度開いて
+      保存すると値が入ります」を含む）で縛っていたので、助言の側を変えた日に赤くなった
+      ── 道具が自分で値を入れるようになり、**既に試した回は同じことを人に頼まない**
+      分岐を足したため。守っている不変（役割ごとに書き写さない）は変わっていない。
+      ★ 今週 7 件目の「番人を字面で書いた」形。
+    ★ だから**核の主張**に結び直す ──「式のままで計算結果が入っていない」は人が読む
+      理由そのもので、ここが 2 箇所になったら片方が腐る。末尾の助言は場面で変わってよい
+      （`_how` が 1 箇所で選ぶ）。
+    """
     from _product_source import count_in_product
-    assert count_in_product('f"{label}の列として使えません（Excel か LibreOffice で一度開いて'
-                            '保存すると値が入ります）。")') == 1, (
+    assert count_in_product("式のままで計算結果が入っていない") == 1, (
         "理由の文が 1 箇所に畳まれていない（役割ごとに書き写すと片方が腐る）")
+    assert count_in_product("{label}の列として使えません") == 1, (
+        "役割の語を差し込む所が 2 箇所ある（キー側と金額側で別文になる）")
     assert role in ("key", "amount") and label in ("キー", "金額")

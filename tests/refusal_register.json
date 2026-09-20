@@ -529,16 +529,15 @@
    "escape": false,
    "example": false,
    "why": "precondition",
-   "unlock": "★ 上と同じ ── 式のままの列はここにも効く。到達候補 ★ 2026-09-20: 断りは**理由を名指ししていた**（式のままの列）── 俺の『vague』の見立ては外れ。示した道（開いて保存）が本当に通ることを実機で歩いて確かめた。★ 次の一手は変わらない: 道具が自分で開いて保存すればよい（人に頼む必要が無い）。",
+   "unlock": "★★ 2026-09-20 に『式のままで値が無い』は**到達へ動いた** ── 道具が自分で LibreOffice に開かせて値を入れるようになった（`read_with_values_filled_in`／器官は `normalize_book` で既に在り、配線が無いだけだった）。★ 残るのは「使える列が本当に無い」回。次の一手は**理由を名指しする**こと ── 『金額』が在るのに値が文字である、と言えば人は直せる。",
    "walk": {
     "kind": "match",
-    "books": "formula_only_amount",
+    "books": "no_usable_amount",
     "task": "金額で突き合わせて",
     "path": {
-     "kind": "walked_on_the_real_machine",
-     "walked_by": "tests/test_the_formula_advice_actually_works.py::test_opening_and_saving_really_makes_the_column_usable"
+     "kind": "none"
     },
-    "why": "★ 道（LibreOffice で開いて保存）そのものが実機を要求する ── 盤は歩かず名指しする"
+    "inventory": "★ 在庫（no_path）: 『金額』という列は在るのに、値が文字（「要確認」「未定」）なので使えない ── そこを**名指ししていない**。式のままの列は理由を言うのに、こちらは言っていない（同じ家系の片配線）"
    }
   },
   "_refuse_split_reading#1": {
