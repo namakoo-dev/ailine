@@ -58,6 +58,24 @@ REGISTER = REPO / "tests" / "refusal_register.json"
 BOOKS = {"4月.xlsx": [["商品", "金額"], ["ボルト", 120], ["ナット", 80]],
          "5月.xlsx": [["商品", "金額"], ["ボルト", 150], ["ワッシャー", 300]]}
 
+#: 照合（2 冊）の検体。★★ この経路は **LLM を 1 語も呼ばない**（列対応は機械 3 段:
+#:   依頼文の名指し → 型 → 曖昧なら exit 3）。だから揺れが無く **A 群で歩ける** ──
+#:   「2 冊と実表が要るから A 群では歩けない」という 2026-09-19 の見立ては外れだった
+#:   （2026-09-20 に実際に歩いて確かめた）。見立てで `未調査` に置くと、そこで止まる。
+MATCH_BOOKS = {
+    # ★ キーの候補が 2 つ（品名・備考）で、依頼文がどちらも名指ししていない
+    "ambiguous_key": {
+        "A": (["品名", "備考", "金額"], [["ボルト", "至急", 120], ["ナット", "", 80]]),
+        "B": (["品名", "備考", "金額"], [["ボルト", "", 150], ["ワッシャー", "", 300]]),
+    },
+    # ★ 金額が**式のままで計算結果を持たない**（盲検 3 体目が踏んだ形）。
+    #   openpyxl は data_only=True で読むので値は None ── 数値列がゼロになる。
+    "formula_only_amount": {
+        "A": (["品名", "金額"], [["ボルト", "=100*2"], ["ナット", "=40*2"]]),
+        "B": (["品名", "金額"], [["ボルト", 150], ["ワッシャー", 300]]),
+    },
+}
+
 #: 同じ見出しのシートを 2 枚持つ冊（対象シートが決まらない断りの引き金）。
 TWO_SHEETS = {"4月": [["商品", "金額"], ["ボルト", 120], ["ナット", 80]],
               "5月": [["商品", "金額"], ["ボルト", 150], ["ワッシャー", 300]]}
@@ -82,6 +100,26 @@ def _make_book(root: Path, sheets: dict | None = None) -> Path:
     wb.save(p)
     wb.close()
     return p
+
+
+def _make_match_books(root: Path, which: str) -> tuple:
+    """照合の検体 2 冊を作る（★ 式の列は文字列でなく**式として**書く）。"""
+    spec = MATCH_BOOKS[which]
+    out = []
+    root.mkdir(parents=True, exist_ok=True)
+    for side in ("A", "B"):
+        headers, rows = spec[side]
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "表"
+        ws.append(headers)
+        for r in rows:
+            ws.append(r)
+        p = root / f"{side}.xlsx"
+        wb.save(p)
+        wb.close()
+        out.append(p)
+    return tuple(out)
 
 
 def load_register() -> dict:
@@ -161,6 +199,11 @@ def _trigger(w: dict, root: Path) -> tuple:
         folder = _make_folder(root)
         argv = ["run", str(folder), w["task"], "--out", str(root / "結果.xlsx")]
         return (*_run(argv, w.get("plan"), w.get("second")), folder)
+    if kind == "match":
+        # ★ 翻訳を差し替えない（plan=None）── この経路は LLM を呼ばないので、
+        #   差し替えると「呼ばれていない」ことを隠してしまう。
+        a_path, b_path = _make_match_books(root, w["books"])
+        return (*_run(["run", str(a_path), str(b_path), w["task"]], None), (a_path, b_path))
     if kind == "two_sheets":
         book = _make_book(root, TWO_SHEETS)
         return (*_run(["run", str(book), w["task"], "--copy"] + extra,
@@ -184,6 +227,15 @@ def _walk_path(w: dict, path: dict, base, root: Path) -> tuple:
         if w.get("kind") == "folder":
             return _run(["run", str(base), task2, "--out", str(root / "結果2.xlsx")], plan)
         return _run(["run", str(base), task2, "--copy"] + extra, plan)
+    if kind == "retry_with_task":
+        # ★ 断りが示した通りに**言い直して**もう一度打つ（照合の道はこれ）。
+        a_path, b_path = base
+        return _run(["run", str(a_path), str(b_path), path["task"]], None)
+    if kind == "walked_on_the_real_machine":
+        # ★★ 道そのものは実機が要る（LibreOffice で開いて保存する等）。盤は A 群なので
+        #   ここでは歩かず、**歩いている試験を名指しする** ── 「見ていない」と
+        #   「別の所で見た」を混ぜない。名指しが腐らないよう番人が突き合わせる。
+        return None, f"実機側で歩く: {path['walked_by']}"
     if kind == "forced_op":
         return _run(["run", str(base), w["task"], "--copy", "--op", path["op"]], plan)
     if kind == "sheet":
@@ -224,6 +276,9 @@ def walk_one(key: str, entry: dict, root: Path) -> dict:
                 "screen": out.strip()[-160:]}
 
     rc2, out2 = _walk_path(w, path, base, root)
+    if rc2 is None and path.get("kind") == "walked_on_the_real_machine":
+        return {"key": key, "verdict": "実機で歩く", "detail": out2,
+                "screen": out.strip()[-160:]}
     if rc2 is None:
         return {"key": key, "verdict": "vague", "detail": out2, "screen": out.strip()[-160:]}
     if rc2 == BUSY:
@@ -259,7 +314,7 @@ def survey() -> list:
 BUSY = 6
 
 ORDER = ["path_fails", "vague", "no_path", "未調査", "歩けなかった", "未記入",
-         "引き金が引けない", "walked", "by_design"]
+         "引き金が引けない", "実機で歩く", "walked", "by_design"]
 
 
 def broken_paths(survey_fn=None) -> list:

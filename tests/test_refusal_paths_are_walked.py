@@ -129,6 +129,39 @@ def test_the_busy_code_is_the_one_the_product_declares():
     assert "| 6 | 並行実行の拒否 |" in doc, "★ 終了コードの宣言が動いた（盤の BUSY を合わせること）"
 
 
+def test_every_pointer_to_the_real_machine_actually_exists():
+    """★★ 「実機側で歩く」と言った先が**実在し、実機の印が付いている**こと。
+
+    ★ 名指しは腐る ── 試験を消す／名前を変える／`-m local` の印を外す、のどれでも
+      盤の主張だけが残って嘘になる。この repo が何度も踏んだ「在っても鳴らない」。
+    ★ だから 3 つとも見る: ファイルが在る・その関数が在る・`@pytest.mark.local` が在る。
+    """
+    reg = walk.load_register()
+    pointed = [(k, (v.get("walk") or {}).get("path", {}).get("walked_by"))
+               for k, v in reg["refusals"].items()
+               if (v.get("walk") or {}).get("path", {}).get("kind")
+               == "walked_on_the_real_machine"]
+    assert pointed, "★ 名指しが 1 件も無い（この検査が空回りしている）"
+    for key, ref in pointed:
+        assert ref and "::" in ref, f"{key}: 名指しの形が違う: {ref!r}"
+        path, func = ref.split("::", 1)
+        f = REPO / path
+        assert f.exists(), f"{key}: 名指しの試験が無い: {path}"
+        body = f.read_bytes().decode("utf-8")
+        assert f"def {func}(" in body, f"{key}: その関数が無い: {ref}"
+        i = body.index(f"def {func}(")
+        assert "@pytest.mark.local" in body[max(0, i - 200):i], (
+            f"{key}: {func} に実機の印（-m local）が無い ── CI では走らないので誰も気づかない")
+
+    # ★★ 名指しが在ることだけでなく、盤が**その判定を出している**ことまで見る
+    #   （変異試験が指した: `実機で歩く` を黙って `vague` に混ぜても、どの検査も
+    #     気づかなかった ── 「別の所で見た」と「理由が粗い」は別の在庫なので混ぜない）。
+    for key, _ref in pointed:
+        with tempfile.TemporaryDirectory() as td:
+            got = walk.walk_one(key, reg["refusals"][key], Path(td) / key.replace("#", "_"))
+        assert got["verdict"] == "実機で歩く", (key, got)
+
+
 def test_the_verdict_is_never_written_in_the_register():
     """★★ 恒真殺し: 台帳に verdict を書かない ── 歩いた結果から決める。"""
     reg = walk.load_register()
@@ -168,8 +201,10 @@ def test_the_pass_line_and_the_board_do_not_drift():
     #      （空集合を回して常に真＝恒真の形）── だから顔ぶれを凍結して突き合わせる。
     #   ③ 2026-09-20 に `歩けなかった` が増えた（機械が塞がっていた回を path_fails と
     #     読んでいた ── 測れなかったのに「通らない」と主張していた形）。
+    #   ④ 2026-09-20 に `実機で歩く` が増えた（道そのものが LibreOffice を要求する回 ──
+    #     盤は歩かず、歩いている試験を名指しする。「見ていない」と混ぜない）。
     VERDICTS = {"path_fails", "vague", "no_path", "未調査", "未記入",
-                "引き金が引けない", "walked", "by_design", "歩けなかった"}
+                "引き金が引けない", "walked", "by_design", "歩けなかった", "実機で歩く"}
     assert set(walk.ORDER) == VERDICTS, (
         f"★ 道具の verdict の顔ぶれが変わった: {sorted(set(walk.ORDER) ^ VERDICTS)} "
         "── 文書（合格線）と一緒に動かすこと")

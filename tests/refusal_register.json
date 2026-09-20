@@ -512,10 +512,16 @@
    "escape": false,
    "example": true,
    "why": "ambiguous",
-   "unlock": "★★ 2026-09-17 に理由の 1 行を足した（式のままで計算結果が無い列を名指し）。次の一手は**道具が自分で値を作る** ── ailine は LibreOffice を持っているので、人に『開いて保存してください』と言う必要は本当は無い。前提を道具が満たせる例",
+   "unlock": "★★ 2026-09-17 に理由の 1 行を足した（式のままで計算結果が無い列を名指し）。次の一手は**道具が自分で値を作る** ── ailine は LibreOffice を持っているので、人に『開いて保存してください』と言う必要は本当は無い。前提を道具が満たせる例 ★ 2026-09-20: 導通を確かめた ── この経路は列対応を機械 3 段で決めており LLM を 1 語も呼ばないので、A 群の盤で歩ける（『2 冊と実表が要るから歩けない』は見立て違いだった）。示した道は実際に通る。",
    "walk": {
-    "kind": "match_unwalkable",
-    "why": "★ 突き合わせは 2 冊と実表が要る ── A 群の器では歩けない。実機側で別に歩く"
+    "kind": "match",
+    "books": "ambiguous_key",
+    "task": "突き合わせて",
+    "path": {
+     "kind": "retry_with_task",
+     "task": "品名をキーに突き合わせて"
+    },
+    "why": "★ 断りが示したとおりに列名を入れて言い直す（この経路は LLM を呼ばないので A 群で歩ける）"
    }
   },
   "cmd_run_match#2": {
@@ -523,10 +529,16 @@
    "escape": false,
    "example": false,
    "why": "precondition",
-   "unlock": "★ 上と同じ ── 式のままの列はここにも効く。到達候補",
+   "unlock": "★ 上と同じ ── 式のままの列はここにも効く。到達候補 ★ 2026-09-20: 断りは**理由を名指ししていた**（式のままの列）── 俺の『vague』の見立ては外れ。示した道（開いて保存）が本当に通ることを実機で歩いて確かめた。★ 次の一手は変わらない: 道具が自分で開いて保存すればよい（人に頼む必要が無い）。",
    "walk": {
-    "kind": "match_unwalkable",
-    "why": "★ 同上。ただし式のままの列を名指しする器官は在る（_named_formula）── 俺は vague と見立てたが外れの可能性が高い。歩いて確かめること"
+    "kind": "match",
+    "books": "formula_only_amount",
+    "task": "金額で突き合わせて",
+    "path": {
+     "kind": "walked_on_the_real_machine",
+     "walked_by": "tests/test_the_formula_advice_actually_works.py::test_opening_and_saving_really_makes_the_column_usable"
+    },
+    "why": "★ 道（LibreOffice で開いて保存）そのものが実機を要求する ── 盤は歩かず名指しする"
    }
   },
   "_refuse_split_reading#1": {
