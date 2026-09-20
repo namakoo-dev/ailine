@@ -59,11 +59,11 @@ def _int_or_none(value):
     return int(text) if text.isdigit() else None
 
 
-def _past_books(past_paths) -> tuple:
+def _past_books(past_paths, overrides=None) -> tuple:
     """過去の冊を名前で引ける形にする。戻り値 ({名前: 冊}, [読めなかった名前]）。"""
     books, unreadable = {}, []
     for path in past_paths:
-        book = accounts_read.read_journal(path)
+        book = accounts_read.read_journal(path, overrides)
         if book.refused:
             unreadable.append(f"{book.name}（{book.refused}）")
             continue
@@ -81,7 +81,7 @@ def _cell_at(book, row_num: int, role: str):
     return None, False
 
 
-def verify_accounts_book(out_path, today_path, past_paths) -> dict:
+def verify_accounts_book(out_path, today_path, past_paths, overrides=None) -> dict:
     """候補の冊を、今回の入力と過去の冊に突き合わせる。
 
     戻り値: {"breaks": [(名前, 名指し)], "facts": {...}, "mismatch": bool} または
@@ -101,7 +101,7 @@ def verify_accounts_book(out_path, today_path, past_paths) -> dict:
         return {"unsupported": f"候補のシートに必要な列がありません: {missing}"}
     i_row, i_account, i_grade, _i_reason, i_cite = (names[n] for n in wanted)
 
-    today = accounts_read.read_journal(today_path)
+    today = accounts_read.read_journal(today_path, overrides)
     if today.refused:
         return {"unsupported": f"今回の冊が読めません: {today.refused}"}
     # ★★ 分母は**今回の入力**から（設計 §6.5 の 2）── 出力の行数でも検分の主張でもない。
@@ -140,7 +140,7 @@ def verify_accounts_book(out_path, today_path, past_paths) -> dict:
         breaks.append(("★ 候補と空欄の理由が同じ行に在る", f"今回の {row_num} 行目"))
 
     # ② 番地のセルを読むだけ（★ 規則を再現しない）。
-    books, unreadable = _past_books(past_paths)
+    books, unreadable = _past_books(past_paths, overrides)
     checked = unchecked = 0
     for row_num in sorted(valued):
         citations = cited.get(row_num) or []

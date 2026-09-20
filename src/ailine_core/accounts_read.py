@@ -76,7 +76,7 @@ def _raw_rows_from_book(path) -> tuple:
         book.close()
 
 
-def read_journal(path) -> JournalBook:
+def read_journal(path, overrides=None) -> JournalBook:
     """1 冊の仕訳（CSV / xlsx）を読み、列を解決して `JournalBook` を返す。
 
     ★ 断るのは 3 つ: 扱えない形式／文字コードが決められない／列が決まらない。
@@ -102,7 +102,7 @@ def read_journal(path) -> JournalBook:
                            refused=f"{path.name}: {input_path.explain_unreadable(e, path)}")
 
     header_row, headers, header_map, refusal = \
-        accounts_core.resolve_accounts_columns(raw_rows)
+        accounts_core.resolve_accounts_columns(raw_rows, overrides)
     width = max((len(v) for _r, v in raw_rows), default=0)
     if refusal:
         return JournalBook(name=path.name, path=str(path), header_row=header_row,

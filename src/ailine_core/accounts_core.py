@@ -215,11 +215,44 @@ def _seen_headers(headers) -> str:
     return names or "（見出しが読めません）"
 
 
+def near_headers(headers, role: str) -> list:
+    """`role` に**近い**見出し（含む／含まれる）。★ 「目の前に在るのに気づかない」を塞ぐ。
+
+    ★★ 出所（盲検 4 体目 ⑤）: 買い手の冊は見出しが『勘定科目』で、道具は
+      「『借方勘定科目』に当たる列がありません……見た見出し: …『勘定科目』…」と言った。
+      **探している物の候補をその場に並べておきながら、近いとは言わなかった** ──
+      人は「在るじゃないか」で止まる。
+    ★ 近さは含有だけで見る（曖昧な類似度を持ち込まない）。決めるのは人。
+    """
+    want = form_read.norm(role)
+    out = []
+    for i, h in enumerate(headers or [], start=1):
+        got = form_read.norm(h)
+        if not got or got == want:
+            continue
+        if got in want or want in got:
+            out.append((i, str(h).strip()))
+    return out
+
+
 def _refuse_columns(headers, role: str, hits: list) -> str:
-    """列が決まらないときの断り文（0 列 / 2 列以上のどちらも名指しする）。"""
+    """列が決まらないときの断り文（0 列 / 2 列以上のどちらも名指しする）。
+
+    ★★ 2026-09-20（⑤）: 0 列の時に**通る道**を示すようにした。旧版は別名を並べるだけで、
+      別名が役割名と同じ役割（借方勘定科目）では情報がゼロだった。
+    """
     if not hits:
-        return (f"『{role}』に当たる列がありません（別名: "
-                f"{'／'.join(COLUMN_ALIASES[role])}）。見た見出し: {_seen_headers(headers)}")
+        near = near_headers(headers, role)
+        lines = [f"『{role}』に当たる列がありません。見た見出し: {_seen_headers(headers)}"]
+        if near:
+            names = "／".join(f"『{n}』" for _i, n in near)
+            lines.append(f"　★ 名前が近い列が在ります: {names}")
+            lines.append(f"　→ その列でよければ `--column {role}={near[0][1]}` を付けて"
+                         "もう一度実行してください")
+        else:
+            lines.append(f"　→ 読ませたい列があるなら `--column {role}=<見出し>` で教えてください"
+                         f"（別名として自動で当たるのは: {'／'.join(COLUMN_ALIASES[role])}）")
+        return "".join(lines)
     names = "／".join(f"『{str(headers[i - 1]).strip()}』" for i in hits)
     return (f"『{role}』に当たる列が {len(hits)} つあります（{names}）"
             f"── どちらを読むかは表からは決まりません。見出しを 1 つにしてください")
@@ -236,7 +269,29 @@ def match_column(headers, role: str) -> list:
             if form_read.norm(h) in wanted and form_read.norm(h)]
 
 
-def resolve_accounts_columns(rows) -> tuple:
+def parse_column_overrides(pairs) -> tuple:
+    """`--column 役割=見出し` の並びを `{役割: 見出し}` にする。戻り値 (組, 断り)。
+
+    ★ 役割の顔ぶれは `COLUMN_ALIASES` が唯一の出どころ（手で並べない ── 足した役割が
+      黙って指定できないまま残らない）。
+    """
+    out = {}
+    for raw in list(pairs or ()):
+        if "=" not in str(raw):
+            return {}, (f"`--column` の形が違います（{raw}）── `役割=見出し` で書いてください"
+                        f"（役割: {'／'.join(COLUMN_ALIASES)}）")
+        role, name = str(raw).split("=", 1)
+        role, name = role.strip(), name.strip()
+        if role not in COLUMN_ALIASES:
+            return {}, (f"『{role}』という役割はありません"
+                        f"（役割: {'／'.join(COLUMN_ALIASES)}）")
+        if not name:
+            return {}, f"『{role}』に渡す見出しが空です（`--column {role}=<見出し>`）"
+        out[role] = name
+    return out, None
+
+
+def resolve_accounts_columns(rows, overrides=None) -> tuple:
     """行の並びから (見出し行, 見出しの並び, {役割: 列番号}, 断り) を決める。
 
     rows: [(行番号, [値, ...]), ...]（原本の 1 起点の行番号）。
@@ -254,7 +309,25 @@ def resolve_accounts_columns(rows) -> tuple:
             break
     if head_row is not None:
         header_map, refusal = {}, None
+        # ★★ 2026-09-20（⑤）: 人が `--column 役割=見出し` で教えた分は**そちらを採る**。
+        #   ★ 教えられた見出しが冊に無ければ、推測で先へ進まず名指しで断る
+        #     （在ると思って渡した人に、何が見えているかを返す）。
+        for role, want in (overrides or {}).items():
+            got = [i for i, h in enumerate(headers or [], start=1)
+                   if form_read.norm(h) == form_read.norm(want)]
+            if len(got) == 1:
+                header_map[role] = got[0]
+            elif not got:
+                return head_row, headers, {}, (
+                    f"`--column {role}={want}` と教わりましたが、その見出しは"
+                    f"この冊にありません。見た見出し: {_seen_headers(headers)}")
+            else:
+                return head_row, headers, {}, (
+                    f"`--column {role}={want}` と教わりましたが、同じ見出しが"
+                    f"{len(got)} 列あります ── どれを読むかは表からは決まりません")
         for role in COLUMN_ALIASES:
+            if role in header_map:      # ★ 人が決めた分は照合し直さない
+                continue
             hits = match_column(headers, role)
             if len(hits) == 1:
                 header_map[role] = hits[0]
@@ -263,7 +336,11 @@ def resolve_accounts_columns(rows) -> tuple:
         missing = [r for r in REQUIRED_COLUMNS if r not in header_map]
         if not missing:
             return head_row, headers, header_map, None
-        refusal = _refuse_columns(headers, missing[0], [])
+        # ★★ 2026-09-20（⑤）: 足りない列は**全部まとめて**言う。旧版は先頭 1 つだけを
+        #   名指ししており、人は直して走らせて次を知る ── 往復が必要列の数だけ増える。
+        #   ★ 照合の側は最初からそうしている（「決まらなかった役割を全部集めてから報告」）
+        #     ── 同じ考えがこちらに配線されていなかった。
+        refusal = "／".join(_refuse_columns(headers, r, []) for r in missing)
     else:
         refusal = f"見出しの行が見つかりません（最初の行: {_seen_headers(ordered[0][1])}）"
 
@@ -272,8 +349,13 @@ def resolve_accounts_columns(rows) -> tuple:
     if len(first_values) == YAYOI_COLUMN_COUNT \
             and _YAYOI_FIRST_CELL.match(str(first_values[0] or "").strip()):
         return None, [], dict(YAYOI_POSITIONS), None
-    return head_row, (headers if head_row is not None else list(first_values)), {}, (
-        refusal + f"（弥生の形（{YAYOI_COLUMN_COUNT} 列・1 列目が 4 桁の数字）でもありません）")
+    # ★★ 2026-09-20（⑤）: 弥生の注記は**幅が弥生と同じ時だけ**出す。旧版は無条件に
+    #   付けており、見出し行の在る 4 列の冊にまで「弥生の形でもありません」と言っていた ──
+    #   買い手は弥生を使っていないので、**無関係な第二の診断**で誤導していた。
+    if len(first_values) == YAYOI_COLUMN_COUNT:
+        refusal += (f"（{YAYOI_COLUMN_COUNT} 列ですが、弥生の形としては受けられません"
+                    "── 1 列目が 4 桁の数字である必要があります）")
+    return head_row, (headers if head_row is not None else list(first_values)), {}, refusal
 
 
 def column_labels(headers, header_map: dict, width: int, reserved=()) -> list:

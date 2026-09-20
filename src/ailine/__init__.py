@@ -19128,7 +19128,11 @@ def cmd_accounts_apply(a: argparse.Namespace) -> int:
     if refusal:
         print(f"× {refusal}")
         return 4
-    book = accounts_read.read_journal(journal)
+    _cols, _why = accounts_core.parse_column_overrides(getattr(a, "column", None))
+    if _why:
+        print(f"× {_why}")
+        return 4
+    book = accounts_read.read_journal(journal, _cols)
     if book.refused:
         print(f"× {book.refused}")
         return 4
@@ -19220,7 +19224,12 @@ def cmd_accounts(a: argparse.Namespace) -> int:
         emit()
         return 4
 
-    today = accounts_read.read_journal(today_path)
+    _cols, _why = accounts_core.parse_column_overrides(getattr(a, "column", None))
+    if _why:
+        result["refused"] = _why
+        emit()
+        return 4
+    today = accounts_read.read_journal(today_path, _cols)
     result.update({"header_row": today.header_row, "encoding": today.encoding,
                    "ambiguous": today.ambiguous})
     if today.truncated:
@@ -19244,7 +19253,9 @@ def cmd_accounts(a: argparse.Namespace) -> int:
             continue
         seen_digest[digest] = path.name
     for path in past_paths:
-        book = accounts_read.read_journal(path)
+        # ★ 過去の冊にも同じ指定を効かせる ── 今回だけ通って過去が全部断られるのは
+        #   「片方だけ直す」形（実際の冊は同じ書き出しなので、見出しも同じ）。
+        book = accounts_read.read_journal(path, _cols)
         if book.refused:
             result["unreadable"].append(book.refused)
             continue
@@ -19450,7 +19461,12 @@ def cmd_verify(a: argparse.Namespace) -> int:
             return 4
         today_src = Path(sources[0]).resolve()
         past_src = [Path(s).resolve() for s in sources[1:]]
-        result = verify_accounts.verify_accounts_book(out, today_src, past_src)
+        _cols, _why = accounts_core.parse_column_overrides(getattr(a, "column", None))
+        if _why:
+            print(f"× {_why}")
+            return 4
+        result = verify_accounts.verify_accounts_book(out, today_src, past_src,
+                                                       overrides=_cols)
         if result.get("unsupported"):
             print(f"× {result['unsupported']}")
             return 4
@@ -19705,12 +19721,26 @@ def build_parser() -> argparse.ArgumentParser:
     fm.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
     fm.set_defaults(func=cmd_forms)
 
+    def _add_column_option(pr):
+        """★★ `--column 役割=見出し` を**1 箇所で**登録して配る（2026-09-20・⑤）。
+
+        ★ 仕訳の冊を読むコマンドは 3 つ（accounts / accounts-apply / verify）。
+          片方にだけ足すと、`accounts` は通るのに次の段で同じ壁に当たる ──
+          この repo が何度も踏んだ「片配線」。文面も選択肢もここ 1 つで決める。
+        ★ 役割の顔ぶれは `COLUMN_ALIASES` が唯一の出どころ（手で並べない）。
+        """
+        pr.add_argument("--column", action="append", metavar="役割=見出し",
+                        help="列の見出しを教える（例: --column 借方勘定科目=勘定科目）。"
+                             "複数回書けます。役割: "
+                             + "／".join(accounts_core.COLUMN_ALIASES))
+
     aa = sub.add_parser("accounts-apply",
                         help="候補の冊で『採用』に ○ を付けた行だけ、候補の科目を元の仕訳に写した取込用ファイルを書く")
     aa.add_argument("book", help="候補の冊（ailine accounts の出力・右端に『採用』列を足して ○ を入れたもの）")
     aa.add_argument("journal", help="今回の仕訳（ailine accounts に渡した元のファイル・CSV か xlsx）")
     aa.add_argument("--out", required=True, help="取込用のファイル（元と同じ形式・列順・文字コード）")
     aa.add_argument("--overwrite", action="store_true", help="出力先に人のファイルがある時の関所を承知で上書きする")
+    _add_column_option(aa)
     aa.set_defaults(func=cmd_accounts_apply)
 
     sp = sub.add_parser("split", help="1 冊の一覧を担当者ごとに分けて配る（新ブック N 冊 + 検分）")
@@ -19741,6 +19771,7 @@ def build_parser() -> argparse.ArgumentParser:
     ac.add_argument("--overwrite", action="store_true",
                     help="出力先に人のファイルが既にある時の関所（exit 7）を承知の上で上書きする")
     ac.add_argument("--json", action="store_true", help="結果を JSON で出す（stdout は JSON のみ）")
+    _add_column_option(ac)
     ac.set_defaults(func=cmd_accounts)
 
     vf = sub.add_parser("verify", help="出力の検算だけを独立に再実行する（stack/extract/match/"
@@ -19748,6 +19779,7 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("out", help="ailine が作った出力ブック")
     # ★ M3 設計 v2「verify」節: 位置引数を nargs 化し「2個=従来形(出力+元フォルダ) /
     #   3個=照合形(出力+元A+元B)」で分岐する（既存 stack/extract の2引数形は不変）。
+    _add_column_option(vf)
     vf.add_argument("sources", nargs="+",
                     help="元フォルダ（1個・stack/extract）または 元A 元B（2個・照合出力）"
                          "または 元の冊（1個・out がフォルダのとき＝分けた冊）")
