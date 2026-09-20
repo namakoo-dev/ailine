@@ -113,20 +113,45 @@ def test_a_probe_that_fails_is_red(session):
 
 
 def test_the_check_leaves_no_trace_of_itself(session):
-    """★★ 測定が対象を汚さないこと ── 試し打ちの跡を消して返す。
+    """★★ 測定が対象を汚さないこと ── 試し打ちの跡を **1 つ残らず** 消して返す。
 
     ★ 残すと、冊の無い依頼として `freeze` に拾われ、corpus が自分の足跡で濁る。
     ★ 元から在った行は**消さない**（消すと買い手の記録を壊す）── バイトごと戻す。
+
+    ★★ 2026-09-20 に**同じ形を 2 度踏んだ**: 初版は `history.jsonl` と控えだけを戻して
+      おり、試し打ちが作った `notice_v2_shown` が残っていた ── その結果
+      **買い手が見るはずの初回の告知を、こちらの検査が先に消費して**いた
+      （commit に紛れて気づいた）。
+    ★ だから顔ぶれで縛る ──「2 つ戻したか」ではなく「**余計なものが 1 つも無いか**」。
     """
     d = core.CORPUS / session
     hist = d / "home" / "history.jsonl"
     hist.write_bytes(b'{"before": 1}\n')
     trace = d / "argv.jsonl"
     trace.write_bytes(b'{"before": 1}\n')
-    rows = core.check(session, run_fn=_ok_probe)
+    # ★★ 元から在って、試し打ちが**書き換える**ファイルを 1 つ置く ── ここが本当の損害
+    #   （買い手が貯めた語彙を、こちらの検査が上書き／削除する側）。変異試験が
+    #   「履歴だけ戻す」形を素通りさせたので足した検体。
+    vocab = d / "home" / "vocab.json"
+    vocab.write_bytes(b'{"buyer": "words"}')
+    before = {p.name for p in (d / "home").rglob("*") if p.is_file()}
+
+    def messy_probe(home: Path, trace_p: Path) -> tuple:
+        """★ 履歴・控えに加えて**印を落とし、元から在る語彙を書き換える**。"""
+        _ok_probe(home, trace_p)
+        (home / "notice_v2_shown").write_bytes(b"1")
+        (home / "vocab.json").write_bytes(b"{}")
+        return True, ""
+
+    rows = core.check(session, run_fn=messy_probe)
     assert all(ok for _k, ok, _t in rows), [t for _k, ok, t in rows if not ok]
     assert hist.read_bytes() == b'{"before": 1}\n', "★ 元の履歴を壊している"
     assert trace.read_bytes() == b'{"before": 1}\n', "★ 元の控えを壊している"
+    after = {p.name for p in (d / "home").rglob("*") if p.is_file()}
+    assert after == before, (
+        f"★ 跡が残った: {sorted(after - before)} ／ 消された: {sorted(before - after)}")
+    assert vocab.read_bytes() == b'{"buyer": "words"}', (
+        "★ 元から在ったものを書き換えたまま返している（買い手の記録を壊す）")
 
 
 def test_a_missing_session_says_so_instead_of_pretending(session):

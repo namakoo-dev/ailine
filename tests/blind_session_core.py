@@ -360,7 +360,11 @@ def check(name: str, run_fn=None) -> list:
     #     戻さないと、この試し打ちが冊の無い依頼として corpus に混ざる（実測で気づいた）。
     hist = home / "history.jsonl"
     default_home = Path.home() / ".ailine" / "history.jsonl"
-    keep = {f: (f.read_bytes() if f.exists() else None) for f in (hist, trace)}
+    # ★★ 2026-09-20: 後始末は**home の中身ぜんぶ**を見る（2 ファイルだけ戻していた初版は
+    #   `notice_v2_shown` を残し、**買い手が見るはずの初回の告知を試し打ちが消費して**いた）。
+    #   ★ 「測定が対象を汚さない」を 2 度続けて踏んだ ── 対象は狭く数えない。
+    keep = {f: f.read_bytes() for f in home.rglob("*") if f.is_file()}
+    keep[trace] = trace.read_bytes() if trace.exists() else None
     before_here, before_default = _count_lines(hist), _count_lines(default_home)
     before_trace = _count_lines(trace)
     try:
@@ -373,6 +377,10 @@ def check(name: str, run_fn=None) -> list:
                 f.unlink(missing_ok=True)
             else:
                 f.write_bytes(b)
+        # ★ 試し打ちが**新しく作った**ファイルも消す（差分でなく現物を突き合わせる）
+        for f in list(home.rglob("*")):
+            if f.is_file() and f not in keep:
+                f.unlink(missing_ok=True)
 
     rows.append(("試し打ち", ok_run,
                  f"試し打ち: {'通った' if ok_run else '★ 落ちた ── ' + tail[:90]}"))
