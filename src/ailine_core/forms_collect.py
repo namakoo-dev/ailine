@@ -20,6 +20,10 @@ from __future__ import annotations
 
 from ailine_core.field_record import GRADES_WITH_VALUE, describe, grade, value
 from ailine_core.form_read import FIELDS as _ORGAN_FIELDS
+# ★★ 印の受け渡し（2026-09-20）: 検算（verify_forms）は `form_read` を直接 import
+#   しない（番人が禁じている ── 抽出の規則を再現させないため）。**宣言の印**だけは
+#   登録簿を通して渡す ── 両側に字面を書くと、文言を直した日に片方が黙る。
+from ailine_core.form_read import SAME_PARTY_MARK  # noqa: F401 ── 登録簿から配る
 from ailine_core import forms_suspect
 
 #: 書き手の印。★ stack.py の KIND_SIGNATURES に登録して初めて「自分の出力」と分かる

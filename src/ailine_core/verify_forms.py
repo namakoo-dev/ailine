@@ -269,6 +269,25 @@ def verify_forms_list(list_path, folder) -> dict:
                 breaks.append(("★ 元に無い値が載っている（含有の破れ）",
                                f"{name}／{header}: {value!r}"))
 
+    # ★★ ⑤ 二者が立っていない回を咎める（2026-09-20・盲検 4 体目 ③）。
+    #
+    #   出所: 買い手の一覧は「請求元が全部空・宛先に仕入先名」で、**verify はそれを ✓ で
+    #   通していた**。含有（③）は破れない ── 発行元の社名は確かにその冊の中に在るからだ。
+    #   だから「値がどの列に在るか」は含有では測れない。
+    #
+    #   ★ かといって抽出の規則を再現すれば**恒真**になる（この検算器の一番の線）。
+    #     測るのは**道具自身の宣言の辻褄**: 請求書は必ず**二者**なので、片方が
+    #     「もう片方と同じ名前だから」という理由で空欄になっているなら、道具は
+    #     どちらが発行元かを決められていない ── その回の宛先は根拠にできない。
+    #   ★ 道具は検分でそう**自白している**（`SAME_PARTY_MARK`）。読むのはその印だけで、
+    #     どう抽出したかは一切見ない。
+    for (name, item), why in sorted(reasons.items()):
+        if forms_collect.SAME_PARTY_MARK in (why or ""):
+            breaks.append(("★ 請求元と宛先が二者として立っていない",
+                           f"{name}／{item}: {forms_collect.SAME_PARTY_MARK}として捨てています"
+                           "── どちらが発行元かを決められていないので、この冊の"
+                           "請求元と宛先はどちらも根拠にできません"))
+
     explained = {name for name, _item in reasons}
     left_out, out_of_scope = [], []
     for path in candidates(folder, recursive):

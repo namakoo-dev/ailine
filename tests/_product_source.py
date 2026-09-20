@@ -108,3 +108,38 @@ def product_text() -> str:
       ファイル境界をまたぐ。窓が要るときは `window_around()` を使うこと。
     """
     return chr(10).join(p.read_bytes().decode("utf-8") for p in product_files())
+
+
+def code_only_text() -> str:
+    """製品コードから**コメントと docstring を落とした**本文（2026-09-20）。
+
+    ★★ なぜ要るか: 「この字面は 1 箇所にしか無い」という契約を数える番人が、
+      **自分たちの説明文**に当たって誤判定する。今日だけで 2 回踏んだ
+      （「soffice を直に呼ぶと…」というコメント／「宛先と同じ名前と判定された」という注釈）。
+    ★ 3 度目に同じ物を書くところだったので、ここに畳む（呼び出し側に持たせない）。
+    ★ 文字列リテラルは残す ── 契約はたいてい**リテラル**についてのものだから。
+    """
+    import ast
+    out = []
+    for path in product_files():
+        src = path.read_bytes().decode("utf-8")
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:          # ★ Python でない断片は数に入れない
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                                     ast.ClassDef)):
+                continue
+            body = getattr(node, "body", [])
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                node.body = body[1:] or [ast.Pass()]
+        out.append(ast.unparse(ast.fix_missing_locations(tree)))
+    return chr(10).join(out)
+
+
+def count_in_code(needle: str) -> int:
+    """★ コードの中だけでの出現回数（コメント・docstring は数えない）。"""
+    return code_only_text().count(needle)
