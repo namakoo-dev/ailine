@@ -384,9 +384,14 @@ def test_the_comparison_basis_is_chosen_by_the_person():
     for opt in ("原本", "直前"):
         assert opt in HTML, f"選択肢『{opt}』が無い"
     # ★ 恒真殺し: 基準を変えたら**色も塗り直す**（表示だけ変えて色が古いままにしない）
+    # ★★ 2026-09-20: ここは描画関数の**名前**（drawTable）で縛っていたので、見え方の
+    #   切り替えを 1 関数（drawPane）に畳んだ日に赤くなった ── 守っている不変は
+    #   1 文字も変わっていない。今週 6 件目の「番人を字面で書いた」形。
+    #   ★ 不変は「後ろの枠を、**新しい基準の色で**描き直すこと」。名前でなくそこを見る。
     i = js.index("function redrawBasis")
-    block = js[i:i + 700]
-    assert "drawTable($(\"#after\")" in block, "基準を変えても色を塗り直していない"
+    block = js[i:i + 900]
+    assert '$("#after")' in block and "beforeCells" in block, (
+        "基準を変えても色を塗り直していない（後ろの枠を新しい基準で描き直すこと）")
 
 
 def test_continuing_is_disclosed():

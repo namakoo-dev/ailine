@@ -13,10 +13,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -139,6 +141,46 @@ def _native_dialog(kind: str, start: str = "", name: str = "") -> str:
     finally:
         root.destroy()
     return got or ""
+
+
+#: ★ 実物の見え方（LibreOffice の描画）を溜めておく場所。人のフォルダには一切作らない
+#:   ── soffice に人のフォルダを触らせると、同名の PDF が予告なく消える（2026-08-26 実測）。
+_RENDER_DIR = Path(tempfile.gettempdir()) / "ailine_gui_render"
+
+
+def _render_pdf(path: Path, sheet: str | None) -> tuple:
+    """冊を **LibreOffice に描かせて** PDF にする。戻り値 (PDF のパス, 理由)。
+
+    ★★ なぜ要るか（Namakoo 実測・2026-09-20）:「今は ailine の確認用に LO を別で開いて
+      るけど、そこがかなり煩わしい」。確かめるたびにアプリを切り替えていた。
+      見たいのは**実際にどう見えるか**（列幅・結合・罫線・グラフ）で、値の一覧では足りない。
+
+    ★ 新しい依存を足さない（GUI の縛り④）── 画像化の道具も使わない。
+      **PDF はブラウザが自分で描ける**ので、LO → PDF → そのまま出す、で終わる。
+    ★ 描くのは製品の `ailine export-pdf`（殻は本体を叩く・縛り③）。ここで soffice を
+      直に呼ぶと、探し方と関所が 2 つ目の実装になる。
+    ★ 同じ冊を何度も描かない ── 鍵は（パス・更新時刻・シート）。実行して中身が変われば
+      更新時刻が動くので勝手に描き直る（画面が「古い絵」を見せ続けない）。
+    """
+    try:
+        path = path.resolve()
+        stamp = path.stat().st_mtime_ns
+    except OSError as e:
+        return None, f"開けません: {e}"
+    key = hashlib.sha1(f"{path}|{stamp}|{sheet or ''}".encode("utf-8")).hexdigest()[:16]
+    out = _RENDER_DIR / f"{key}.pdf"
+    if out.exists():
+        return out, None
+    _RENDER_DIR.mkdir(parents=True, exist_ok=True)
+    args = ["export-pdf", str(path), "--out", str(out), "--fit-to-width", "--overwrite"]
+    if sheet:
+        args += ["--sheet", sheet]
+    rc, text, _payload = _ailine(args)
+    if rc != 0 or not out.exists():
+        # ★ 黙って空を見せない ── 描けなかった理由をそのまま画面へ返す
+        #   （LibreOffice が無い環境もある。出ないことは信号でない）。
+        return None, (text or "").strip()[-300:] or f"描けませんでした（exit {rc}）"
+    return out, None
 
 
 MAX_ROWS = 200
@@ -367,6 +409,17 @@ class Handler(BaseHTTPRequestHandler):
             path = Path((q.get("path") or [""])[0])
             want = (q.get("sheet") or [None])[0]
             self._json(200, _read_sheet(path, want))
+            return
+        if u.path == "/api/render":
+            # ★ 実物の見え方を返す（LibreOffice が描いた PDF）。判定は一切作らない ──
+            #   殻は本体が出したものを**そのまま映す**だけ（GUI の縛り①）。
+            q = parse_qs(u.query)
+            pdf, why = _render_pdf(Path((q.get("path") or [""])[0]),
+                                    (q.get("sheet") or [None])[0])
+            if why:
+                self._json(200, {"error": why})
+                return
+            self._send(200, pdf.read_bytes(), "application/pdf")
             return
         if u.path == "/api/files":
             q = parse_qs(u.query)
