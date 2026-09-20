@@ -62,6 +62,16 @@ def test_the_refusal_names_the_cause_and_the_next_thing_to_say():
     assert "キー列" in err and "対象列" in err, f"★ 原因を言っていない: {err}"
     assert "コード" in err, f"★ 次に言うべき列（参照表の 1 列目）を名指していない: {err}"
     assert "依頼文" in err, f"★ 人が何をすればいいか言っていない: {err}"
+    # ★★ 2026-09-20（盲検 5 体目 ⑤）: 例文が**その誤りを再生産しない**こと。
+    #   買い手:「その例文どおりに書いたら、また同じエラーになるはずです。
+    #   直し方が書いていないのと同じでした」── 導通の盤で一番重い `path_fails`。
+    #   ★ 俺は直しで**2 回続けて同じ所を外した**（1 度目は句が隣り合っていない前提、
+    #     2 度目は除外する列を間違えた）。だから字面でなく**形**で縛る:
+    #     例文の「◯◯で引いて△△を転記して」の ◯◯ と △△ が同じなら赤。
+    import re as _re
+    for _m in _re.finditer(r"「([^」]+?)で引いて([^」]+?)を転記して」", err):
+        assert _m.group(1) != _m.group(2), (
+            f"★ 例文が同じ列を両側に置いている（打つと同じ誤りが再生産される）: {_m.group(0)}")
 
 
 def test_a_proper_key_still_passes():
@@ -80,3 +90,35 @@ def test_the_judgment_reads_structure_not_the_request_text():
             {"target_sheet": "注文", "target_col": "商品名", "source_sheet": "商品表", "key_col": "商品名"},
             META, task=task, target_sheet="注文")
         assert ok is False, f"★ 依頼文『{task}』で判定が変わった"
+
+#: ★★ 盲検 5 体目の形（2026-09-20）── 参照表の **1 列目が転記先と同じ名前**。
+#:   買い手の発注記録がこれで、例文が「商品名で引いて商品名を転記して」になった
+#:   ＝ **打つと同じ誤りが再生産される**（導通の盤で一番重い `path_fails`）。
+#:   ★ 検体を足した理由: 既存の検体は 1 列目が『コード』で転記先と違うため、
+#:     直しを戻す変異が**素通り**した（変異試験が指した）。
+BUYER_META = {
+    "sheets": ["請求", "商品名・発注金額だけ"],
+    "headers": {"請求": ["商品名", "請求金額", "発注金額"],
+                "商品名・発注金額だけ": ["商品名", "発注金額"]},
+    "header_rows": {"請求": 1, "商品名・発注金額だけ": 1},
+}
+
+
+def test_the_example_never_repeats_the_same_column_in_the_buyers_shape():
+    """★★ 参照表の 1 列目が転記先と同名でも、例文が誤りを再生産しないこと。
+
+    ★ 盲検 5 体目の買い手が踏んだ形そのもの。
+    """
+    ok, _r, _i, err = ailine.verify_dsl_args(
+        "LOOKUP_FILL",
+        {"target_sheet": "請求", "target_col": "商品名",
+         "source_sheet": "商品名・発注金額だけ", "key_col": "商品名"},
+        BUYER_META, task="商品名で発注金額を転記して", target_sheet="請求")
+    assert ok is False, err
+    import re
+    pairs = re.findall(r"「([^」]+?)で引いて([^」]+?)を転記して」", err)
+    assert pairs, f"★ 例文が無い（通る道を示していない）: {err}"
+    for puller, target in pairs:
+        assert puller != target, (
+            f"★ 例文が同じ列を両側に置いている（打つと同じ誤りが再生産される）: {err}")
+    assert "発注金額" in err, f"★ 転記できる列を名指していない: {err}"

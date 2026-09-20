@@ -1,0 +1,267 @@
+{
+ "head": "7a0bb5fadc5171c6f8a41de4e7aa2e15a879083d",
+ "version_line": "✓ ailine 版（この道具の版です（README の記載と合っているか確かめてください）） (0.2.5（作業木 C:\\Dev\\ailine）)",
+ "frozen_at": "2026-09-20T10:00:35.575404+00:00",
+ "requests": [
+  {
+   "ts": "2026-09-20T09:49:01+00:00",
+   "task": "重複している行を削除して",
+   "book": "d940d11bd56b.xlsx",
+   "book_name": "商品リスト.xlsx",
+   "path": "dsl",
+   "op": "DEDUP",
+   "ok": true,
+   "verdict": "warned"
+  },
+  {
+   "ts": "2026-09-20T09:49:28+00:00",
+   "task": "品番の小さい順に並べ替えて",
+   "book": "d940d11bd56b.xlsx",
+   "book_name": "商品リスト.xlsx",
+   "path": "dsl",
+   "op": "SORT",
+   "ok": true,
+   "verdict": "unverified"
+  },
+  {
+   "ts": "2026-09-20T09:50:52+00:00",
+   "task": "2枚目のシートを品番の小さい順に並べ替えて",
+   "book": "d940d11bd56b.xlsx",
+   "book_name": "商品リスト.xlsx",
+   "path": "dsl",
+   "op": "SORT",
+   "ok": true,
+   "verdict": "unverified"
+  },
+  {
+   "ts": "2026-09-20T09:51:22+00:00",
+   "task": "数量に売価を掛けた金額の列を作って",
+   "book": "5025a5c4c834.xlsx",
+   "book_name": "9月_全店売上.xlsx",
+   "path": "dsl",
+   "op": "COMPUTE_COLUMN",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:51:36+00:00",
+   "task": "一番下に金額の合計行を付けて",
+   "book": "5025a5c4c834.xlsx",
+   "book_name": "9月_全店売上.xlsx",
+   "path": "dsl",
+   "op": "APPEND_TOTAL",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:52:03+00:00",
+   "task": "発注記録.xlsx から商品名で発注金額を転記して",
+   "book": "d138428bb436.xlsx",
+   "book_name": "請求書.xlsx",
+   "path": "freeform",
+   "op": "LOOKUP_FILL",
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-20T09:52:35+00:00",
+   "task": "請求シートに、発注シートから商品名で発注金額を転記して",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "dsl",
+   "op": "LOOKUP_FILL",
+   "ok": false,
+   "verdict": "not_applied"
+  },
+  {
+   "ts": "2026-09-20T09:52:49+00:00",
+   "task": "発注シートから商品名と発注金額の列だけ抜き出して",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "dsl",
+   "op": "EXTRACT_COLUMNS",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:53:03+00:00",
+   "task": "請求シートに、3枚目のシートから商品名で発注金額を転記して",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "freeform",
+   "op": "LOOKUP_FILL",
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-20T09:53:20+00:00",
+   "task": "請求シートの発注金額の列に、3枚目のシートから商品名をキーにして引き当てて",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "dsl",
+   "op": "LOOKUP_FILL",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:53:35+00:00",
+   "task": "請求シートで請求金額から発注金額を引いた差額の列を作って",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "dsl",
+   "op": "COMPUTE_COLUMN",
+   "ok": true,
+   "verdict": "warned"
+  },
+  {
+   "ts": "2026-09-20T09:53:59+00:00",
+   "task": "請求シートで差額が0でない行の備考列に「要確認」と入れて",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "vocab_miss",
+   "op": null,
+   "ok": false,
+   "verdict": "not_applied"
+  },
+  {
+   "ts": "2026-09-20T09:54:55+00:00",
+   "task": "確認という列を追加して",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "dsl",
+   "op": "ADD_COLUMN",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:55:09+00:00",
+   "task": "差額が1以上の行の確認列に「◎」を付けて",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "dsl",
+   "op": "SET_WHERE",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:55:24+00:00",
+   "task": "請求金額と発注金額を突き合わせて",
+   "book": "d138428bb436.xlsx",
+   "book_name": "請求書.xlsx",
+   "path": "match",
+   "op": null,
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-20T09:55:31+00:00",
+   "task": "商品名をキタに請求金額と発注金額を突き合わせて",
+   "book": "d138428bb436.xlsx",
+   "book_name": "請求書.xlsx",
+   "path": "match",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-20T09:55:32+00:00",
+   "task": "商品名をキーに請求金額と発注金額を突き合わせて",
+   "book": "d138428bb436.xlsx",
+   "book_name": "請求書.xlsx",
+   "path": "match",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-20T09:55:58+00:00",
+   "task": "重複している行を削除して",
+   "book": "d940d11bd56b.xlsx",
+   "book_name": "商品リスト.xlsx",
+   "path": "dsl",
+   "op": "DEDUP",
+   "ok": true,
+   "verdict": "warned"
+  },
+  {
+   "ts": "2026-09-20T09:56:12+00:00",
+   "task": "この表をメールで仕入先に送って",
+   "book": "468ae12c5321.xlsx",
+   "book_name": "突合.xlsx",
+   "path": "clarify",
+   "op": null,
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-20T09:56:36+00:00",
+   "task": "金額の合計を出して",
+   "book": "9bd1d72c9794.xlsx",
+   "book_name": "空.xlsx",
+   "path": "vocab_miss",
+   "op": null,
+   "ok": false,
+   "verdict": "not_applied"
+  },
+  {
+   "ts": "2026-09-20T09:56:55+00:00",
+   "task": "見出しを太字にして",
+   "book": "5025a5c4c834.xlsx",
+   "book_name": "9月_全店売上.xlsx",
+   "path": "dsl",
+   "op": "BOLD",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:57:03+00:00",
+   "task": "金額の列を3桁区切りにして",
+   "book": "5025a5c4c834.xlsx",
+   "book_name": "9月_全店売上.xlsx",
+   "path": "dsl",
+   "op": "NUMBER_FORMAT",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:57:30+00:00",
+   "task": "元ファイルごとに金額を集計して",
+   "book": "5025a5c4c834.xlsx",
+   "book_name": "9月_全店売上.xlsx",
+   "path": "dsl",
+   "op": "AGGREGATE",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:58:11+00:00",
+   "task": "商品名をキーに請求金額と発注金額を突き合わせて",
+   "book": "d138428bb436.xlsx",
+   "book_name": "請求書.xlsx",
+   "path": "match",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-20T09:58:30+00:00",
+   "task": "差額が1以上の行のチェック列に「◎」を付けて",
+   "book": "e61e7825f4b5.xlsx",
+   "book_name": "突合_試し.xlsx",
+   "path": "dsl",
+   "op": "SET_WHERE",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-20T09:58:49+00:00",
+   "task": "金額が20000以上の行のチェック列に「◎」を付けて",
+   "book": "5025a5c4c834.xlsx",
+   "book_name": "売上_試し.xlsx",
+   "path": "freeform",
+   "op": "SET_WHERE",
+   "ok": false,
+   "verdict": null
+  }
+ ]
+}

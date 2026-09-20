@@ -4303,11 +4303,27 @@ def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, 
         _hint = (f"参照表『{resolved['source_sheet']}』の 1 列目は『{_src[0]}』です ── "
                  f"ふつうはそれがキー列です" if _src else
                  f"参照表『{resolved['source_sheet']}』の 1 列目がキーになります")
+        # ★★ 2026-09-20（盲検 5 体目 ⑤）: ここの例文は「引く側」に参照表の 1 列目を
+        #   そのまま入れていた。買い手の冊は 1 列目も転記先も『商品名』だったので、
+        #   **例文がそのまま同じ誤りを再生産した**（`path_fails` ── 盤で一番重い失敗）。
+        #   ★ キーと同じ名前になる例は作らない。人が次に言うべきは「**何を**転記するか」
+        #     なので、参照表の**他の列**を候補として名指しする。
+        # ★★ 除くのは**引く側に使う列**（参照表の 1 列目）── 初版は `key_col` で除いたので、
+        #   1 列目が `key_col` と違う冊では 1 列目自身が候補に残り、例文がまた
+        #   「コードで引いてコードを転記して」になった（既存の番人が掴んだ・2026-09-20）。
+        _puller = str(_src[0]) if _src else ""
+        _others = [c for c in _src if str(c) != _puller]
+        if _others:
+            _how = (f"引くのは『{_puller}』のままで構いません ── "
+                    f"**転記したい列**を選んでください（『{_others[0]}』など"
+                    + ("、他に " + "／".join(f"『{c}』" for c in _others[1:4]) if len(_others) > 1 else "")
+                    + f"）。依頼文にそう書いてください。例:「{_puller}で引いて{_others[0]}を転記して」")
+        else:
+            _how = (f"参照表『{resolved['source_sheet']}』には『{resolved['key_col']}』しか"
+                    "列がありません ── 転記できる中身がその表に入っていません")
         return False, resolved, inferred, (
             f"転記のキー列と対象列がどちらも『{resolved['key_col']}』になっています。"
-            f"転記は別の列を手がかりに引きます（{_hint}）。"
-            f"どの列で引くかを依頼文に書いてください"
-            f"（例:「{_src[0] if _src else 'コード'}で引いて{resolved['target_col']}を転記して」）"
+            f"転記は**キーとは別の列**を持ってくる操作です（{_hint}）。{_how}"
         )
     return None
 
@@ -16374,7 +16390,13 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                     a, about, out_book, workdir, refs_dir, helpers_dir, f"plan{i}", apply_timeout,
                     step_prefix=f"  {i}段目: ", vocab=vocab, op=op, about=about)
             except _FreeformGateAbort as e:
-                return e.exit_code
+                # ★★ 2026-09-20（盲検 5 体目 ①・同じ家系の 3 件目）: ここは
+                #   `_finish_run` を素通りしていたので、関所で止まった run が
+                #   `.out.xlsx` を**黙って**残し、次の run が「この道具が書いた記録が
+                #   ありません」と塞いだ ── **1 分前に自分が作った物**なのに。
+                #   ★ 失敗の出口（2026-08-26）と上書きの関所（2026-09-16）で既に
+                #     直してある形。出口が 1 つ漏れると必ずこうなる。
+                return _finish_gated(a, book, out_book, result, e.exit_code)
             if okf:
                 items.append((i, about, "warn", None))
                 for ln in changes:

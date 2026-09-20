@@ -35,20 +35,32 @@ def test_the_list_does_not_eat_an_ability_we_have():
 
     重なった瞬間、その op は**永久に断られる**（黙って能力が消える）。
     """
-    ours = set()
-    for meta in ailine.OP_META.values():
+    # ★★ 2026-09-20: 語彙を **op ごと**に持つ（名簿に「組」の鍵が入ったため）。
+    #   組（("メール","送")）は**全部そろった時だけ**断るので、片方が或る op の語と
+    #   重なっても、その op は死なない。**同じ op の語彙に全部が重なった時**だけ食う。
+    #   ★ 平らな集合で数えると、組を足した日に偽の赤が出る（規則は変えていない）。
+    by_op: dict = {}
+    for op, meta in ailine.OP_META.items():
+        got = set()
         for key in ("label", "without_the_word"):
             if isinstance(meta.get(key), str):
-                ours.add(meta[key])
+                got.add(meta[key])
         for key in ("synonyms", "match_phrases", "pool_phrases", "requires_word"):
-            ours.update(str(w) for w in (meta.get(key) or ()))
-    ours.update(str(v) for v in ailine.OP_LABELS.values())
+            got.update(str(w) for w in (meta.get(key) or ()))
+        if ailine.OP_LABELS.get(op):
+            got.add(str(ailine.OP_LABELS[op]))
+        by_op[op] = got
+
+    def _eats(part: str, vocab: set) -> bool:
+        return any(mine and (part in mine or mine in part) for mine in vocab)
 
     collisions = []
     for word in WE_DO_NOT_DO:
-        for mine in ours:
-            if mine and (word in mine or mine in word):
-                collisions.append((word, mine))
+        parts = word if isinstance(word, tuple) else (word,)
+        for op, vocab in by_op.items():
+            if all(_eats(p, vocab) for p in parts):
+                collisions.append((word, op, sorted(m for m in vocab
+                                                     if any(p in m or m in p for p in parts))[:3]))
     assert not collisions, (
         "『できない属性』の名簿が、持っている op の語彙と重なっている ── "
         f"その op は今後ずっと断られる: {collisions}")

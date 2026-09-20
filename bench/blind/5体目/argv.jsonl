@@ -1,0 +1,42 @@
+{"ts": "2026-09-20T09:48:14+00:00", "argv": ["doctor"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:48:54+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\商品リスト.xlsx", "重複している行を削除して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:49:20+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\商品リスト.xlsx", "品番の小さい順に並べ替えて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:49:42+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\商品リスト.xlsx", "品番の重複除去シートを品番の小さい順に並べ替えて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:50:20+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\商品リスト.xlsx", "2枚目のシートを品番の小さい順に並べ替えて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:50:44+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\商品リスト.xlsx", "2枚目のシートを品番の小さい順に並べ替えて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:50:59+00:00", "argv": ["stack", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\店舗別売上", "--out", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\9月_全店売上.xlsx"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:51:07+00:00", "argv": ["verify", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\9月_全店売上.xlsx", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\店舗別売上"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:51:14+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\9月_全店売上.xlsx", "数量に売価を掛けた金額の列を作って"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:51:28+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\9月_全店売上.xlsx", "一番下に金額の合計行を付けて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:51:56+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\請求書.xlsx", "発注記録.xlsx から商品名で発注金額を転記して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:52:11+00:00", "argv": ["ops"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:52:26+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "請求シートに、発注シートから商品名で発注金額を転記して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:52:44+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "発注シートから商品名と発注金額の列だけ抜き出して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:52:55+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "請求シートに、3枚目のシートから商品名で発注金額を転記して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:53:11+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "請求シートの発注金額の列に、3枚目のシートから商品名をキーにして引き当てて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:53:26+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "請求シートで請求金額から発注金額を引いた差額の列を作って"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:53:52+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "請求シートで差額が0でない行の備考列に「要確認」と入れて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:54:10+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "差額が1以上の行のチェック列に「◎」を付けて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:54:27+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "差額の右に確認という空の列を追加して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:54:44+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "確認という列を追加して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:01+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "差額が1以上の行の確認列に「◎」を付けて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:15+00:00", "argv": [], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:16+00:00", "argv": ["--help"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:24+00:00", "argv": [], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:24+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\請求書.xlsx", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\発注記録.xlsx", "請求金額と発注金額を突き合わせて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:31+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\請求書.xlsx", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\発注記録.xlsx", "商品名をキタに請求金額と発注金額を突き合わせて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:31+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\請求書.xlsx", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\発注記録.xlsx", "商品名をキーに請求金額と発注金額を突き合わせて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:50+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\商品リスト.xlsx", "重複している行を削除して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:55:58+00:00", "argv": ["undo", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\商品リスト.xlsx"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:56:07+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\空.xlsx", "金額の合計を出して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:56:08+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "この表をメールで仕入先に送って"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:56:23+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合.xlsx", "画像を挿入して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:56:27+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\空.xlsx", "金額の合計を出して", "--header-row", "1"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:56:47+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\9月_全店売上.xlsx", "見出しを太字にして"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:56:55+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\9月_全店売上.xlsx", "金額の列を3桁区切りにして"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:57:21+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\9月_全店売上.xlsx", "元ファイルごとに金額を集計して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:57:42+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\9月_全店売上.xlsx", "金額の税込み合計を出して"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:57:59+00:00", "argv": ["history"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:58:11+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\請求書.xlsx", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\発注記録.xlsx", "商品名をキーに請求金額と発注金額を突き合わせて"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:58:22+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\突合_試し.xlsx", "差額が1以上の行のチェック列に「◎」を付けて", "--overwrite"], "cwd": "C:\\Dev\\ailine"}
+{"ts": "2026-09-20T09:58:42+00:00", "argv": ["run", "C:\\Dev\\ailine\\bench\\blind\\5体目\\work\\売上_試し.xlsx", "金額が20000以上の行のチェック列に「◎」を付けて", "--overwrite"], "cwd": "C:\\Dev\\ailine"}

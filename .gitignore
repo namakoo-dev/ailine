@@ -48,3 +48,12 @@ bench/split_people/split_books/
 bench/split_people/答え_split.json
 bench/accounts/accounts_books/
 bench/accounts/答え_accounts.json
+
+# ★★ 2026-09-20（盲検 5 体目・機密語の番人が push を止めた）: 原子的置換の**途中で
+#   残る一時ファイル**（43 バイトの壊れた zip）が追跡され、走査器が「中を読めない」と
+#   fail closed した ── 止め方は正しい。追跡する側を直す。
+.at-*
+# ★ 盲検の corpus は**再生に要るもの**だけ追う（依頼文・冊・控え・履歴）。
+#   バックアップと undo の世代は買い手の作業の副産物で、再生には使わない。
+bench/blind/*/home/backups/
+bench/blind/*/home/undo/
