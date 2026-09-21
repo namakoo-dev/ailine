@@ -484,7 +484,9 @@ def test_composite_plan_shows_the_sheet_but_never_asks(tmp_path, monkeypatch, ca
 #    ここは CLI をそのまま通して、出た行で見る。
 # ===========================================================================
 
-_FALSE_STAR = "★ 依頼で言及された『金額』は存在しません/変更されていません"
+#: ★ 2026-09-21: シートの枝は「在るのに存在しないと言う」のをやめた（買い手役 5 体目）。
+#:   在るか無いかは機械が見て言い分ける ── ここは**在って変わらなかった**側。
+_FALSE_STAR = "★ 依頼で言及された『金額』は変更されていません"
 
 
 def test_conflict_fallback_does_not_warn_that_the_sheet_was_not_changed(tmp_path, monkeypatch, capsys):

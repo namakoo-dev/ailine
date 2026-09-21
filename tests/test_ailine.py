@@ -1297,7 +1297,8 @@ def test_build_advisories_silences_mention_for_declared_reads_only_sheet(tmp_pat
     assert not any("工事台帳" in ln and ln.startswith("★") for ln in lines)
     # 宣言を渡さなければ従来どおり出る（消えたのが宣言のおかげであることの対照）。
     plain = ailine.build_advisories(task, before, after, None)
-    assert "★ 依頼で言及された『工事台帳』は存在しません/変更されていません" in plain
+    # ★ 2026-09-21: 在るシートに「存在しません」と言わない（買い手役 5 体目・文言のみ）。
+    assert "★ 依頼で言及された『工事台帳』は変更されていません" in plain
 
 
 def test_declared_new_column_letter_driven_by_op_write_target():

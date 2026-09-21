@@ -1637,7 +1637,21 @@ _RE_COL_LETTER_SUFFIX = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,3})\s*列")
 _RE_ROW = re.compile(r"行\s*(\d+)")
 
 
-def extract_task_mentions(task: str, sheet_names: list) -> dict:
+def _header_names_of(meta) -> tuple:
+    """book_meta / meta から**実在する見出し名**を平らに取り出す（重複は畳む）。
+
+    ★ 呼び出し側ごとに書き写さない ── 同じ取り出しが 2 箇所にあると、片方だけ直る日が来る。
+    """
+    heads = (meta or {}).get("headers") or {}
+    out = []
+    for cols in heads.values():
+        for c in (cols or ()):
+            if c and str(c) not in out:
+                out.append(str(c))
+    return tuple(out)
+
+
+def extract_task_mentions(task: str, sheet_names: list, header_names=()) -> dict:
     """タスク文言から明示的な言及だけを正規表現で抜き出す（保守的・誤検知回避優先）。
        戻り値: {"cols": {1起点の列番号(文字表記=曖昧さなし)}, "digit_cols": {数字表記の生の値},
                "rows": {1起点の行番号}, "sheets": {原本に実在するシート名}}
@@ -1660,8 +1674,19 @@ def extract_task_mentions(task: str, sheet_names: list) -> dict:
     #   絞る／助言側は全部使う、という役割の違いだけを残す（判定規則も戻り値も不変）。
     # ★ 片配線の解消（2026-08-24）: 対象シートの決定は部分文字列を畳むのに、言及の
     #   抽出は畳んでいなかった。同じ規則（位置で見る）を ailine_core 側の 1 箇所から使う。
+    # ★★ 2026-09-21（買い手役 5 体目・偽の ⚠ で ✓ が △ に落ちた）: 覆う側の語彙に
+    #   **列名が入っていなかった**。「請求シートで請求金額から発注金額を引いた差額の列を
+    #   作って」で、シート『発注』は文中『発注金額』（列名）の内側にしか出てこないのに
+    #   言及と数え、「『発注』は存在しません/変更されていません」と誤警報を出していた。
+    #   ★ 器官（位置で見る drop_names_covered_by_longer）は在った ── **語彙が届いて
+    #     いなかった**。判定規則は一切変えず、覆う候補に実在する列名を足すだけ。
+    #   ★ 足すのは覆う側だけ（戻り値は実在シート名のまま）。
+    #   ★ 同名（シート名＝列名）は覆いにならない ── 畳むのは**より長い**名前だけなので、
+    #     足しても重複が増えるだけ（変異で観測差が出ないことを確認済み・等価）。
+    _covering = list(dict.fromkeys(str(h) for h in (header_names or ()) if h))
     sheets = set(drop_names_covered_by_longer(
-        task, sheet_names_mentioned_in(task, list(sheet_names or ()))))
+        task, sheet_names_mentioned_in(task, list(sheet_names or ())) + _covering))
+    sheets &= set(sheet_names or ())
     return {"cols": cols, "digit_cols": digit_cols, "rows": rows, "sheets": sheets}
 
 
@@ -1928,7 +1953,16 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
         if any(sheet in ex for ex in exclude_sheets):
             continue
         if sheet not in changed_sheets:
-            lines.append(f"★ 依頼で言及された『{sheet}』は存在しません/変更されていません")
+            # ★★ 2026-09-21（買い手役 5 体目）: 「存在しません**/**変更されていません」は
+            #   **2 つの全く違う事実を 1 つの文に畳んでいた**。機械はどちらか知っている
+            #   （原本のシート一覧を見れば分かる）のに、知らないふりをしていた。
+            #   買い手は前半を読んで、正しくできた仕事の ✓ が △ に落ちた回を疑った。
+            #   ★ 推論（「シートの枝では存在しないは起こりえない」）に寄りかからず、
+            #     **実際に見て**言い分ける ── 前提が崩れても嘘にならない側に置く。
+            if sheet in set(before.get("sheets") or ()):
+                lines.append(f"★ 依頼で言及された『{sheet}』は変更されていません")
+            else:
+                lines.append(f"★ 依頼で言及された『{sheet}』は存在しません")
     return lines
 
 
@@ -2021,7 +2055,8 @@ def build_advisories(task: str, before: dict, after: dict, exclude_sheets: set |
     lines = list(_structural_advisories(before, after, op=op, resolved=resolved, meta=meta,
                                         precondition_broken=precondition_broken, after_path=after_path))
     lines.extend(unrequested_new_sheet_advisory(task, before, after, op=op))
-    mentions = extract_task_mentions(task, before["sheets"])
+    mentions = extract_task_mentions(task, before["sheets"],
+                                      _header_names_of(meta))
     excluded = (set(exclude_sheets or ()) | _declared_reads_only_sheets(op, resolved)
                 | conflict_excluded_sheets(sheet_conflict))
     excluded_cols = (_declared_kept_subject_cols(op, resolved, meta)
@@ -16518,7 +16553,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     #   （単発の build_advisories が中でやっているのと同じ和・ここは④を直接呼ぶ経路）。
     mention_exclude_sheets |= conflict_excluded_sheets(getattr(a, "_sheet_conflict", None))
     after_all = snapshot(out_book)
-    mentions = extract_task_mentions(a.task, before_all["sheets"])
+    mentions = extract_task_mentions(a.task, before_all["sheets"],
+                                      _header_names_of(book_meta))
     final_mention_lines = mention_overlap_advisory(
         mentions, before_all, after_all, mention_exclude_sheets or None)
     step_advisory_entries.extend((None, ln) for ln in final_mention_lines)   # None=計画全体
