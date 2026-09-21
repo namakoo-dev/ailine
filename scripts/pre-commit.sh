@@ -23,10 +23,15 @@ root=$(git rev-parse --show-toplevel)
 cd "$root"
 
 printf '▶ pre-commit: 改行コードと制御文字…'
-if ! out=$(python -m pytest -q -p no:cacheprovider --no-header tests/test_no_control_chars.py 2>&1); then
+# ★★ 2026-09-21 追記: 改行の**混在**（1 ファイルの中に CRLF と LF が同居）も
+#   ここで見る。同じ日に 2 回、CRLF のファイルへ LF で 1 行足して pre-push まで
+#   気づかなかった（17 分 x 2）。番人は在ったが、鳴る場所が push の中だった。
+#   ★ この番人は **git の index** を見る（tests/test_line_endings_stay_consistent.py の
+#     docstring 参照）。commit の瞬間なら staged の中身が index に在るので捕まる。
+if ! out=$(python -m pytest -q -p no:cacheprovider --no-header tests/test_no_control_chars.py tests/test_line_endings_stay_consistent.py 2>&1); then
     printf '\n%s\n' "$out" >&2
     echo "" >&2
-    echo "✗ pre-commit: 改行コード/制御文字の番人が止めました。" >&2
+    echo "✗ pre-commit: 改行コード/制御文字/改行の混在の番人が止めました。" >&2
     echo "  よくある原因: Python から repo のファイルを書き戻す時に write_text() を使った" >&2
     echo "  （Windows では LF が CRLF に化けます）── 書き戻しは **write_bytes** で。" >&2
     echo '  直す: python -c "import pathlib;p=pathlib.Path(FILE);p.write_bytes(p.read_bytes().replace(b(CR LF),b(LF)))"' >&2
