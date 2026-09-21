@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "resolved": {
+    "keys": [
+      "商品"
+    ],
+    "_target_sheet": "Sheet",
+    "_skip_rows": [],
+    "_source_headers": [
+      "商品",
+      "数量",
+      "単価",
+      "金額"
+    ]
+  },
+  "inferred": [],
+  "err": "重複している行はありません（判定キー: 商品） ── 消すものが無いので、何もしていません"
+}

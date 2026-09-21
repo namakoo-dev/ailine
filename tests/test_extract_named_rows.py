@@ -39,8 +39,11 @@ def test_the_check_compares_what_is_shown_not_the_formula_text():
     """★ 変異試験: 元セルが式なら、比べる相手はキャッシュ値。"""
     assert count_in_product("def _row_as_shown(") == 1
     # 抽出と重複除去の両方がその関数を通ること（片配線を作らない）
-    # 定義 1 + 呼び出し 2（抽出と重複除去）── 片方だけ直さない
-    assert count_in_product("_row_as_shown(") == 3, "片方だけが計算結果と比べている"
+    # ★ 2026-09-21: 重複行の**削除**（DEDUP_DELETE）が 2 箇所から呼ぶようになった
+    #   ── 結果の行と、元から組み直した期待行の**両方**を同じ読み方で比べるため。
+    #   片側だけ値ビューだと、式の入った表で必ず食い違う（この番人が見ている穴そのもの）。
+    # 定義 1 + 呼び出し 4（抽出 1・重複除去 1・重複行の削除 2）
+    assert count_in_product("_row_as_shown(") == 5, "片方だけが計算結果と比べている"
 
 
 def test_a_formula_row_is_read_as_its_value(tmp_path):

@@ -218,6 +218,14 @@ _add("dedup_multi_key_hr1", "DEDUP",
 _add("dedup_single_key_hr3", "DEDUP", {"keys": ["商品"], "_new_sheet": "商品の重複除去"},
      book_meta=BM_HR3)
 
+# --- DEDUP_DELETE（重複行を元の表から消す・2026-09-21）------------------------
+# ★ 生成は DELETE_ROWS と同じ関数を通る（`_delete_rows` を**下から順に**消す）。
+#   順序が逆だと、上を消した時点で下の行番号がずれる ── ここで凍結する。
+_add("dedup_delete_two_rows_hr1", "DEDUP_DELETE",
+     {"keys": ["商品"], "_delete_rows": [3, 5]})
+_add("dedup_delete_one_row_hr3", "DEDUP_DELETE",
+     {"keys": ["商品"], "_delete_rows": [4]}, book_meta=BM_HR3)
+
 # --- REPORT_PER_ROW（帳票段）--------------------------------------------------
 # ★ _target_sheet/_report_rows は verify_dsl_args が積む値（unique_sheet_name で
 #   一意名を決め切ってから渡す ── Basic 側で名前を作らない・設計文書の指示どおり）。

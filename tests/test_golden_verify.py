@@ -331,6 +331,9 @@ _add("extract_missing_value", "EXTRACT", {"col": "金額", "cmp": "gte", "value"
 # --- DEDUP（EXTRACT の兄弟）--------------------------------------------------
 _add("dedup_ok_single_key", "DEDUP", {"keys": ["商品"]})
 _add("dedup_ok_multi_key", "DEDUP", {"keys": ["商品", "単価"]})
+# ★ DEDUP_DELETE（2026-09-21）: 冊のパスが無い book_meta では**重複を数えられない**ので、
+#   推測で消しに行かず断る ── 破壊する op として凍結しておく契約。
+_add("dedup_delete_without_a_readable_book", "DEDUP_DELETE", {"keys": ["商品"]})
 _add("dedup_unknown_key_column", "DEDUP", {"keys": ["不明"]})
 _add("dedup_missing_keys_empty_list", "DEDUP", {"keys": []})
 _add("dedup_missing_keys_absent", "DEDUP", {})

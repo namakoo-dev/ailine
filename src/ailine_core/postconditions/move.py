@@ -905,6 +905,86 @@ def check_split_cell(path: Path, args: dict, header_row: int = 1,
     return "ok", (f"{res.rows_checked} 行を {len(new_cols)} 列へ分割"
                    f"（繋ぎ直して元と一致・元の列は保存）")
 
+def check_dedup_delete(path: Path, args: dict, header_row: int = 1,
+                       source_book: Path | None = None) -> tuple:
+    """DEDUP_DELETE の事後条件（★ 破壊形 ── 消した先を、元と突き合わせて確かめる）。
+
+    ★★ 2026-09-21（盲検 5 体目・Namakoo 決裁「消す側を作る／削除は誤爆が許されない」）:
+      「結果に重複が無い」だけでは**弱い** ── 間違った行を消しても重複は消える。
+      だから `check_dedup` と同じ作法で、**元の冊から期待する残り行を独立に組み直し**、
+      位置対応で全部突き合わせる（消し過ぎ・消し足りない・別の行を消した、を同時に拾う）。
+
+    ★★ 元の冊が無ければ**満額を名乗らない**: 重複が残っていないことだけ言えるが、
+      「正しい行を消した」は言えない ── 観測していないことを主張しない（三値の真ん中）。
+    """
+    keys = args.get("keys") or []
+    if not keys:
+        return "fail", "判定キー列が決まっていません（verify_dsl_args を経由していない可能性）"
+    sheet = args.get("_target_sheet")
+
+    with BookView(path) as bv:
+        out = bv.sheet(sheet)
+        last_col = 0
+        while out.cell(row=header_row, column=last_col + 1).value not in (None, ""):
+            last_col += 1
+        if last_col == 0:
+            return "fail", "見出し行が読めません"
+        key_idxs = []
+        for k in keys:
+            hit = None
+            for c in range(1, last_col + 1):
+                if str(out.cell(row=header_row, column=c).value or "") == str(k):
+                    hit = c
+                    break
+            if hit is None:
+                return "fail", f"判定キー『{k}』の列が結果に見つかりません"
+            key_idxs.append(hit)
+        out_rows, r = [], header_row + 1
+        while out.cell(row=r, column=1).value not in (None, ""):
+            out_rows.append(_row_as_shown(bv, out.title, r, last_col))
+            r += 1
+
+    # ① どの場合でも言えること: 結果に同じキーの行が 2 つ無い。
+    seen = set()
+    for row_vals in out_rows:
+        kt = tuple(_dedup_normalize_key_part(row_vals[i - 1]) for i in key_idxs)
+        if kt in seen:
+            return "fail", f"重複が残っています（判定キー: {'・'.join(keys)}）"
+        seen.add(kt)
+
+    if source_book is None:
+        # ★ 元が無いので「正しい行を消した」は確かめられない ── 名乗らない。
+        return "warn", (f"結果に重複はありません（{len(out_rows)}行・判定キー: "
+                        f"{'・'.join(keys)}）が、元の冊が無いので"
+                        "**消した行が正しかったか**は確かめられていません")
+
+    # ② 元から「最初の出現だけ残す」を独立に組み直して、位置対応で全部突き合わせる。
+    with BookView(source_book) as sv:
+        src = sv.sheet(sheet)
+        expected, kept, dropped = [], set(), []
+        r = header_row + 1
+        while src.cell(row=r, column=1).value not in (None, ""):
+            kt = tuple(_dedup_normalize_key_part(
+                source_value_as_projected(sv, src, r, i)) for i in key_idxs)
+            if kt in kept:
+                dropped.append(r)
+            else:
+                kept.add(kt)
+                expected.append(_row_as_shown(sv, src.title, r, last_col))
+            r += 1
+
+    denom = (f"元 {len(expected) + len(dropped)} 行のうち {len(dropped)} 行を削除しました"
+             f"（判定キー: {'・'.join(keys)}）")
+    if len(out_rows) != len(expected):
+        return "fail", (f"{denom} ── 残った行数が合いません"
+                        f"（期待 {len(expected)} / 実際 {len(out_rows)}）")
+    for i, (got, want) in enumerate(zip(out_rows, expected), start=1):
+        if got != want:
+            return "fail", (f"{denom} ── {i} 行目の中身が、元で最初に現れた行と違います"
+                            f"（期待 {want!r} / 実際 {got!r}）")
+    return "pass", denom
+
+
 def check_dedup(path: Path, args: dict, header_row: int = 1,
                  source_book: Path | None = None) -> tuple:
     """DEDUP の事後条件（EXTRACT の兄弟・非破壊形）。

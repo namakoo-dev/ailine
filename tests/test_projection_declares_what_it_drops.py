@@ -126,7 +126,10 @@ def test_the_projected_value_read_is_folded_into_one_function():
     assert derive.count("def source_value_as_projected(") == 1, "定義が 1 つでない"
     callers = {"derive.py": derive.count("source_value_as_projected(") - 1,
                "move.py": move.count("source_value_as_projected(")}
-    assert callers == {"derive.py": 3, "move.py": 1}, (
+    # ★ 2026-09-21: move が 2 本に（重複除去の鍵 ／ **重複行の削除**の鍵）。どちらも
+    #   「元の表で最初に現れた行はどれか」を決める鍵なので、式は値で読む必要がある。
+    #   書き写さず、同じ 1 本を通している（下の import の assert が縛る）。
+    assert callers == {"derive.py": 3, "move.py": 2}, (
         f"呼び出しの数が変わった: {callers}"
         "（derive: 帳票・様式写像・抽出の述語 ／ move: 重複削除の鍵）"
         "── 増やすなら、1 本を通す形を壊していないか見てから数を直すこと")

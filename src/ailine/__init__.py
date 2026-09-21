@@ -261,7 +261,7 @@ from ailine_core.postconditions.move import (   # noqa: F401 ── 再輸出（
     _check_swap_cells, _column_block_values, _dedup_key_display, _dedup_normalize_key_part,
     _fmt_amount, _nested_total_reason, _sort_rows_lost_their_identity,
     _total_row_left_the_bottom_reason, check_add_column, check_add_row, check_append_total,
-    check_dedup, check_delete_column, check_delete_rows, check_insert_rows,
+    check_dedup, check_dedup_delete, check_delete_column, check_delete_rows, check_insert_rows,
     check_move_column, check_sort,
     check_split_cell, check_swap, note_deleted, _APPEND_TOTAL_FORMULA_RE,
 )
@@ -2830,8 +2830,28 @@ OP_META = {
                     "match_phrases": ["別のセルに分ける", "別セルに分ける", "1件ずつ別のセルに",
                                        "区切りで分ける", "セルを分割"]},
     "DEDUP": {"category": "表を編集する", "label": "重複除去", "folder": False,
-               "synonyms": ["重複を除く", "重複除去", "重複行を消す", "ユニークにする"],
-               "match_phrases": ["ダブりを消す", "重複行を削除"]},
+               "synonyms": ["重複を除く", "重複除去", "ユニークにする"],
+               "match_phrases": ["重複を取り除いた表", "重複のない一覧"]},
+    # ★★ 2026-09-21（盲検 5 体目・Namakoo 決裁「消す側を作る／削除は必ず確認」）:
+    #   DEDUP は**非破壊**（別シートに作る）と宣言しているのに、同義語が
+    #   「重複行を消す」「重複行を削除」と**削除を約束していた**。買い手は
+    #   「重複している行を削除して」と頼んで削除されず、⚠ でそう言われた。
+    #   ★ 語彙の約束と宣言を揃える: 消すと言った依頼は、**本当に消す op**が受ける。
+    #   ★ 誤爆が許されないので、受けるのは**消すと明示した言い方だけ**
+    #     （「重複除去」「ユニークに」は従来どおり非破壊の DEDUP が受ける）。
+    # ★★ 導線に載せるのは**実測で通った言い方だけ**（2026-09-21・各 5 回中 5 回）。
+    #   ★ 実測で分かったこと: 模型が見分けているのは「**削除**」の語だけだった ──
+    #       「重複している行を削除して」「重複した行を削除して」「重複行を削除して」… 5/5
+    #       「重複行を消して」「ダブりを消して」「重複行を取り除いて」……………… 0/5（DEDUP へ）
+    #   ★ 「消す」側が非破壊に落ちるのは**安全な向きの外れ**で、⚠ が「行や列を取り除き
+    #     ません」と開示する。無理に拾いに行かない ── 拾いに行くと、安全な言い方まで
+    #     削除側へ寄る危険がある（消す op で踏んではいけない向き）。
+    #   ★ 通らない言い方を導線に載せない:「道具が自分の示した例を自分で断っていた」
+    #     （render_refusal のコメント）── 導線が嘘なら、導線が無いより悪い。
+    "DEDUP_DELETE": {"category": "表を編集する", "label": "重複行の削除", "folder": False,
+                      "synonyms": ["重複行を削除", "重複している行を削除"],
+                      "match_phrases": ["重複している行を削除", "重複した行を削除",
+                                         "重複行を削除"]},
     # ★ 帳票段: 実需 MARKET-20260823-lancers.md 財務書類系7件中5件がこの形
     #   （表の1行を、人が作った定型フォーマットの1枚に転写してN枚出す）。
     #   ★ folder は False（第一波はフォルダ集約に対応しない・単一ブックのみ）。
@@ -3075,6 +3095,7 @@ OP_SCHEMA = {
     #   出力シート名は verify_dsl_args が機械で決め打ちする（EXTRACT と同じ A' 原則）。
     "SPLIT_CELL": ("col", "sep"),
     "DEDUP": ("keys",),
+    "DEDUP_DELETE": ("keys",),
     # ★ 帳票段: REPORT_PER_ROW。template_sheet(人が作った雛形シート)・name_col
     #   (シート名に使う列＝データ行の見出し役)。印({{列名}})の実在検証・出力シート名
     #   （行の値から機械で決め打ち・sanitize_sheet_name/unique_sheet_name）は
@@ -3239,6 +3260,9 @@ OP_WRITE_TARGET = {
     "SPLIT_CELL": WriteTarget(writes=(WRITE_NEW_COLUMN,), cols_key="_new_cols",
                                keeps_subject=True),
     "DEDUP": WriteTarget(writes=(WRITE_NEW_SHEET,), reads_only=("_target_sheet",)),
+    # ★ 消すと宣言する ── これだけで `_removal_was_declared` の家系に入り、
+    #   破壊の関所と `test_deleting_data_asks_first` の分母に自動で乗る（列挙は漏れる）。
+    "DEDUP_DELETE": WriteTarget(writes=(WRITE_REMOVE,)),
     # ★ 帳票段: REPORT_PER_ROW は N 枚の新規シート＋検分シートを作るだけ（新規シートの
     #   前提検査 _check_new_sheet は before に存在しないシートを一切対象にしないので、
     #   1 枚固定を前提にする既存の宣言をそのまま流用できる）。データシート(_target_sheet)と
@@ -3337,6 +3361,7 @@ OP_SUBJECT_SLOTS = {
     #   「計算の入力」ではなく依頼文が直接名指す対象そのもの（EXTRACT の col と同じ扱い）。
     "SPLIT_CELL": (("col", SUBJ_COLUMN),),
     "DEDUP": (("keys", SUBJ_COLUMN),),
+    "DEDUP_DELETE": (("keys", SUBJ_COLUMN),),
     # ★ 帳票段: name_col は依頼文が名指しうる「対象」そのもの（AGGREGATE の group_col と
     #   同じ扱い）。template_sheet は「対象」ではなく、依頼文がその名で言及していれば
     #   消費するだけの入力（LOOKUP_FILL の source_sheet と同じ SHEET_INPUT）。
@@ -6246,6 +6271,76 @@ def _verify_dedup(resolved, inferred, first_sheet, headers):
     return None
 
 
+def duplicate_rows(path, sheet: str, keys, header_row: int = 1) -> tuple:
+    """実物の表を読み、**2 件目以降**の重複行（1 起点の行番号）を上から順に返す。
+
+    ★★ 2026-09-21（盲検 5 体目・Namakoo 決裁「消す側を作る」）: 削除する行を
+      **Python 側が決める**。Basic 側で探索させない理由は 2 つ:
+      ① 確認の文と実際に消す行が**同じ材料**から出る（見せた数と違う数を消さない）
+      ② 「何が重複か」の判断を 2 つ書かない（Basic にもう 1 つ書けば、片方だけ直る日が来る）
+    ★ 鍵の規則は事後条件と同じ `_dedup_normalize_key_part`（前後空白だけ落とす・型が違えば別）。
+    ★ 読めない・列が無いなら空 ── 根拠が無い時に消しに行かない。
+    """
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception:   # noqa: BLE001
+        return ()
+    try:
+        if sheet not in wb.sheetnames:
+            return ()
+        ws = wb[sheet]
+        rows = list(ws.iter_rows(values_only=True))
+        if len(rows) <= header_row:
+            return ()
+        head = [str(c) if c is not None else "" for c in rows[header_row - 1]]
+        idxs = [head.index(k) for k in keys if k in head]
+        if len(idxs) != len(list(keys)):
+            return ()
+        seen, dup = set(), []
+        for n, row in enumerate(rows[header_row:], start=header_row + 1):
+            key = tuple(_dedup_normalize_key_part(row[i] if i < len(row) else None) for i in idxs)
+            if key in seen:
+                dup.append(n)
+            else:
+                seen.add(key)
+        return tuple(dup)
+    except Exception:   # noqa: BLE001
+        return ()
+    finally:
+        wb.close()
+
+
+def _verify_dedup_delete(resolved, inferred, first_sheet, headers, book_meta):
+    """DEDUP_DELETE の引数を確かめ、**消える行を数えて確認に積む**。
+
+    ★★ 削除は取り返しがつかない（2026-09-07 の決裁「削除は必ず聞く」）。
+      `_confirm_delete` を積むと、既存の破壊の関所がそのまま「削除しますか？」で聞く
+      ── 新しい関所も新しい終了コードも作らない。
+    ★ 鳴る条件は上書き・列削除と**対称**: **消えるものが在る時だけ**（重複が 0 なら黙る）。
+    """
+    r = _verify_dedup(resolved, inferred, first_sheet, headers)
+    if r is not None:
+        return r
+    # ★ 非破壊版が積む出力シート名はこの op には無い（別シートを作らない）。
+    resolved.pop("_new_sheet", None)
+    sheet = resolved.get("_target_sheet") or first_sheet
+    hr = (book_meta.get("header_rows") or {}).get(sheet, 1)
+    dup = duplicate_rows(book_meta.get("path"), sheet, resolved["keys"], header_row=hr)
+    if not dup:
+        # ★ 破壊する op で**無言の no-op** を作らない ── 消すものが無いなら、そう言って止まる。
+        return False, resolved, inferred, (
+            f"重複している行はありません（判定キー: {'・'.join(resolved['keys'])}）"
+            " ── 消すものが無いので、何もしていません")
+    # ★ 鍵の名前は既存の DELETE_ROWS と**同じ** ── 生成部（_codegen_delete_rows）を
+    #   そのまま使い回す。「下から順に消す」を 2 箇所に書かない。
+    resolved["_delete_rows"] = list(dup)
+    _shown = "・".join(str(n) for n in dup[:5]) + ("…" if len(dup) > 5 else "")
+    resolved["_confirm_delete"] = (
+        f"重複が {len(dup)} 行あります（{_shown} 行目 ── その行ごと削除します。"
+        f"判定キー: {'・'.join(resolved['keys'])}）")
+    return None
+
+
 def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in, task):
     """SPLIT_CELL の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
@@ -6745,6 +6840,11 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         if r is not None:
             return r
 
+    elif op == "DEDUP_DELETE":
+        r = _verify_dedup_delete(resolved, inferred, first_sheet, headers, book_meta)
+        if r is not None:
+            return r
+
     # ★ 帳票段: REPORT_PER_ROW（DESIGN-20260823-report-per-row.md）。表の1行を、人が作った
     #   雛形シートの1枚に転写してN枚出す。憲法の適用: 機械が触ってよいのは雛形の中の
     #   印({{列名}})が置かれたセルだけ ── ここで印を実在検証し、印以外は一切触らない前提を
@@ -6856,6 +6956,11 @@ _CONFIRM_FIELDS = {
     "SPLIT_CELL": (("対象列", "col", None),
                     ("区切り", "sep", lambda v: split_cell.describe_separator(v))),
     "DEDUP": (("判定キー", "keys", lambda v: "・".join(v)),),
+    # ★★ 削除は「何が消えるか」を見せてから聞く（2026-09-07 の決裁の作法）。
+    #   `_dup_rows` は verify_dsl_args が**実物の表から**数えたもの ── 確認の文と
+    #   実際に消す行が同じ材料から出る（見せた数と違う数を消さない）。
+    "DEDUP_DELETE": (("判定キー", "keys", lambda v: "・".join(v)),
+                      ("消える行", "_delete_rows", lambda v: f"{len(v)} 行")),
     "REPORT_PER_ROW": (("雛形", "template_sheet", None), ("シート名の元列", "name_col", None)),
     "FORMAT_MAP": (("雛形", "template_sheet", None),),
 }
@@ -7566,6 +7671,20 @@ def _codegen_delete_rows(*, op, resolved_args, book_meta, use_formula, headers, 
     return wrap(f"    Call DeleteRows(oDoc, {at0}, {count})\n")
 
 
+def _codegen_dedup_delete(*, op, resolved_args, book_meta, use_formula, headers, first_sheet,
+                 header_row, hr0, wrap):
+    """DEDUP_DELETE の Basic ── 中身は DELETE_ROWS と**同じ**（`_delete_rows` を下から順に消す）。
+
+    ★ 実装は 1 本（`_codegen_delete_rows`）。ここは名簿の作法（`_codegen_<op>`）と
+      引数の形を守るためだけの薄い配線 ── 「下から順に消す」を書き写さない。
+    ★ 引数を `**kw` で受けない: 番人が「かつてローカルだったものをグローバルで取りに
+      行っていないか」を署名で見ている（test_codegen_is_a_table）。
+    """
+    return _codegen_delete_rows(
+        op=op, resolved_args=resolved_args, book_meta=book_meta, use_formula=use_formula,
+        headers=headers, first_sheet=first_sheet, header_row=header_row, hr0=hr0, wrap=wrap)
+
+
 def _codegen_delete_column(*, op, resolved_args, book_meta, use_formula, headers, first_sheet,
                  header_row, hr0, wrap):
     """DELETE_COLUMN の Basic を組む（★ codegen_dsl から**本文をそのまま**移した）。"""
@@ -7945,6 +8064,9 @@ CODEGEN_BY_OP = {
     "EXTRACT": _codegen_extract,
     "SPLIT_CELL": _codegen_split_cell,
     "DEDUP": _codegen_dedup,
+    # ★ 削除の生成は DELETE_ROWS と**同じ関数**（`_delete_rows` を下から順に消す）。
+    #   op ごとに書き写すと、片方だけ直る日が来る。
+    "DEDUP_DELETE": _codegen_dedup_delete,
     "REPORT_PER_ROW": _codegen_report_per_row,
     "FORMAT_MAP": _codegen_format_map,
 }
@@ -10509,6 +10631,7 @@ POSTCONDITIONS = {
     "EXTRACT": check_extract,
     "SPLIT_CELL": check_split_cell,
     "DEDUP": check_dedup,
+    "DEDUP_DELETE": check_dedup_delete,
     # ★ 帳票段:
     "REPORT_PER_ROW": _check_report_router,
     # ★ 様式写像段:
@@ -10575,7 +10698,12 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
                        source_book=source_book)
         if op in ("AGGREGATE", "LOOKUP_FILL"):
             return fn(out_book, resolved_args, header_row, use_formula=use_formula)
-        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "REPORT_PER_ROW", "FORMAT_MAP",
+        # ★ 2026-09-21: DEDUP_DELETE を足した時、この**手書きの名簿**から漏れて
+        #   `source_book` が渡らず、事後条件が「消した行が正しかったかは確かめられて
+        #   いない」と言うしかなかった（実機で観測）── 破壊する op こそ検証が要る。
+        #   ★「列挙は漏れる」の実例。足す時はここも見ること。
+        if op in ("INSERT_ROWS", "AUTOFIT", "EXTRACT", "DEDUP", "DEDUP_DELETE",
+                   "REPORT_PER_ROW", "FORMAT_MAP",
                    "ADD_ROW", "DELETE_ROWS", "DELETE_COLUMN", "MOVE_COLUMN",
                    "SET_CELL_VALUE", "SWAP",
                    "ADD_COLUMN", "SET_WHERE",
@@ -11705,6 +11833,29 @@ def check_openpyxl_fidelity_loss(original: Path, normalized: Path) -> list:
     if dv_a < dv_b:
         out.append(("入力規則", dv_b, dv_a))
     return out
+
+
+def destructive_sibling(op: str | None) -> str | None:
+    """同じ引数で**消す側**の op（無ければ None）。
+
+    ★★ 2026-09-21（盲検 5 体目 ⑦・Namakoo 決裁「--op でのみ呼べるにする」）:
+      「重複している行を削除して」で削除されない件。消す op は作ったが、**自然語の
+      振り分けからは外した** ── 実測で、凍結検体「重複とみなして削除して」（期待は
+      **非破壊**）まで削除側に取られ、言葉づかいでは境界を引けなかったため
+      （245 件の実機測定: 対照 242 / 語を絞っても 239・帯は 241〜245）。
+    ★ 代わりに、非破壊の側で断った時に**本当のコマンドを名指し**する。
+      ★ op 名を書かない ── 宣言（OP_SCHEMA が同じ・writes に remove）から導く。
+        消す op が増えても自動で正しく案内される（列挙は漏れる）。
+    """
+    if not op or _removal_was_declared(op):
+        return None
+    want = OP_SCHEMA.get(op)
+    if want is None:
+        return None
+    for other, sch in OP_SCHEMA.items():
+        if other != op and sch == want and _removal_was_declared(other):
+            return other
+    return None
 
 
 def _removal_was_declared(op: str | None) -> bool:
@@ -13126,6 +13277,14 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
                      f"『{OP_LABELS.get(_op_now, _op_now)}』です")
             print(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は{_tail}"
                   "── 頼んだ通りかを「解釈:」行で確かめてください")
+            # ★★ 2026-09-21: 断るだけで終わらせない ── **本当に消す道**が在るなら名指しする。
+            #   消す op は自然語の振り分けから外してある（誤爆が許されないため）ので、
+            #   ここで教えないと買い手は辿り着けない。
+            _sib = destructive_sibling(_op_now)
+            if _sib:
+                print(f"  → 本当に元の表から消すなら: "
+                      f"ailine run <ブック> \"<依頼>\" --op {_sib}"
+                      f"（{OP_LABELS.get(_sib, _sib)}・消える行を見せてから聞きます）")
             warning_count += 1
         # ★★ 2026-09-08（盲検の検品が唯一の false ✓ として拾った）: 上の 2 つは
         #   **列名**と**効果の種類**を見るので、「どの列を、どの向きで割るか」は拾えない。

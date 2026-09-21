@@ -90,8 +90,12 @@ def test_the_example_actually_runs(tmp_path, op, task):
     import os, subprocess
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "表"
     ws.append(["品名", "部門", "金額", "備考"])
+    # ★ 2026-09-21: **重複を 1 行入れる**。重複除去系の例（DEDUP / DEDUP_DELETE）は、
+    #   重複が無い表では「重複している行はありません」と正しく断るため、この検体では
+    #   例が通らない ── 検体が op を動かせないだけで、例が悪いのではない。
+    #   ★ 他の例（並べ替え・抽出・合計…）は行が 1 本増えても通る。
     for r in [["机", "営業", 12000, None], ["椅子", "経理", 800, None],
-              ["棚", "営業", 15000, None]]:
+              ["棚", "営業", 15000, None], ["机", "営業", 12000, None]]:
         ws.append(r)
     src = tmp_path / "in.xlsx"; wb.save(src)
     repo = Path(ailine.__file__).resolve().parents[2]

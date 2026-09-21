@@ -72,6 +72,21 @@ REACHED_BY_MACHINE_REREAD = {
 
 UNREACHABLE_TODAY = {"EXTRACT_COLUMNS", "SET_WHERE"}
 
+#: ★★ 2026-09-21: **わざと**自然語から届かせていない op（Namakoo 決裁）。
+#:   上の UNREACHABLE_TODAY は「直したい積み残し」だが、こちらは**選んだ結果**。
+#:   混ぜると、直すべきものと決めたものの区別が消える。
+#:   ★ 届く道は在る ── `--op <名前>` で人が明示した時だけ呼べる（第三の道）。
+#:   ★ 外した理由は実測（bench/basic_ops_matrix.py・245 件・実機）:
+#:       追加なし 242 ／「削除」で絞る 239 ／「行を削除」で絞る 239 ／説明 4 行 234
+#:       （帯は 241〜245）。落ちた中身の本体は凍結検体
+#:       「品名が同じなら重複とみなして削除して」── 期待は**非破壊**なのに
+#:       削除側へ取られた。言葉づかいを 2 通り試しても境界が引けなかった。
+#:   ★ 削除は取り返しがつかないので、誤爆の危険を負うより明示指定に倒した。
+#:     代わりに非破壊側の ⚠ が `--op` のコマンドを名指しで案内する
+#:     （ailine.destructive_sibling が宣言から導く）。
+#:   ★ 戻す条件は tests/op_completeness_register.json の免除の unlock に書いてある。
+BY_EXPLICIT_FLAG_ONLY = {"DEDUP_DELETE"}
+
 
 @pytest.mark.xfail(strict=True, reason=(
     "2026-08-30 実測: この 2 つはモデルにも教えておらず読み直しも無いので到達不能"
@@ -80,7 +95,7 @@ def test_every_advertised_op_is_reachable():
     """★ `ailine ops` に載っている操作には、**届く道**があること。
        道は「モデルに教える」か「機械の読み直しが拾う」のどちらか。"""
     unreachable = sorted(set(ailine.OP_META) - _ops_in_prompt()
-                          - set(REACHED_BY_MACHINE_REREAD))
+                          - set(REACHED_BY_MACHINE_REREAD) - BY_EXPLICIT_FLAG_ONLY)
     assert not unreachable, (
         "登録簿に在るのに、モデルにも教えず読み直しも無い op（到達不能）: "
         f"{unreachable}")
@@ -88,9 +103,39 @@ def test_every_advertised_op_is_reachable():
 
 def test_the_unreachable_ones_are_exactly_the_ones_we_know_about():
     """★ 到達不能が**増えていない**ことを見張る（xfail で目をつぶる代わり）。"""
-    unreachable = set(ailine.OP_META) - _ops_in_prompt() - set(REACHED_BY_MACHINE_REREAD)
+    unreachable = (set(ailine.OP_META) - _ops_in_prompt()
+                   - set(REACHED_BY_MACHINE_REREAD) - BY_EXPLICIT_FLAG_ONLY)
     assert unreachable == UNREACHABLE_TODAY, (
         f"到達不能の顔ぶれが変わった: {sorted(unreachable)}")
+
+
+def test_the_flag_only_ops_really_can_be_called():
+    """★★ 「`--op` で呼べる」が**口約束でない**こと ── 隣の番人（読み直しが本当に在るか）
+    と同じ趣旨で、**無いのに在ると書く**のを塞ぐ。
+
+    ★ 見るのは 3 つ: ① `--op` が run に在る ② その op が引数の宣言に在る
+      ③ 生成部と事後条件まで揃っている（呼べても検証されないなら、案内してはいけない）。
+    """
+    import argparse as _ap
+    sub = [ac for ac in ailine.build_parser()._actions
+           if isinstance(ac, _ap._SubParsersAction)][0]
+    run = sub.choices["run"]
+    assert [ac for ac in run._actions if "--op" in ac.option_strings], "--op が run に無い"
+    for op in BY_EXPLICIT_FLAG_ONLY:
+        assert op in ailine.OP_SCHEMA, f"{op} が引数の宣言に無い"
+        assert op in ailine.CODEGEN_BY_OP, f"{op} に生成部が無い"
+        assert op in ailine.POSTCONDITIONS, f"{op} に事後条件が無い（検証されない道は案内しない）"
+
+
+def test_the_flag_only_ops_are_not_in_the_prompt():
+    """★ 決めたことが守られていること ── わざと外した op が、黙って語彙に戻っていない。
+
+    ★ 戻すなら 245 件の実機測定をやり直す（免除の unlock に条件が書いてある）。
+    """
+    back = sorted(BY_EXPLICIT_FLAG_ONLY & _ops_in_prompt())
+    assert not back, (
+        f"わざと外した op が語彙に戻っている: {back} ── "
+        "戻すなら bench/basic_ops_matrix.py を回して帯（241〜245）に入ることを確かめること")
 
 
 def test_the_machine_rereads_actually_exist():

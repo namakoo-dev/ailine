@@ -795,6 +795,24 @@ _DEDUP_ARGS = {"keys": ["取引先"], "_target_sheet": "Sheet", "_new_sheet": "�
 _add("dedup_pass", "DEDUP", _DEDUP_ARGS, _b_dedup_pass)
 _add("dedup_fail_missing_sheet", "DEDUP", _DEDUP_ARGS, _b_dedup_fail_missing_sheet)
 
+
+# --- DEDUP_DELETE（2026-09-21）------------------------------------------------
+# ★ 元の冊が無い時は**満額を名乗らない**（「重複は残っていない」は言えるが
+#   「正しい行を消した」は言えない）── warn で凍結する。
+def _b_dedup_delete_no_source(tmp_path):
+    p = tmp_path / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    for row in [["取引先", "金額"], ["甲社", 100], ["乙社", 200]]:
+        ws.append(row)
+    wb.save(p)
+    return p, None
+
+
+_add("dedup_delete_without_the_original", "DEDUP_DELETE",
+     {"keys": ["取引先"], "_target_sheet": "Sheet"}, _b_dedup_delete_no_source)
+
 # --- REPORT_PER_ROW（帳票段）--------------------------------------------------
 _REPORT_ARGS = {
     "template_sheet": "雛形", "name_col": "取引先", "_target_sheet": "売上",

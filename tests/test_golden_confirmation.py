@@ -84,6 +84,8 @@ _add("set_column_value_with_source", "SET_COLUMN_VALUE",
 _add("extract", "EXTRACT", {"col": "金額", "cmp": "gte", "value": 40000.0})
 _add("dedup", "DEDUP", {"keys": ["商品"]})
 _add("dedup_multi_key", "DEDUP", {"keys": ["商品", "金額"]})
+# ★ DEDUP_DELETE（2026-09-21）: 確認行に**消える行数**が出ること（見せてから聞く）。
+_add("dedup_delete", "DEDUP_DELETE", {"keys": ["商品"], "_delete_rows": [3, 5]})
 _add("report_per_row", "REPORT_PER_ROW", {"template_sheet": "雛形", "name_col": "取引先"})
 _add("format_map", "FORMAT_MAP", {"template_sheet": "様式"})
 _add("split_cell_newline", "SPLIT_CELL", {"col": "URL", "sep": chr(10),

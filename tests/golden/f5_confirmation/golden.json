@@ -12,6 +12,7 @@
   "compute_column_with_target_inferred": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:* 対象列:金額(推定)",
   "compute_column_without_target_omits_field": "解釈: 操作:計算列 演算対象:数量 と 単価 演算子:*",
   "dedup": "解釈: 操作:重複除去 判定キー:商品",
+  "dedup_delete": "解釈: 操作:重複行の削除 判定キー:商品 消える行:2 行",
   "dedup_multi_key": "解釈: 操作:重複除去 判定キー:商品・金額",
   "delete_column_one": "解釈: 操作:列削除 削除する列:金額",
   "delete_rows_inferred": "解釈: 操作:行削除 削除位置:3 行数:1(推定)",
