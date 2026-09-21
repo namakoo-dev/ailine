@@ -3513,7 +3513,8 @@ def test_codegen_dsl_lookup_fill_calls_helper():
     code = ailine.codegen_dsl(
         "LOOKUP_FILL",
         {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}, meta)
-    assert 'Call VLookupFromTable(oDoc, 0, 0, 2, "単価表")' in code
+    # ★ 2026-09-21: 参照表の列を名前で渡すようになった（2 列マスタは従来どおり 0/1）。
+    assert 'Call VLookupFromTable(oDoc, 0, 0, 2, "単価表", 0, 1)' in code
 
 def test_codegen_dsl_lookup_fill_creates_new_column_when_target_col_missing():
     # ★ W10c 致命2: target_col が対象シートに実在しない場合、末尾に新しい列を作ってから
@@ -3524,7 +3525,8 @@ def test_codegen_dsl_lookup_fill_creates_new_column_when_target_col_missing():
         "LOOKUP_FILL",
         {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品コード"}, meta)
     assert 'getCellByPosition(2, 0).setString("単価")' in code
-    assert 'Call VLookupFromTable(oDoc, 0, 0, 2, "単価表")' in code
+    # ★ 2026-09-21: 参照表の列を名前で渡すようになった（2 列マスタは従来どおり 0/1）。
+    assert 'Call VLookupFromTable(oDoc, 0, 0, 2, "単価表", 0, 1)' in code
 
 def test_codegen_dsl_aggregate_calls_helper():
     code = ailine.codegen_dsl("AGGREGATE", {"group_col": "商品", "value_col": "売上"}, _SAMPLE_META)
@@ -3691,12 +3693,25 @@ def test_check_lookup_fill_master_reversed_column_order_gives_actionable_guidanc
     p = tmp_path / "lookup_reversed.xlsx"
     wb.save(p)
     args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
+    # ★★ 2026-09-21（盲検 5 体目）: 参照表の列を**名前で**引くようにしたので、
+    #   「値→キー」の逆順マスタも**そのまま引ける**ようになった。
+    #   ・書き手は lookupKeyCol=1 / lookupValueCol=0 を渡す（下の assert）
+    #   ・検算も名前で引くので、期待値そのものを名指しできる
+    #   ★ この冊は**誰も転記していない**（手で組んだ空の単価列）ので、fail は正しい。
+    #     文言は「列順が違う可能性」という推測から、**期待 100 / 実際 None** という
+    #     観測そのものに変わった ── 推測より観測の方が人は直せる。
+    meta = {"sheets": ["明細", "単価表"],
+            "headers": {"明細": ["商品", "数量", "単価"], "単価表": ["単価", "商品"]},
+            "header_rows": {"明細": 1, "単価表": 1}}
+    code = ailine.codegen_dsl("LOOKUP_FILL", dict(args), meta, use_formula=False)
+    call = [ln for ln in code.splitlines() if "VLookupFromTable" in ln][0]
+    assert call.rstrip().endswith('"単価表", 1, 0)'), call
     status, reason = ailine.check_lookup_fill(p, args)
     assert status == "fail"
-    assert "単価表" in reason
-    assert "可能性があります" in reason   # ★ 断定でなく可能性として並べる
-    assert "キー列→値列の順" in reason
-    assert "A 列にキー" in reason and "B 列に値" in reason
+    assert "100" in reason and "りんご" in reason, reason
+    # ★ 旧: 「マスタ表の列順が違う可能性」「A 列にキー・B 列に値」の案内。
+    #   名前で引けるようになったので、その直し方はもう要らない（逆順でも引ける）。
+    #   代わりに**観測そのもの**（期待/実際）を出す ── 人が直せるのはこちら。
 
 
 # --- ★ W10f 項目5: LOOKUP_FILL のキー列を operand にすると誤診断する（Namakoo 実測の

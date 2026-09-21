@@ -549,17 +549,28 @@ End Sub
 ' VLOOKUP 相当。1枚目シートの各データ行について、keyCol の値をキーに
 ' 別表シートを照合し、見つけた値を resultCol に書く（静的な値として）。
 ' ★ 数式の =VLOOKUP は この経路で #VALUE! になるため、Basic 側で照合する。
-' ★ 参照表(lookupSheet)は「列0=キー・列1=値」の2列表を前提にする（物理1行目が見出し・
-'   検出対象外）。
-'   headerRow   : 1枚目シートの見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
-'   keyCol      : 1枚目シートの、キーが入っている列（例: 商品名=0）
-'   resultCol   : 1枚目シートの、引いた値を書き込む列（例: 単価=2）
-'   lookupSheet : 参照表のシート名（例: "単価表"）
-Sub VLookupFromTable(oDoc As Object, headerRow As Integer, keyCol As Integer, resultCol As Integer, lookupSheet As String)
+' ★★ 2026-09-21（盲検 5 体目）: 参照表は長らく「列0=キー・列1=値」の**2 列表**を
+'   前提にしていた。買い手の発注記録は 6 列で、転記はそのままでは使えなかった
+'   （道具は「2 列だけの表を用意してください」と言っていた）。
+'   → 参照表のどの列を読むかを**呼び側が渡せる**ようにした。省略時は従来どおり 0/1 なので、
+'     カタログの呼び方も自由生成の 5 引数の呼び出しも壊れない。
+'   headerRow      : 1枚目シートの見出し行（0 起点。W3: StructDump が推定した実際の見出し行）
+'   keyCol         : 1枚目シートの、キーが入っている列（例: 商品名=0）
+'   resultCol      : 1枚目シートの、引いた値を書き込む列（例: 単価=2）
+'   lookupSheet    : 参照表のシート名（例: "単価表"）
+'   lookupKeyCol   : 参照表の、キーが入っている列（省略時 0）
+'   lookupValueCol : 参照表の、値が入っている列（省略時 1）
+Sub VLookupFromTable(oDoc As Object, headerRow As Integer, keyCol As Integer, resultCol As Integer, lookupSheet As String, Optional lookupKeyCol, Optional lookupValueCol)
     Dim oSheet As Object, oLook As Object
     Dim lastRow As Long, lastLook As Long, i As Long, j As Long
     Dim key As String
     Dim oSrc As Object, oDst As Object
+    Dim kc As Integer, vc As Integer
+
+    kc = 0
+    vc = 1
+    If Not IsMissing(lookupKeyCol) Then kc = CInt(lookupKeyCol)
+    If Not IsMissing(lookupValueCol) Then vc = CInt(lookupValueCol)
 
     oSheet = oDoc.Sheets.getByIndex(0)
     If Not oDoc.Sheets.hasByName(lookupSheet) Then Exit Sub
@@ -574,8 +585,8 @@ Sub VLookupFromTable(oDoc As Object, headerRow As Integer, keyCol As Integer, re
     For i = headerRow + 1 To lastRow
         key = oSheet.getCellByPosition(keyCol, i).getString()
         For j = 1 To lastLook
-            If oLook.getCellByPosition(0, j).getString() = key Then
-                oSrc = oLook.getCellByPosition(1, j)      ' 参照表 列1=値
+            If oLook.getCellByPosition(kc, j).getString() = key Then
+                oSrc = oLook.getCellByPosition(vc, j)     ' 参照表の値の列（既定 1）
                 oDst = oSheet.getCellByPosition(resultCol, i)
                 If oSrc.getType() = com.sun.star.table.CellContentType.TEXT Then
                     oDst.setString(oSrc.getString())

@@ -529,7 +529,7 @@ def load_helpers(helpers_dir: Path) -> tuple:
         "例: 表に罫線を引く → `Call DrawTableBorders(oDoc)`\n"
         "例: 各列の幅を内容に合わせる → `Call AutoFitColumns(oDoc)`\n"
         "例: C列(列2)に、商品名(列0)をキーに『単価表』から値を引く（VLOOKUP相当）"
-        " → `Call VLookupFromTable(oDoc, 0, 0, 2, \"単価表\")`（参照表は 列0=キー・列1=値）\n"
+        " → `Call VLookupFromTable(oDoc, 0, 0, 2, \"単価表\")`（参照表は 既定で 列0=キー・列1=値。違う列なら 6・7 番目の引数で渡せる）\n"
         "例: 『ピボット』で部門(列0)ごとに金額(列1)を集計（本物の DataPilot・Excel で操作可）"
         " → `Call PivotSum(oDoc, 0, 1)`\n"
         "例: 『集計表／まとめ』を作る＝部門(列0)ごとの金額(列1)を見栄えのする普通の表に"
@@ -4359,16 +4359,19 @@ def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, 
     #     どちらも「2 列目 ≠ 頼まれた列」で、**列の位置だけでは区別できない**。
     #     断ると正しい依頼まで止める（既存検体で実証）。判定は変えず、
     #     何が書かれるかを名指しして ✓ を △ に降ろす（決裁③の機構に乗せる）。
+    # ★★ 2026-09-21（盲検 5 体目）: 参照表の値の列を**名前で**読むようにしたので、
+    #   名前が見つかる限り 3 列以上のマスタでも正しく転記できる（買い手の発注記録は 6 列で、
+    #   以前は「2 列だけの表を用意してください」と言うしかなかった）。
+    #   ★ 残す警告は **名前で引けなかった時だけ** ── そこは従来どおり 2 列目に落ちるので、
+    #     何が書かれるかを名指しして ✓ を △ に降ろす（決裁③の機構に乗せる）。
     _src_headers = list((book_meta.get("headers") or {}).get(resolved["source_sheet"], []))
     _want = resolved.get("target_col")
-    if len(_src_headers) > 2 and isinstance(_want, str) and _want in _src_headers:
-        _at = _src_headers.index(_want) + 1
-        if _at != 2:
-            resolved["_warnings"] = resolved.get("_warnings", []) + [
-                f"参照表『{resolved['source_sheet']}』では『{_want}』が {_at} 列目ですが、"
-                f"この転記は 2 列目を値として読む仕組みです（1 列目がキー・2 列目が値）。"
-                f"実際に書き込まれるのは『{_src_headers[1]}』の値です ── "
-                f"意図と違う場合は、キーと『{_want}』だけの表を用意してください"]
+    if len(_src_headers) > 2 and isinstance(_want, str) and _want not in _src_headers:
+        resolved["_warnings"] = resolved.get("_warnings", []) + [
+            f"参照表『{resolved['source_sheet']}』に『{_want}』という列が見つかりません。"
+            f"この転記は列の名前で値を探しますが、見つからないときは 2 列目に落ちます ── "
+            f"実際に書き込まれるのは『{_src_headers[1]}』の値です。"
+            f"意図と違う場合は、参照表の見出しを確かめてください"]
     # ★ W10c 致命2: target_col は COMPUTE_COLUMN の target と違い OP_SCHEMA 上は必須
     #   slot なので、LLM は「存在しないなら空にする」を選べない。実測（監査再現）:
     #   対象シートに『単価』列がまだ無いのに転記を頼むと、LLM がそれと無関係な
@@ -7229,8 +7232,19 @@ def _codegen_lookup_fill(*, op, resolved_args, book_meta, use_formula, headers, 
         header_name = str(target_col_name).replace('"', '""')
         header_write = (f'    oDoc.Sheets.getByIndex(0).getCellByPosition({tgt_idx}, {hr0})'
                          f'.setString("{header_name}")\n')
+    # ★★ 2026-09-21（盲検 5 体目）: 参照表のどの列を読むかを**名前で**決めて渡す。
+    #   長らく「1 列目がキー・2 列目が値」の決め打ちで、買い手の 6 列の発注記録では
+    #   転記が使えなかった（道具は「2 列だけの表を用意してください」と言っていた）。
+    #   ★★ 位置を割り出す式は**すぐ上の警告（verify_dsl_args）が既に書いていた** ──
+    #     正しい列を計算しておきながら、それで書きに行かず「意図と違うかもしれません」と
+    #     言うだけだった（器官は在るが配線が無い）。
+    #   ★ 見つからなければ従来どおり 0/1 に落ちる（挙動は変えない・警告はそこだけ残す）。
+    _sheaders = list(headers.get(resolved_args["source_sheet"], []))
+    _lk = _sheaders.index(resolved_args["key_col"]) if resolved_args["key_col"] in _sheaders else 0
+    _lv = _sheaders.index(target_col_name) if target_col_name in _sheaders else 1
     return wrap(header_write +
-                        f'    Call VLookupFromTable(oDoc, {hr0}, {key_idx}, {tgt_idx}, "{src}")\n')
+                        f'    Call VLookupFromTable(oDoc, {hr0}, {key_idx}, {tgt_idx}, '
+                        f'"{src}", {_lk}, {_lv})\n')
 
 
 def _codegen_aggregate(*, op, resolved_args, book_meta, use_formula, headers, first_sheet,

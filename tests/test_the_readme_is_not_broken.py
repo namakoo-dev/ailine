@@ -109,7 +109,23 @@ def test_the_two_book_form_is_documented():
     > README に書いてない機能が、いちばん役に立った。… 20 分は無駄にしました。
 
     ★ 買い手が月 2,000〜3,000 円を出すと言った唯一の機能が、載っていなかった。
-    ★ ここは**在ること**だけを縛る（文面は人が決める）。
+    ★★ 2026-09-21 に締め直した ── **初版は緑のまま買い手が見つけられなかった**。
+      初版は「README のどこかに在るか」を見ていた。実際、例は載っていた（下の節）。
+      買い手が見たのは**コマンド表**で、そこに 2 冊の行が無かったから「載っていない」と
+      判断した。★ **在るかどうかでなく、探す人が見る場所に在るか**が問われていた
+      （「在っても鳴らない」の人間側）。
+    ★ 文面は人が決める ── 縛るのは**表の中に在ること**だけ。
     """
-    assert re.search(r"ailine run \S+\.xlsx \S+\.xlsx", README), (
-        "★ 2 冊を並べる形が README に無い（買い手がいちばん欲しがった機能）")
+    lines = README.splitlines()
+    rows = [i for i, ln in enumerate(lines) if ln.startswith("|") and "ailine scan" in ln]
+    assert rows, "コマンド表が見つからない（`ailine scan` の行が目印）"
+    i = rows[0]
+    lo = hi = i
+    while lo > 0 and lines[lo - 1].startswith("|"):
+        lo -= 1
+    while hi + 1 < len(lines) and lines[hi + 1].startswith("|"):
+        hi += 1
+    table = chr(10).join(lines[lo:hi + 1])
+    assert re.search(r"ailine run <ブック> <ブック>", table), (
+        "★ 2 冊を並べる形が**コマンド表**に無い ── 節に書いてあっても、"
+        "表しか読まない人には無いのと同じ（買い手は 20 分を失った）")

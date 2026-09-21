@@ -291,10 +291,18 @@ def check_lookup_fill(path: Path, args: dict, header_row: int = 1,
         tgt_idx = _col_index_by_header(tws, args["target_col"], header_row=header_row)
         if key_idx is None or tgt_idx is None:
             return "fail", "対象シートにキー列/対象列が無い"
+        # ★★ 2026-09-21（盲検 5 体目）: 参照表の「列1=キー・列2=値」の決め打ちをやめる。
+        #   書き手も検算も同じ決め打ちを共有していたので、**必ず一致する（恒真）**
+        #   ── 3 列マスタで単価を頼むと区分が入って ✓ が出ていた（08-24 の実測）。
+        #   ★ ここは**ファイルの見出しから**引く（書き手は book_meta から引く）。
+        #     同じ「名前」に別の道で辿り着くので、位置がずれていれば食い違いとして出る。
+        #   ★ 名前で引けない参照表は従来どおり 1/2 に落ちる（根拠が無い時に線を動かさない）。
+        skey = _col_index_by_header(sws, args.get("key_col"), header_row=1) or 1
+        sval = _col_index_by_header(sws, args.get("target_col"), header_row=1) or 2
         lookup = {}
         r = 2
-        while sws.cell(row=r, column=1).value not in (None, ""):
-            lookup[sws.cell(row=r, column=1).value] = sws.cell(row=r, column=2).value
+        while sws.cell(row=r, column=skey).value not in (None, ""):
+            lookup[sws.cell(row=r, column=skey).value] = sws.cell(row=r, column=sval).value
             r += 1
         scanned = 0   # ★ 止血1: 対象シートに行が1件も無い(0件)場合と、行はあるが1件も
                       #   対応表に載っていない場合を別のメッセージで区別する。
