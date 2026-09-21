@@ -129,3 +129,48 @@ def test_the_two_book_form_is_documented():
     assert re.search(r"ailine run <ブック> <ブック>", table), (
         "★ 2 冊を並べる形が**コマンド表**に無い ── 節に書いてあっても、"
         "表しか読まない人には無いのと同じ（買い手は 20 分を失った）")
+
+
+# --- 先頭の道案内（2026-09-21・盲検 3 体目 ⑩ / 4 体目 ⑧）------------------------------
+
+def _anchor(text: str) -> str:
+    """GitHub が見出しから作る錨と同じ規則（小文字化・記号を落とす・空白を -）。"""
+    import unicodedata
+    t = text.strip().lower()
+    keep = [c for c in t if c.isalnum() or c in " -_"
+            or (ord(c) > 127 and not unicodedata.category(c).startswith("P"))]
+    return "".join(keep).replace(" ", "-")
+
+
+def test_every_internal_link_points_at_a_real_heading():
+    """★★ README の中のリンクが**実在する見出し**を指すこと。
+
+    ★ 「導線が嘘なら、導線が無いより悪い」── この repo が
+      `tests/test_examples_actually_work.py` で出した結論を、文書の側にも置く。
+    ★ 見出しを直した日に、リンクだけ古いまま残るのが一番静かな壊れ方。
+    """
+    heads = {_anchor(m.group(1)) for m in re.finditer(r"^#{1,6} (.+)$", README, re.M)}
+    broken = [m.group(1) for m in re.finditer(r"\]\(#([^)]+)\)", README)
+              if m.group(1) not in heads]
+    assert not broken, f"飛び先の無いリンク: {broken}"
+
+
+def test_the_router_is_at_the_top_and_names_the_monthly_runbook():
+    """★★ 買い手が**最初に**行き先を見つけられること。
+
+    ★★ 出所（盲検・2 人が独立に）:
+      3 体目「README が約 700 行で『**月末に何を打てばいいか**』が無い」
+      4 体目「README が 700 行で、買い手が**読む所を見つけられない**」
+      ★ 月末の紙（docs/月末の締めのやり方.md・A4 1 枚）は**元から在った** ──
+        リンクが表のセルの末尾と 600 行目の奥にしか無かった。
+        在るかどうかではなく、**探す人の目の位置に在るか**の問題だった。
+    ★ ここが縛るのは「先頭に在ること」と「月末の紙を名指ししていること」だけ
+      （文面は人が決める）。
+    """
+    lines = README.splitlines()
+    where = [i for i, ln in enumerate(lines) if ln.startswith("## ") and "どこを読む" in ln]
+    assert where, "先頭の道案内が消えている"
+    assert where[0] < 40, f"道案内が {where[0]} 行目にある ── 買い手は上から読む"
+    router = chr(10).join(lines[where[0]:where[0] + 20])
+    assert "月末の締めのやり方" in router, "月末に何を打つかの紙を案内していない"
+    assert "セットアップ" in router, "動かし方への行き先が無い"
