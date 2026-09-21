@@ -955,6 +955,62 @@ def _scan_first_rows(path: Path, sheet_name: str, max_rows: int = 10) -> dict:
         wb.close()
 
 
+def _sheet_with_nothing_in_it(path: Path, target_sheet, sheets) -> tuple:
+    """対象シートが**空**なら (そのシート名, 中身のある他シート) を返す。空でなければ (None, ())。
+
+    ★★ 2026-09-21（買い手役 5 体目 ②）: 空のファイルに「金額の合計を出して」と頼むと
+      「見出しが何行目か分かりません。`--header-row 3` のように…」と言い、勧められた
+      `--header-row 1` を打つと今度は「語彙外」と言った。**2 回とも原因は『冊が空』**
+      なのに、指している先が 2 回とも違った（買い手は 2 回無駄打ちした）。
+    ★ 「決まらない」（材料はあるが一意でない＝3）と「無い」（材料がゼロ＝9）は別の事故 ──
+      ENGINEERING.md の終了コード表が既にそう線を引いている。そして**フォルダの階層では
+      `multifile.nothing_to_read` が 09-13 に処置済み**（買い手役 3 体のうち 2 体）。
+      同じ判断がシートの階層に配線されていなかった＝片配線。
+    ★ 数え直さない: 判定は `_used_extent`（中身のあるセルが 1 つも無ければ (0, 0)）。
+    ★ 空でない時は他シートを見ない（断る回だけ余分に走査する）。
+    ★ 読めない・シートが無い等はどんな理由でも (None, ()) ── 『空だ』と言い切れるのは
+      実際に開いて数え切れた時だけ。**見ていないことを根拠にしない。**
+    """
+    name = target_sheet if target_sheet in sheets else (sheets[0] if sheets else None)
+    if not name:
+        return None, ()
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception:   # noqa: BLE001 ── 読めない理由はここでは言わない
+        return None, ()
+    try:
+        if name not in wb.sheetnames:
+            return None, ()
+        if _used_extent(wb[name]) != (0, 0):
+            return None, ()
+        others = tuple(s for s in wb.sheetnames
+                       if s != name and _used_extent(wb[s]) != (0, 0))
+        return name, others
+    except Exception:   # noqa: BLE001
+        return None, ()
+    finally:
+        wb.close()
+
+
+def nothing_in_the_sheet(sheet: str, others=()) -> str:
+    """空のシートに頼まれたときの断り（★ `multifile.nothing_to_read` と同じ形）。
+
+    ★ 要点は **`--header-row` を勧めないこと** ── 買い手はそれを打って 2 打目を外した。
+      何行目を指定しても、そこに見出しは無い。
+    ★ 他シートは**中身のあるものだけ**挙げる ── 全部空なのに `--sheet` を勧めたら、
+      それこそ 3 打目の無駄打ちになる。
+    """
+    lines = [f"× 『{sheet}』シートには表がありません（中身のあるセルが 1 つもありません）",
+             "  ・`--header-row` では直せません ── 何行目を指定しても、そこに見出しがありません"]
+    if others:
+        names = "／".join(str(n) for n in others[:5])
+        more = f" ほか {len(others) - 5} 枚" if len(others) > 5 else ""
+        lines.append(f"  ・中身のあるシートが {len(others)} 枚あります: {names}{more}"
+                     "（`--sheet <名前>` で選べます）")
+    lines.append("  → ファイルは作っていません")
+    return chr(10).join(lines)
+
+
 def _header_row_hint_for_missing_col(book_meta: dict, sheet_name: str, raw_col) -> str | None:
     """★ operator8 ③: 列解決が失敗したときの敗者復活。book_meta["_row_scan"]
        （_translate_and_dispatch が実ファイルから積む・単体テストで直接 verify_dsl_args を
@@ -14208,6 +14264,17 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
        同じ依頼文に対して ollama を2回叩かない）。"""
     target_sheet = getattr(a, "_target_sheet", None)
     forced_header_row = getattr(a, "header_row", None)
+    # ★★ 買い手役 5 体目 ②: 空の冊は「見出しが決まらない」でも「語彙外」でもない。
+    #   ここは --header-row の分岐より**手前** ── 買い手は 1 打目で --header-row を勧められ、
+    #   2 打目に打って「語彙外」と言われた。原因はどちらも『冊が空』なのに、指す先が
+    #   2 回とも違った。1 箇所に置けば、両方の打鍵が同じ返事で止まる（片配線にしない）。
+    # ★ 空の冊で失う能力は無いと確かめた: 1 セルに書く経路（resolve_cell_target_from_task）は
+    #   実表の値を手がかりに位置を決めるので、手がかりが 0 なら元から None を返す。
+    _empty_sheet, _other_filled = _sheet_with_nothing_in_it(source_book, target_sheet, sheets)
+    if _empty_sheet is not None:
+        _flush_pending_sheet_announce(a)
+        print(nothing_in_the_sheet(_empty_sheet, _other_filled))
+        return EXIT_ENVIRONMENT
     if forced_header_row:
         # ★ W8a 項目3: --header-row 指定時は検出(StructDump ヒューリスティクス)を丸ごと
         #   スキップし、その行を対象シートの見出しとして採用する（他シートは既定1行目のまま
