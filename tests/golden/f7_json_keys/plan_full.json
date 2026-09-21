@@ -10,6 +10,7 @@
     "command": "null",
     "fidelity": "null",
     "items": "list[dict{detail:str,idx:int,label:str,status:str}]",
+    "made_sheets": "list[]",
     "model": "str",
     "ok": "bool",
     "op": "str",

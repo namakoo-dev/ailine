@@ -1204,6 +1204,24 @@ def diff_snapshots(before: dict, after: dict) -> tuple:
     return changed, lines
 
 
+def record_diff(result: dict, before: dict, after: dict, lines: list) -> None:
+    """差分の記録を **1 箇所**で決める ── 人に見せる行と、機械が後で読む出所。
+
+    ★★ 2026-09-21（買い手役 5 体目・★ の一行が成功 run の 61% で出る件）:
+      `result["changes"]`（表示用）は **4 経路がそれぞれ書いていた**。そこへ
+      「この run が作ったシート」を足すと 5 つ目の片配線になる。判断を 1 関数に畳み、
+      呼び出し側には持たせない（同じ処方を 08-24 に払った授業料で決めてある）。
+
+    ★ `made_sheets` は **before/after の差分から機械的に**出す ── シートを作る経路を
+      手で並べない。経路が増えても、差分に出るかぎり自動で入る。
+    ★ 表示用の `changes` は履歴で `[:3]` に切られる。**出所は切られない別の項**に置く
+      （表示文字列から出所を読み取る道は、元から壊れていた）。
+    """
+    result["changes"] = lines
+    known = set(before.get("sheets") or ())
+    result["made_sheets"] = [s for s in (after.get("sheets") or ()) if s not in known]
+
+
 def _truncation_notice(before: dict, after: dict, exhaustive_postcondition: bool) -> str | None:
     """★ 止血3: before/after どちらかの snapshot が MAX_ROWS/MAX_COLS で切り詰められて
        いたら、無言で切らず正直な1行を返す（bench/realworld/BASELINE.md の B 検体所見）。
@@ -3330,11 +3348,19 @@ OP_SUBJECT_SLOTS = {
 }
 
 
-def _subject_slots(op: str, resolved: dict, sheets: list, task: str = "") -> list:
+def _subject_slots(op: str, resolved: dict, sheets: list, task: str = "",
+                    sheets_we_made=()) -> list:
     """宣言(OP_SUBJECT_SLOTS)と resolved から判定対象のスロットを組む。
        ★ 対象シートは全 op 共通で足す ―― ただし**複数シートのブックだけ**
        （1枚しか無いブックに『どのシートか』の曖昧さは存在しない。format_sheet_field/
-       describe_target_sheet が沈黙するのと同じ線引き＝単一シート帳票の出力は不変）。"""
+       describe_target_sheet が沈黙するのと同じ線引き＝単一シート帳票の出力は不変）。
+
+    ★★ 2026-09-21（買い手役 5 体目・Namakoo 決裁）: その「複数枚」を
+      **人が作った枚数**で数える。買い手の冊で ★ の一行を出していた競合相手は
+      『品番の重複除去』『集計』『商品名・発注金額だけ』『検分』── どれも ailine 自身の
+      置き土産だった。自分が散らかしたものを理由に「どれか分かりません」と言っていた。
+      ★ `sheets_we_made` は履歴（作った本人の記録）から来る。空なら従来どおり全部数える
+        ＝**分からない時は黙らない**。"""
     slots = []
     for key, kind in OP_SUBJECT_SLOTS.get(op, ()):
         value = resolved.get(key)
@@ -3366,7 +3392,8 @@ def _subject_slots(op: str, resolved: dict, sheets: list, task: str = "") -> lis
     #   ── 人が選んだという事実のほうが、語の一致より強い証拠。
     if resolved.get("_sheet_source") == "cli":
         target_sheet = None
-    if target_sheet and len(sheets or []) > 1:
+    _theirs = [s for s in (sheets or []) if s not in set(sheets_we_made or ())]
+    if target_sheet and len(_theirs) > 1:
         slots.append(Slot(key="_target_sheet", value=str(target_sheet), kind=SUBJ_SHEET))
     return slots
 
@@ -3530,7 +3557,9 @@ def classify_subject_provenance(op: str, resolved: dict, meta: dict, task: str, 
     _named_missing = ()
     if _wt is not None and _wt.writes == (WRITE_EXISTING_COLUMN,):
         _named_missing = named_but_missing_columns(task or "", columns)
-    return classify_slots(_subject_slots(op, resolved, sheets, task or ""), task=task or "",
+    _ours = sheets_ailine_made(getattr(a, "book", None)) if a is not None else ()
+    return classify_slots(_subject_slots(op, resolved, sheets, task or "",
+                                          sheets_we_made=_ours), task=task or "",
                            columns=columns, header_row=header_row, sheets=sheets,
                            qualifier_signal=qualifier, consumed=consumed,
                            named_missing=_named_missing)
@@ -12435,6 +12464,11 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
         "postcondition": result.get("postcondition"),
         # ★ A': 用語集/依頼文から機械確定した値（APPEND_TOTAL の倍率等）の出典。無ければ None。
         "provenance": result.get("provenance"),
+        # ★★ 2026-09-21: この run が**作った**シート（出所追跡）。`changes` は表示用で
+        #   [:3] に切られるので、機械が読む出所はこちらに持つ。
+        #   ★ 上の out_sha の顛末（ここがキーを固定列挙していて写さず、関所が到達不能に
+        #     なっていた）と**同じ罠の前**に立っている項 ── 番人は本番の書き手を通す。
+        "made_sheets": result.get("made_sheets"),
         "fidelity": result.get("fidelity"),
     }
 
@@ -12507,6 +12541,89 @@ def read_history(path: Path | None = None, max_n: int = 10) -> list:
         except json.JSONDecodeError:
             continue
     return list(reversed(entries))[:max_n]
+
+
+def _path_key(p) -> str:
+    """同じファイルを指すパスを 1 つの鍵に畳む（大小文字・区切りの向き・相対を吸収）。
+
+    ★★ 2026-09-21（実測で捕まえた）: 出所を生の文字列で突き合わせたら、
+      `stack` が書いた `C:\…\全店売上.xlsx` と、人が打った
+      `C:/…/全店売上.xlsx` が**別物**になり、記録は在るのに一度も当たらなかった。
+    ★★ 怖いのは、それが**挙動に出なかった**こと ── 当たらない＝「人のもの」扱いで
+      注記が出続けるだけなので、安全側に倒れて静かに死んでいた。
+      **陽性側を実測しなければ気づけない死に方**（「出ないことは信号でない」）。
+    ★ 実体には触らない（存在しないファイルでも鍵は作れる）── resolve() は
+      シンボリックリンクや I/O を伴うので使わない。
+    """
+    if not p:
+        return ""
+    try:
+        return os.path.normcase(os.path.abspath(str(p)))
+    except (OSError, ValueError):
+        return ""
+
+
+def record_made_book(path, command: str) -> None:
+    """**冊まるごと ailine が作った**ことを台帳に残す（出所追跡・2026-09-21）。
+
+    ★★ 出所: 買い手の `9月_全店売上.xlsx`（売上＋検分）は `stack` が丸ごと作った冊なのに、
+      **`stack` は履歴を 1 行も残していなかった**。記録が無いので後の run は
+      「どのシートか依頼文と照合できません」と、**自分の置き土産（検分）を理由に**
+      警告を出していた。★ 記録するのは行為した本人。
+    ★ 副次: `ailine history` にも出るようになる ── 道具が作った冊が作業記録から
+      丸ごと抜けている方が、台帳としておかしい。
+    ★ 台帳は補助なので、失敗しても本体の成否に影響させない。
+    """
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True)
+        names = list(wb.sheetnames)
+        wb.close()
+    except Exception:   # noqa: BLE001 ── 読めない理由はここでは言わない
+        return
+    # ★★ 履歴を書く実装を増やさない ── `run` を通らない道の記録は 09-18（盲検 3 体目 ⑨・
+    #   「2 冊照合の履歴が出ない」）で **1 本に畳んである**。そこへ乗せる。
+    #   ★ 番人 `test_the_history_writer_is_a_single_function` が、3 本目を作りかけた
+    #     ところで止めた（2026-09-21）。
+    _record_side_command_history(command, Path(path), f"（{command} が作りました）",
+                                 Path(path), True, "none", made_sheets=names)
+
+
+def sheets_ailine_made(book, path: Path | None = None) -> set:
+    """その冊の中で **ailine 自身が作った**シート名（＝行為した本人が残した記録）。
+
+    ★★ なぜ形で推し量らないか: `write_precondition._looks_like_own_prior_output` は
+      見出しの一致で「たぶん自分」を当てる代理指標で、docstring 自身が限界を書いている
+      ── 人の手作りシートの見出しがたまたま一致すると区別できず、敵対検証（08-20）で
+      「真の出所追跡は未実装」と刻まれている。ここはその穴を塞ぐ側。
+
+    ★★ 失敗の向きを決めてある: 読めない・記録が無い・冊を移した/複製した → **空**。
+      空は「全部 人のもの」として扱われ、**注記は出続ける**。
+      分からない時に黙る側へ倒さない ── 黙って消える警告が一番高くつく。
+    """
+    p = path or HISTORY_FILE
+    try:
+        if not Path(p).exists():
+            return set()
+        raw = Path(p).read_text(encoding="utf-8")
+    except Exception:   # noqa: BLE001 ── ★ 読めない理由は問わない。UnicodeDecodeError は OSError ではない
+        return set()
+    want = _path_key(book)
+    if not want:
+        return set()
+    made = set()
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or "made_sheets" not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        # ★ 原本直接なら book、--copy なら out に書いた ── どちらの経路も同じ冊を指す。
+        if want not in (_path_key(e.get("book")), _path_key(e.get("out"))):
+            continue
+        made |= {str(x) for x in (e.get("made_sheets") or ()) if x}
+    return made
 
 
 def append_misclass(entry: dict, path: Path | None = None) -> None:
@@ -12738,7 +12855,7 @@ def _record_history(a: argparse.Namespace, book: Path, result: dict, failure_kin
 
 def _record_side_command_history(path_kind: str, book: Path, task: str, out: Path | None,
                                  ok: bool, failure_kind: str | None = None,
-                                 stamp_out: bool = True) -> None:
+                                 stamp_out: bool = True, made_sheets=()) -> None:
     """run の DSL 経路を通らない道（csv 変換・export-csv・**2 冊の照合**）の履歴を 1 行残す。
 
     ★★ 2026-09-18（盲検 3 体目 ⑨）: 買い手「**2 冊照合の履歴が `ailine history` に
@@ -12773,6 +12890,9 @@ def _record_side_command_history(path_kind: str, book: Path, task: str, out: Pat
             "command": None,
             "postcondition": None,
             "provenance": None,
+            # ★ 2026-09-21: この道が**作った**シート（出所追跡）。run の側は
+            #   build_history_entry が同じキーを運ぶ（両方で同じ名前・同じ意味）。
+            "made_sheets": list(made_sheets) or None,
             "fidelity": None,
         })
     except OSError:
@@ -15056,7 +15176,7 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
             header_rows=(book_meta or {}).get("header_rows"))   # ★ 前後を見る助言はここ 1 本に畳んである
     for adv in advisories:
         print(adv)
-    result["changes"] = lines
+    record_diff(result, before, after, lines)
     result["advisories"] = advisories
 
     status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
@@ -15244,7 +15364,7 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
             header_rows=(book_meta or {}).get("header_rows"))
     for adv in advisories:
         print(adv)
-    result["changes"] = lines
+    record_diff(result, before, after, lines)
     result["advisories"] = advisories
 
     status, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"],
@@ -15414,7 +15534,7 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
             header_rows=(book_meta or {}).get("header_rows"))
     for adv in advisories:
         print(adv)
-    result["changes"] = lines
+    record_diff(result, before, after, lines)
     result["advisories"] = advisories
 
     status, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"],
@@ -16580,7 +16700,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
     result["provenance"] = plan_provenance or None
     result["items"] = [{"idx": idx, "label": label, "status": st, "detail": det}
                         for idx, label, st, det in items]
-    result["changes"] = difflines
+    record_diff(result, before_all, after_all, difflines)
     result["advisories"] = [{"steps": idxs, "text": text}
                              for idxs, text in _group_step_advisories(step_advisory_entries)]
 
@@ -17214,6 +17334,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 return 7
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(tmp_out, out)
+        record_made_book(out, "run")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -17646,6 +17767,7 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
 
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(tmp_out, out)
+        record_made_book(out, "run")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -18417,6 +18539,7 @@ def cmd_demo(a: argparse.Namespace) -> int:
         dest_dir.mkdir(parents=True, exist_ok=True)
         for name in available:
             shutil.copy2(src_dir / name, dest_dir / name)
+            record_made_book(dest_dir / name, "demo")
             copied.append(name)
     except OSError as e:
         print(f"× サンプルを置けませんでした: {e}")
@@ -18654,6 +18777,7 @@ def cmd_forms(a: argparse.Namespace) -> int:
                 return 7
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(tmp_out, out)
+        record_made_book(out, "forms")
         result["file_written"] = True
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -18903,6 +19027,7 @@ def cmd_stack(a: argparse.Namespace) -> int:
                 return 7
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(tmp_out, out)
+        record_made_book(out, "stack")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -19200,6 +19325,7 @@ def cmd_split(a: argparse.Namespace) -> int:
                   if multifile_stack.own_output_mark(p) == split_people.CREATOR_MARK}
         for tmp in list(written.values()) + [report_tmp]:
             shutil.copy2(tmp, out_dir / tmp.name)
+            record_made_book(out_dir / tmp.name, "split")
             result["files_written"].append(tmp.name)
         result["overwrote_own"] = sorted(before & set(result["files_written"]))
         result["stale_own"] = sorted(before - set(result["files_written"]))
@@ -19300,6 +19426,7 @@ def cmd_accounts_apply(a: argparse.Namespace) -> int:
             return 5
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(tmp, out)
+        record_made_book(out, "accounts-apply")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     print(f"採用 {len(adopted)} 行（候補の冊の {seen} 行のうち）── 借方勘定科目に写しました: {out}")
@@ -19517,6 +19644,7 @@ def cmd_accounts(a: argparse.Namespace) -> int:
                 return 7
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(tmp_out, out)
+        record_made_book(out, "accounts")
         result["file_written"] = True
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

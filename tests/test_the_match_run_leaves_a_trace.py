@@ -129,14 +129,21 @@ def test_the_history_entry_is_built_in_one_place():
 def test_the_side_routes_all_go_through_the_helper():
     """★ DSL を通らない経路が全部、同じ器を通ること。
 
-    ★ 呼び手は 4 ── csv 変換 / export-csv / 照合の**成功** / 照合の**断り**。
+    ★ 呼び手は 5 ── csv 変換 / export-csv / 照合の**成功** / 照合の**断り** /
+      **冊を作った記録**（`record_made_book`）。
       照合を 2 箇所に配線したのは、単一ブックの run が成功も語彙外も残しているのと
       揃えたから（片方だけ残すのは、また片配線）。
+
+    ★★ 2026-09-21（盲検 5 体目・出所追跡）: 5 本目が増えた。`record_made_book` は
+      **それ自身が 8 つの入口（stack/forms/split/accounts/accounts-apply/demo/
+      run の folder・match）の漏斗**なので、ここは 1 本のまま数える。
+      ★ この本数は手で持つ**意図的な引っかけ**（配線が黙って増減したら気づくため）──
+        増やす時は理由を書いて更新する。
     """
     n = len(_calls("_record_side_command_history"))
-    assert n == 4, (
-        f"★ 呼び手が {n} 本（期待 4: csv / export-csv / 照合の成功 / 照合の断り）── "
-        "どれかが畳まれていないか、配線が増減した")
+    assert n == 5, (
+        f"★ 呼び手が {n} 本（期待 5: csv / export-csv / 照合の成功 / 照合の断り / "
+        "冊を作った記録）── どれかが畳まれていないか、配線が増減した")
 
 
 def test_every_side_route_stamps_its_output():

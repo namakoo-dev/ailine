@@ -390,10 +390,15 @@ def test_f4_aggregate_twice_in_the_same_book(tmp_path, monkeypatch, capsys):
     out2 = capsys.readouterr().out
     assert rc1 == 0
     assert rc2 == 0, out2
-    # ★ 1回目の出力で2シートになるため、2回目は②の範囲注記が1本出る（単位F より前からの挙動）。
-    assert _stars(out2) == [
-        "★ ただし対象シート『工事台帳』は依頼文の語と機械照合していません"
-        "（ブックの実体・既定から機械決定しました） — 「解釈:」行を確認してください。"]
+    # ★★ 2026-09-21（盲検 5 体目・出所追跡）: 旧挙動では「1回目の**出力**で2シートになる
+    #   ため、2回目は②の範囲注記が1本出る」だった。★ 競合していた『集計』は
+    #   **1回目に ailine 自身が作ったシート**で、自分の置き土産を理由に
+    #   「どのシートか分かりません」と言っていた（買い手: 成功 run の 61% で出て
+    #   「3回目から読まなくなりました」）。
+    #   ★ 出所を記録するようにしたので、ここは静かになるのが正しい。
+    #     人のシートが本当に2枚ある回では今までどおり出る
+    #     （tests/test_the_tool_knows_which_sheets_it_made.py の陰性対照）。
+    assert _stars(out2) == []
 
 
 def test_f4b_aggregate_twice_with_edited_source_data(tmp_path, monkeypatch, capsys):
