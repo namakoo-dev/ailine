@@ -210,6 +210,7 @@ from ailine_core.target_sheet import (
 )
 from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から「対象スロット」へ広げる
     Slot, Consumed as SubjectConsumed, classify_slots,
+    named_but_missing_columns,   # ★ 2026-09-21: 実在しないのに列を名乗った語（③の材料）
     COLUMN as SUBJ_COLUMN, REGION as SUBJ_REGION, ROW as SUBJ_ROW,
     SHEET as SUBJ_SHEET, LABEL as SUBJ_LABEL, INPUT as SUBJ_INPUT,
     SHEET_INPUT as SUBJ_SHEET_INPUT,   # ★ operator8 ①: LOOKUP_FILL の source_sheet 消費用
@@ -3427,9 +3428,21 @@ def classify_subject_provenance(op: str, resolved: dict, meta: dict, task: str, 
     if a is not None and consumed is None:
         consumed = SubjectConsumed()
         a._subject_consumed = consumed
+    # ★★ 2026-09-21（盲検 5 体目 ④・Namakoo 決裁）: **既存列にだけ書く op** の時は、
+    #   「◯◯列」と名乗られたのにその列が無い語を**反証の材料**に加える。
+    #   ★ 出所: 「差額が1以上の**チェック列**に「◎」を付けて」に対し、道具は既存の
+    #     『確認』列を選んで書き、`✓` を出した ── 合格線 ①2「頼んでいないものを変えない」。
+    #   ★★ 「作る」側の op には当てない（`OP_WRITE_TARGET` の宣言で絞る）── 検体に
+    #     「売上から原価を**引いた列**を作って」が 16 件あり、そこでは『引いた』は
+    #     列名ではなく説明だから（実装前に数えて決めた）。
+    _wt = OP_WRITE_TARGET.get(op)
+    _named_missing = ()
+    if _wt is not None and _wt.writes == (WRITE_EXISTING_COLUMN,):
+        _named_missing = named_but_missing_columns(task or "", columns)
     return classify_slots(_subject_slots(op, resolved, sheets, task or ""), task=task or "",
                            columns=columns, header_row=header_row, sheets=sheets,
-                           qualifier_signal=qualifier, consumed=consumed)
+                           qualifier_signal=qualifier, consumed=consumed,
+                           named_missing=_named_missing)
 
 
 # ★ bench/translation_spike.py（実測 v1）と同じ語彙定義（bench 側は比較用に据え置き、

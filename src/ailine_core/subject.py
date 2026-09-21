@@ -368,7 +368,41 @@ def _match_slot(slot: Slot, task: str, columns, d: TaskDesignators, sheets,
     return hit, (("column", raw) if hit else None)
 
 
-def _remaining(d: TaskDesignators, consumed: Consumed, kind: str) -> tuple:
+#: ★★ 『◯◯列』と**列を名乗っている**語（2026-09-21・盲検 5 体目 ④）。
+#:   助詞や括弧で切る ── 「差額が1以上の行のチェック列に」から `チェック` を取る。
+_COLUMNISH_RE = re.compile(r"([^\s「」『』、。のをにへとがはでも]{1,12})列")
+
+
+def named_but_missing_columns(task: str, columns=()) -> tuple:
+    """依頼文が**列として名乗っている**のに、その名前の列が実在しないもの。
+
+    ★★ 出所（盲検 5 体目 ④）: 「差額が1以上の行の**チェック列**に「◎」を付けて」に対し、
+      道具は**既存の『確認』列**を選んで書き、`✓` を出した。開示は ★ 行 1 つだけで、
+      買い手は「毎回出るので 3 回目から読まなくなった」と言っている。
+      ★ 合格線 ①2「頼んでいないものを変えない」に当たる。
+
+    ★★ なぜ `task_designators` に混ぜないか: あちらは**実在物との照合だけ**で拾う、と
+      決めてある（断片まで拾うと「まっとうな run が軒並み止まる」と実測つきで書いてある）。
+      ここは別のカテゴリ ── **実在しないのに列を名乗っている**という積極的な証拠。
+
+    ★★ 使ってよいのは**既存列にだけ書く op**（`SET_WHERE` / `SET_COLUMN_VALUE`）だけ。
+      「作る」側に当てると誤爆する ── 検体に「売上から原価を**引いた列**を作って」
+      「数量と単価を**かけた列**」が 16 件あり、`引いた`『かけた』は列名ではなく説明だから
+      （実装前に数えた）。呼び出し側が宣言（`OP_WRITE_TARGET`）から絞る。
+    """
+    real = {str(c) for c in columns if c}
+    out = []
+    for m in _COLUMNISH_RE.finditer(str(task or "")):
+        stem, whole = m.group(1), m.group(0)
+        if stem in real or whole in real:
+            continue            # ★ 実在する列を『在庫列』と呼んだだけ ── 反証ではない
+        if whole not in out:
+            out.append(whole)
+    return tuple(out)
+
+
+def _remaining(d: TaskDesignators, consumed: Consumed, kind: str,
+               named_missing: tuple = ()) -> tuple:
     """まだどのスロットも拾っていない依頼文の語（③の反証そのもの）。
        シートは別の家系（列/行/全体とは互いに反証にならない）。"""
     if kind == SHEET:
@@ -377,11 +411,14 @@ def _remaining(d: TaskDesignators, consumed: Consumed, kind: str) -> tuple:
     left += tuple(w for n, w in zip(d.rows, d.row_words) if n not in consumed.rows)
     if d.whole and not consumed.whole:
         left += (d.whole_word,)
+    # ★ 実在しないのに列を名乗っている語は、**誰も拾えない**ので必ず残る＝反証。
+    left += tuple(w for w in named_missing if w not in consumed.columns)
     return left
 
 
 def classify_slots(slots, *, task: str, columns=(), header_row: int = 1, sheets=(),
-                    qualifier_signal: bool = False, consumed: Consumed | None = None) -> list:
+                    qualifier_signal: bool = False, consumed: Consumed | None = None,
+                    named_missing: tuple = ()) -> list:
     """対象スロット群を①②③に仕分ける（純関数）。slots は Slot のリスト。
        columns/sheets は**対象シートの実在列名・ブックの実在シート名**（照合の材料）。
        consumed を渡すと、そこに積まれた「既に拾われた語」を反証から除き、この呼び出しで
@@ -416,7 +453,7 @@ def classify_slots(slots, *, task: str, columns=(), header_row: int = 1, sheets=
         if slot.kind == LABEL:  # 限定語は「残り物」の概念を持たない（依頼文に在るか否かだけ）
             verdicts.append(SubjectVerdict(slot, CONTRADICTED, ("税込み/税抜き等の限定",)))
             continue
-        left = _remaining(d, consumed, slot.kind)
+        left = _remaining(d, consumed, slot.kind, named_missing)
         verdicts.append(SubjectVerdict(slot, CONTRADICTED if left else UNSPOKEN, left))
     return verdicts
 
