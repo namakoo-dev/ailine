@@ -155,6 +155,26 @@ def restore(saved: dict) -> None:
         assert _sha(got) == _sha(b), f"復元できていない: {p}"
 
 
+def _also_outside_the_product(needle: str) -> str:
+    """その文言が**製品ファイルの外**にも在るか（在れば最初の 1 つを返す）。
+
+    ★ 在るなら、製品だけを変異させても番人は当たらない ── 緑は「死んでいる」でなく
+      「測れていない」。★ 差が出ない回こそ測定器を疑う、の実例。
+    """
+    import subprocess as sp
+    r = sp.run(["git", "grep", "-l", "--fixed-strings", needle],
+               cwd=str(REPO), capture_output=True, text=True, encoding="utf-8",
+               errors="replace")
+    if r.returncode != 0:
+        return ""
+    prod = {p.relative_to(REPO).as_posix() for p in _product_paths()}
+    for line in r.stdout.splitlines():
+        f = line.strip()
+        if f and f not in prod and not f.startswith("tests/"):
+            return f
+    return ""
+
+
 def run_one(test_file: Path, timeout=900) -> bool:
     """その試験ファイルが緑か。"""
     r = subprocess.run(
@@ -205,6 +225,18 @@ def main():
         finally:
             restore(saved)
         if green:
+            # ★★ 2026-09-22: ここで即「死んでいる」と書いて誤った。
+            #   道具が書き換えるのは**製品ファイルだけ**なのに、番人は repo の別の所
+            #   （demo/手順.md・README・bench/*.json …）を読んでいることがある。
+            #   その場合の緑は「番人が見ていない」ではなく「**道具が違うファイルを
+            #   変異させた**」── 測れていないだけ。3 件中 3 件がこれだった。
+            elsewhere = _also_outside_the_product(needle)
+            if elsewhere:
+                skipped.append((tf, ln, needle,
+                                f"製品の外にも在る（{elsewhere}）ので測れない"))
+                print(f"    … 測れない ── この文言は製品の外にも在る（{elsewhere}）",
+                      flush=True)
+                continue
             dead.append((tf, ln, needle))
             print("    ★ 緑のまま ── この番人はこの文言を見ていない", flush=True)
         else:
