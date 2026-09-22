@@ -19968,7 +19968,24 @@ def cmd_verify(a: argparse.Namespace) -> int:
                 print(f"× ファイルが見つかりません: {Path(s).resolve()}")
                 return input_path.MISSING_INPUT_EXIT
     elif len(sources) == 1 and not Path(sources[0]).is_dir():
-        print(f"× フォルダが見つかりません: {Path(sources[0]).resolve()}")
+        # ★★ 2026-09-22（3 体目 ② を測っていて自分が踏んだ）: README の表は
+        #   `ailine verify <出力> <元>` としか書いておらず、**元がフォルダだと
+        #   言っていない**。表に従って冊を渡すと「フォルダが見つかりません」と
+        #   言われる ── **ファイルは在るのに「見つかりません」**なので、人は
+        #   打ち間違いを疑って同じことを繰り返す。
+        #   ★ 何を渡せばいいかを名指しする（組み合わせはこの関数の分岐がすべて）。
+        _p = Path(sources[0]).resolve()
+        if _p.is_file():
+            print(f"× 『元』に冊を 1 つだけ渡されました: {_p}")
+            print("  出力がブックの時、『元』はこのどちらかです:")
+            print("  ・縦積み・抽出の出力 → 元はフォルダ 1 つ"
+                  "（例: ailine verify 縦積み.xlsx 受領フォルダ）")
+            print("  ・2 冊照合の出力 → 元は冊 2 つ"
+                  "（例: ailine verify 照合.xlsx 請求書.xlsx 発注記録.xlsx）")
+            print("  ★ 分けた冊（split）を確かめる時は、出力の側がフォルダです"
+                  "（例: ailine verify 配る/ 一覧.xlsx）")
+        else:
+            print(f"× フォルダが見つかりません: {_p}")
         return input_path.MISSING_INPUT_EXIT
     if len(sources) == 1:
         folder = Path(sources[0]).resolve()

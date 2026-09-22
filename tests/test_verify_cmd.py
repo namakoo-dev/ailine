@@ -234,3 +234,55 @@ def test_verify_names_the_edited_row_not_just_aggregate_sums(tmp_path):
     assert "300" in p.stdout and "1099" in p.stdout, f"集計 Σ の両側が無い:\n{p.stdout}"
     assert "b.xlsx" in p.stdout, f"どのファイル由来の行かの名指しが無い:\n{p.stdout}"
     assert "200" in p.stdout and "999" in p.stdout, f"行水準の両側の数字が無い:\n{p.stdout}"
+
+
+# --- 元に冊を 1 つ渡した回（2026-09-22・3 体目 ② を測っていて自分が踏んだ）--------------
+
+def test_a_single_book_as_the_source_says_what_to_pass_instead(tmp_path):
+    """★★ README の表は `ailine verify <出力> <元>` としか書いておらず、**元がフォルダだと
+    言っていない**。表に従って冊を渡すと、旧実装は「フォルダが見つかりません」と言った ──
+    **ファイルは在るのに「見つかりません」**なので、人は打ち間違いを疑って同じことを繰り返す。
+
+    ★ 3 体目の ②（「verify が判定を出さない」）を測っている途中で、こちらに当たった。
+      ② そのものは 3 つの形すべてで判定（✓）が出て再現しなかった（セッションが
+      保存されていないので、買い手が当たった形は特定できていない）。
+    ★ ここが縛るのは「**何を渡せばいいかを名指しする**こと」だけ（文面は人が決める）。
+    """
+    import os
+    out = tmp_path / "出力.xlsx"
+    src = tmp_path / "元.xlsx"
+    for p_ in (out, src):
+        wb = openpyxl.Workbook()
+        wb.active.append(["品名", "数量"])
+        wb.save(p_)
+    repo = Path(__file__).resolve().parent.parent
+    r = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out), str(src)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       cwd=str(repo),
+                       env={**os.environ, "PYTHONPATH": str(repo / "src"),
+                            "AILINE_HOME": str(tmp_path / "home")})
+    assert r.returncode == 9, r.stdout
+    assert "フォルダが見つかりません" not in r.stdout, (
+        "★ ファイルは在るのに『見つかりません』と言っている: " + r.stdout)
+    assert "冊を 1 つだけ" in r.stdout, r.stdout
+    # ★ 次に打てる形を**全部**名指しすること（縦積み/抽出・照合・分けた冊）
+    for want in ("フォルダ 1 つ", "冊 2 つ", "出力の側がフォルダ"):
+        assert want in r.stdout, f"『{want}』の道を示していない: {r.stdout}"
+
+
+def test_a_missing_folder_still_says_so(tmp_path):
+    """★ 陰性対照 ── 本当に無いパスには、今までどおり「フォルダが見つかりません」。"""
+    import os
+    out = tmp_path / "出力.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active.append(["品名"])
+    wb.save(out)
+    repo = Path(__file__).resolve().parent.parent
+    r = subprocess.run([sys.executable, "-m", "ailine", "verify", str(out),
+                        str(tmp_path / "無いフォルダ")],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       cwd=str(repo),
+                       env={**os.environ, "PYTHONPATH": str(repo / "src"),
+                            "AILINE_HOME": str(tmp_path / "home")})
+    assert r.returncode == 9, r.stdout
+    assert "フォルダが見つかりません" in r.stdout, r.stdout
