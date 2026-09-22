@@ -6055,6 +6055,17 @@ def _verify_bold(resolved, inferred, first_sheet, headers, op, task="",
         n = target[4:]
         if not (n.isdigit() and int(n) >= 1):
             return False, resolved, inferred, f"行番号『{n}』が不正です"
+        # ★★ 2026-09-22（盲検 6 体目）: 依頼文が「見出し」と言っていて、実際の
+        #   見出し行が 1 行目でないなら、**機械が直す**。模型は few-shot の
+        #   `row:1` を写しているだけで、表を見ていない。
+        #   ★ 黙って直さない ── 出所を残し、画面の「解釈:」行に出る値そのものを変える。
+        _hr = header_row_the_task_means(task, header_row)
+        if _hr and int(n) != _hr:
+            resolved["target"] = f"row:{_hr}"
+            resolved.setdefault("_sources", {})["target"] = (
+                f"依頼文の『見出し』と、この冊の見出し行（{_hr}行目）から機械が決めました"
+                f"（模型は {target} と言っていました）")
+            inferred.add("target")
         # ★ 単位I: 契約文(1743)・codegen(2588)は CENTER_ALIGN に row: を認めておらず、
         #   ここだけが少数派だった（実測: row:N を通した先で codegen が素の traceback）。
         #   codegen に row: を実装するのは別作業 ―― ここは契約文に合わせて拒否するだけ。
@@ -6652,6 +6663,38 @@ def _verify_autofit():
     """
     pass   # 引数無し・全列が対象（検証することが無い）
     return None
+
+
+# ★ 「見出しの行」を指す語。**ここは語の列挙で正しい** ── 判定しているのが
+#   「表のどこか」ではなく「人がどの場所を言ったか」だからだ（_REMOVAL_WORDS と同じ理屈）。
+_HEADER_WORDS = ("見出し", "ヘッダ", "ヘッダー", "項目名", "タイトル行", "見だし")
+
+
+def header_row_the_task_means(task: str, header_row: int | None) -> int | None:
+    r"""依頼文が「見出し」を指していて、その行が 1 行目でないなら、その行番号を返す。
+
+    ★★ なぜ在るか（盲検 6 体目・2026-09-22 に再来）:
+      `--header-row 3` を渡した冊に「見出しを太字にして」と頼むと、
+      `解釈: 操作:太字 対象:row:1` になり **1 行目（空のタイトル行）が太字**になった。
+      見出し行（3 行目）は太字のまま残り、判定は ⚠ の **exit 0**。
+
+    ★★ この族は一度踏んでいる（ailine_core/subject.py の冒頭に記録がある）──
+      「見出しを太字にして」が `col:数量*単価` に解決され、**見出し行は太字にならない
+      まま ✓ が出た**。その時の処置は「⚠ で言う」止まりだった。
+      ★ 言えているのに直していない ── 今日は**機械が決める**側へ進める。
+
+    ★ なぜ模型に決めさせないか: few-shot の例が `{"target": "row:1"}` と書いてあり、
+      模型はそれを**写している**だけ。見出しが何行目かは表を見ないと決まらない。
+      ★ `_OP_SCHEMA_NOTES` が他の op で宣言している分担と同じ ──「これは入れない、
+        機械が決める」。
+    """
+    if not any(w in (task or "") for w in _HEADER_WORDS):
+        return None
+    # ★ 見出し行は**呼び出し側が既に知っている**（resolve_header_rows が 1 箇所で
+    #   決めた値を渡している）。ここで冊を読み直さない ── 二度読むと割れる。
+    if not isinstance(header_row, int) or header_row <= 1:
+        return None
+    return header_row
 
 
 def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab: dict | None = None,

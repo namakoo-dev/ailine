@@ -148,6 +148,7 @@ value _FIDELITY_RELS_RE
 value _FORMAT_OP_WORDS
 class _FreeformGateAbort(exit_code: 'int')
 value _GENERIC_EXT_RE
+value _HEADER_WORDS
 value _HEADER_WORD_RE
 value _HELPER_CALL_RE
 value _HELPER_SUB_DECL_RE
@@ -678,6 +679,7 @@ def freeform_notice_reason(op: 'str', about: 'str' = '') -> 'str'
 def get_column_letter(col_idx)
 def header_cell_target(task: 'str', target: 'str', header_row: 'int', columns) -> 'str | None'
 def header_row_drops_columns(ws, chosen_row: 'int') -> 'str | None'
+def header_row_the_task_means(task: 'str', header_row: 'int | None') -> 'int | None'
 def history_in_folder(entries: 'list', folder) -> 'list'
 def history_place(book, base=None) -> 'str'
 def history_scope_line(shown: 'int', hidden: 'int', ledger, folder=None) -> 'str'
