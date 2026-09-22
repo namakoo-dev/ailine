@@ -22,7 +22,7 @@ value DEFAULT_REFS
 value DEFAULT_SUGGESTIONS
 value DEFAULT_VOCAB_MAX_ENTRIES
 value DEFAULT_VOCAB_MAX_TERM_LEN
-class DslStepDeps(format_confirmation_line: 'Callable', maybe_warn_header_col_mismatch: 'Callable', maybe_warn_target_overwrite: 'Callable', interpretation_summary_line: 'Callable', confirm_overwrite_or_gate: 'Callable', basrun_apply: 'Callable', stop_office: 'Callable', snapshot: 'Callable', why_output_is_unusable: 'Callable', diff_snapshots: 'Callable', run_postcondition: 'Callable', progress_start: 'Callable', progress_end: 'Callable', pivot_caveat: 'str', verify_dsl_args: 'Callable', apply_new_column_fallback: 'Callable', build_advisories: 'Callable', structural_advisories: 'Callable', unrequested_new_sheet_advisory: 'Callable', classify_subject_provenance: 'Callable | None' = None, sheet_conflict_gate: 'Callable | None' = None) -> None
+class DslStepDeps(format_confirmation_line: 'Callable', maybe_warn_header_col_mismatch: 'Callable', maybe_warn_target_overwrite: 'Callable', interpretation_summary_line: 'Callable', confirm_overwrite_or_gate: 'Callable', basrun_apply: 'Callable', stop_office: 'Callable', snapshot: 'Callable', why_output_is_unusable: 'Callable', diff_snapshots: 'Callable', run_postcondition: 'Callable', progress_start: 'Callable', progress_end: 'Callable', pivot_caveat: 'str', verify_dsl_args: 'Callable', apply_new_column_fallback: 'Callable', task_asks_to_undo_this_op: 'Callable', build_advisories: 'Callable', structural_advisories: 'Callable', unrequested_new_sheet_advisory: 'Callable', classify_subject_provenance: 'Callable | None' = None, sheet_conflict_gate: 'Callable | None' = None) -> None
 value EXIT_APPLY_FAILED
 value EXIT_ENVIRONMENT
 value EXIT_WRITE_BLOCKED
@@ -185,6 +185,7 @@ value _SUB_OPEN_RE
 value _TAIL_WORDS
 value _TAX_EXCLUSIVE_RE
 value _TAX_INCLUSIVE_RE
+value _UNDO_WORDS
 value _VOCAB_MISS_KIND_PREFIX
 value _VOCAB_MISS_REASONS
 value _ZENKAKU_DIGITS
@@ -318,6 +319,7 @@ def _is_our_scratch_output(book: 'Path', out_book: 'Path') -> 'bool'
 def _judge_ops_catalog() -> 'str'
 def _kill_process_tree(pid: 'int') -> 'None'
 def _known_helper_names(helper_files: 'list') -> 'set'
+def _label_chunks(label: 'str') -> 'tuple'
 def _last_task_for_book(book: 'Path') -> 'str'
 def _letterlike_header_columns(book_meta: 'dict | None') -> 'set'
 def _load_module_from_path(path: 'Path', name: 'str')
@@ -679,6 +681,7 @@ def header_row_drops_columns(ws, chosen_row: 'int') -> 'str | None'
 def history_in_folder(entries: 'list', folder) -> 'list'
 def history_place(book, base=None) -> 'str'
 def history_scope_line(shown: 'int', hidden: 'int', ledger, folder=None) -> 'str'
+def home_dir_looks_garbled() -> 'str | None'
 def insert_rows_should_have_been_add_row(task: 'str', resolved: 'dict', book_meta: 'dict | None' = None, sheet: 'str | None' = None) -> 'str | None'
 def inspection_sheet_basic_call(sheet_name: 'str', header: 'list', rows: 'list', types: 'str') -> 'str'
 def interfaces_only(bas_text: 'str') -> 'str'
@@ -706,6 +709,7 @@ def main(argv=None) -> 'int'
 def make_backup(book: 'Path', keep: 'int' = 10, shelf: 'bool' = False) -> 'Path'
 def maybe_show_notice_v2(path: 'Path | None' = None) -> 'bool'
 def mention_overlap_advisory(mentions: 'dict', before: 'dict', after: 'dict', exclude_sheets: 'set | None' = None, exclude_cols: 'set | None' = None) -> 'list'
+def mojibake_reading(text: 'str') -> 'str | None'
 def multi_file_routes() -> 'set'
 def name_matches_task(name, task: 'str', others=()) -> 'bool'
 def named_but_missing_columns(task: 'str', columns=()) -> 'tuple'
@@ -842,6 +846,7 @@ def task_asks_for_number_format(task: 'str') -> 'bool'
 def task_asks_for_one_cell(task: 'str') -> 'bool'
 def task_asks_to_add_a_column(task: 'str') -> 'bool'
 def task_asks_to_extract_columns(task: 'str') -> 'bool'
+def task_asks_to_undo_this_op(task: 'str', op: 'str | None') -> 'str | None'
 def task_names_a1_cell(task: 'str') -> 'tuple | None'
 def task_names_a_row_number(task: 'str') -> 'int | None'
 def task_names_a_table_edge_row(task: 'str', book_meta: 'dict', sheet: 'str | None') -> 'tuple | None'

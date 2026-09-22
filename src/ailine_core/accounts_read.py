@@ -44,6 +44,9 @@ class JournalBook:
     encoding: str | None = None
     ambiguous: bool = False
     truncated: bool = False
+    #: ★ 2026-09-22: `--column` の指定がこの冊で当たらず自動照合へ落ちた等、
+    #:   **黙って別の列を読んでいない**ことを人に返すための名指し。
+    notes: list = field(default_factory=list)
     refused: str | None = None
 
 
@@ -84,6 +87,7 @@ def read_journal(path, overrides=None) -> JournalBook:
     """
     suffix = path.suffix.lower()
     encoding, ambiguous, truncated = None, False, False
+    notes: list = []   # ★ 指定が当たらず自動照合へ落ちた等の名指し
     try:
         if suffix == filetypes.CSV_SUFFIX:
             raw_rows, encoding, ambiguous, truncated = _raw_rows_from_csv(path)
@@ -102,19 +106,20 @@ def read_journal(path, overrides=None) -> JournalBook:
                            refused=f"{path.name}: {input_path.explain_unreadable(e, path)}")
 
     header_row, headers, header_map, refusal = \
-        accounts_core.resolve_accounts_columns(raw_rows, overrides)
+        accounts_core.resolve_accounts_columns(raw_rows, overrides, notes=notes)
     width = max((len(v) for _r, v in raw_rows), default=0)
     if refusal:
         return JournalBook(name=path.name, path=str(path), header_row=header_row,
                            headers=list(headers), width=width, encoding=encoding,
                            ambiguous=ambiguous, truncated=truncated,
+                           notes=list(notes),
                            refused=f"{path.name}: {refusal}")
     rows = [(r, v) for r, v in sorted(raw_rows, key=lambda rv: rv[0])
             if header_row is None or r > header_row]
     return JournalBook(name=path.name, path=str(path), header_row=header_row,
                        headers=list(headers), header_map=header_map, rows=rows,
                        width=width, encoding=encoding, ambiguous=ambiguous,
-                       truncated=truncated)
+                       truncated=truncated, notes=list(notes))
 
 
 def past_pool(books) -> dict:

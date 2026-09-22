@@ -274,8 +274,14 @@ def parse_column_overrides(pairs) -> tuple:
 
     ★ 役割の顔ぶれは `COLUMN_ALIASES` が唯一の出どころ（手で並べない ── 足した役割が
       黙って指定できないまま残らない）。
+
+    ★★ 2026-09-22（盲検 6 体目 ⑥・致命）: 同じ役割を 2 回教えると**後勝ち**で上書きされ、
+      「今回の冊＝『科目』／過去の冊＝『借方科目』」のように**出所が違う 2 種**を
+      突き合わせる時に、どちらを教えても片方が落ちた。
+      買い手の言葉:「うちの精算書と会計ソフト出力の見出しが一致することはまずありません」。
+      ★ だから役割ごとに**候補の並び**を持つ（冊ごとに当たった方を使う）。
     """
-    out = {}
+    out: dict = {}
     for raw in list(pairs or ()):
         if "=" not in str(raw):
             return {}, (f"`--column` の形が違います（{raw}）── `役割=見出し` で書いてください"
@@ -287,17 +293,20 @@ def parse_column_overrides(pairs) -> tuple:
                         f"（役割: {'／'.join(COLUMN_ALIASES)}）")
         if not name:
             return {}, f"『{role}』に渡す見出しが空です（`--column {role}=<見出し>`）"
-        out[role] = name
+        out.setdefault(role, [])
+        if name not in out[role]:
+            out[role].append(name)
     return out, None
 
 
-def resolve_accounts_columns(rows, overrides=None) -> tuple:
+def resolve_accounts_columns(rows, overrides=None, notes=None) -> tuple:
     """行の並びから (見出し行, 見出しの並び, {役割: 列番号}, 断り) を決める。
 
     rows: [(行番号, [値, ...]), ...]（原本の 1 起点の行番号）。
     ★ 見出し行は「2 つ以上埋まった最初の行」── 弥生（見出し行が無い）だけは列位置で受ける。
     ★ 断ったら header_map は空（推測で先へ進まない）。
     """
+    notes = notes if notes is not None else []
     ordered = sorted(rows, key=lambda rv: rv[0])
     if not ordered:
         return None, [], {}, "行がありません（空のファイル）"
@@ -312,21 +321,34 @@ def resolve_accounts_columns(rows, overrides=None) -> tuple:
     if head_row is not None:
         header_map, refusal = {}, None
         # ★★ 2026-09-20（⑤）: 人が `--column 役割=見出し` で教えた分は**そちらを採る**。
-        #   ★ 教えられた見出しが冊に無ければ、推測で先へ進まず名指しで断る
-        #     （在ると思って渡した人に、何が見えているかを返す）。
-        for role, want in (overrides or {}).items():
-            got = [i for i, h in enumerate(headers or [], start=1)
-                   if form_read.norm(h) == form_read.norm(want)]
-            if len(got) == 1:
-                header_map[role] = got[0]
-            elif not got:
-                return head_row, headers, {}, (
-                    f"`--column {role}={want}` と教わりましたが、その見出しは"
-                    f"この冊にありません。見た見出し: {_seen_headers(headers)}")
-            else:
-                return head_row, headers, {}, (
-                    f"`--column {role}={want}` と教わりましたが、同じ見出しが"
-                    f"{len(got)} 列あります ── どれを読むかは表からは決まりません")
+        # ★★ 2026-09-22（盲検 6 体目 ⑥・致命）: ただし**当たらない冊では自動照合へ落ちる**。
+        #   ★ 事故: 道具が「`--column 借方勘定科目=科目` を付けて」と案内し、その通りに
+        #     打つと**過去の仕訳の側が全部落ちた**（今回=自社の精算書『科目』／
+        #     過去=会計ソフト出力『借方科目』）。★ 導線が嘘になっていた。
+        #   ★ 旧版のコメントは「実際の冊は同じ書き出しなので、見出しも同じ」と書いて
+        #     いたが、**出所が違う 2 種を突き合わせる道具**なので、揃う方が珍しい。
+        #     買い手の言葉:「うちの精算書と会計ソフト出力の見出しが一致することは
+        #     まずありません」。
+        #   ★ 黙って別の列を読まない ── 落ちたことは notes で名指しして返す。
+        for role, wants in (overrides or {}).items():
+            wants = wants if isinstance(wants, (list, tuple)) else [wants]
+            landed = None
+            for want in wants:
+                got = [i for i, h in enumerate(headers or [], start=1)
+                       if form_read.norm(h) == form_read.norm(want)]
+                if len(got) == 1:
+                    header_map[role] = got[0]
+                    landed = want
+                    break
+                if len(got) > 1:
+                    return head_row, headers, {}, (
+                        f"`--column {role}={want}` と教わりましたが、同じ見出しが"
+                        f"{len(got)} 列あります ── どれを読むかは表からは決まりません")
+            if landed is None:
+                notes.append(
+                    f"`--column {role}=" + "／".join(wants) + "` と教わりましたが、"
+                    f"その見出しはこの冊にありません（この冊では自動で探しました）。"
+                    f"見た見出し: {_seen_headers(headers)}")
         for role in COLUMN_ALIASES:
             if role in header_map:      # ★ 人が決めた分は照合し直さない
                 continue
@@ -338,6 +360,14 @@ def resolve_accounts_columns(rows, overrides=None) -> tuple:
         missing = [r for r in REQUIRED_COLUMNS if r not in header_map]
         if not missing:
             return head_row, headers, header_map, None
+        # ★★ 2026-09-22: 教えた見出しが**当たらず、しかも最後まで決まらなかった**役割は、
+        #   note でなく**断りに載せる** ── 1 冊しか渡していない人にとって、当たらない
+        #   指定は打ち間違いであり、黙って自動照合に落ちたら「教えたのに無視された」に
+        #   見える（2026-09-20 に置いた契約: 在ると思って渡した人に、何が見えているかを返す）。
+        #   ★ 2 冊以上なら当たった冊で使われるので、そちらは note のままでよい。
+        stray = [n for n in notes if any(f"{r}=" in n for r in missing)]
+        if stray:
+            return head_row, headers, {}, "／".join(stray)
         # ★★ 2026-09-20（⑤）: 足りない列は**全部まとめて**言う。旧版は先頭 1 つだけを
         #   名指ししており、人は直して走らせて次を知る ── 往復が必要列の数だけ増える。
         #   ★ 照合の側は最初からそうしている（「決まらなかった役割を全部集めてから報告」）

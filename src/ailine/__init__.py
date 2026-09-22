@@ -318,6 +318,55 @@ def resolve_home_dir() -> Path:
     return Path.home() / ".ailine"
 
 
+def mojibake_reading(text: str) -> str | None:
+    r"""その文字列が**渡され方で壊れた日本語**なら、元の読みを返す。違えば None。
+
+    ★★ なぜ在るか（2026-09-22・盲検 6 体目 ⑨・こちらで実体を確認）:
+      買い手の画面に `C:\...\bench\blind\6菴鍋岼\home\history.jsonl` と出た。
+      買い手は「文字化け」と書いたが、**表示の問題ではなかった** ──
+      道具はその名前で**実際にフォルダを作り**、履歴もバックアップも
+      **undo の世代も**そちらへ書いていた（正しい側の home は空だった）。
+      ★ `ailine undo` の退避先ごと別の場所になる、という重さがある。
+
+    ★ 見分け方（実測）: `6体目` を UTF-8 で符号化したバイト列を cp932 として
+      解釈すると、ちょうど `6菴鍋岼` になる。**逆に戻して意味のある日本語に
+      なるなら、渡され方が壊れている** ── 偶然そうなる確率は極めて低い。
+    ★ 直さない（勝手に読み替えない）── 人に言うだけ。どちらが本物かは人しか決められない。
+    """
+    t = text or ""
+    if not any("\u3040" <= c <= "\u30ff" or "\u4e00" <= c <= "\u9fff" for c in t):
+        return None
+    try:
+        back = t.encode("cp932").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return None
+    if back == t or not back.strip():
+        return None
+    # ★ 戻した先が**日本語として読める**時だけ言う（記号の羅列に戻っても意味がない）
+    if not any("\u3040" <= c <= "\u30ff" or "\u4e00" <= c <= "\u9fff" for c in back):
+        return None
+    return back
+
+
+def home_dir_looks_garbled() -> str | None:
+    """置き場の名が壊れて見えるなら、人に言う 1 行を返す。
+
+    ★ 置き場は resolve_home_dir が唯一の入口なので、ここで見れば全経路に効く。
+    """
+    home = resolve_home_dir()
+    for part in home.parts:
+        back = mojibake_reading(part)
+        if back:
+            return (f"★ 置き場の名前が壊れて見えます: 『{part}』"
+                    f"（本来は『{back}』ではありませんか）" + chr(10)
+                    + f"  いま書いている先: {home}" + chr(10)
+                    + "  ── 履歴・バックアップ・undo の世代は、この名前のまま"
+                    "書かれます（表示だけの問題ではありません）。" + chr(10)
+                    + "  AILINE_HOME の渡し方を確かめてください"
+                    "（PowerShell なら `$env:AILINE_HOME` の中身）。")
+    return None
+
+
 HISTORY_DIR = resolve_home_dir()
 HISTORY_FILE = HISTORY_DIR / "history.jsonl"
 BACKUP_DIR = HISTORY_DIR / "backups"
@@ -9020,6 +9069,68 @@ def except_extraction_reading(book_meta: dict, sheet: str | None, task: str,
 CHOICE_PREFIX = "候補: "
 
 
+# ★ 「打ち消す」意味の語。**ここは語の列挙で正しい** ── 判定しているのが
+#   「表のどこか」ではなく「人がどの動作を言ったか」だからだ（_REMOVAL_WORDS と同じ理屈）。
+#   ★ 漏れた時の壊れ方: 語が無ければ**今までどおり**（黙って別のことをするのではない）。
+#     誤って当たった時は**断る**側に倒れる ── この道具の契約は「到達か、適切な断り」。
+_UNDO_WORDS = ("解除", "外して", "外す", "取り消して", "取り消す", "戻して",
+               "やめて", "取りやめ", "無効に", "解いて")
+
+
+def task_asks_to_undo_this_op(task: str, op: str | None) -> str | None:
+    """依頼文が「その op を**打ち消せ**」と言っているか。言っていれば理由を返す。
+
+    ★★ なぜ在るか（2026-09-22・盲検 6 体目 ①・致命）:
+      「B1からF1の**結合を解除**して」が `操作:セル結合` と読まれ、**`✓ 機械検証済み`**
+      が出た。依頼と**真逆**の操作に ✓ が付く。買い手の言葉:
+      「私が 1 時間で『できていないのに ✓ と言った』場面を引き当てました」── 値付け 0 円。
+
+    ★ 三項で言うと、破れているのは**依頼↔宣言**:
+        依頼=解除 / 宣言=セル結合 / 実体=結合されている
+      宣言と実体は一致するので検算は通る。だから事後条件では**原理的に捕まらない**。
+
+    ★ 一般に依頼↔宣言は機械で確かめられない（だから画面に「解釈:」行が在る）。
+      ★ だが**この形だけ**は安く捕まる ── 依頼文が「その op の概念語」と
+        「打ち消しの語」を**両方**含む時。概念語は宣言（OP_LABELS）から引く。
+
+    ★ 08-29 に同じ族を踏んでいる（「合計を金額表示にして」が合計追加になり、
+      既にある合計をもう一度書いて ✓）。その時の処置は**その op 専用**だったので、
+      族そのものは開いたままだった。ここで宣言から引く形にして畳む。
+    """
+    text = (task or "").strip()
+    label = OP_LABELS.get(op or "")
+    if not text or not label:
+        return None
+    # ★★ 2026-09-22: 「消す」系の語も、**その op が消すと宣言していない時だけ**
+    #   打ち消しとして扱う。語を足すのでなく**宣言で分ける**（器官は既に在る）:
+    #     「けい線を消して」× DRAW_BORDERS（消さない op）→ 打ち消し
+    #     「3行目を削除して」× DELETE_ROWS（消すと宣言）  → 正常
+    words = _UNDO_WORDS if _removal_was_declared(op) else _UNDO_WORDS + _REMOVAL_WORDS
+    if not any(w in text for w in words):
+        return None
+    # ★ 概念語は丸ごとでなく**文字の重なり**で見る（「セル結合」に対し依頼は「結合」）。
+    #   2 文字以上の重なりを要求する（1 文字だと関係ない依頼に当たる）。
+    hit = next((c for c in _label_chunks(label) if c in text), None)
+    if not hit:
+        return None
+    undo = next(w for w in words if w in text)
+    return (f"依頼は『{hit}』を『{undo}』と言っていますが、読み取った操作は"
+            f"『{label}』そのものです ── 真逆のことをしかけました。"
+            f"この道具に『{label}』を打ち消す操作はありません")
+
+
+def _label_chunks(label: str) -> tuple:
+    """概念語から、依頼文と突き合わせる 2 文字以上の断片を作る。
+
+       ★ 「セル結合」→ ("セル結合", "結合")。人は op 名をそのまま言わない。
+    """
+    out = [label]
+    for n in (3, 2):
+        if len(label) > n:
+            out.append(label[-n:])
+    return tuple(dict.fromkeys(c for c in out if len(c) >= 2))
+
+
 def render_refusal(op: str, resolved_or_args, reason: str, task: str = "") -> list:
     """断りを、**利用者の言葉**で 3 行にする。
 
@@ -15343,6 +15454,7 @@ def _make_dsl_step_deps() -> DslStepDeps:
         run_postcondition=run_postcondition, progress_start=progress_start, progress_end=progress_end,
         pivot_caveat=PIVOT_CAVEAT, verify_dsl_args=verify_dsl_args,
         apply_new_column_fallback=_apply_new_column_fallback, build_advisories=build_advisories,
+        task_asks_to_undo_this_op=task_asks_to_undo_this_op,   # ★ 盲検 6 体目 ①（致命）
         structural_advisories=_structural_advisories, unrequested_new_sheet_advisory=unrequested_new_sheet_advisory,
         classify_subject_provenance=classify_subject_provenance,   # ★ 単位E
         sheet_conflict_gate=_sheet_conflict_gate)   # ★ 挙動変更#3
@@ -19747,6 +19859,7 @@ def cmd_accounts(a: argparse.Namespace) -> int:
     today = accounts_read.read_journal(today_path, _cols)
     result.update({"header_row": today.header_row, "encoding": today.encoding,
                    "ambiguous": today.ambiguous})
+    result["unreadable"] += [f"{today.name}: {n}" for n in (today.notes or [])]
     if today.truncated:
         result["unreadable"].append(f"{today.name} は {accounts_read.MAX_ROWS} 行で"
                                     "打ち切りました（それ以降は読んでいません）")
@@ -19771,6 +19884,9 @@ def cmd_accounts(a: argparse.Namespace) -> int:
         # ★ 過去の冊にも同じ指定を効かせる ── 今回だけ通って過去が全部断られるのは
         #   「片方だけ直す」形（実際の冊は同じ書き出しなので、見出しも同じ）。
         book = accounts_read.read_journal(path, _cols)
+        # ★ 2026-09-22: `--column` がこの冊で当たらず自動照合へ落ちたことを名指しする
+        #   （黙って別の列を読まない ── 既存の名指しの道に載せる）。
+        result["unreadable"] += [f"{book.name}: {n}" for n in (book.notes or [])]
         if book.refused:
             result["unreadable"].append(book.refused)
             continue
@@ -20396,6 +20512,18 @@ def main(argv=None) -> int:
     #     そのままでは流し直せない。だから argv をそのまま控える。
     #   ★ 書き先はローカルのファイルだけ。外へは出さない。書けなくても run は止めない
     #     （測定の口が製品の動きを変えてはいけない）。
+    # ★★ 2026-09-22（盲検 6 体目 ⑨）: 置き場の名が壊れて見えるなら、**先に**言う。
+    #   実体: 道具は化けた名前で**実際にフォルダを作り**、履歴もバックアップも
+    #   undo の世代もそちらへ書いていた（正しい側の home は空だった）── 表示の
+    #   問題ではない。★ 勝手に読み替えない（どちらが本物かは人しか決められない）。
+    #   ★ 全コマンドの共通の入口はここ 1 箇所なので、呼び出し側に配らない。
+    try:
+        _garbled = home_dir_looks_garbled()
+    except Exception:   # noqa: BLE001 ── 番人が道を塞がない
+        _garbled = None
+    if _garbled:
+        print(_garbled, file=sys.stderr)
+
     _trace = os.environ.get("AILINE_TRACE")
     if _trace:
         try:

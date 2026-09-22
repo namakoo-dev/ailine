@@ -91,6 +91,9 @@ class DslStepDeps:
     pivot_caveat: str
     verify_dsl_args: Callable
     apply_new_column_fallback: Callable
+    # ★ 2026-09-22: 依頼が『その操作を打ち消せ』と言っているかを見る（盲検 6 体目 ①・致命）。
+    #   ailine_core は ailine を import しない規律なので本体から注入する。
+    task_asks_to_undo_this_op: Callable
     build_advisories: Callable
     structural_advisories: Callable
     unrequested_new_sheet_advisory: Callable
@@ -126,6 +129,17 @@ def resolve_dsl_step_args(op: str, raw_args: dict, task: str, meta: dict, vocab:
        original_headers=None のガードにより new_cols への影響は無い（下記参照）。
        複合計画は直前までの段の original_headers/current_meta/first_sheet を渡し、
        『直前段が作った新規列』への依存つき連鎖フォールバックを1回だけ試みる。"""
+    # ★★ 2026-09-22（盲検 6 体目 ①・致命）: 依頼が「その操作を**打ち消せ**」と
+    #   言っているなら、引数を解く前に断る。
+    #   ★ 実測: 「B1からF1の結合を解除して」が `操作:セル結合` と読まれ ✓ が出た。
+    #     宣言（セル結合）と実体（結合されている）は一致するので**検算は通る** ──
+    #     破れているのは依頼↔宣言で、事後条件では原理的に捕まらない。
+    #   ★ ここに置く理由: この関数は単発・帳票・様式写像の**3 経路が共通で通る**。
+    #     呼び出し側に配ると、また片配線になる（この repo が何度も踏んだ形）。
+    undo = deps.task_asks_to_undo_this_op(task, op)
+    if undo:
+        return DslGroundResult(ok=False, resolved={}, inferred={}, err=undo, new_cols=[])
+
     new_cols: list = []
     if first_sheet and original_headers is not None:
         new_cols = [c for c in meta["headers"].get(first_sheet, [])
