@@ -282,7 +282,7 @@ def test_t5_aggregate_onto_the_summary_sheet_itself_stops_at_the_postcondition(
               "AGGREGATE", {"group_col": "取引先", "value_col": "金額"}, fake)
     out = capsys.readouterr().out
     assert rc == 1, out
-    assert "事後条件を満たさない" in out
+    assert ailine.PC_UNMET in out
     assert _cell(book, "集計", "B1") == "金額"   # 原本は無傷
 
 

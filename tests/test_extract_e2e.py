@@ -85,7 +85,7 @@ def test_extract_fake_empty_sheet_apply_fails_postcondition(tmp_path, monkeypatc
     rc, out = _run_main(["run", str(book), "金額が40000以上の行だけを別シートに抜き出して",
                           "--copy"], capsys)
     assert rc != 0, f"できたふりの空シートが exit 0 で通ってしまった:\n{out}"
-    assert "適用されたが事後条件を満たさない" in out, out
+    assert ailine.PC_UNMET in out, out
     assert "✓" not in out, out   # ★ 機械検証済みを絶対に名乗らないこと
 
 
@@ -140,7 +140,7 @@ def test_extract_second_run_does_not_gate(tmp_path, monkeypatch, capsys):
     # ★ 「変更が元データの範囲外です」は別の助言(幽霊データ検出)で、単位F/G/Hの対象外
     #   （出力シートの行数が前回より増える＝EXTRACTの正常な作り直しでは毎回起きうる）。
     #   ここでは「exit 7 で止まらない」ことだけを主張する。
-    assert "事後条件を確認" in out, out
+    assert ailine.PC_CONFIRMED in out, out
 
 
 @pytest.mark.local

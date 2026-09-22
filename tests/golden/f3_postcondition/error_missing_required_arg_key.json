@@ -1,4 +1,4 @@
 {
   "status": "error",
-  "reason": "事後条件の検証に失敗: KeyError: 'col'"
+  "reason": "検算そのものができませんでした: KeyError: 'col'"
 }

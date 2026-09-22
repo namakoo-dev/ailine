@@ -94,7 +94,7 @@ def test_the_independent_check_reads_what_was_actually_used(tmp_path):
     a, b = _formula_pair(tmp_path)
     r = _run(a, b, "金額で突き合わせて", tmp_path / "home")
     assert r.returncode == 0, r.stdout[-700:]
-    assert "事後条件が破れた" not in r.stdout, "★ 検算が別のデータを読んでいる:\n" + r.stdout[-700:]
+    assert ailine.PC_BROKEN not in r.stdout, "★ 検算が別のデータを読んでいる:\n" + r.stdout[-700:]
     # ★ =100*2 → 200（B は 150 なので +50）、=40*2 → 80
     assert "+50" in r.stdout and "200" in r.stdout, r.stdout[-700:]
     assert "80" in r.stdout, r.stdout[-700:]

@@ -119,7 +119,7 @@ def test_postcondition_failure_names_the_culprit_file(tmp_path, monkeypatch, cap
         lambda model, task, book_meta, temperature=0.1:
         {"op": "EXTRACT", "args": {"col": "金額", "cmp": "gte", "value": 50000}})
     rc, out = _run_main(["run", str(folder), "金額が50000以上の行を抜き出して"], capsys)
-    if "事後条件が破れた" not in out:
+    if ailine.PC_BROKEN not in out:
         pytest.skip(f"この検体では事後条件が破れなかった（前提が崩れた）: {out[-400:]}")
     assert "c.xlsx" in out, f"原因のファイルを名指ししていない（数字の差だけ）: {out}"
     assert "別フォルダ" in out or "見出しの行" in out, f"直し方が無い: {out}"

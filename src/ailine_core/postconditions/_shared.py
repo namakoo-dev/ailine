@@ -55,13 +55,17 @@ PIVOT_CAVEAT = "書式なしの素の表になります。書式つきは『集�
 #   **「頼んだとおり」に寄せてはいけない。** ここが見ているのは*道具が宣言した効果*
 #   （同じ画面の「解釈:」行）であって、人の意図ではない。意図と合っているかは、
 #   人が「解釈:」行を読んで判断する ── 道具はそれを確かめていないし、名乗れない。
-PC_NAME = "事後条件"                     # ★ 語そのものを替えるなら、まずここ
-PC_CONFIRMED = f"{PC_NAME}を確認"
-PC_UNVERIFIABLE = f"{PC_NAME}を機械検証できなかった"
-PC_UNMET = f"適用されたが{PC_NAME}を満たさない"
-PC_BROKEN = f"{PC_NAME}が破れた"
-PC_CHECK_FAILED = f"{PC_NAME}の検証に失敗"
-_ZERO_TARGET_REASON = f"{PC_NAME}の検証対象が0件（何も検証できていない）"
+# ★★ 2026-09-22（Namakoo 決定）: 「事後条件」→「**検算**」。
+#   買い手役は 3 体とも税理士事務所の人で、「検算」は**その人たちの母語**。
+#   意味も正確に乗る ──「別の道から確かめ直す」。ailine が売っているのはそれ。
+#   ★ 「頼んだとおり」とは**言わない**（上の制約）。検算が照らすのは「解釈:」行。
+PC_NAME = "検算"                         # ★ 語そのものを替えるなら、まずここ
+PC_CONFIRMED = f"{PC_NAME}しました"
+PC_UNVERIFIABLE = f"{PC_NAME}できませんでした"
+PC_UNMET = f"適用しましたが、{PC_NAME}が合いません"
+PC_BROKEN = f"{PC_NAME}が合いません"
+PC_CHECK_FAILED = f"{PC_NAME}そのものができませんでした"
+_ZERO_TARGET_REASON = f"{PC_NAME}の対象が 0 件（何も確かめられていません）"
 
 def _numeric_value(v):
     """セルの値を「表計算にとっての数値」にする。数値でなければ None。

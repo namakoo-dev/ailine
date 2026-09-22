@@ -114,9 +114,9 @@ def test_mutated_diff_cell_is_caught_by_postcondition(tmp_path, monkeypatch, cap
     rc = ailine.main(["run", str(a), str(b), TASK])
     out = capsys.readouterr().out
     assert rc != 0, f"改竄した差額セルで合格した:\n{out}"
-    assert "事後条件が破れた" in out, out
+    assert ailine.PC_BROKEN in out, out
     after = set((tmp_path / "in").glob("*.xlsx"))
-    assert after == before, "事後条件が破れたのに出力を本置き場に書いた"
+    assert after == before, "検算が合わないのに出力を本置き場に書いた"
 
 
 def test_symmetry_with_a_second_independent_dataset(tmp_path, capsys):

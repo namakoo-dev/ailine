@@ -12677,11 +12677,11 @@ def report_postcondition(a, book, out_book, result, op, resolved, status, reason
         return 1
     if status == "warn":
         # ★ 止血1: 検証対象が少なすぎる場合、「機械検証済み」とは名乗らない。
-        print(f"{chr(10)}⚠ {PC_UNVERIFIABLE}（操作:{OP_LABELS.get(op, op)}）: {reason}")
+        print(f"{chr(10)}⚠ {PC_UNVERIFIABLE}（{OP_LABELS.get(op, op)}）: {reason}")
     else:
         # ★ C9: 事後条件が見た中身（例「3 行を検証（降順）」）はここで述べる。✓ とは呼ばない
         #   ―― ✓ は原本(--copy なら .out)が確定した後の1行だけ（_finish_apply）。
-        print(f"{chr(10)}{PC_CONFIRMED}（操作:{OP_LABELS.get(op, op)}）: {reason}")
+        print(f"{chr(10)}{PC_CONFIRMED}（{OP_LABELS.get(op, op)}）: {reason}")
     result["ok"] = True
     return None
 

@@ -449,9 +449,10 @@ def test_postcondition_catches_attribution_swap_via_evaluate_and_stack_mutation(
     rc = ailine.main(["stack", str(folder), "--out", str(out)])
     captured = capsys.readouterr()
     assert rc != 0, f"帰属を入れ替えたのに合格した:\n{captured.out}"
-    assert "事後条件が破れた" in captured.out and "元" in captured.out and "出力" in captured.out, \
+    from ailine_core.postconditions._shared import PC_BROKEN
+    assert PC_BROKEN in captured.out and "元" in captured.out and "出力" in captured.out, \
         captured.out
-    assert not out.exists(), "事後条件が破れたのに出力を本置き場に書いた"
+    assert not out.exists(), "検算が合わないのに出力を本置き場に書いた"
 
 
 def test_date_column_width_is_not_inflated_by_time_tail(tmp_path):

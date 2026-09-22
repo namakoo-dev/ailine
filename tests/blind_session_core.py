@@ -44,6 +44,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 CORPUS = REPO / "bench" / "blind"
 
+# ★ 画面の文言は製品の宣言から引く（字面を写すと、言い換えた日に黙って 0 件になる）。
+sys.path.insert(0, str(REPO / "src"))
+from ailine_core.postconditions._shared import PC_CONFIRMED  # noqa: E402
+
 #: ★ 合格率を採る既定の回数（Namakoo 決裁）。30/30 で「真の成功率 90% 以上」が言える最小。
 DEFAULT_RUNS = 30
 
@@ -180,7 +184,7 @@ def freeze(name: str) -> list:
 
 
 # ── 再生（合格率） ──────────────────────────────────────────────────────────
-_LANDED = re.compile(r"事後条件を確認（操作:([^）]+)）")
+_LANDED = re.compile(re.escape(PC_CONFIRMED) + r"（([^）]+)）")
 
 
 def _once(book: Path, task: str, home: Path) -> dict:

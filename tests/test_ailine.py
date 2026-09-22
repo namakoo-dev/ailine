@@ -4027,7 +4027,7 @@ def test_check_sort_fails_when_zero_data_rows(tmp_path):
     p = _book(tmp_path, [["商品", "金額"]])
     status, reason = ailine.check_sort(p, {"col": "金額", "order": "desc"})
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
 
 def test_check_sort_warns_when_only_one_row(tmp_path):
     p = _book(tmp_path, [["商品", "金額"], ["a", 100]])
@@ -4053,14 +4053,14 @@ def test_check_sort_of_a_text_column_is_not_a_failure_but_never_claims_the_order
     status, reason = ailine.check_sort(p, {"col": "備考", "order": "desc"})
     assert status == "warn", (status, reason)
     assert "並び順そのものは確かめていません" in reason, reason
-    assert "検証対象が0件" not in reason
+    assert ailine._ZERO_TARGET_REASON not in reason
 
 
 def test_check_sort_still_fails_when_the_column_is_empty(tmp_path):
     """★ 陰性対照 ── 値が 1 つも無い列は今までどおり fail（空虚な合格を作らない）。"""
     p = _book(tmp_path, [["商品", "備考"], ["a", None], ["b", None]])
     status, reason = ailine.check_sort(p, {"col": "備考", "order": "desc"})
-    assert status == "fail" and "検証対象が0件" in reason, (status, reason)
+    assert status == "fail" and ailine._ZERO_TARGET_REASON in reason, (status, reason)
 
 # --- ★ W10f 項目1: check_sort も同型（対象列を式ビューから読むと全行『数値でない』
 #   扱いになる）。SORT は全行をまたぐ検証なので、キャッシュ欠落は部分採点せず fail で
@@ -4117,7 +4117,7 @@ def test_check_compute_column_fails_when_zero_data_rows(tmp_path):
     p = _book(tmp_path, [["売上", "原価", "売上-原価"]])
     status, reason = ailine.check_compute_column(p, {"operands": ["売上", "原価"], "operator": "-"})
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
 
 def test_check_compute_column_excludes_blank_total_row_and_still_passes(tmp_path):
     p = _book(tmp_path, [["区分", "売上", "原価", "売上-原価"],
@@ -4134,7 +4134,7 @@ def test_check_compute_column_fails_when_all_rows_blank(tmp_path):
     status, reason = ailine.check_compute_column(
         p, {"operands": ["売上", "原価"], "operator": "-"})
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
 
 # --- check_lookup_fill: 対象シートに行が0件 --------------------------------------
 
@@ -4150,7 +4150,7 @@ def test_check_lookup_fill_fails_when_target_sheet_has_no_rows(tmp_path):
     args = {"target_sheet": "明細", "target_col": "単価", "source_sheet": "単価表", "key_col": "商品"}
     status, reason = ailine.check_lookup_fill(p, args)
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
 
 # --- check_aggregate: 元データが0件 ----------------------------------------------
 
@@ -4164,7 +4164,7 @@ def test_check_aggregate_fails_when_source_has_no_rows(tmp_path):
     wb.save(p)
     status, reason = ailine.check_aggregate(p, {"group_col": "部門", "value_col": "金額"})
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
 
 # --- check_bold/check_center_align: 検証対象0件(見出しすら無い空シート) ----------
 
@@ -4174,7 +4174,7 @@ def test_check_bold_fails_when_sheet_completely_empty(tmp_path):
     wb.save(p)
     status, reason = ailine.check_bold(p, {"target": "row:1"})
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
 
 def test_check_center_align_fails_when_sheet_completely_empty(tmp_path):
     wb = openpyxl.Workbook()
@@ -4182,7 +4182,7 @@ def test_check_center_align_fails_when_sheet_completely_empty(tmp_path):
     wb.save(p)
     status, reason = ailine.check_center_align(p, {"target": "all"})
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
 
 # --- check_number_format: データ行0件 --------------------------------------------
 
@@ -4190,7 +4190,7 @@ def test_check_number_format_fails_when_zero_data_rows(tmp_path):
     p = _book(tmp_path, [["商品", "金額"]])
     status, reason = ailine.check_number_format(p, {"col": "金額", "style": "thousands"})
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
 
 # --- run_postcondition: チェッカー内例外は生トレースバックを出さず"error"に変換 --
 
@@ -4203,7 +4203,7 @@ def test_run_postcondition_catches_checker_exception(tmp_path, monkeypatch):
     monkeypatch.setitem(ailine.POSTCONDITIONS, "SORT", boom)
     status, reason = ailine.run_postcondition("SORT", p, {"col": "金額", "order": "desc"})
     assert status == "error"
-    assert "事後条件の検証に失敗" in reason
+    assert ailine.PC_CHECK_FAILED in reason
     assert "TypeError" in reason
 
 def test_cmd_run_dsl_postcondition_warn_does_not_claim_verified(tmp_path, monkeypatch, capsys):
@@ -4353,7 +4353,7 @@ def test_cmd_run_dsl_postcondition_failure_returns_1(tmp_path, monkeypatch, caps
     rc = ailine.main(argv)
     captured = capsys.readouterr()
     assert rc == 1
-    assert "事後条件を満たさない" in captured.out
+    assert ailine.PC_UNMET in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -5319,7 +5319,7 @@ def test_check_compute_column_operand_from_prior_formula_column_no_cache_fails_w
     status, reason = ailine.check_compute_column(
         p, {"operands": ["小計", "数量"], "operator": "*", "target": "税込"}, use_formula=True)
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
     assert "キャッシュ値が無く検証できない 2 行" in reason
     assert "数値でない" not in reason
 
@@ -5343,7 +5343,7 @@ def test_check_compute_column_single_factor_operand_from_prior_formula_column_no
     status, reason = ailine.check_compute_column(
         p, {"operands": ["小計"], "operator": "*", "factor": 1.1, "target": "税込"}, use_formula=True)
     assert status == "fail"
-    assert "検証対象が0件" in reason
+    assert ailine._ZERO_TARGET_REASON in reason
     assert "キャッシュ値が無く検証できない 1 行" in reason
     assert "数値でない" not in reason
 

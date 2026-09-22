@@ -75,7 +75,12 @@ def test_all_failure_paths_share_one_implementation():
     ★ 畳んだのは**画面の語を直す前**（盲検 3 体目 ⑧ / 4 体目 ⑦）── 順番を逆にすると、
       直した人が「片方だけ直した人」になる。
     """
-    assert count_in_product("適用されたが事後条件を満たさない") == 1, (
+    # ★ 2026-09-22: ここは**字面**で数えていた。画面の語を言い換えた瞬間に 0 件になり、
+    #   番人が意味を失う形だった。記号で数える ── 文面が変わっても契約は生き続ける。
+    from _product_source import code_only_text
+    printed = sum(1 for ln in code_only_text().splitlines()
+                  if "print(" in ln and "PC_UNMET" in ln)
+    assert printed == 1, (
         "画面に出す所が増えた ── report_postcondition 1 本に畳むこと")
     assert count_in_product("likely_cause_of_no_change(") == 2, (
         "心当たりを言う所が 1 本（定義 1 + 呼び出し 1）でない")

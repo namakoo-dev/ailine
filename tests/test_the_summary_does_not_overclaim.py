@@ -117,14 +117,19 @@ def test_the_postcondition_wording_lives_in_exactly_one_file():
     from ailine_core.postconditions import _shared
     from _product_source import product_strings
 
-    word = _shared.PC_NAME                      # ★ 字面を書かない
+    # ★★ 縛るのは**語**でなく**文**。2026-09-22 に「事後条件」→「検算」にしたところ、
+    #   「検算」は既に `ailine verify` の語として製品の 31 箇所で使われていた
+    #   （同じ概念の手動版なので、語の共有はむしろ正しい）。
+    #   ★ だから語で縛ると即座に赤くなる ── 縛るべきは**この家族の文**の方。
+    phrases = [_shared.PC_CONFIRMED, _shared.PC_UNVERIFIABLE, _shared.PC_UNMET,
+               _shared.PC_BROKEN, _shared.PC_CHECK_FAILED, _shared._ZERO_TARGET_REASON]
     home = Path(_shared.__file__).resolve()
     strays = [(f, ln, v) for f, ln, v in product_strings()
-              if word in v and Path(f).resolve() != home]
+              if any(ph in v for ph in phrases) and Path(f).resolve() != home]
     assert not strays, (
-        f"『{word}』を字面で持つ文字列が、宣言した {home.name} の外に "
+        f"検算の言い方を字面で持つ文字列が、宣言した {home.name} の外に "
         f"{len(strays)} 件あります: {[(str(f), ln) for f, ln, _ in strays]}"
-        + chr(10) + "  画面の語は _shared.py の PC_* から組んでください "
+        + chr(10) + "  画面の文は _shared.py の PC_* から組んでください "
         "（言い換える日に 1 箇所で済むように）")
 
 

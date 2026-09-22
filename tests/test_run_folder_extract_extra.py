@@ -144,8 +144,8 @@ def test_postcondition_actually_fires_when_the_write_side_is_mutated(tmp_path, m
     monkeypatch.setattr(extract_multi, "evaluate_and_extract", mutant)
     rc, out = _run(folder, TASK, capsys=capsys)
     assert rc == 1, f"変異を注入したのに合格した:\n{out}"
-    assert "事後条件が破れた" in out and "元" in out and "出力" in out, out
-    assert list(tmp_path.glob("*.xlsx")) == [], "事後条件が破れたのに出力を書いた"
+    assert ailine.PC_BROKEN in out and "元" in out and "出力" in out, out
+    assert list(tmp_path.glob("*.xlsx")) == [], "検算が合わないのに出力を書いた"
 
 
 # --- E9: 出力ファイル名の sanitize（単体） -------------------------------------
