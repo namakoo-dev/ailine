@@ -453,9 +453,9 @@ def check_shift(before: CellMap, after: CellMap, shift: Shift,
                 want_m.add((a[0], a[1], b[0], b[1]))
         got_m = set(after.merges)
         if want_m != got_m:
-            return Verdict(False, f"結合セルが宣言どおり動いていません: "
+            return Verdict(False, f"結合セルが検算と合いません: "
                                    f"欠け {sorted(want_m - got_m)}・余り {sorted(got_m - want_m)}")
-    return Verdict(True, f"{shift.describe()} ── 宣言した座標だけが宣言どおり変わりました"
+    return Verdict(True, f"{shift.describe()} ── 宣言した座標だけが変わったことを確かめました"
                           f"（写した {len(expected) - len(writes)} 箇所・"
                           f"新しく書いた {len(writes)} 箇所・それ以外は 1 箇所も無し）")
 

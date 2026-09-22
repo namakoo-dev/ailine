@@ -145,7 +145,7 @@ def render_applied_claim_demoted(claim: Claim, display_name: str, warning_count:
     assert claim.verified and claim.observed_after_apply, (
         "render_applied_claim_demoted も反映後に読み戻した verified=True の Claim だけを受け取る")
     assert warning_count > 0, "render_applied_claim_demoted は warning_count > 0 の時だけ呼ぶ"
-    line = (f"\n△ {display_name} は宣言どおりの変化を確認しました"
+    line = (f"\n△ {display_name} は検算が合いました"
             f"（適用後に読み戻して確認: {claim.evidence}）"
             f" ── ただし ⚠ {warning_count} 件を先に確認してください")
     if not claim.observation_complete:
@@ -175,8 +175,7 @@ def render_unverified_advisories(unverified) -> list:
       試験だけがそれを守っていた（番人が本番でない方を見張る片配線）。
       ailine_core に置いたのは、本番の合流点である dsl_step から直接呼べる側だから。
     """
-    return [f"⚠ {u['rows']} 行は検証できていません（{u['why']}）"
-            " ── この行については「宣言どおり」と言えません"
+    return [f"⚠ {u['rows']} 行は検算できていません（{u['why']}）"
             for u in (unverified or [])]
 
 

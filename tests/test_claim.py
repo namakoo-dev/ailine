@@ -141,7 +141,9 @@ def test_count_suspicious_advisories_empty_is_zero():
 def test_render_applied_claim_demoted_says_triangle_not_checkmark():
     lines = render_applied_claim_demoted(_observed(), "b.xlsx", 2)
     assert "✓" not in "".join(lines)
-    assert lines[0].startswith("\n△ b.xlsx は宣言どおりの変化を確認しました")
+    # ★ 2026-09-22: 全文の字面を持っていたので、言い換えのたびに落ちていた。
+    #   この試験の名前が言うとおり、守る契約は「△ であって ✓ でない」こと。
+    assert lines[0].startswith("\n△ b.xlsx は"), lines[0]
     assert "⚠ 2 件を先に確認してください" in lines[0]
 
 def test_render_applied_claim_demoted_rejects_unverified_claim():

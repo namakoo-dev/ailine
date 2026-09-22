@@ -447,7 +447,7 @@ def check_add_row(path: Path, args: dict, header_row: int = 1,
     #   **ずれを隠している**。下の行は 1 つ下へ動き、式も書き直される ── 画面には直前に
     #   その差分が全部出ている。★ 正直な書き方は同じ repo に在った（check_insert_rows が
     #   「セル分のシフトを確認」と書いている）。そちらへ揃える。
-    return "pass", (f"{at}行目に 1 行追加（値は宣言どおり・上の行はそのまま・"
+    return "pass", (f"{at}行目に 1 行追加（値は検算済み・上の行はそのまま・"
                     "下の行は 1 つ下へずれますが、中身と式は保たれています）")
 
 def check_delete_rows(path: Path, args: dict, header_row: int = 1,

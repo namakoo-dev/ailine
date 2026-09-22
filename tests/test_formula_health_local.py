@@ -90,7 +90,8 @@ def test_set_column_value_nonnumeric_breaks_formula_via_real_basrun(tmp_path, mo
         #   期待は ✓ ではなく **△ と、⚠ を先に見ろという誘導**になった。
         #   ★ 契約を緩めたのではなく付け替えた ── ✓ を名乗らないことを明示で縛る。
         assert "✓" not in captured.out, f"⚠ が在るのに ✓ を名乗った: {captured.out}"
-        assert "宣言どおりの変化を確認しました（適用後に読み戻して確認: " in captured.out, captured.out
+        # ★ 2026-09-22: 全文でなく契約で見る（△ に降りたことと、読み戻しの証拠）。
+        assert "△ " in captured.out and "（適用後に読み戻して確認: " in captured.out, captured.out
         assert "ただし ⚠" in captured.out, captured.out
         assert "★ 疑わしい: 適用後にエラー値のセルが増えました" in captured.out, captured.out
         assert "#VALUE!" in captured.out, captured.out

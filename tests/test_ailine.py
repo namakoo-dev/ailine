@@ -8027,7 +8027,8 @@ def test_set_column_value_nonnumeric_write_triggers_both_advisories(tmp_path, mo
     assert rc == 0
     # ★ 決裁③(2026-08-22): 疑わしい ⚠ が出た run は ✓ でなく △（宣言どおりの照合は
     # 通ったが先に ⚠ を確認してほしい、という降格後の顔）。
-    assert "は宣言どおりの変化を確認しました（適用後に読み戻して確認: " in captured.out
+    # ★ 2026-09-22: 全文でなく契約で見る ── △ に降りたことと、読み戻しの証拠が出ていること。
+    assert "△ " in captured.out and "（適用後に読み戻して確認: " in captured.out, captured.out
     assert "先に確認してください" in captured.out
     assert "✓" not in captured.out
     assert "★ 疑わしい: 適用後にエラー値のセルが増えました" in captured.out
