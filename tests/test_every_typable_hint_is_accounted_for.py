@@ -101,3 +101,48 @@ def test_the_one_that_bit_us_is_marked():
     assert rows, "accounts_core.py の導線が 1 件も載っていない"
     assert any("6 体目" in (e.get("note") or "") for e in rows), (
         "★ 盲検 6 体目で事故った導線だと分かる記録が無い")
+
+
+def _declared():
+    """argparse の宣言から、サブコマンドと長いフラグを取る（手書きしない）。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    import ailine
+    subs, flags = set(), set()
+    for a in ailine.build_parser()._actions:
+        if hasattr(a, "choices") and a.choices and hasattr(a.choices, "keys"):
+            for name, sp in a.choices.items():
+                subs.add(name)
+                flags |= {o for act in sp._actions
+                          for o in act.option_strings if o.startswith("--")}
+    return subs, flags
+
+
+def test_every_advertised_name_actually_exists():
+    """★★ 案内した名前が**宣言に在る**こと（打てないものを勧めない）。
+
+    ★ これは**存在の確認であって、歩けることの確認ではない** ──
+      盲検 6 体目 ⑥ の `--column` は**実在したうえで落ちた**。
+      歩行は walked 欄（と walk_refusals）の仕事。ここは安い側だけを機械で縛る。
+    ★ 分母は argparse の宣言から引く（名簿を手で持たない）。
+    """
+    subs, flags = _declared()
+    bad = []
+    for name, ln, typ, _v in typable_hints():
+        if typ.startswith("ailine "):
+            if typ.split()[1] not in subs:
+                bad.append((name, ln, typ, "そんなサブコマンドは無い"))
+        elif typ not in flags:
+            bad.append((name, ln, typ, "そんなフラグはどのサブコマンドにも無い"))
+    assert not bad, f"実在しないものを案内しています: {bad[:6]}"
+
+
+def test_existing_is_not_the_same_as_walkable():
+    """★ 「在る」と「歩ける」を混ぜない ── 台帳にまだ歩いていない行が在ることを認める。
+
+    ★ ここが緑でなくなったら、38 件を歩き終えたということ（その時はこの試験を消す）。
+      ★ 0 件でも通る試験にしない ── 数が減ったら**気づく**側に倒す。
+    """
+    todo = [e for e in _register()["hints"] if e.get("walked") == "未調査"]
+    assert todo, "★ 未調査が 0 件 ── 歩き終えたならこの試験は消してよい"
+    assert len(todo) <= 38, (
+        f"未調査が増えています（{len(todo)} 件）── 新しい導線を足したなら歩いてから")
