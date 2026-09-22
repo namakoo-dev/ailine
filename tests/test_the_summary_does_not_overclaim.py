@@ -94,3 +94,36 @@ def test_inserting_a_column_does_not_claim_nothing_moved(before, tmp_path):
         header_row=1, source_book=before)
     assert st == "pass", (st, msg)
     assert "1 セルも変わらず" not in msg, msg
+
+
+# --- 事後条件の画面は 1 か所から出す（2026-09-22・盲検 3 体目 ⑧ / 4 体目 ⑦ の前段）------
+
+def test_the_postcondition_screen_is_printed_from_one_place():
+    """★★ 事後条件の結果を画面に出す 17 行は、**3 か所に写されていた**。
+
+    ★★ しかもその中のコメントが「**1 実装・全経路**」と書いていた ── 宣言と実体の
+      食い違いで、片方だけ直す事故の予約だった（この repo が何度も踏んだ形）。
+    ★ 画面の語を直す（開発者語の言い換え）**前に**畳んだ。順番を逆にすると、
+      直した人が「片方だけ直した人」になる。
+    ★ 数え方: 画面に出す文が製品コードに 1 回だけ現れること
+      ── `report_postcondition` の中だけ。
+    """
+    from _product_source import count_in_code
+    for line in ("適用されたが事後条件を満たさない",
+                 "事後条件を機械検証できなかった（操作",
+                 "事後条件を確認（操作"):
+        assert count_in_code(line) == 1, (
+            f"『{line}』が製品コードに {count_in_code(line)} 回ある ── "
+            "画面に出す所は report_postcondition 1 か所に畳むこと")
+
+
+def test_the_folded_reporter_still_decides_the_exit_code():
+    """★ 畳んだ先が**止める判断まで持っている**こと（呼び出し側に散らさない）。
+
+    ★ 続行なら None・止めるなら終了コード、という 1 つの形にしてある。
+    """
+    from _product_source import window_around
+    seg = window_around("def report_postcondition", before=0, after=2000)
+    assert "return 1" in seg, "止める判断が畳んだ先に無い"
+    assert "return None" in seg, "続行の合図が無い"
+    assert 'result["ok"] = True' in seg, "成功の印を呼び出し側に残している"

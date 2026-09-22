@@ -790,6 +790,7 @@ def render_vocab_add_result(ok: 'bool', msg: 'str') -> 'str'
 def render_vocab_listing(vocab: 'dict', vocab_file: 'Path') -> 'list'
 def render_vocab_miss_refusal(about: 'str' = '', sunset_notice: 'bool' = False, translate_error: 'bool' = False, task: 'str' = '') -> 'list'
 def replace_examples_in_question(question: 'str', ops=None) -> 'str'
+def report_postcondition(a, book, out_book, result, op, resolved, status, reason) -> 'int | None'
 def resolve_cell_target_from_task(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)
 def resolve_col_anchor(task: 'str', headers: 'list') -> 'tuple'
 def resolve_col_ref(raw, headers: 'list') -> 'tuple'

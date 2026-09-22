@@ -12642,6 +12642,44 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
     }
 
 
+def report_postcondition(a, book, out_book, result, op, resolved, status, reason) -> int | None:
+    """事後条件の結果を画面に出す。止めるなら終了コード、続行なら None。
+
+    ★★ 2026-09-22: この 17 行は **2 か所に写されていた**（単発 DSL 経路と 帳票/様式写像の
+      経路）。しかも中のコメントが「**1 実装・全経路**」と書いていた ── 宣言と実体の
+      食い違いで、片方だけ直す事故の予約だった。
+      ★ 画面の語を直す（盲検 3 体目 ⑧ / 4 体目 ⑦）**前に**畳む ── 順番を逆にすると、
+        私が「片方だけ直した人」になる。
+    ★ 畳む時に挙動は変えない（文言・終了コード・`_finish_run` の失敗種別まで同じ）。
+    """
+    result["postcondition"] = "fail" if status == "error" else status
+    if status == "error":
+        print(f"{chr(10)}× {reason}")
+        print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
+        result["out"] = str(out_book)
+        _finish_run(a, book, result, "postcondition_error")
+        return 1
+    if status == "fail":
+        print(f"{chr(10)}× 適用されたが事後条件を満たさない: {reason}")
+        # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
+        for _ln in likely_cause_of_no_change(
+                out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
+            print(_ln)
+        print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
+        result["out"] = str(out_book)
+        _finish_run(a, book, result, "postcondition_fail")
+        return 1
+    if status == "warn":
+        # ★ 止血1: 検証対象が少なすぎる場合、「機械検証済み」とは名乗らない。
+        print(f"{chr(10)}⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
+    else:
+        # ★ C9: 事後条件が見た中身（例「3 行を検証（降順）」）はここで述べる。✓ とは呼ばない
+        #   ―― ✓ は原本(--copy なら .out)が確定した後の1行だけ（_finish_apply）。
+        print(f"{chr(10)}事後条件を確認（操作:{OP_LABELS.get(op, op)}）: {reason}")
+    result["ok"] = True
+    return None
+
+
 def _file_digest(path: Path) -> str | None:
     """ファイルの指紋（sha256 先頭 16 桁）。読めなければ None ── 無いことは信号でない。"""
     try:
@@ -15402,31 +15440,11 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
 
     status, reason = apply_result.postcondition_status, apply_result.postcondition_reason
     # ★ 止血1/2: "error"(チェッカー内の予期しない例外)は --json 上 "fail" に丸める。
-    result["postcondition"] = "fail" if status == "error" else status
-    if status == "error":
-        print(f"\n× {reason}")
-        print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
-        result["out"] = str(out_book)
-        _finish_run(a, book, result, "postcondition_error")
-        return 1
-    if status == "fail":
-        print(f"\n× 適用されたが事後条件を満たさない: {reason}")
-        # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
-        for _ln in likely_cause_of_no_change(
-                out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
-            print(_ln)
-        print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
-        result["out"] = str(out_book)
-        _finish_run(a, book, result, "postcondition_fail")
-        return 1
-    if status == "warn":
-        # ★ 止血1: 検証対象が少なすぎる場合、「機械検証済み」とは名乗らない。
-        print(f"\n⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
-    else:
-        # ★ C9: 事後条件が見た中身（例「3 行を検証（降順）」）はここで述べる。✓ とは呼ばない
-        #   ―― ✓ は原本(--copy なら .out)が確定した後の1行だけ（_finish_apply）。
-        print(f"\n事後条件を確認（操作:{OP_LABELS.get(op, op)}）: {reason}")
-    result["ok"] = True
+    # ★ 2026-09-22: 画面に出す所を 1 本に畳んだ（report_postcondition）── 同じ 17 行が
+    #   **3 か所**に写されていて、コメントだけが「1 実装・全経路」と言っていた。
+    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason)
+    if _rc is not None:
+        return _rc
 
     # ★★ 単位F: 反映の直前（原本はまだ無傷・before/after は両方手元にある）に、宣言した
     #   書き込み領域の前提を確かめる。破れていたら**同じ破壊の関所**へ渡す（新しい関所も
@@ -15591,28 +15609,11 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
     status, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"],
                                         header_row=header_row, use_formula=use_formula,
                                         source_book=source_book, before_chart_paths=before_chart_paths)
-    result["postcondition"] = "fail" if status == "error" else status
-    if status == "error":
-        print(f"\n× {reason}")
-        print(_untouched_original_line(book, out_book))
-        result["out"] = str(out_book)
-        _finish_run(a, book, result, "postcondition_error")
-        return 1
-    if status == "fail":
-        print(f"\n× 適用されたが事後条件を満たさない: {reason}")
-        # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
-        for _ln in likely_cause_of_no_change(
-                out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
-            print(_ln)
-        print(_untouched_original_line(book, out_book))
-        result["out"] = str(out_book)
-        _finish_run(a, book, result, "postcondition_fail")
-        return 1
-    if status == "warn":
-        print(f"\n⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
-    else:
-        print(f"\n事後条件を確認（操作:{OP_LABELS.get(op, op)}）: {reason}")
-    result["ok"] = True
+    # ★ 2026-09-22: 画面に出す所を 1 本に畳んだ（report_postcondition）── 同じ 17 行が
+    #   **3 か所**に写されていて、コメントだけが「1 実装・全経路」と言っていた。
+    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason)
+    if _rc is not None:
+        return _rc
 
     warn_precondition = precondition[1] if precondition else None
     if warn_precondition:
@@ -15761,28 +15762,11 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
     status, reason = run_postcondition(op, out_book, resolved, before_charts=before["charts"],
                                         header_row=header_row, use_formula=use_formula,
                                         source_book=source_book, before_chart_paths=before_chart_paths)
-    result["postcondition"] = "fail" if status == "error" else status
-    if status == "error":
-        print(f"\n× {reason}")
-        print(_untouched_original_line(book, out_book))
-        result["out"] = str(out_book)
-        _finish_run(a, book, result, "postcondition_error")
-        return 1
-    if status == "fail":
-        print(f"\n× 適用されたが事後条件を満たさない: {reason}")
-        # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
-        for _ln in likely_cause_of_no_change(
-                out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
-            print(_ln)
-        print(_untouched_original_line(book, out_book))
-        result["out"] = str(out_book)
-        _finish_run(a, book, result, "postcondition_fail")
-        return 1
-    if status == "warn":
-        print(f"\n⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
-    else:
-        print(f"\n事後条件を確認（操作:{OP_LABELS.get(op, op)}）: {reason}")
-    result["ok"] = True
+    # ★ 2026-09-22: 画面に出す所を 1 本に畳んだ（report_postcondition）── 同じ 17 行が
+    #   **3 か所**に写されていて、コメントだけが「1 実装・全経路」と言っていた。
+    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason)
+    if _rc is not None:
+        return _rc
 
     warn_precondition = precondition[1] if precondition else None
     if warn_precondition:
