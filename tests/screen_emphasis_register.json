@@ -1,0 +1,45 @@
+{
+ "_meta": {
+  "purpose": "画面に出る文字列に markdown の強調（**）を書かないことの台帳。番人は tests/test_the_screen_has_no_markdown.py。",
+  "why": "2026-09-15 盲検 ⑧ / 2026-09-20 盲検 5 体目: 画面に `**` がそのまま出ていた。★ 端末は markdown を描かない。**GUI も描かない**（gui/index.html は textContent と <pre> で出す）── 実測で確かめた。つまり `**` が強調として効いている場所は 1 つも無く、買い手には記号がそのまま見えるだけだった。",
+  "how_to_read": "ここに載っているのは**画面に出ない**文字列だけ。載せる時は、なぜ画面に出ないのかを 1 行で書く。★ 数を通すために足さないこと ── 『画面に出るが **  を残したい』という枠はこの台帳に無い。",
+  "measured": "2026-09-22 に製品の文字列を機械で数えたら 31 件が `**` を持っていた。うち 23 件が画面で、削った。残る 8 件がここに在る。"
+ },
+ "exempt": [
+  {
+   "name": "CONTRACT",
+   "file": "src/ailine/__init__.py",
+   "kind": "模型に渡る",
+   "why": "LibreOffice Basic を書かせる契約文。買い手の画面には出ない。",
+   "do_not_touch": "プロンプトは 1 バイト変えると op 一致が動く（OPS_DOC に 16 行足したら 98.1% → 94.2% の実測）。`**` が模型への強調として効いているかは**測っていない**ので、測らずに消さない。"
+  },
+  {
+   "name": "SUGGEST_JUDGE_SYSTEM",
+   "file": "src/ailine/__init__.py",
+   "kind": "模型に渡る",
+   "why": "op 判定係への指示。画面には出ない。",
+   "do_not_touch": "同上。"
+  },
+  {
+   "name": "OPS_DOC",
+   "file": "src/ailine/__init__.py",
+   "kind": "模型に渡る",
+   "why": "対応できる操作の一覧（模型向け）。画面には出ない。",
+   "do_not_touch": "★ ここは実測がある: 16 行足したら op 一致が 98.1% → 94.2% に落ちた。"
+  },
+  {
+   "name": "_OP_SCHEMA_NOTES",
+   "file": "src/ailine/__init__.py",
+   "kind": "模型に渡る",
+   "why": "第二段翻訳の注記（4 op ぶん）。画面には出ない。",
+   "do_not_touch": "注記は『これは入れない、機械が決める』という分担の宣言で、`**` はその分担を模型に効かせている可能性がある。番人は tests/test_op_schema_notes_are_decided.py。"
+  },
+  {
+   "name": "AXES",
+   "file": "src/ailine_core/op_axes.py",
+   "kind": "描画されない記録",
+   "why": "`note` は保留（DEAD_END）の台帳で、render_axis_* のどれも note を出さない── 2026-09-22 に実測で確認した。",
+   "do_not_touch": "開発者が読む記録なので、読みやすさを優先してよい。★ ただし将来 note を画面に出すなら、その時に `**` を外すこと。"
+  }
+ ]
+}

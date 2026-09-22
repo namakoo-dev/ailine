@@ -120,6 +120,6 @@ def describe(broken_list: list, headers: list) -> str | None:
     parts = [f"『{_nm(t)}』＝『{_nm(a)}』{op}『{_nm(b)}』" for t, op, a, b in broken_list[:3]]
     more = f" ほか {len(broken_list) - 3} 件" if len(broken_list) > 3 else ""
     return ("この操作の前は " + "・".join(parts) + more
-             + " が全行で成り立っていましたが、**成り立たなくなりました**"
+             + " が全行で成り立っていましたが、成り立たなくなりました"
                " ── 計算で出している列が、直した値に付いていっていません"
                "（どう直すかは人が決めることなので、直していません）")

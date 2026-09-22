@@ -4482,7 +4482,7 @@ def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, 
         _others = [c for c in _src if str(c) != _puller]
         if _others:
             _how = (f"引くのは『{_puller}』のままで構いません ── "
-                    f"**転記したい列**を選んでください（『{_others[0]}』など"
+                    f"転記したい列を選んでください（『{_others[0]}』など"
                     + ("、他に " + "／".join(f"『{c}』" for c in _others[1:4]) if len(_others) > 1 else "")
                     + f"）。依頼文にそう書いてください。例:「{_puller}で引いて{_others[0]}を転記して」")
         else:
@@ -4490,7 +4490,7 @@ def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, 
                     "列がありません ── 転記できる中身がその表に入っていません")
         return False, resolved, inferred, (
             f"転記のキー列と対象列がどちらも『{resolved['key_col']}』になっています。"
-            f"転記は**キーとは別の列**を持ってくる操作です（{_hint}）。{_how}"
+            f"転記はキーとは別の列を持ってくる操作です（{_hint}）。{_how}"
         )
     return None
 
@@ -4781,7 +4781,7 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
             elif parsed_date is not None and col_kind == "text_date":
                 # ★ 辞書順で黙って比べない ── "2026/3/26" > "2026/12/1" になる。
                 return False, resolved, inferred, (
-                    f"列『{resolved['col']}』は日付が**文字列**で入っているため、"
+                    f"列『{resolved['col']}』は日付が文字列で入っているため、"
                     f"『{raw_value}』との日付比較ができません"
                     f"（日付の書式に直してから、もう一度お試しください）"
                 )
@@ -5113,7 +5113,7 @@ def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers,
             # ★ 見出しを書き換える回に「対象の行:取引先」と出ると読み手を誤らせる
             #   （実測で出た）── 何をしているのかを、その言葉で言う。
             _row_name = "見出し"
-            _note_c = f"{_hitrow}行目（見出し行）── **見出しの名前を変えます**"
+            _note_c = f"{_hitrow}行目（見出し行）── 見出しの名前を変えます"
         else:
             _row_name = _row_name or (_rowvals[0] if _rowvals and _rowvals[0] else str(_hitrow))
     else:
@@ -10918,7 +10918,7 @@ def _match_after_filling_values(book_a: Path, book_b: Path, formula_only: dict,
             # ★★ 誰が計算した値かを言う（観測していないことを主張しない）。
             #   ★ 原本を変えていないことも言う ── 黙って直すと「何をされたか」が消える。
             notes.append(f"　★『{book.name}』の『{_names}』は式のままで計算結果が"
-                          "入っていなかったので、**LibreOffice で開いて計算させました**"
+                          "入っていなかったので、LibreOffice で開いて計算させました"
                           "（原本は変えていません／この値は LibreOffice が計算したものです）")
             reads[side] = _peek_match_book(filled)
             # ★ 検算が読む格子も**ここで**取る ── コピーは with を出ると消えるので、
@@ -11662,7 +11662,7 @@ def refuse_if_locked(book: Path) -> int | None:
         # ★ 「書けないから止める」ではなく「**あとで消えるから止める**」。理由を言う。
         print("  → LibreOffice で開いています。閉じてから実行してください")
         print("  → 開いたまま書き換えると、そのあと LibreOffice 側で保存したときに"
-              "**開いた時点の内容で上書き**され、変更が消えます")
+              "開いた時点の内容で上書きされ、変更が消えます")
         print("  → 開いていないのに出る場合は、同じフォルダの"
               f"「.~lock.{book.name}#」が前回の異常終了の残骸です（消せば進めます）")
     else:
@@ -12494,7 +12494,7 @@ def _doctor_business_note(name: str) -> str | None:
 
 
 #: 実機が無いときに必ず出す 1 行の頭（★ 買い手が最初に読む・ここで離脱を止める）。
-MACHINE_FREE_NOTE = "★ LibreOffice も AI も無くても、**読むだけの道具**は使えます"
+MACHINE_FREE_NOTE = "★ LibreOffice も AI も無くても、読むだけの道具は使えます"
 
 #: その 1 行で名指しする入口（★ 買い手の用事に近い順・`machine_free_routes()` の部分集合）。
 MACHINE_FREE_SHOWN = ("forms", "split", "accounts", "scan", "stack", "verify")
@@ -14029,8 +14029,8 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
                  f"その 1 セルだけを書き換える（行番号で言い直してください"
                  f"・例:「7行目の{_col_hint or '担当'}を『佐藤』に」）"),
                 ("SET_COLUMN_VALUE",
-                 f"『{_col_hint}』列のデータ行を**全部**書き換える"
-                 if _col_hint else "その列のデータ行を**全部**書き換える"),
+                 f"『{_col_hint}』列のデータ行を全部書き換える"
+                 if _col_hint else "その列のデータ行を全部書き換える"),
             ]))
             return plan, 3, _reread_done
 
@@ -14069,7 +14069,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
         if _nm and _fmt_op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
             _cr, _cc, _cnote = resolve_named_cell(book_meta, _sheet_h, _nm)
             if _cr:
-                print(f"（『{_nm}』の**1 セル**として読み直しました ── {_cnote}。"
+                print(f"（『{_nm}』の1 セルとして読み直しました ── {_cnote}。"
                        "列ぜんぶには広げません）")
                 _fmt_args["target"] = f"cell:{_cr},{_cc}"
                 plan = [{"op": _fmt_op, "args": _fmt_args}]
@@ -14096,7 +14096,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
             _ncol, _nvals = except_extraction_reading(book_meta, _sheet_h, a.task)
             if _ncol and _nvals:
                 print(f"（『抽出』として読み直しました ── 『{_ncol}』が"
-                       f"{'・'.join(_nvals)} **以外**の行を抜き出します）")
+                       f"{'・'.join(_nvals)} 以外の行を抜き出します）")
                 plan = [{"op": "EXTRACT", "args": {"col": _ncol, "cmp": "nin",
                                                     "value": list(_nvals)}}]
                 _reread_done = True
@@ -14817,7 +14817,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
             _pts = task_points_at_one_row(a.task, book_meta, target_sheet)
             if _pts:
                 print(f"？ {_pts}が、『{OP_LABELS[forced_op]}』は"
-                       "その列のデータ行を**全部**書き換えます。"
+                       "その列のデータ行を全部書き換えます。"
                        "1 か所だけ直すなら『1セル書換』を選んでください")
                 return 3
         translation = {"plan": [{"op": forced_op, "args": _fargs}]}
@@ -17593,7 +17593,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     #   『計 0 行一致』＋『行の完全会計: 成立』＋ exit 0 という**嘘の成功報告**が出ていた。
     if uncached_total:
         say(f"  ⚠ 『{col}』の {uncached_total} 件は数式で、計算結果がファイルに"
-            "入っていないため**条件に合うか確かめられませんでした**"
+            "入っていないため条件に合うか確かめられませんでした"
             "（合わなかったのではありません）")
         say("  → Excel か LibreOffice で一度開いて保存し直すと、計算結果が入ります")
     # ★ D6 差し戻し（実弾検分・2026-08-21）: 正常なファイルは名指ししない ── 名指しは
@@ -17839,7 +17839,7 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
                 _how = ("LibreOffice で開いて計算させましたが、それでも値が入りませんでした"
                         if _tried_filling
                         else "Excel か LibreOffice で一度開いて保存すると値が入ります")
-                say(f"　★『{"』『".join(str(h) for h in _named_formula)}』は**式のままで計算結果が入っていない**ため、"
+                say(f"　★『{"』『".join(str(h) for h in _named_formula)}』は式のままで計算結果が入っていないため、"
                     f"{label}の列として使えません（{_how}）。")
         # ★ 断った回も残す ── 単一ブックの run は語彙外も台帳に残している。
         #   「何を頼んで通らなかったか」は月次の証跡として成功と同じだけ要る
@@ -18501,7 +18501,7 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
     uncached = list(getattr(grid, "uncached_formulas", ()) or ())
     for r, c in uncached[:5]:
         lines.append(f"⚠ {r}行目{c}列目は数式で、計算結果がファイルに入っていないため"
-                     "**空欄で書き出しました**（元の値は分かりません）")
+                     "空欄で書き出しました（元の値は分かりません）")
     if len(uncached) > 5:
         lines.append(f"⚠ 同じ形のセルがほかに {len(uncached) - 5} 個あります")
     if uncached:

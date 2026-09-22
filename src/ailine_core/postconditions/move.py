@@ -956,7 +956,7 @@ def check_dedup_delete(path: Path, args: dict, header_row: int = 1,
         # ★ 元が無いので「正しい行を消した」は確かめられない ── 名乗らない。
         return "warn", (f"結果に重複はありません（{len(out_rows)}行・判定キー: "
                         f"{'・'.join(keys)}）が、元の冊が無いので"
-                        "**消した行が正しかったか**は確かめられていません")
+                        "消した行が正しかったかは確かめられていません")
 
     # ② 元から「最初の出現だけ残す」を独立に組み直して、位置対応で全部突き合わせる。
     with BookView(source_book) as sv:

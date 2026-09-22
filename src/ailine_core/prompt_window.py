@@ -70,5 +70,5 @@ def describe_the_loss(messages: list, prompt_eval_count, num_ctx: int) -> str:
     return (f"★ プロンプトが文脈の窓に入っていない: 少なくとも {missing:,} トークンを"
             f"モデルは読んでいない（読んだ {prompt_eval_count:,} / 窓 {num_ctx:,}・"
             f"送った {prompt_chars(messages):,} 字）。"
-            "\n  ★ 消えるのは**先頭**（規約やカタログの前半）。num_ctx を広げるか、"
+            "\n  ★ 消えるのは先頭（規約やカタログの前半）。num_ctx を広げるか、"
             "渡す材料を減らすこと。")

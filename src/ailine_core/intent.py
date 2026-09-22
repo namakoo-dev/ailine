@@ -501,7 +501,7 @@ def refuse_structural_op_that_is_really_a_write(task: str, op: str, *,
         return None
     what = "『" + col + "』に値を入れる形" if col else "条件（〜以上・〜未満 など）に合う行に値を入れる形"
     return (
-        "依頼文が" + what + "で書かれているので、これは**" + effect + "**依頼ではなく"
+        "依頼文が" + what + "で書かれているので、これは" + effect + "依頼ではなく"
         "「条件に合う行の、ある列を書き換える」依頼だと読みました ── "
         "そのまま実行すると" + effect + "ことになり、頼んでいない変化が表に残ります。実行しません。"
         + chr(10) +

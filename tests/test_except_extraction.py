@@ -123,7 +123,7 @@ def test_the_reread_fires_through_the_real_path(tmp_path, monkeypatch, capsys):
     #   （決定の場所が結果だけは拾い直すため ── 今日 4 度目の打ち消し合い）。
     #   ★ ここが見たいのは**読み直しが何と言ったか**。文面を名指しで縛る。
     #     結果（cmp=nin）は別の検体（決定の場所）が見ている。
-    assert "**以外**の行を抜き出します" in out, (
+    assert "以外の行を抜き出します" in out, (
         "読み直しが否定として説明していない: " + out)
     assert "のどれでもない" in out, ("否定として決まっていない: " + out)
 

@@ -594,6 +594,6 @@ def reference_drift_note(hits: list, unit: str = "行") -> str | None:
     more = f" ほか {len(hits) - 3} 件" if len(hits) > 3 else ""
     # ★ 2026-08-31: 列の入れ替えなのに「**行**が入れ替わります」と言っていた
     #   （同じ形の言い間違いを 08-30 に別の場所で直したばかり）── 軸を受け取る。
-    return (f"この操作で、**指す先の中身が変わる式**が {len(hits)} 件あります: {head}{more}"
+    return (f"この操作で、指す先の中身が変わる式が {len(hits)} 件あります: {head}{more}"
              f" ── 式そのものは壊れませんが、指している{unit}が入れ替わります"
              "（直してよいかは人が決めることなので、直していません）")

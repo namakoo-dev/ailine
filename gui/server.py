@@ -733,7 +733,7 @@ def main() -> int:
     if port_already_answers(port):
         print(f"× ポート {port} は既に使われています。"
                f"別の ailine GUI が動いたままかもしれません。" + chr(10)
-               + "  ここに重ねて起動すると、**どちらが応答するかが決まりません**"
+               + "  ここに重ねて起動すると、どちらが応答するかが決まりません"
                  "（古い方が答えると、直したはずの不具合がそのまま出ます）。" + chr(10)
                + "  いま応答しているものを確かめる:" + chr(10)
                + f"    Get-NetTCPConnection -State Listen -LocalPort {port} "
