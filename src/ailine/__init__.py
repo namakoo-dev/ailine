@@ -12694,11 +12694,31 @@ def _file_digest(path: Path) -> str | None:
         return None
 
 
+def run_started_from_a_test() -> bool:
+    """この走行が**試験の中から**始まったか。
+
+       ★★ なぜこの印か（2026-09-22 の実測）: 本番の台帳 19,046 行のうち
+         **18,292 行（96%）が試験の走行**だった。思い出しが見る窓 500 行は
+         **100% が試験**で、実害の経路が 2 本生きていた ──
+         ① 試験の走行を「あなたの前回」として日付つきで引用する（買い手はやっていない）
+         ② 道具が作った .out が窓から押し出され「人のファイル」扱いで断られる
+       ★ `AILINE_HOME` が既定かどうかでは分けられない ── 汚染は**隔離を忘れて
+         既定の home に書いた**ときに起きたので、その印では捕まらない。
+       ★ `PYTEST_CURRENT_TEST` は pytest が環境に立てる**宣言**で、subprocess にも
+         継承される（この repo の試験は env={**os.environ, ...} で起動する）。
+         推測でなく宣言で分けられる唯一の材料。"""
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
 def append_history(entry: dict, path: Path | None = None) -> None:
     """history.jsonl に 1 行 append する。★ 失敗したら例外を投げる（run 本体を落とさ
        ないための try は呼び出し側(cmd_run)が持つ。ここでは書き込みロジックだけ）。"""
     p = path or HISTORY_FILE
     p.parent.mkdir(parents=True, exist_ok=True)
+    # ★ 試験から始まった走行には印を付ける（読む側が本番の材料から外せるように）。
+    #   ★ 印は**足すだけ**で、既存の欄は一切触らない。
+    if run_started_from_a_test():
+        entry = {**entry, "from_test": True}
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -12740,7 +12760,14 @@ def op_that_worked_before(task: str, entries) -> tuple:
 
 
 def read_history(path: Path | None = None, max_n: int = 10) -> list:
-    """新しい順に最大 max_n 件を返す。壊れた行は読み飛ばす。"""
+    """新しい順に最大 max_n 件を返す。壊れた行は読み飛ばす。
+
+       ★★ 2026-09-22: **本番の走行は、試験の走行から学ばない。**
+         `from_test` の印が付いた行は、本番の走行では材料にしない。
+       ★ ただし**試験の中からは見える** ── 試験が自分で書いた記録を読み返す
+         検体（思い出し・上書き判定）が在り、そこを塞ぐと番人が死ぬ。
+         つまり契約は「本番は試験を見ない」であって「印の行を消す」ではない。
+       ★ 印の無い古い行はそのまま通る（過去の台帳は退避で掃除済み）。"""
     p = path or HISTORY_FILE
     if not p.exists():
         return []
@@ -12750,9 +12777,12 @@ def read_history(path: Path | None = None, max_n: int = 10) -> list:
         if not line:
             continue
         try:
-            entries.append(json.loads(line))
+            row = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if row.get("from_test") and not run_started_from_a_test():
+            continue
+        entries.append(row)
     return list(reversed(entries))[:max_n]
 
 
