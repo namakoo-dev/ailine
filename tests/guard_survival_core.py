@@ -103,8 +103,14 @@ def run_one(test_file: Path, timeout=900) -> bool:
 
 
 def tree_is_clean() -> bool:
-    r = subprocess.run(["git", "status", "--porcelain"], cwd=str(REPO),
-                       capture_output=True, text=True)
+    """★ 見るのは**追跡ファイルに変更が無いこと**だけ。
+
+    ★ 未追跡ファイルは汚れに数えない ── この道具を測るための検体（陽性対照）を
+      置いた状態でも走らせたいから。守りたいのは「戻し損ねても git で取り返せる」
+      ことであって、作業場が空であることではない。
+    """
+    r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+                       cwd=str(REPO), capture_output=True, text=True)
     return r.returncode == 0 and not r.stdout.strip()
 
 
