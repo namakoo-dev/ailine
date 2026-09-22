@@ -114,7 +114,14 @@ def test_the_ledger_counts_are_stated():
     assert len(now) == len(ENTRIES), (
         f"入口 {len(ENTRIES)} 件のうち関所を通るのは {len(now)} 件")
     body = _body("refuse_if_locked")
-    if "経路を縛る" in body:
-        m = re.search(r"(\d+)\s*経路を縛る", body)
-        assert m and int(m.group(1)) == len(ENTRIES), (
-            f"docstring の経路数（{m.group(1) if m else '?'}）と実体（{len(ENTRIES)}）が違う")
+    # ★★ 2026-09-22（番人の生存試験で見つけた）: ここは `if "経路を縛る" in body:` で
+    #   **条件つき**だった。字義どおりの契約（数が書いてあるなら検算する）には合っている。
+    #   ★ 危ないのは**言い換え**の方 ── 文言を「4 つの経路を守る」などに直すと、
+    #     数は残ったまま検査だけが静かに消える。今日、画面の文言を 2 度言い換えた。
+    #   ★ だから宣言を**必須**にする。消す・言い換えるときは、ここで大声で止まる。
+    assert "経路を縛る" in body, (
+        "refuse_if_locked の docstring から『N 経路を縛る』の宣言が消えています ── "
+        "言い換えるなら、この番人の読み方も一緒に直してください（数だけ残すと古くなる）")
+    m = re.search(r"(\d+)\s*経路を縛る", body)
+    assert m and int(m.group(1)) == len(ENTRIES), (
+        f"docstring の経路数（{m.group(1) if m else '?'}）と実体（{len(ENTRIES)}）が違う")
