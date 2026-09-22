@@ -34,8 +34,15 @@ echo "▶ pre-push: 実機テスト(-m local)を走らせます（CI では走�
 #   ★ 外した数字が腐らないよう、記録の measured_on が 7 日を越えたら
 #     tests/test_battery_number_is_current.py が**素の環境で**赤くする（在っても鳴らない、を作らない）。
 #   ★ 日次は `PYTHONPATH=src python scripts/machine_lock.py --what daily -- python -m pytest tests -q -m daily`。
-PYTHONPATH=src python scripts/machine_lock.py --what "pre-push の実機テスト" --     python -m pytest tests -q -m "local and not daily"
-rc=$?
+# ★★ 2026-09-23: 出力を**控えてから**流す。背景で push した回に、画面には
+#   「実機テストが通っていません」しか残らず、**どの試験が落ちたか分からなかった**。
+#   名前を取るために実機を 53 分かけて走らせ直した ── この repo の線
+#   「判断に使う出力を切るな」が、道具の側にも在った。
+#   ★ tee で人の画面はそのまま・控えは失敗時の再掲だけに使う。
+local_log=$(mktemp -t ailine-local-XXXXXX.log 2>/dev/null || echo "${TMPDIR:-/tmp}/ailine-local.log")
+PYTHONPATH=src python scripts/machine_lock.py --what "pre-push の実機テスト" --     python -m pytest tests -q -m "local and not daily" 2>&1 | tee "$local_log"
+# ★ パイプは exit を食う ── pytest の側の値を取る（この repo で 4 度踏んだ形）。
+rc=${PIPESTATUS[0]}
 if [ $rc -eq 2 ]; then
     echo "" >&2
     echo "✗ pre-push: 実機の走行がすでに 1 本あるので止めました（上の名指しを見てください）。" >&2
@@ -45,6 +52,10 @@ fi
 if [ $rc -ne 0 ]; then
     echo "" >&2
     echo "✗ pre-push: 実機テストが通っていません（exit $rc）。" >&2
+    # ★ 落ちた試験の**名前**を再掲する（背景実行だと上の出力が流れて消える）。
+    echo "  落ちた試験:" >&2
+    grep -E "^(FAILED|ERROR)" "$local_log" >&2 || echo "    （名前が取れませんでした ── $local_log を見てください）" >&2
+    echo "  全文: $local_log" >&2
     echo "  CI は -m \"not local\" なので、ここで止めないと誰も気づきません。" >&2
     echo "  ollama/LibreOffice が落ちているだけなら AILINE_SKIP_LOCAL=1 git push で越えられます。" >&2
     exit 1
