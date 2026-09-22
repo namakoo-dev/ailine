@@ -114,6 +114,7 @@ value _BACKUP_TS_SEQ_RE
 value _BASIC_COMMENT_LINE_RE
 value _CELL_DEFAULT
 value _CELL_FIELD_LABELS
+value _CELL_RANGE_RE
 value _CHART_KINDS
 value _CHART_KIND_LABELS
 value _CHART_KIND_NUM_RE
@@ -393,7 +394,7 @@ def _record_misclass_suspect(signal: 'str', task: 'str', plan, book) -> 'None'
 def _record_side_command_history(path_kind: 'str', book: 'Path', task: 'str', out: 'Path | None', ok: 'bool', failure_kind: 'str | None' = None, stamp_out: 'bool' = True, made_sheets=()) -> 'None'
 def _refuse_edited_output(out: 'Path') -> 'int'
 def _refuse_output_conflict(out: 'Path', mark: 'str | None') -> 'int'
-def _refuse_split_reading(first: 'dict', second: 'dict', effects=None) -> 'int'
+def _refuse_split_reading(first: 'dict', second: 'dict', effects=None, task: 'str' = '') -> 'int'
 def _refuse_unresolved_args(a, book, op, raw_args, err) -> 'int'
 def _release_os_lock(fd) -> 'None'
 def _removal_was_declared(op: 'str | None') -> 'bool'
@@ -524,6 +525,8 @@ def build_suggest_judge_messages(task: 'str', about: 'str | None') -> 'list'
 def build_translation_fixed_op_messages(op: 'str', task: 'str', book_meta: 'dict') -> 'list'
 def build_translation_messages(task: 'str', book_meta: 'dict') -> 'list'
 def bundled_demo_dir() -> 'Path'
+def cell_range_in_task(task: 'str') -> 'str | None'
+def cell_range_note(task: 'str') -> 'list'
 def cells_with_multiple_placeholders(placeholders) -> 'list'
 def chain_target_sheet(op: 'str', task: 'str', derived_sheets, sheets, headers) -> 'str | None'
 def chart_data_last_row(path, sheet_name: 'str | None' = None, header_row: 'int' = 1) -> 'int'
@@ -635,6 +638,7 @@ def drop_names_covered_by_longer(task: 'str', names: 'list') -> 'list'
 def duplicate_name_warning(col: 'str', values) -> 'str | None'
 def duplicate_rows(path, sheet: 'str', keys, header_row: 'int' = 1) -> 'tuple'
 def empty_new_sheets(before_path, after_path) -> 'list'
+def example_task_for(op: 'str | None') -> 'str | None'
 def except_extraction_reading(book_meta: 'dict', sheet: 'str | None', task: 'str', header_row: 'int' = 1) -> 'tuple'
 def existing_sheet_replaced_advisory(before: 'dict', after: 'dict', *, op: 'str | None' = None, precondition_broken: 'str | None' = None) -> 'list'
 def exit_environment(message: 'str')
@@ -773,7 +777,7 @@ def render_independent_verify_report(label: 'str', out_label: 'str', source_labe
 def render_legacy_note(legacy: 'list') -> 'list'
 def render_missing_sheet_refusal(word: 'str', sheets: 'list') -> 'list'
 def render_ops_table(op_meta: 'dict', op_schema: 'dict', confirm_fields: 'dict') -> 'list'
-def render_refusal(op: 'str', resolved_or_args, reason: 'str') -> 'list'
+def render_refusal(op: 'str', resolved_or_args, reason: 'str', task: 'str' = '') -> 'list'
 def render_restore_done(book_name: 'str', used_name: 'str', remaining: 'int | None' = None) -> 'str'
 def render_retry_options(step_prefix: 'str', options: 'list') -> 'list'
 def render_run_header(label: 'str', model: 'str', book_name: 'str') -> 'str'

@@ -175,7 +175,7 @@ from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run �
 from ailine_core import csv_export   # ★ CSV_EXPORT: `ailine export-csv`（検疫の逆方向）の本体
 from ailine_core import date_compare   # ★ EXTRACT の日付範囲比較（台帳 DATE_RANGE_AGG の正体）
 from ailine_core import split_cell   # ★ SPLIT_CELL: 1セルの複数値を右の列へ割る（台帳2件）
-from ailine_core.examples import (DEFAULT_SUGGESTIONS, render_example_line,  # ★ 導線に出す例は実測で通るものだけ
+from ailine_core.examples import (DEFAULT_SUGGESTIONS, example_task_for, render_example_line,  # ★ 導線に出す例は実測で通るものだけ
                                   render_examples_for, replace_examples_in_question)
 from ailine_core.op_axes import AXES, judge_axis, render_axis_ambiguity, render_axis_refusal  # ★ 軸の上でまだ扱えないものを宣言する
 from ailine_core import pdf_export   # ★ PRINT/EXPORT_DOC: `ailine export-pdf`（台帳4件）
@@ -9014,7 +9014,7 @@ def except_extraction_reading(book_meta: dict, sheet: str | None, task: str,
 CHOICE_PREFIX = "候補: "
 
 
-def render_refusal(op: str, resolved_or_args, reason: str) -> list:
+def render_refusal(op: str, resolved_or_args, reason: str, task: str = "") -> list:
     """断りを、**利用者の言葉**で 3 行にする。
 
     ★★ 2026-08-30（Namakoo）:「断りの理由が対象とする非エンジニアにとって理解しがたい。
@@ -9075,6 +9075,10 @@ def render_refusal(op: str, resolved_or_args, reason: str) -> list:
         #   **その操作を指す言い方**として出す（「こう言えば通る」は上の例が担う）。
         lines.append(f"  『{label}』を指す言い方: "
                       + "／".join(f"「{p}」" for p in phrases[:3]))
+    # ★★ 2026-09-22: 依頼文が**セル範囲**（A1:C5）を名指していたら、何が言えないのかを言う。
+    #   ★ 断りの経路は 1 つでない（読み方が割れた回／対象の形式で止まった回…）。
+    #     ここは**共通の描画口**なので、経路ごとに書き足さずに済む。
+    lines.extend(cell_range_note(task))
     lines.append("  読み方そのものが違うなら、言い直してください（頼める操作の一覧: ailine ops）")
     return lines
 
@@ -9135,7 +9139,7 @@ def _refuse_unresolved_args(a, book, op, raw_args, err) -> int:
       置き場は AILINE_HOME 配下（既定 ~/.ailine）で、外へは送らない。
       分析に理由文が要らなくなったら、この 2 キーを落とせば op と種別だけになる。
     """
-    for _ln in render_refusal(op, raw_args, err):
+    for _ln in render_refusal(op, raw_args, err, task=getattr(a, "task", "") or ""):
         print(_ln)
     entry = build_history_entry(
         {"ok": False, "op": op, "attempts": 0}, book, a.task, a.model, "refused/args")
@@ -14553,7 +14557,47 @@ def _readings_agree_on_the_book(a: argparse.Namespace, book: Path, source_book: 
     return d1 == d2, d1, d2
 
 
-def _refuse_split_reading(first: dict, second: dict, effects=None) -> int:
+#: 依頼文が名指しする**セル範囲**（`A1:C5`）。★ 全角コロンも拾う。
+_CELL_RANGE_RE = re.compile(
+    "([A-Za-z]{1,3}[0-9]{1,7})[ ]*[:：][ ]*([A-Za-z]{1,3}[0-9]{1,7})")
+
+
+def cell_range_in_task(task: str) -> str | None:
+    """依頼文が名指ししている最初のセル範囲（例 `A1:C5`）。無ければ None。"""
+    m = _CELL_RANGE_RE.search(str(task or ""))
+    return f"{m.group(1)}:{m.group(2)}" if m else None
+
+
+def cell_range_note(task: str) -> list:
+    """セル範囲を名指しているのに、それを対象にできる op が限られる時の案内（行のリスト）。
+
+    ★★ 2026-09-22（Namakoo 自身の実測・18,024 run 中 7 件）: 「A1:C5 を『済』にして」は
+      09-18 まで**罫線を引いて ✓**（引用値の残差検査で塞いだ）。いまは二読の関所が
+      止めるが、**示す読み方が「背景色」「一括書換」でどちらも頼んだことでない**。
+      ★ 断るのは正しい。だが**何が言えないのか**を言わないと、人は言い直せない。
+
+    ★ 範囲を受け取れる op は**宣言から導く**（`OP_SCHEMA` に "range" を持つもの）──
+      いまは `MERGE` だけ。範囲を扱う op が増えたら、この案内も自動で正しくなる。
+    ★ 代わりの言い方は **`example_task_for` から取る**（実機の番人
+      `test_examples_actually_work.py` が「そのまま打てば通る」ことを毎回確かめている）。
+      ★ 自分で作文しない ── 通らない例を示すのは、示さないより悪い。
+    """
+    rng = cell_range_in_task(task)
+    if not rng:
+        return []
+    takes_range = sorted(op for op, sch in OP_SCHEMA.items() if "range" in (sch or ()))
+    labels = "／".join(f"『{OP_LABELS.get(o, o)}』" for o in takes_range) or "（ありません）"
+    # ★ 画面は Markdown ではない ── 強調記号をそのまま出さない（周りの行と字下げも揃える）。
+    lines = [f"  ★ 『{rng}』のようなセル範囲を対象にできるのは {labels} だけです"]
+    ways = [example_task_for(o) for o in ("SET_COLUMN_VALUE", "SET_CELL_VALUE")]
+    ways = [w for w in ways if w]
+    if ways:
+        lines.append("    値を入れるなら、列名か 1 セルで言ってください ── 例: "
+                     + "／".join(f"「{w}」" for w in ways))
+    return lines
+
+
+def _refuse_split_reading(first: dict, second: dict, effects=None, task: str = "") -> int:
     """読み方が分かれた回の断り ── 勝手にどちらかで実行しない。選べる形で返す（exit 3）。
 
     ★ 候補は各読みの**先頭の op**（`--op` は 1 つの op を固定する仕組み）。先頭が同じで
@@ -14577,6 +14621,9 @@ def _refuse_split_reading(first: dict, second: dict, effects=None) -> int:
                               for op in ops]))
     else:
         print("  どちらの意味かが分かるように、言い直してください")
+    # ★ 読み方を並べるだけで終わらせない ── **何が言えないのか**を言う。
+    for _ln in cell_range_note(task):
+        print(_ln)
     return 3
 
 
@@ -14811,7 +14858,8 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
         _agree, _d1, _d2 = _readings_agree_on_the_book(
             a, book, source_book, book_meta, plan, _second)
         if _agree is not True:
-            return _refuse_split_reading(translation, _second, effects=(_d1, _d2))
+            return _refuse_split_reading(translation, _second, effects=(_d1, _d2),
+                                         task=getattr(a, "task", "") or "")
 
     # ★★ 関所（2026-08-29・Namakoo の設計判断）: 同じ軸に位置を作る段が 2 つ以上ある
     #   計画は実行しない。上の読み直しで 1 本に畳めていればここは通る ── 畳めなかった
@@ -17244,7 +17292,8 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     # ★ 2026-09-19: 1 冊の run と同じ受け皿（翻訳の呼び口は 2 つ ── 片配線を作らない）。
     _second = recheck_translation(a.model, a.task, book_meta, translation)
     if _second is not None:
-        return _refuse_split_reading(translation, _second)
+        return _refuse_split_reading(translation, _second,
+                                     task=getattr(a, "task", "") or "")
     plan = translation.get("plan") if isinstance(translation, dict) else None
     if plan is None and isinstance(translation, dict) and translation.get("op"):
         plan = [translation]          # ★ 後方互換: "plan" で包まない旧形式
