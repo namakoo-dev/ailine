@@ -63,6 +63,69 @@ def wording_needles() -> list:
     return out
 
 
+# ── 解析器の族（今日の事故が起きた側）────────────────────────────────
+PARSER_CALLS = {"compile", "search", "match", "findall", "finditer", "fullmatch", "split"}
+_META = set("()[]{}|?*+.^$" + chr(92) + "<>=!:-")
+
+
+def _literal_runs(pattern: str) -> list:
+    """正規表現から、メタ文字を除いた**文字の連なり**を取り出す。
+
+    ★ 解析器は製品の文言をそのまま持っていない（`(数字)` などが挟まる）ので、
+      変異させられるのは「必ずそのまま出るはずの部分」だけ。
+    """
+    runs, cur = [], []
+    skip = False
+    for ch in pattern:
+        if skip:
+            skip = False
+            cur = []
+            continue
+        if ch == chr(92):
+            skip = True
+            if cur:
+                runs.append("".join(cur))
+            cur = []
+            continue
+        if ch in _META:
+            if cur:
+                runs.append("".join(cur))
+            cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        runs.append("".join(cur))
+    return [r.strip() for r in runs if len(r.strip()) >= 4 and _has_japanese(r)]
+
+
+def parser_needles() -> list:
+    """画面の文言を**解析している**所を (試験ファイル, 行, 文言) で返す。
+
+    ★★ なぜこの族を測るか（2026-09-22 の実測）: 今日、画面の語を言い換えたときに
+      黙った番人は **assert ではなく正規表現**だった。拾えなくても例外にならず、
+      「着いた先ゼロ」を静かに返す ── 全件緑のまま測定だけが死ぬ。
+      count_in_product 系（12/12 生存）はこの族を **1 件も含んでいない**。
+    """
+    import ast
+    out = []
+    for p in sorted((REPO / "tests").glob("*.py")):
+        try:
+            tree = ast.parse(io.open(p, encoding="utf-8").read())
+        except SyntaxError:
+            continue
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr in PARSER_CALLS):
+                continue
+            for a in n.args:
+                if not (isinstance(a, ast.Constant) and isinstance(a.value, str)):
+                    continue
+                runs = _literal_runs(a.value)
+                if runs:
+                    out.append((p, n.lineno, max(runs, key=len)))
+    return out
+
+
 def _product_paths() -> list:
     from _product_source import product_files
     return list(product_files())
@@ -118,8 +181,11 @@ def main():
     if not tree_is_clean():
         print("✗ 作業木が汚れています。戻し損ねたときに取り返せないので走らせません。")
         return 2
-    needles = wording_needles()
-    print(f"人に見せる文言を字面で持つ番人: {len(needles)} 件")
+    kind = "parsers" if "--parsers" in sys.argv else "wording"
+    needles = parser_needles() if kind == "parsers" else wording_needles()
+    label = ("画面の文言を**解析している**番人" if kind == "parsers"
+             else "人に見せる文言を字面で持つ番人")
+    print(f"{label}: {len(needles)} 件")
     print()
     alive, dead, skipped = [], [], []
     for i, (tf, ln, needle) in enumerate(needles, 1):
