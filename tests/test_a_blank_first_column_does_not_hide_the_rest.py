@@ -63,11 +63,54 @@ def test_no_helper_decides_the_end_of_the_table_by_itself():
 
 
 def test_the_end_is_decided_by_the_width_of_the_header_not_by_one_column():
-    """★ 畳んだ先が「A 列を見るだけ」に退行していないこと（中身を縛る）。"""
+    """★ 畳んだ先が「A 列を見るだけ」に退行していないこと（中身を縛る）。
+
+    ★★ 2026-09-22: ここは**字面**（`getCellByPosition(lastCol, headerRow)`）で
+      「幅を測っている」ことを確かめていた。列の走査を `HeaderLastCol` へ畳んだら、
+      契約は満たしているのに**番人だけが落ちた** ── 今日 4 本目の字面の番人。
+      ★ 契約で書き直す: 幅は**別の関数から受け取る**（自分で A 列だけ見ない）。
+    """
     src = _bas()
     body = src.split("Function TableLastRow(")[1].split("End Function")[0]
-    assert "getCellByPosition(lastCol, headerRow)" in body, "見出しの幅を測っていない"
+    assert "HeaderLastCol(" in body, "見出しの幅を測っていない（幅を決める関数を呼んでいない）"
     assert "For c = 0 To lastCol" in body, "行の幅を見ていない（A 列だけに戻っている）"
+
+
+def test_the_header_width_does_not_stop_at_the_first_empty_column():
+    """★★ 2026-09-22（盲検 6 体目 ⑩の真因）── **列**の走査にも同じ罠が在った。
+
+    ★ 旧版は 0 列目から「最初の空」で止めて幅を決めていた。**A 列が空の表**では
+      1 周目で止まって幅が -1 になり、`TableLastRow` が見出し行を返す →
+      呼び出し側の `If lastRow < headerRow + 1 Then Exit Sub` で**黙って何もしない**。
+    ★ 09-16 に**行**から外した前提が、**列**に残っていた（同じ冊・同じコメント）。
+    """
+    src = _bas()
+    body = src.split("Function HeaderLastCol(")[1].split("End Function")[0]
+    assert "gapRun" in body, "空列で即座に止める形に戻っている"
+    assert "SCAN_COLS_MAX" in body, "走査の上限が宣言から来ていない"
+    # ★ 書き写しが復活していないこと（畳んだ意味が消える）
+    assert "Do While oSheet.getCellByPosition(lastCol" not in src, (
+        "列の走査が書き写されています ── HeaderLastCol に畳んでください")
+
+
+def test_both_languages_use_the_same_numbers():
+    """★★ 言語の境目で規則を割らない ── Basic と Python の定数が同じであること。
+
+    ★ この族は「言語の境目で切れた片配線」を **3 回**踏んでいる
+      （Basic の行 09-16 / Basic の列 09-22 / Python の列 09-22）。
+    """
+    import re
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from ailine_core import table_scan
+    src = _bas()
+    for name in ("SCAN_COLS_MAX", "GAP_COLS"):
+        m = re.search(rf"Const {name} As Integer = (\d+)", src)
+        assert m, f"Basic 側に {name} が無い"
+        assert int(m.group(1)) == getattr(table_scan, name), (
+            f"{name} が Basic と Python で違う: "
+            f"{m.group(1)} / {getattr(table_scan, name)}")
 
 
 # --- 実機（ここからが本番。上の 3 本は形だけを守る）-----------------------------

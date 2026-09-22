@@ -1,6 +1,49 @@
 Option VBASupport 1
 Option Explicit
 
+' ★ 見出し行を見るときの走査の上限と、表の右端とみなす空列の連なり。
+'   上限を置くのは、離れた注記 1 つで幅が跳ね上がらないようにするため
+'   （行の側で 2026-09-16 に同じ線を引いている）。
+Const SCAN_COLS_MAX As Integer = 64
+Const GAP_COLS As Integer = 4
+
+' ──────────────────────────────────────────────────────────────────
+' ★★ 見出し行の右端を決める（2026-09-22・盲検 6 体目 ⑩の真因）
+'
+' 旧版は 0 列目から「最初の空」で止めていた。**A 列が空の表**では 1 周目で止まり
+' lastCol = -1 になる → TableLastRow が見出し行を返す → 呼び出し側の
+' `If lastRow < headerRow + 1 Then Exit Sub` で**黙って何もしない**。
+'
+' ★ 2026-09-16 に**行**の走査から同じ罠を外したが、**列**の走査には残っていた。
+'   しかも同じ 5 行が **4 か所**（TableLastRow / ExtractRows / DedupRows /
+'   SplitColumn）に書き写されていた ── 行の時と同じ形。だから 1 本に畳む。
+'
+' ★ 実測（A 列が空・見出しは 3 行目の経費精算書）:
+'     集計 × / 並べ替え × / 列幅 × / 太字は ⚠ のまま exit 0
+'
+' 数え方: 左端から**飛ばしながら**見出し行を見る。値が在った所を憶え、値を見た後に
+' 空が GAP_COLS 続いたら、そこを表の右端とみなす。
+' ★ 変えたのは「左端は必ず埋まっている」という前提だけ ── 右端の決め方は同じ。
+' ★ 見出し行に値が 1 つも無ければ -1 を返す（呼び出し側は今までどおり守る）。
+' ──────────────────────────────────────────────────────────────────
+Function HeaderLastCol(oSheet As Object, headerRow As Integer) As Integer
+    Dim c As Integer, found As Integer, gapRun As Integer
+    found = -1
+    gapRun = 0
+    c = 0
+    Do While c < SCAN_COLS_MAX
+        If oSheet.getCellByPosition(c, headerRow).getString() <> "" Then
+            found = c
+            gapRun = 0
+        Else
+            gapRun = gapRun + 1
+            If found >= 0 And gapRun > GAP_COLS Then Exit Do
+        End If
+        c = c + 1
+    Loop
+    HeaderLastCol = found
+End Function
+
 ' ──────────────────────────────────────────────────────────────────
 ' ★★ 表の終わりを決める（2026-09-16・掃き出しで 11 か所の書き写しを 1 本に畳んだ）
 '
@@ -22,11 +65,7 @@ Option Explicit
 '   「lastRow < headerRow + 1 なら何もしない」で既に守っている。
 Function TableLastRow(oSheet As Object, headerRow As Integer) As Long
     Dim lastCol As Integer, r As Long, c As Integer, seen As Boolean
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
-    lastCol = lastCol - 1
+    lastCol = HeaderLastCol(oSheet, headerRow)
     If lastCol < 0 Then
         TableLastRow = headerRow
         Exit Function
@@ -469,11 +508,12 @@ Sub DrawTableBorders(oDoc As Object)
     oSheet = oDoc.Sheets.getByIndex(0)
 
     lastRow = TableLastRow(oSheet, 0)
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, 0).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
-    lastCol = lastCol - 1
+    ' ★ 2026-09-22: ここも同じ書き写しだった（A 列が空だと lastCol = -1 になり
+    '   黙って何もしない）。1 本に畳んだ HeaderLastCol へ寄せる。
+    ' ★ ただし**見出しが 1 行目という決め打ち**はここでは直していない ──
+    '   直すには引数を増やす必要があり、プロンプトの例（OPS_DOC）まで動く。
+    '   語彙を足すと近い op から静かに奪う実測が在るので、そこは別に測ってから。
+    lastCol = HeaderLastCol(oSheet, 0)
     If lastRow < 0 Or lastCol < 0 Then Exit Sub
 
     oRange = oSheet.getCellRangeByPosition(0, 0, lastCol, lastRow)
@@ -496,11 +536,12 @@ Sub AutoFitColumns(oDoc As Object)
     Dim oSheet As Object, oCols As Object
     Dim i As Integer, lastCol As Integer
     oSheet = oDoc.Sheets.getByIndex(0)
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, 0).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
-    lastCol = lastCol - 1
+    ' ★ 2026-09-22: ここも同じ書き写しだった（A 列が空だと lastCol = -1 になり
+    '   黙って何もしない）。1 本に畳んだ HeaderLastCol へ寄せる。
+    ' ★ ただし**見出しが 1 行目という決め打ち**はここでは直していない ──
+    '   直すには引数を増やす必要があり、プロンプトの例（OPS_DOC）まで動く。
+    '   語彙を足すと近い op から静かに奪う実測が在るので、そこは別に測ってから。
+    lastCol = HeaderLastCol(oSheet, 0)
     If lastCol < 0 Then Exit Sub
     oCols = oSheet.Columns
     For i = 0 To lastCol
@@ -611,11 +652,12 @@ Sub PivotSum(oDoc As Object, groupCol As Integer, valueCol As Integer)
     oSheet = oDoc.Sheets.getByIndex(0)
 
     lastRow = TableLastRow(oSheet, 0)
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, 0).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
-    lastCol = lastCol - 1
+    ' ★ 2026-09-22: ここも同じ書き写しだった（A 列が空だと lastCol = -1 になり
+    '   黙って何もしない）。1 本に畳んだ HeaderLastCol へ寄せる。
+    ' ★ ただし**見出しが 1 行目という決め打ち**はここでは直していない ──
+    '   直すには引数を増やす必要があり、プロンプトの例（OPS_DOC）まで動く。
+    '   語彙を足すと近い op から静かに奪う実測が在るので、そこは別に測ってから。
+    lastCol = HeaderLastCol(oSheet, 0)
     If lastRow < 1 Then Exit Sub
 
     Dim oSrc As New com.sun.star.table.CellRangeAddress
@@ -975,11 +1017,7 @@ Sub ExtractRows(oDoc As Object, headerRow As Integer, colIdx As Integer, cmpCode
     ' 最終データ行（A 列を見出しの直下から走査）
     lastRow = TableLastRow(oSheet, headerRow)
     ' 最終列（見出し行を走査）
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
-    lastCol = lastCol - 1
+    lastCol = HeaderLastCol(oSheet, headerRow)
     If lastRow < headerRow + 1 Or lastCol < 0 Then Exit Sub
 
     If oDoc.Sheets.hasByName(dstName) Then oDoc.Sheets.removeByName(dstName)
@@ -1057,11 +1095,7 @@ Sub DedupRows(oDoc As Object, headerRow As Integer, keyIdxCsv As String, dstName
     ' 最終データ行（A 列を見出しの直下から走査）
     lastRow = TableLastRow(oSheet, headerRow)
     ' 最終列（見出し行を走査）
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
-    lastCol = lastCol - 1
+    lastCol = HeaderLastCol(oSheet, headerRow)
     If lastRow < headerRow + 1 Or lastCol < 0 Then Exit Sub
 
     If oDoc.Sheets.hasByName(dstName) Then oDoc.Sheets.removeByName(dstName)
@@ -1307,10 +1341,9 @@ Sub SplitColumn(oDoc As Object, headerRow As Integer, colIdx As Integer, sep As 
     names = Split(namesCsv, ",")
 
     lastRow = TableLastRow(oSheet, headerRow)
-    lastCol = 0
-    Do While oSheet.getCellByPosition(lastCol, headerRow).getString() <> ""
-        lastCol = lastCol + 1
-    Loop
+    ' ★ ここは lastCol を『右端の**次**の列』として使う（baseCol = lastCol）──
+    '   ほかの 3 か所とは意味が違うので、畳まずに同じ関数から組み立てる。
+    lastCol = HeaderLastCol(oSheet, headerRow) + 1
     If lastRow < headerRow + 1 Then Exit Sub
     baseCol = lastCol   ' データの右端の次から新しい列を作る
 

@@ -38,14 +38,31 @@ def _cell_ref(row: int, col: int) -> str:
     """
     return f"{get_column_letter(col)}{row}"
 
+#: ★ 見出し行を見るときの走査の上限と、表の右端とみなす空列の連なり。
+#:   Basic 側（AiLineHelpers.bas の SCAN_COLS_MAX / GAP_COLS）と**同じ数**に
+#:   そろえる ── 言語の境目で規則が割れると、片方だけ直る日が来る。
+SCAN_COLS_MAX = 64
+GAP_COLS = 4
+
+
 def _col_index_by_header(ws, name: str, header_row: int = 1):
     """見出し行(既定は物理1行目・header_row で指定可)を左から走査して name に一致する
        列の1起点インデックスを返す。無ければ None。★ W3: header_row 省略時は旧挙動と同一。
        ★ W3: header_row>1 の子見出し行で空欄の列は、book_columns() と同じ規則で
        真上の行を遡って引き継ぐ（多段見出しの先頭列対策。無いと『7月』等キー列より
        手前の空欄列で走査が誤って打ち切られる）。"""
+    # ★★ 2026-09-22（盲検 6 体目 ⑩を追って・言語をまたいで 3 度目）: 旧版は
+    #   「最初の空列で打ち切る」形だった。**A 列が空の表**では 1 列目で止まり、
+    #   その先にある見出しに辿り着けない（実測: 並べ替えは実際に起きているのに
+    #   検算が「列『金額』が見つからない」と言って × になった）。
+    #   ★ Basic 側の TableLastRow / HeaderLastCol とまったく同じ前提 ──
+    #     「表の左端は必ず埋まっている」。2026-09-16 に Basic の**行**から外し、
+    #     今日 Basic の**列**から外し、ここが 3 つ目。**言語の境目で切れた片配線。**
+    #   ★ 右端の決め方は変えない: 値を見た後に空が GAP_COLS 続いたらそこで止める。
     c = 1
-    while True:
+    gap_run = 0
+    seen = False
+    while c <= SCAN_COLS_MAX:
         v = ws.cell(row=header_row, column=c).value
         if v in (None, "") and header_row > 1:
             for up in range(header_row - 1, 0, -1):
@@ -54,10 +71,16 @@ def _col_index_by_header(ws, name: str, header_row: int = 1):
                     v = uv
                     break
         if v in (None, ""):
-            return None
-        if str(v) == name:
-            return c
+            gap_run += 1
+            if seen and gap_run > GAP_COLS:
+                return None
+        else:
+            seen = True
+            gap_run = 0
+            if str(v) == name:
+                return c
         c += 1
+    return None
 
 def _row_has_any_value(ws, row: int, last_col: int) -> bool:
     """その行に、表の幅の中で 1 つでも値が在るか（2026-09-05）。"""

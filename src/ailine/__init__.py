@@ -12759,7 +12759,8 @@ def build_history_entry(result: dict, book: Path, task: str, model: str, failure
     }
 
 
-def report_postcondition(a, book, out_book, result, op, resolved, status, reason) -> int | None:
+def report_postcondition(a, book, out_book, result, op, resolved, status, reason,
+                         header_row: int = 1) -> int | None:
     """事後条件の結果を画面に出す。止めるなら終了コード、続行なら None。
 
     ★★ 2026-09-22: この 17 行は **2 か所に写されていた**（単発 DSL 経路と 帳票/様式写像の
@@ -12779,8 +12780,13 @@ def report_postcondition(a, book, out_book, result, op, resolved, status, reason
     if status == "fail":
         print(f"{chr(10)}× {PC_UNMET}: {reason}")
         # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
+        # ★ 2026-09-22: 見出し行を**渡す**。渡さないと 1 行目と決め打ちになり、
+        #   見出しが 3 行目の冊（タイトル付きの精算書）で『走査が止まった』と
+        #   誤爆する（実測）。呼び出し側は必ず知っているので、推測しない。
         for _ln in likely_cause_of_no_change(
-                out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
+                out_book,
+                resolved.get("_target_sheet") if isinstance(resolved, dict) else None,
+                header_row=header_row):
             print(_ln)
         print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
         result["out"] = str(out_book)
@@ -13646,7 +13652,7 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
     return True
 
 
-def likely_cause_of_no_change(book_path, sheet_name=None) -> list:
+def likely_cause_of_no_change(book_path, sheet_name=None, header_row: int = 1) -> list:
     """事後条件が破れたとき、**なぜ効かなかったか**の心当たりを述べる行を返す。
 
     ★ 2026-08-24（土台固め）: 飾りの生存表を作っている最中に、対照実験で確定した ──
@@ -13659,12 +13665,15 @@ def likely_cause_of_no_change(book_path, sheet_name=None) -> list:
     （結合セルが在っても効く操作はある）。
     """
     lines = []
+    # ★★ 2026-09-22: 心当たりは**1 つずつ囲う**。1 つの try にまとめたら、
+    #   extent_gap が投げた瞬間に**結合セルの心当たりごと消えた**（今日 1 回）──
+    #   「出ないことは信号でない」そのもの。片方が転んでも、もう片方は言う。
+    merged = []
     try:
         with BookView(book_path) as bv:
-            ws = bv.sheet(sheet_name)
-            merged = list(ws.merged_cells.ranges)
-    except Exception:
-        return []
+            merged = list(bv.sheet(sheet_name).merged_cells.ranges)
+    except Exception:   # noqa: BLE001 ── 心当たりが道を塞がない
+        merged = []
     if merged:
         shown = "・".join(str(m) for m in merged[:3])
         more = f"（ほか {len(merged) - 3} 件）" if len(merged) > 3 else ""
@@ -13672,7 +13681,8 @@ def likely_cause_of_no_change(book_path, sheet_name=None) -> list:
                       f"{len(merged)} 件あります（{shown}{more}）")
         lines.append("  → 表の中に結合セルがあると、並べ替えなどの操作が"
                      "何もせずに終わることがあります（実測）。"
-                     "結合を解除してからお試しください")
+                     "★ この道具に結合を解除する操作はありません ──"
+                     " Excel / LibreOffice で解除してからお試しください")
     return lines
 
 
@@ -15594,7 +15604,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
     # ★ 止血1/2: "error"(チェッカー内の予期しない例外)は --json 上 "fail" に丸める。
     # ★ 2026-09-22: 画面に出す所を 1 本に畳んだ（report_postcondition）── 同じ 17 行が
     #   **3 か所**に写されていて、コメントだけが「1 実装・全経路」と言っていた。
-    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason)
+    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason,
+                               header_row=header_row)
     if _rc is not None:
         return _rc
 
@@ -15763,7 +15774,8 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
                                         source_book=source_book, before_chart_paths=before_chart_paths)
     # ★ 2026-09-22: 画面に出す所を 1 本に畳んだ（report_postcondition）── 同じ 17 行が
     #   **3 か所**に写されていて、コメントだけが「1 実装・全経路」と言っていた。
-    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason)
+    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason,
+                               header_row=header_row)
     if _rc is not None:
         return _rc
 
@@ -15916,7 +15928,8 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
                                         source_book=source_book, before_chart_paths=before_chart_paths)
     # ★ 2026-09-22: 画面に出す所を 1 本に畳んだ（report_postcondition）── 同じ 17 行が
     #   **3 か所**に写されていて、コメントだけが「1 実装・全経路」と言っていた。
-    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason)
+    _rc = report_postcondition(a, book, out_book, result, op, resolved, status, reason,
+                               header_row=header_row)
     if _rc is not None:
         return _rc
 
