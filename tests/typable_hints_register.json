@@ -1,0 +1,332 @@
+{
+ "_meta": {
+  "purpose": "「こう打てば進める」と人に言っている所の台帳。★ 導線が嘘なら、導線が無いより悪い（2026-09-05 の実測・render_refusal の例文事故）。",
+  "why": "盲検 6 体目 ⑥（致命）: 道具が `--column …` を案内し、**その通りに打つと落ちた**。★ 『断りが示した道を歩く』道具（tests/walk_refusals_core.py）は既に在ったのに、台帳（refusal_register.json）の分母が「『？』で始まる断り」だけで、accounts の断り（`×` 始まり・道を示す文は別関数で連結）が構造的に落ちていた。",
+  "denominator": "機械で出す ── 製品の画面に出うる文字列のうち、バッククォートの中に**打てるもの**（`ailine <サブコマンド>` か `--フラグ`）を含むもの。番人は tests/test_every_typable_hint_is_accounted_for.py。",
+  "walked_values": "walked=歩いて着いた / path_fails=歩いたが着かなかった（最悪）/ by_design=意図した行き止まり / 未調査=まだ誰も歩いていない",
+  "how_to_read": "★ 未調査は『大丈夫』ではない ── **見ていない**という意味。walk_refusals と同じ線で、測れなかった回を判定に混ぜない。",
+  "measured": "2026-09-23 に機械で数えて 40 件。うち 40 件が既存の台帳の外だった。"
+ },
+ "hints": [
+  {
+   "file": "__init__.py",
+   "line": 939,
+   "typable": "--header-row",
+   "text": "見出しが何行目か分かりません。`--header-row 3` のように指定して再実行してください",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 1059,
+   "typable": "--header-row",
+   "text": "・`--header-row` では直せません ── 何行目を指定しても、そこに見出しがありません",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 19029,
+   "typable": "ailine undo",
+   "text": "★ 原本は自動でバックアップされ、`ailine undo` で戻せます。",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 19030,
+   "typable": "ailine doctor",
+   "text": "★ うまく動かないときは `ailine doctor` が在否を名指しで教えます。",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 19929,
+   "typable": "--past",
+   "text": "過去の仕訳が 1 件もありません（`--past` に渡した先に仕訳の書き出しが見つかりません）── 先例が無ければ何も引けません",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 13186,
+   "typable": "ailine history",
+   "text": "（このフォルダの冊を動かした記録はまだありません ── 全部見るなら `ailine history`）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 17876,
+   "typable": "ailine csv",
+   "text": "は csv 形式なので、このままでは照合できません。先に `ailine csv",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 19016,
+   "typable": "ailine doctor",
+   "text": "揃ったら `ailine doctor` で全部 ○ になることを確かめてから、もう一度ここへ。",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 1064,
+   "typable": "--sheet",
+   "text": "（`--sheet <名前>` で選べます）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 1087,
+   "typable": "--header-row",
+   "text": "行目に見出しがあるようです。`--header-row",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 19024,
+   "typable": "ailine verify",
+   "text": "→ 出来た一覧は `ailine verify <一覧.xlsx> <フォルダ>` で確かめられます",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 20323,
+   "typable": "ailine ops",
+   "text": "-h`・入口の一覧は `ailine ops`",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "__init__.py",
+   "line": 18670,
+   "typable": "--sheet",
+   "text": "× どのシートを書き出すか `--sheet` で指してください（ある:",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "accounts_core.py",
+   "line": 250,
+   "typable": "--column",
+   "text": "→ その列でよければ `--column",
+   "walked": "path_fails",
+   "note": "★ 盲検 6 体目 ⑥（致命）: この案内どおり `--column 借方勘定科目=科目` を打つと過去の仕訳が全部落ちた。2026-09-22 に『冊ごとの手がかり』へ直して歩けるようにした"
+  },
+  {
+   "file": "accounts_core.py",
+   "line": 253,
+   "typable": "--column",
+   "text": "→ 読ませたい列があるなら `--column",
+   "walked": "walked",
+   "note": "★ 盲検 6 体目 ⑥ と同じ家系。直し後は両方の冊が読めることを実機で確認"
+  },
+  {
+   "file": "accounts_core.py",
+   "line": 287,
+   "typable": "--column",
+   "text": "`--column` の形が違います（",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "accounts_core.py",
+   "line": 295,
+   "typable": "--column",
+   "text": "』に渡す見出しが空です（`--column",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "accounts_core.py",
+   "line": 345,
+   "typable": "--column",
+   "text": "`--column",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "accounts_core.py",
+   "line": 349,
+   "typable": "--column",
+   "text": "`--column",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "cli_render.py",
+   "line": 49,
+   "typable": "--show-basic",
+   "text": "（生成した .bas は出していません ── ルール変換（LLM 不使用）で作りました。見るなら `--show-basic`。何をしたかは下の「変更点」と検証で確かめられます）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "cli_render.py",
+   "line": 163,
+   "typable": "ailine ops",
+   "text": "AI が直接生成します（機械保証なし・適用の確認は出ません。次の手: `ailine ops` / 依頼を言い換える）。",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "cli_render.py",
+   "line": 138,
+   "typable": "ailine doctor",
+   "text": "→ `ailine doctor` で、何が足りないかを名指しします",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "cli_render.py",
+   "line": 830,
+   "typable": "--amount",
+   "text": "金額は数えていません（`--amount <金額の見出し>` を付けると、行数と同じやり方で金額の和も証明します）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "cli_render.py",
+   "line": 147,
+   "typable": "ailine run",
+   "text": "は `ailine run` では受け取れません。",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "cli_render.py",
+   "line": 222,
+   "typable": "ailine vocab",
+   "text": "に登録するか `ailine vocab add <語> <値>` で追加）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "cli_render.py",
+   "line": 235,
+   "typable": "ailine alias",
+   "text": "に登録するか `ailine alias add <言い回し> <OP>` で追加）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "cli_render.py",
+   "line": 447,
+   "typable": "ailine csv",
+   "text": "件（1本ずつなら `ailine csv` で扱ってください）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "input_path.py",
+   "line": 81,
+   "typable": "ailine csv",
+   "text": "この入口は CSV を直接は受け取りません ── `ailine csv <ファイル>` で xlsx にすると（0 落ちを守って・原本は無変更）そのまま渡せます",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "input_path.py",
+   "line": 97,
+   "typable": "ailine ops",
+   "text": "・この入口は 1 冊を受け取ります（フォルダを渡す入口は `ailine ops` に出ています）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "multifile.py",
+   "line": 66,
+   "typable": "ailine csv",
+   "text": "件あります ── `ailine csv <ファイル>` で 1 本ずつ xlsx にできます",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "pdf_export.py",
+   "line": 308,
+   "typable": "--orientation",
+   "text": "→ それでも収まらないなら `--orientation landscape` を試してください",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "split_people.py",
+   "line": 260,
+   "typable": "--exact",
+   "text": "（打った文字とそのまま一致する見出しが 1 つあります ── その列でよければ `--exact` を付けてください。列番号では指せません）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "split_people.py",
+   "line": 505,
+   "typable": "--amount",
+   "text": "金額の見出しが指されていないので、金額は数えていません（`--amount <見出し>` を付けると行数と同じやり方で証明します）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "verify.py",
+   "line": 231,
+   "typable": "ailine verify",
+   "text": "照合出力の検算には原本2冊の指定が必要です（`ailine verify <出力> <元A> <元B>` の形で実行してください）。",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "verify.py",
+   "line": 237,
+   "typable": "ailine csv",
+   "text": "CSV 検疫の出力は `ailine csv <元のcsv>` を再実行して確認してください（独立の検算はまだ実装していません）。",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "verify.py",
+   "line": 250,
+   "typable": "ailine verify",
+   "text": "分けた冊の検算はフォルダで受けます（和は『全部の冊 ＋ 空欄 ＋ 複数担当』で初めて閉じるため）: `ailine verify <出力フォルダ> <元の冊> [--amount <見出し>]`",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "verify.py",
+   "line": 257,
+   "typable": "ailine verify",
+   "text": "科目の候補の冊の検算は、今回の仕訳と過去の仕訳を渡して受けます（先例の番地のセルを読むため）: `ailine verify <候補の冊> <今回の仕訳> <過去の仕訳…>`",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "verify_split.py",
+   "line": 243,
+   "typable": "--amount",
+   "text": "測っていません（`--amount <見出し>` を渡すと和も検算します）",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "verify_split.py",
+   "line": 131,
+   "typable": "ailine split",
+   "text": "このフォルダの冊に `ailine split` の印がありません（人のファイルを検算したことにしない）。",
+   "walked": "未調査",
+   "note": ""
+  },
+  {
+   "file": "verify_split.py",
+   "line": 145,
+   "typable": "--amount",
+   "text": "」の列がありません（`--amount` に元の冊の見出しを渡してください）。",
+   "walked": "未調査",
+   "note": ""
+  }
+ ]
+}
