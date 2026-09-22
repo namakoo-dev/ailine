@@ -9156,10 +9156,43 @@ def task_asks_to_undo_this_op(task: str, op: str | None) -> str | None:
     hit = next((c for c in _label_chunks(label) if c in text), None)
     if not hit:
         return None
-    undo = next(w for w in words if w in text)
+    # ★★ 2026-09-23（実機の番人が捕まえた誤爆）: 打ち消しの語が在るだけでは足りない。
+    #   その語が**その操作に掛かっている**必要がある。
+    #     「結合を解除して」        … 概念語 → 打ち消し（隣接）── 真逆
+    #     「合計行を除いて並べ替えて」… 打ち消し → …→ 概念語 ── **対象を絞る**依頼
+    #   ★ 後者を止めたら、実機の検体 2 件が赤くなった（素の環境では出ない）。
+    #     道具は正しい振る舞いを既に持っていた（「『除いて』は対象から外す意味なので、
+    #     行を消す段は外しました」）── 私の門がその手前で潰していた。
+    #   ★ 条件: 概念語の**直後**に打ち消しの語が来ること（間に挟めるのは助詞だけ）。
+    undo = _undo_word_right_after(text, hit, words)
+    if not undo:
+        return None
     return (f"依頼は『{hit}』を『{undo}』と言っていますが、読み取った操作は"
             f"『{label}』そのものです ── 真逆のことをしかけました。"
             f"この道具に『{label}』を打ち消す操作はありません")
+
+
+def _undo_word_right_after(text: str, hit: str, words) -> str | None:
+    """概念語の**直後**に来る打ち消しの語を返す（無ければ None）。
+
+       ★ 間に挟めるのは助詞だけ ──「結合**を**解除」は真逆、
+         「合計行を除いて…並べ替え」は対象を絞る依頼で、意味が違う。
+    """
+    _JOINERS = ("", "を", "は", "の", "も", "だけ", "まで")
+    start = 0
+    while True:
+        i = text.find(hit, start)
+        if i < 0:
+            return None
+        rest = text[i + len(hit):]
+        for j in _JOINERS:
+            if not rest.startswith(j):
+                continue
+            tail = rest[len(j):]
+            for w in words:
+                if tail.startswith(w):
+                    return w
+        start = i + 1
 
 
 def _label_chunks(label: str) -> tuple:

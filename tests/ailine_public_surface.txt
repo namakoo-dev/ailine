@@ -459,6 +459,7 @@ def _try_os_lock(fd) -> 'bool'
 def _ts_sort_key(ts: 'str')
 def _undo_pointer_path(book: 'Path') -> 'Path'
 def _undo_position(book: 'Path', backups: 'list') -> 'int | None'
+def _undo_word_right_after(text: 'str', hit: 'str', words) -> 'str | None'
 def _unreadable_book_for_match_message(path: 'Path') -> 'str'
 def _untouched_original_line(book: 'Path', out_book: 'Path') -> 'str'
 def _used_extent(ws) -> 'tuple'
