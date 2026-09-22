@@ -57,6 +57,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -67,6 +68,7 @@ from datetime import datetime, timezone
 #   引ける状態は保つ。★ 分割の diff に「名前の削除」を混ぜない。
 from datetime import date as _date_cls   # noqa: F401 ── 再輸出（公開面の凍結が守る名前）
 from pathlib import Path
+from typing import NoReturn
 
 # ★ 2026-08-24（盲検の査定で最も痛い指摘・第 1 位）: この 2 つは openpyxl の import
 #   ガードより**後ろ**に置かれていて、openpyxl が無い環境では
@@ -89,9 +91,12 @@ EXIT_WRITE_BLOCKED = 5
 EXIT_APPLY_FAILED = 9
 
 
-def exit_environment(message: str):
+def exit_environment(message: str) -> NoReturn:
     """実行の前提が満たされていない旨を述べて EXIT_ENVIRONMENT で落ちる。
-       ★ sys.exit(文字列) は必ず 1 になる ── 意味を持つ番号で落ちる唯一の入口にする。"""
+       ★ sys.exit(文字列) は必ず 1 になる ── 意味を持つ番号で落ちる唯一の入口にする。
+       ★ 2026-09-22: **戻らないこと**(`NoReturn`)を宣言する。これが無いと型検査器は
+         「ここを通った後、あの名前は未定義かもしれない」と数える ── 実測で誤報 67 件。
+         宣言した後は 10 件（残りは本物の予約）。"""
     print(message, file=sys.stderr)
     raise SystemExit(EXIT_ENVIRONMENT)
 
@@ -12751,7 +12756,7 @@ def read_history(path: Path | None = None, max_n: int = 10) -> list:
 
 
 def _path_key(p) -> str:
-    """同じファイルを指すパスを 1 つの鍵に畳む（大小文字・区切りの向き・相対を吸収）。
+    r"""同じファイルを指すパスを 1 つの鍵に畳む（大小文字・区切りの向き・相対を吸収）。
 
     ★★ 2026-09-21（実測で捕まえた）: 出所を生の文字列で突き合わせたら、
       `stack` が書いた `C:\…\全店売上.xlsx` と、人が打った
@@ -13478,8 +13483,12 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         claim = Claim(verified=True, basis="declaration", scope=scope, evidence=evidence,
                        observation_complete=True, observed_on=str(final), observed_after_apply=True)
         # ★ 決裁③(2026-08-22): 疑わしい ⚠ が1件でも出た run は ✓ を名乗らない（△ に降格）。
-        render_fn = render_applied_claim_demoted if warning_count > 0 else render_applied_claim
-        lines = render_fn(claim, final.name, warning_count) if warning_count > 0 else render_fn(claim, final.name)
+        # ★ 2026-09-22: ここは `warning_count > 0` を**2 回**書いていた（関数を選ぶ時と、引数の数を選ぶ時）。
+        #   動きは正しかったが、同じ判断が 2 箇所に在れば片方だけ直る日が来る。1 回に畳む。
+        if warning_count > 0:
+            lines = render_applied_claim_demoted(claim, final.name, warning_count)
+        else:
+            lines = render_applied_claim(claim, final.name)
         for ln in lines:
             print(ln)
         if scope_note:
@@ -18052,12 +18061,16 @@ class _CsvEvaluation:
     """CSV 検疫の評価結果（書き込みより前・出力パスに依存しない）。
        error が None でなければ硬い拒否（行数上限超過・文字コード判定不能）── 呼び出し側は
        書き込みに進まず名指しで断る。"""
-    error: str = None
-    sha256: str = None
-    encoding: object = None
-    parsed: object = None
-    classifications: list = None
-    warnings: list = None
+    # ★ 2026-09-22: ここは `object` / 素の `str` と書いてあったが、入るものは決まっている。
+    #   注釈が「何でも入る」と言っていたので、型検査器はこの先の `.encoding` も
+    #   `.ambiguous` も見られなかった ── **番人の目を注釈が塞いでいた**。
+    #   （`from __future__ import annotations` が効いているので実行時の費用は無い。）
+    error: str | None = None
+    sha256: str | None = None
+    encoding: csv_quarantine.EncodingResult | None = None
+    parsed: csv_quarantine.ParseResult | None = None
+    classifications: list | None = None
+    warnings: list | None = None
 
 
 def _csv_record_label(parsed, raw_idx: int, header_offset: int) -> str:
@@ -20334,7 +20347,9 @@ def main(argv=None) -> int:
     #   符号化はそのまま・書けない文字だけ置換に倒す（クラッシュしない、が保証の中身）。
     for _stream in (sys.stdout, sys.stderr):
         try:
-            _stream.reconfigure(errors="replace")
+            # ★ 型スタブは sys.stdout を TextIO と言うが、実体は TextIOWrapper で
+            #   reconfigure を持つ。持たない実装のために try で囲ってある。
+            _stream.reconfigure(errors="replace")  # pyright: ignore[reportAttributeAccessIssue]
         except Exception:
             pass
     # ★★ 2026-09-18（盲検の分母・Namakoo 決裁）: 盲検の回だけ、打たれた**全コマンド**を

@@ -1,0 +1,30 @@
+{
+  "include": ["../src"],
+  "extraPaths": ["../src"],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalSubscript": "none",
+  "reportOptionalIterable": "none",
+  "reportOptionalOperand": "none",
+  "reportOptionalCall": "none",
+  "reportArgumentType": "none",
+  "reportCallIssue": "none",
+  "reportAssignmentType": "none",
+  "reportOperatorIssue": "none",
+  "reportIndexIssue": "none",
+  "reportReturnType": "none",
+  "reportGeneralTypeIssues": "none",
+  "reportFunctionMemberAccess": "none",
+  "reportRedeclaration": "none",
+  "reportTypedDictNotRequiredAccess": "none",
+
+  "reportPossiblyUnboundVariable": "error",
+  "reportUndefinedVariable": "error",
+  "reportAttributeAccessIssue": "error",
+  "reportInvalidStringEscapeSequence": "error",
+  "reportSelfClsParameterName": "error"
+}

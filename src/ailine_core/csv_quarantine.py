@@ -546,7 +546,7 @@ def write_quarantined_xlsx(parsed: ParseResult, classifications: list, out_path,
         for cp in rm:
             removed.append((row, col, cp))
         cell = ws.cell(row=row, column=col)
-        cell.value = cleaned
+        cell.value = cleaned  # pyright: ignore[reportAttributeAccessIssue] ── 自分で作った新規シート（結合セルは無い）
         cell.data_type = "s"
         if cleaned != "":
             declared[(row, col)] = cleaned
@@ -581,7 +581,7 @@ def write_quarantined_xlsx(parsed: ParseResult, classifications: list, out_path,
                     _write_string_cell(row_no, col, raw_cell)
                 else:
                     cell = ws.cell(row=row_no, column=col)
-                    cell.value = value
+                    cell.value = value  # pyright: ignore[reportAttributeAccessIssue] ── 自分で作った新規シート（結合セルは無い）
                     cell.number_format = "yyyy-mm-dd"
                     declared[(row_no, col)] = value
             else:

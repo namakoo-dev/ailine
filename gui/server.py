@@ -733,14 +733,14 @@ def main() -> int:
     if port_already_answers(port):
         print(f"× ポート {port} は既に使われています。"
                f"別の ailine GUI が動いたままかもしれません。" + chr(10)
-               + f"  ここに重ねて起動すると、**どちらが応答するかが決まりません**"
-                 f"（古い方が答えると、直したはずの不具合がそのまま出ます）。" + chr(10)
-               + f"  いま応答しているものを確かめる:" + chr(10)
+               + "  ここに重ねて起動すると、**どちらが応答するかが決まりません**"
+                 "（古い方が答えると、直したはずの不具合がそのまま出ます）。" + chr(10)
+               + "  いま応答しているものを確かめる:" + chr(10)
                + f"    Get-NetTCPConnection -State Listen -LocalPort {port} "
                  f"| Select-Object OwningProcess" + chr(10)
-               + f"  それが要らないものなら、その PID だけを止めてください"
-                 f"（名前でまとめて止めない）。" + chr(10)
-               + f"  2 つ並べて比べたいときは --port で別の番号を指定してください。")
+               + "  それが要らないものなら、その PID だけを止めてください"
+                 "（名前でまとめて止めない）。" + chr(10)
+               + "  2 つ並べて比べたいときは --port で別の番号を指定してください。")
         return 1
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"

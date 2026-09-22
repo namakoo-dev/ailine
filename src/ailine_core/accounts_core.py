@@ -301,7 +301,9 @@ def resolve_accounts_columns(rows, overrides=None) -> tuple:
     ordered = sorted(rows, key=lambda rv: rv[0])
     if not ordered:
         return None, [], {}, "行がありません（空のファイル）"
-    head_row = None
+    # ★ 2026-09-22: 見出し行と見出し名は**対で持つ**。片方だけ代入される経路が
+    #   後から生えると、静かに空の見出しで先へ進む ── 型検査器がその予約を指した。
+    head_row, headers = None, []
     for row_num, values in ordered:
         if sum(1 for v in values if form_read.norm(v)) >= 2:
             head_row = row_num

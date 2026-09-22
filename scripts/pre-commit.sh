@@ -75,4 +75,55 @@ if [ -n "$parts" ]; then
     fi
     printf ' ✓\n'
 fi
+# --- 3 本目: バグ系のリンタと、絞った型検査（2026-09-22）------------------------
+# ★ なぜ在るか: この日、私は 2 つの失敗をした ── 存在しない名前を書いたのと、
+#   `urllib.error` を名指しで輸入せずに使っていたの。どちらも**書いた瞬間**に道具が
+#   指したもので、**全件テストでは出なかった**（試験が通る経路では踏まないため）。
+#   ★ 5091 件の試験が緑でも見えない族が在る ── だから足した。
+# ★ 版を固定する。固定しないと、道具が上がった日に門が勝手に変わる
+#   （requirements-dev.txt と同じ作法）。uvx なので環境には入れない。
+# ★ 何を入れ、**何を入れなかったか（とその実測値）**は tests/pyright_gate.md に書いてある。
+#   0 件でない規則は入れない ── 初日から赤い門は、そのうち誰も見なくなる。
+# ★ 変異試験で鳴ることを確かめてある: 未代入・未定義・無い属性・無効なエスケープ・self の誤り
+#   の 5 つを入れた検体で 5 件すべて鳴り exit 1、外して 0 件 exit 0。
+# ★ 実測（暖まった状態）: ruff 0.16 秒 / pyright 8.5 秒。
+py_staged=$(echo "$staged" | grep -E '^(src|gui)/.*[.]py$' || true)
+if [ -n "$py_staged" ]; then
+    if ! command -v uvx >/dev/null 2>&1; then
+        echo "✗ pre-commit: uvx が無いので、リンタと型検査を走らせられません。" >&2
+        echo "  ★ 走らせられなかったことを『指摘なし』と読みません（出ないことは信号でない）。" >&2
+        echo "  直す: winget install astral-sh.uv   もしくは   pip install uv" >&2
+        echo "  意図的に通すなら: git commit --no-verify" >&2
+        exit 1
+    fi
+
+    printf '▶ pre-commit: バグ系のリンタ…'
+    if ! out=$(uvx ruff@0.16.8 check --select=F,E9 --output-format=concise src/ gui/ 2>&1); then
+        printf '\n%s\n' "$out" >&2
+        echo "" >&2
+        echo "✗ pre-commit: ruff（F=バグ系 / E9=構文）が止めました。" >&2
+        echo "  ★ ここは書式の好みではありません ── 未定義の名前・重複した定義・" >&2
+        echo "    使われない輸入など、**動きに関わる**ものだけを見ています。" >&2
+        echo "  意図的に残すなら、その行に理由つきの # noqa を付けてください。" >&2
+        echo "  意図的に通すなら: git commit --no-verify" >&2
+        exit 1
+    fi
+    printf ' ✓\n'
+
+    printf '▶ pre-commit: 型の門（8 秒）…'
+    if ! out=$(uvx pyright@1.1.414 -p tests/pyright_gate.json 2>&1); then
+        printf '\n%s\n' "$out" >&2
+        echo "" >&2
+        echo "✗ pre-commit: 型の門が止めました。" >&2
+        echo "  見ているのは 5 つだけです: 経路によっては未代入 / 知らない名前 /" >&2
+        echo "  無い属性 / 無効なエスケープ / self・cls の書き間違い。" >&2
+        echo "  ★ 契約と、入れなかった規則の理由: tests/pyright_gate.md" >&2
+        echo "  道具の型情報の限界なら、その行に理由を書いて" >&2
+        echo "  # pyright: ignore[規則名] を付けてください（数を緩めるためには使わない）。" >&2
+        echo "  意図的に通すなら: git commit --no-verify" >&2
+        exit 1
+    fi
+    printf ' ✓\n'
+fi
+
 exit 0
