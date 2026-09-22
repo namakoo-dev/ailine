@@ -98,23 +98,54 @@ def test_inserting_a_column_does_not_claim_nothing_moved(before, tmp_path):
 
 # --- 事後条件の画面は 1 か所から出す（2026-09-22・盲検 3 体目 ⑧ / 4 体目 ⑦ の前段）------
 
-def test_the_postcondition_screen_is_printed_from_one_place():
-    """★★ 事後条件の結果を画面に出す 17 行は、**3 か所に写されていた**。
+def test_the_postcondition_wording_lives_in_exactly_one_file():
+    """★★ 画面に出る「事後条件」の言い方は、宣言した 1 ファイルの外に書かない。
 
-    ★★ しかもその中のコメントが「**1 実装・全経路**」と書いていた ── 宣言と実体の
-      食い違いで、片方だけ直す事故の予約だった（この repo が何度も踏んだ形）。
-    ★ 画面の語を直す（開発者語の言い換え）**前に**畳んだ。順番を逆にすると、
-      直した人が「片方だけ直した人」になる。
-    ★ 数え方: 画面に出す文が製品コードに 1 回だけ現れること
-      ── `report_postcondition` の中だけ。
+    ★★ 2026-09-22 の実測: この語は **14 箇所**に書き写されていた
+      （`⚠ 事後条件が破れた: ` だけで 9 箇所）。盲検の買い手役が 3・4・5 体目と
+      **続けて**「意味が分からない語」に挙げている ── つまり言い換える日が来る。
+      その日に「片方だけ直った」を作らないために、言い換えより先に畳んだ。
+
+    ★★ この番人の前の版は**字面の名簿**だった（3 つの文を手で並べて数えていた）。
+      言い換えた瞬間に名簿の語がコードから消え、`count == 1` は落ちるか、
+      名簿を書き換えれば**空振りで緑**になる ── どちらにせよ守れない。
+      ★ だから**語は宣言から引く**（`_shared.PC_NAME`）。番人は語を知らない。
     """
-    from _product_source import count_in_code
-    for line in ("適用されたが事後条件を満たさない",
-                 "事後条件を機械検証できなかった（操作",
-                 "事後条件を確認（操作"):
-        assert count_in_code(line) == 1, (
-            f"『{line}』が製品コードに {count_in_code(line)} 回ある ── "
-            "画面に出す所は report_postcondition 1 か所に畳むこと")
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from ailine_core.postconditions import _shared
+    from _product_source import product_strings
+
+    word = _shared.PC_NAME                      # ★ 字面を書かない
+    home = Path(_shared.__file__).resolve()
+    strays = [(f, ln, v) for f, ln, v in product_strings()
+              if word in v and Path(f).resolve() != home]
+    assert not strays, (
+        f"『{word}』を字面で持つ文字列が、宣言した {home.name} の外に "
+        f"{len(strays)} 件あります: {[(str(f), ln) for f, ln, _ in strays]}"
+        + chr(10) + "  画面の語は _shared.py の PC_* から組んでください "
+        "（言い換える日に 1 箇所で済むように）")
+
+
+def test_the_postcondition_screen_is_printed_from_one_place():
+    """★ 結果の画面を出す所は report_postcondition 1 か所（畳んだ形を縛る）。
+
+    ★ 数えるのは**記号**（PC_*）── 文面が変わっても、この契約は生き続ける。
+    """
+    from _product_source import code_only_text
+    lines = code_only_text().splitlines()
+
+    def printed_from(symbol):
+        return sum(1 for ln in lines if "print(" in ln and symbol in ln)
+
+    for symbol in ("PC_CONFIRMED", "PC_UNVERIFIABLE", "PC_UNMET"):
+        assert printed_from(symbol) == 1, (
+            f"{symbol} を画面に出す所が {printed_from(symbol)} 箇所 ── "
+            "結果の画面は report_postcondition 1 か所から出すこと")
+    # ★ PC_BROKEN だけは 9 箇所でよい ── 破れた**検算の種類**がそれぞれ別で、
+    #   言っている中身が違う。畳んでいるのは**言い方**であって、検算ではない。
+    assert printed_from("PC_BROKEN") >= 2, "PC_BROKEN の配線が外れている"
 
 
 def test_the_folded_reporter_still_decides_the_exit_code():

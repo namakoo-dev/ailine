@@ -143,3 +143,32 @@ def code_only_text() -> str:
 def count_in_code(needle: str) -> int:
     """★ コードの中だけでの出現回数（コメント・docstring は数えない）。"""
     return code_only_text().count(needle)
+
+
+def product_strings() -> list:
+    """製品コードの**画面に出うる文字列**を (ファイル, 行, 中身) で全部。
+
+    ★ docstring は除く（概念を説明する文は画面に出ない）。コメントは ast が元から見ない。
+    ★ なぜ在るか（2026-09-22）: 「この語が画面に出ていないこと」を確かめる番人が
+      **字面の名簿**で書かれていた ── 言い換えた日に、名簿の語が消えて**空振りで緑**になる
+      （恒真の罠）。★ 分母は宣言から引き、**在り処で**縛る:
+      「宣言した 1 ファイルの外に、その語を字面で持つ文字列が在ってはいけない」。
+    """
+    import ast
+    out = []
+    for f in product_files():
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        docs = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef,
+                                 ast.AsyncFunctionDef, ast.ClassDef)):
+                body = getattr(node, "body", [])
+                if (body and isinstance(body[0], ast.Expr)
+                        and isinstance(body[0].value, ast.Constant)
+                        and isinstance(body[0].value.value, str)):
+                    docs.add(id(body[0].value))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in docs):
+                out.append((f, node.lineno, node.value))
+    return out

@@ -250,6 +250,7 @@ from ailine_core.table_scan import (   # noqa: F401 ── 再輸出
 )
 from ailine_core.postconditions._shared import (   # noqa: F401 ── 再輸出
     COLOR_MAP, PIVOT_CAVEAT, _ZERO_TARGET_REASON,   # ★ 共有する文言・語彙
+    PC_NAME, PC_CONFIRMED, PC_UNVERIFIABLE, PC_UNMET, PC_BROKEN, PC_CHECK_FAILED,
     # ★ 分割: 事後条件の共有部分。_MOVED_ROWS_WHY は本体では使わないが、
     #   公開面の凍結が名前を守っているので ailine. から引ける状態を保つ。
     _MOVED_ROWS_WHY, _cells_for_shift, _extract_predicate, _moved_rows_note,
@@ -10720,7 +10721,7 @@ def run_postcondition(op: str, out_book: Path, resolved_args: dict, before_chart
             return fn(out_book, resolved_args, header_row, source_book=source_book)
         return fn(out_book, resolved_args, header_row)
     except Exception as e:
-        return "error", f"事後条件の検証に失敗: {type(e).__name__}: {e}"
+        return "error", f"{PC_CHECK_FAILED}: {type(e).__name__}: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -12665,7 +12666,7 @@ def report_postcondition(a, book, out_book, result, op, resolved, status, reason
         _finish_run(a, book, result, "postcondition_error")
         return 1
     if status == "fail":
-        print(f"{chr(10)}× 適用されたが事後条件を満たさない: {reason}")
+        print(f"{chr(10)}× {PC_UNMET}: {reason}")
         # ★ 2026-08-24: 「効かなかった」だけでなく心当たりも言う（1 実装・全経路）。
         for _ln in likely_cause_of_no_change(
                 out_book, resolved.get("_target_sheet") if isinstance(resolved, dict) else None):
@@ -12676,11 +12677,11 @@ def report_postcondition(a, book, out_book, result, op, resolved, status, reason
         return 1
     if status == "warn":
         # ★ 止血1: 検証対象が少なすぎる場合、「機械検証済み」とは名乗らない。
-        print(f"{chr(10)}⚠ 事後条件を機械検証できなかった（操作:{OP_LABELS.get(op, op)}）: {reason}")
+        print(f"{chr(10)}⚠ {PC_UNVERIFIABLE}（操作:{OP_LABELS.get(op, op)}）: {reason}")
     else:
         # ★ C9: 事後条件が見た中身（例「3 行を検証（降順）」）はここで述べる。✓ とは呼ばない
         #   ―― ✓ は原本(--copy なら .out)が確定した後の1行だけ（_finish_apply）。
-        print(f"{chr(10)}事後条件を確認（操作:{OP_LABELS.get(op, op)}）: {reason}")
+        print(f"{chr(10)}{PC_CONFIRMED}（操作:{OP_LABELS.get(op, op)}）: {reason}")
     result["ok"] = True
     return None
 
@@ -17029,7 +17030,7 @@ def _stack_json(result: dict) -> dict:
 
 def _stack_postcondition_fail(label: str, expected, actual) -> int:
     """事後条件①②が破れた時の唯一の出口。★ tmp_out は移さない（out は無傷のまま）。"""
-    print(f"⚠ 事後条件が破れた: {label}  元(採用時) {primitives.fmt_num(expected)} / "
+    print(f"⚠ {PC_BROKEN}: {label}  元(採用時) {primitives.fmt_num(expected)} / "
           f"出力(書いた直後) {primitives.fmt_num(actual)}")
     return 5
 
@@ -17040,7 +17041,7 @@ def _stack_attribution_fail(mismatch: dict) -> int:
        行数+Σ だけで帰属を見ていなかった ── Σ 保存のまま値だけ入れ替える変異が exit 0 で
        素通りする実機再現が根拠。行数/Σ と同じ『移す前の tmp_out』段で
        verify.verify_output（帰属検算まで含む独立読み）を呼び、ここで拾う。"""
-    print(f"⚠ 事後条件が破れた: 帰属  {mismatch['file']} の {mismatch['src_row']}行目 "
+    print(f"⚠ {PC_BROKEN}: 帰属  {mismatch['file']} の {mismatch['src_row']}行目 "
           f"列『{mismatch['column']}』 元(採用時) {primitives.fmt_num(mismatch['source'])} / "
           f"出力(書いた直後) {primitives.fmt_num(mismatch['output'])}")
     return 5
@@ -17516,7 +17517,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 if skipped:
                     print("  → この冊の行が『元』に数えられ、出力には現れないため差が出ます")
                     print("     見出しの行や列名を揃えるか、この冊を別フォルダへ移してお試しください")
-                print(f"⚠ 事後条件が破れた: {where}  元 {primitives.fmt_num(m['source'])} / "
+                print(f"⚠ {PC_BROKEN}: {where}  元 {primitives.fmt_num(m['source'])} / "
                       f"出力(書いた直後) {primitives.fmt_num(m['output'])}")
                 print(f"（{out.name} は書き込んでいません。元フォルダも変更していません）")
             return 1
@@ -17744,7 +17745,7 @@ def _own_match_output_status(path: Path, cond: dict) -> tuple:
 
 def _match_postcondition_fail(label: str, source, output) -> int:
     """M3 事後条件の破れ（両側の数字つき・design v2: 破れは exit 1）。"""
-    print(f"⚠ 事後条件が破れた: {label}  元(算出) {inspection.fmt_num(source)} / "
+    print(f"⚠ {PC_BROKEN}: {label}  元(算出) {inspection.fmt_num(source)} / "
           f"出力(書いた直後) {inspection.fmt_num(output)}")
     return 1
 
@@ -18859,7 +18860,7 @@ def cmd_forms(a: argparse.Namespace) -> int:
     #   型が禁じているので普通は起きない ── 「型が守っているはず」は検算ではない。
     n_blank, n_reason, missing = forms_collect.blanks_have_reasons(collected)
     if missing:
-        print(f"⚠ 事後条件が破れた: 理由の無い空欄 {len(missing)} 件 ── {missing[:5]}")
+        print(f"⚠ {PC_BROKEN}: 理由の無い空欄 {len(missing)} 件 ── {missing[:5]}")
         return 5
 
     # ★★ 2026-09-13（買い手役の初見・経理）: 項目が 1 つも取れなかった冊（送付状・稟議書）を
@@ -18975,7 +18976,7 @@ def cmd_forms(a: argparse.Namespace) -> int:
         written = len(xml_readback.data_row_numbers(readback, header_row=1))
         expected = len(rows) + (1 if month else 0)          # ★ --month は合計行が 1 行乗る
         if written != expected:
-            print(f"⚠ 事後条件が破れた: 一覧の行数  元 {expected} / 出力 {written}")
+            print(f"⚠ {PC_BROKEN}: 一覧の行数  元 {expected} / 出力 {written}")
             return 5
 
         # ★ 関所（stack と同じ線）: 人のファイル / 別コマンドの出力は名指しで止める。
@@ -19284,7 +19285,7 @@ def _split_postcondition_fail(label: str, expected, actual) -> int:
          そのまま出す（部分が 4 つに散るので 2 項では言い表せない）。文言を共用すると、
          どちらかの経路で意味の合わない語が出る。
     """
-    print(f"⚠ 事後条件が破れた: {label}  元(原本) {primitives.fmt_num(expected)} / "
+    print(f"⚠ {PC_BROKEN}: {label}  元(原本) {primitives.fmt_num(expected)} / "
           f"出力(書いた直後に読み戻した) {primitives.fmt_num(actual)}")
     print("（配る冊は 1 件も置いていません ── 証明できないものは配りません）")
     return 5
@@ -19562,7 +19563,7 @@ def _accounts_postcondition_fail(label: str, expected, actual) -> int:
          『どの行にどの科目を書いたか』の帰属で、数の等式ではない ── 文言を共用すると
          どちらかの経路で意味の合わない語が出る。
     """
-    print(f"⚠ 事後条件が破れた: {label}  算出 {expected} / 出力(書いた直後に読み戻した) {actual}")
+    print(f"⚠ {PC_BROKEN}: {label}  算出 {expected} / 出力(書いた直後に読み戻した) {actual}")
     print("（候補の冊は置いていません ── 読み戻して合わないものは出しません）")
     return EXIT_WRITE_BLOCKED
 
@@ -19640,7 +19641,7 @@ def cmd_accounts_apply(a: argparse.Namespace) -> int:
         diff = accounts_apply.diff_cells(journal, tmp, book.encoding)
         stray = [d for d in diff if not (d[0] in adopted and d[1] == col)]
         if stray:
-            print(f"⚠ 事後条件が破れた: 採用の行以外のセルが {len(stray)} 個変わりました（例: {stray[:3]}）")
+            print(f"⚠ {PC_BROKEN}: 採用の行以外のセルが {len(stray)} 個変わりました（例: {stray[:3]}）")
             print("（取込用のファイルは書いていません）")
             return 5
         out.parent.mkdir(parents=True, exist_ok=True)
