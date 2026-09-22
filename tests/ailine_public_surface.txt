@@ -129,7 +129,7 @@ value _COL_TAIL
 value _CONFIRM_FIELDS
 value _COUNT_WORDS
 value _CSV_REASON_LABELS
-class _CsvEvaluation(error: 'str' = None, sha256: 'str' = None, encoding: 'object' = None, parsed: 'object' = None, classifications: 'list' = None, warnings: 'list' = None) -> None
+class _CsvEvaluation(error: 'str | None' = None, sha256: 'str | None' = None, encoding: 'csv_quarantine.EncodingResult | None' = None, parsed: 'csv_quarantine.ParseResult | None' = None, classifications: 'list | None' = None, warnings: 'list | None' = None) -> None
 value _DEST_JA
 value _DOCTOR_BUSINESS_NOTES
 value _ENDSUB_RE
@@ -641,7 +641,7 @@ def empty_new_sheets(before_path, after_path) -> 'list'
 def example_task_for(op: 'str | None') -> 'str | None'
 def except_extraction_reading(book_meta: 'dict', sheet: 'str | None', task: 'str', header_row: 'int' = 1) -> 'tuple'
 def existing_sheet_replaced_advisory(before: 'dict', after: 'dict', *, op: 'str | None' = None, precondition_broken: 'str | None' = None) -> 'list'
-def exit_environment(message: 'str')
+def exit_environment(message: 'str') -> 'typing.NoReturn'
 def extent_gap(ws, header_row: 'int' = 1, key_col: 'int' = 1) -> 'dict'
 def extract_bas(text: 'str') -> 'str'
 def extract_chart_kind_from_task(task: 'str') -> 'str | None'

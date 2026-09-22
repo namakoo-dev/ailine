@@ -22,16 +22,24 @@ set -e
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-printf '▶ pre-commit: 改行コードと制御文字…'
+# ★★ 2026-09-22 追記: **公開面の凍結**もここで見る（0.19 秒）。この日、署名を 2 つ
+#   変えたまま push し、素の環境で 35 分走らせた末に止められた。番人は正しく鳴った ──
+#   鳴る場所が push の中だっただけ。★ しかもその時、**意図していなかった 3 つ目**を
+#   捕まえている（`from typing import NoReturn` で `ailine.NoReturn` が生えていた）。
+#   安い番人ほど手前に置く。
+printf '▶ pre-commit: 改行コード・制御文字・公開面…'
 # ★★ 2026-09-21 追記: 改行の**混在**（1 ファイルの中に CRLF と LF が同居）も
 #   ここで見る。同じ日に 2 回、CRLF のファイルへ LF で 1 行足して pre-push まで
 #   気づかなかった（17 分 x 2）。番人は在ったが、鳴る場所が push の中だった。
 #   ★ この番人は **git の index** を見る（tests/test_line_endings_stay_consistent.py の
 #     docstring 参照）。commit の瞬間なら staged の中身が index に在るので捕まる。
-if ! out=$(python -m pytest -q -p no:cacheprovider --no-header tests/test_no_control_chars.py tests/test_line_endings_stay_consistent.py 2>&1); then
+if ! out=$(python -m pytest -q -p no:cacheprovider --no-header tests/test_no_control_chars.py tests/test_line_endings_stay_consistent.py tests/test_public_surface_is_frozen.py 2>&1); then
     printf '\n%s\n' "$out" >&2
     echo "" >&2
-    echo "✗ pre-commit: 改行コード/制御文字/改行の混在の番人が止めました。" >&2
+    echo "✗ pre-commit: 改行コード/制御文字/改行の混在/公開面の番人が止めました。" >&2
+    echo "  ★ 公開面（名前と署名）を意図して変えたなら、記録を作り直してください:" >&2
+    echo "    AILINE_REGEN_SURFACE=1 python -m pytest tests/test_public_surface_is_frozen.py" >&2
+    echo "    ★ 作り直したら git diff で中身を読むこと（増えたぶんは意図した追加か）。" >&2
     echo "  よくある原因: Python から repo のファイルを書き戻す時に write_text() を使った" >&2
     echo "  （Windows では LF が CRLF に化けます）── 書き戻しは **write_bytes** で。" >&2
     echo '  直す: python -c "import pathlib;p=pathlib.Path(FILE);p.write_bytes(p.read_bytes().replace(b(CR LF),b(LF)))"' >&2

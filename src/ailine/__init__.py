@@ -68,7 +68,7 @@ from datetime import datetime, timezone
 #   引ける状態は保つ。★ 分割の diff に「名前の削除」を混ぜない。
 from datetime import date as _date_cls   # noqa: F401 ── 再輸出（公開面の凍結が守る名前）
 from pathlib import Path
-from typing import NoReturn
+import typing   # ★ 注釈のためだけ（`from typing import X` だと X が ailine の公開面に生える ── 凍結の番人が捕まえた）
 
 # ★ 2026-08-24（盲検の査定で最も痛い指摘・第 1 位）: この 2 つは openpyxl の import
 #   ガードより**後ろ**に置かれていて、openpyxl が無い環境では
@@ -91,7 +91,7 @@ EXIT_WRITE_BLOCKED = 5
 EXIT_APPLY_FAILED = 9
 
 
-def exit_environment(message: str) -> NoReturn:
+def exit_environment(message: str) -> typing.NoReturn:
     """実行の前提が満たされていない旨を述べて EXIT_ENVIRONMENT で落ちる。
        ★ sys.exit(文字列) は必ず 1 になる ── 意味を持つ番号で落ちる唯一の入口にする。
        ★ 2026-09-22: **戻らないこと**(`NoReturn`)を宣言する。これが無いと型検査器は
