@@ -47,7 +47,10 @@ def _text_of(node):
 def survey() -> dict:
     """実装から断りを数える ── 鍵は func#N（関数内の出現順）。"""
     out = {}
-    for path in [SRC / "ailine" / "__init__.py"] + sorted((SRC / "ailine_core").glob("*.py")):
+    from _product_source import src_files
+    # ★ 2026-09-23: 手で並べず芯から引く（再帰する ── 初版の `glob("*.py")` は
+    #   ailine_core/postconditions/ を見ていなかった）。視野は元と同じ src の下。
+    for path in src_files():
         src = path.read_bytes().decode("utf-8")
         tree = ast.parse(src)
         spans = sorted(((n.lineno, getattr(n, "end_lineno", n.lineno), n.name, n)

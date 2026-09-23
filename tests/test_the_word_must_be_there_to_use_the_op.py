@@ -125,11 +125,13 @@ def test_a_forced_op_is_left_alone():
     import inspect
     src = inspect.getsource(ailine._reread_plan_from_the_table) if hasattr(
         ailine, "_reread_plan_from_the_table") else ""
-    if not src:
-        import pathlib
-        src = pathlib.Path(ailine.__file__).read_text(encoding="utf-8")
-    i = src.index("required_word.enforce")
-    head = src[max(0, i - 400):i]
+    if src:
+        i = src.index("required_word.enforce")
+        head = src[max(0, i - 400):i]
+    else:
+        # ★ 2026-09-23: 本体を場所で読まない ── 文言の在るファイルの中で手前 400 字を切る。
+        from _product_source import window_around
+        head = window_around("required_word.enforce", after=0, before=400)
     assert "_forced_op" in head, head[-200:]
 
 

@@ -103,8 +103,8 @@ def test_the_refusal_names_the_sheets_that_do_exist():
 # --- ⑤ 配線（★ 純ロジックだけでは守れないことを今日学んだ）------------------
 
 def test_the_gate_asks_the_real_book_for_its_sheets():
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    gate = src.split("def cmd_refuse_vocab_miss")[1].split(chr(10) + "def ")[0]
+    import inspect
+    gate = inspect.getsource(ailine.cmd_refuse_vocab_miss)
     assert "sheet_named_but_missing(" in gate, "門に配線されていない"
     call = gate.split("sheet_named_but_missing(")[1][:80]
     assert "a.task" in call and "_sheets_now" in call, f"実表を渡していない: {call[:60]}"
@@ -147,10 +147,9 @@ def test_asking_is_wired_into_every_place_that_asks():
     ★ 出所: 09-05 に真因（LLM の作文を人に見せない）を直したのに、直した先が
       断りの経路だけで CLARIFY には通っていなかった（片配線）。
     """
-    src = (Path(__file__).resolve().parent.parent / "src" / "ailine"
-            / "__init__.py").read_text(encoding="utf-8")
-    asks = src.count('question = step.get("question")')
-    guards = src.count("if _answer_before_asking(a, book, book_meta,")
+    from _product_source import count_in_product
+    asks = count_in_product('question = step.get("question")')
+    guards = count_in_product("if _answer_before_asking(a, book, book_meta,")
     assert asks >= 1, "聞き返しを出す所が見つからない（番人が守る対象を失っている）"
     assert asks == guards, (
         f"聞き返し {asks} 箇所に対して、実表へ聞く配線が {guards} 箇所 ── "

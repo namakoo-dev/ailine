@@ -103,8 +103,10 @@ def test_the_guard_is_wired_where_all_three_paths_pass():
 
     ★ この repo が何度も踏んだ形。呼び出し側に配ると M 箇所だけ直る。
     """
-    src = (Path(ailine.__file__).resolve().parent.parent
-           / "ailine_core" / "dsl_step.py").read_text(encoding="utf-8")
+    import inspect
+    from ailine_core import dsl_step
+    # ★ 2026-09-23: 場所でなくモジュール名で引く。
+    src = inspect.getsource(dsl_step)
     assert "task_asks_to_undo_this_op" in src, (
         "resolve_dsl_step_args に配線されていません（呼び出し側に配らないこと）")
     assert src.count("deps.task_asks_to_undo_this_op(") == 1, (

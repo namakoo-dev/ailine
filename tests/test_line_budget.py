@@ -29,8 +29,11 @@ import ast
 import os
 from pathlib import Path
 
+from _product_source import MAIN_FILE
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AILINE_PY = REPO_ROOT / "src" / "ailine" / "__init__.py"
+#: ★ 本体という**ファイルそのもの**の行数を測る番人 ── 場所は芯（MAIN_FILE）から引く。
+AILINE_PY = MAIN_FILE
 CORE_DIR = REPO_ROOT / "src" / "ailine_core"
 BUDGET_FILE = Path(__file__).resolve().parent / "ailine_py_line_budget.txt"
 
@@ -65,10 +68,12 @@ def test_ailine_core_modules_are_portable():
     `ailine.py -> ailine_core` の一方通行に保つ。
     """
     offenders = {}
-    for py in sorted(CORE_DIR.glob("*.py")):
+    # ★ 2026-09-23: 再帰する ── 初版の `glob("*.py")` は ailine_core/postconditions/ を
+    #   見ておらず、そこが ailine を import しても鳴らなかった。
+    for py in sorted(CORE_DIR.rglob("*.py")):
         back = {r for r in _imported_roots(py) if r == "ailine"}
         if back:
-            offenders[py.name] = sorted(back)
+            offenders[py.relative_to(CORE_DIR).as_posix()] = sorted(back)
     assert not offenders, (
         f"ailine_core のモジュールが ailine を import している: {offenders}。"
         f"逆流があるとその部分だけを別プロジェクトに持ち出せない。"

@@ -100,12 +100,17 @@ def test_the_notice_is_printed_at_the_single_confluence():
 
     今日ここまでで片配線を 5 回踏んでいる ── 同じ形を新しく作らない。
     """
-    src = (Path(ailine.__file__).parent.parent / "ailine_core" / "dsl_step.py"
-           ).read_text(encoding="utf-8")
+    import inspect
+    from _product_source import count_in_product
+    from ailine_core import dsl_step
+    # ★ 2026-09-23: 場所でなく名前で引く（合流点のモジュール）。「呼び出し側に配っていない」は
+    #   本体 1 冊でなく製品全体で数える ── 定義を除いた呼び出しが合流点の 1 つだけであること。
+    src = inspect.getsource(dsl_step)
     assert src.count("render_projection_notice(") == 1, \
         "投影法の開示が dsl_step.py の 1 箇所でない"
-    main = Path(ailine.__file__).read_text(encoding="utf-8")
-    assert "render_projection_notice(" not in main, \
+    calls = (count_in_product("render_projection_notice(")
+             - count_in_product("def render_projection_notice("))
+    assert calls == 1, \
         "呼び出し側にも配っている（合流点 1 箇所に置くこと）"
 
 
@@ -116,9 +121,11 @@ def test_the_projected_value_read_is_folded_into_one_function():
       5 件の欠陥の共通の根）。帳票と様式写像が **6・7 件目**だったので、
       2 箇所に書き写さず 1 本を通す。
     """
-    post = Path(ailine.__file__).parent.parent / "ailine_core" / "postconditions"
-    derive = (post / "derive.py").read_text(encoding="utf-8")
-    move = (post / "move.py").read_text(encoding="utf-8")
+    import inspect
+    from ailine_core.postconditions import derive as _derive, move as _move
+    # ★ 2026-09-23: 場所でなくモジュール名で引く。
+    derive = inspect.getsource(_derive)
+    move = inspect.getsource(_move)
     # ★★ 2026-09-15: 呼び出しが増えた（抽出の述語・重複削除の鍵）。増やした理由を書く ──
     #   盲検の買い手役が「この道具が作った計算列で絞れない」を踏み、原因が
     #   「述語だけ式ビューを読んでいた」だった（同じ関数の中で行の比較は値ビュー＝片配線）。

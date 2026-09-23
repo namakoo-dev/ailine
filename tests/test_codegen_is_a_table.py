@@ -31,12 +31,9 @@ sys.path.insert(0, str(REPO / "src"))
 
 import ailine  # noqa: E402
 
-SRC = inspect.getsource(ailine)
-TREE = ast.parse(SRC)
-
-
 def _fn(name):
-    return next(n for n in TREE.body if isinstance(n, ast.FunctionDef) and n.name == name)
+    """★ 2026-09-23: モジュール丸ごと（＝本体 1 冊）を読まず、関数を**名前で**引く。"""
+    return ast.parse(inspect.getsource(getattr(ailine, name))).body[0]
 
 
 def test_the_dispatcher_stays_small():
@@ -47,7 +44,7 @@ def test_the_dispatcher_stays_small():
 
 def test_no_op_branch_remains_in_the_dispatcher():
     """★ 畳んだ形が戻らないこと（次に op を足す人が if を書き足せる形にしない）。"""
-    body = ast.get_source_segment(SRC, _fn("codegen_dsl"))
+    body = inspect.getsource(ailine.codegen_dsl)
     found = re.findall(r'op == "([A-Z_]+)"', body or "")
     assert not found, (
         f"codegen_dsl に op ごとの分岐が戻っている: {found} ── "

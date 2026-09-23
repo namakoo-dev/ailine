@@ -18,12 +18,12 @@ sys.path.insert(0, str(REPO / "src"))
 
 from ailine_core.cli_render import render_independent_verify_report          # noqa: E402
 
-AILINE_PY = REPO / "src" / "ailine" / "__init__.py"
+from _product_source import count_in_product, product_files  # noqa: E402 ── ★ 本体決め打ちでなく製品全体を読む
 
 
 def _calls(name: str) -> int:
-    tree = ast.parse(AILINE_PY.read_text(encoding="utf-8"))
-    return sum(1 for n in ast.walk(tree)
+    return sum(1 for p in product_files()
+               for n in ast.walk(ast.parse(p.read_bytes().decode("utf-8")))
                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name)
 
 
@@ -38,9 +38,10 @@ def test_every_report_of_this_kind_takes_its_exit_code_from_one_place():
 
 def test_no_route_writes_the_verdict_by_hand():
     """★ 変異の裏返し ── 手書きの `5 if ... else 0` が 1 つでも戻ったら赤。"""
-    text = AILINE_PY.read_text(encoding="utf-8")
+    from _product_source import product_text
+    text = product_text()
     # ★ 先に「探す場所が空でない」ことを確かめる（`not in` は空なら必ず通る）。
-    assert text.count("_independent_verify_exit(result)") >= 3, (
+    assert count_in_product("_independent_verify_exit(result)") >= 3, (
         "畳んだ関数を通す経路が 3 本未満 ── 分母が痩せている（この試験は無意味になる）")
     assert '5 if result.get("mismatch") else 0' not in text, (
         "番号を手書きしている行がある ── `_independent_verify_exit` を通すこと")

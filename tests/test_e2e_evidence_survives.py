@@ -16,12 +16,16 @@
 import re
 from pathlib import Path
 
+from _product_source import product_files
+
 REPO = Path(__file__).resolve().parent.parent
 E2E = REPO / "e2e_work"
 
 # 名指しで参照している側（★ ここが増えたら足す。減ったらこの試験も見直す）
-CITERS = [
-    "src/ailine/__init__.py",
+# ★ 2026-09-23: 製品コードは本体 1 冊を名指しせず芯から引く（分割で参照が動いても拾う）。
+#   並べるのは**実際に証跡を名指ししている**製品ファイルだけ（下の説明の検査も同じ一覧を読む）。
+CITERS = [p.relative_to(REPO).as_posix() for p in product_files()
+          if "e2e_work/" in p.read_bytes().decode("utf-8", errors="replace")] + [
     "tests/test_ailine.py",
     "bench/realworld/BASELINE.md",
     "docs/behavior-corpus/nodes/verification-scope-honesty.md",

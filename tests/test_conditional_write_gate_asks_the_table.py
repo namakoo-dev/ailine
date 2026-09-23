@@ -90,17 +90,17 @@ def test_callers_without_the_table_keep_the_old_behaviour(roster):
 
 def test_the_position_words_are_not_re_listed():
     """★ 語を新しく列挙しない ── 既に在る _ANCHOR_* を使うこと（列挙は漏れる）。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src[src.index("def task_asks_for_a_conditional_write"):
-               src.index("\ndef ", src.index("def task_asks_for_a_conditional_write") + 10)]
+    import inspect
+    body = inspect.getsource(ailine.task_asks_for_a_conditional_write)
     assert "_ANCHOR_AFTER" in body and "_ANCHOR_BEFORE" in body
     assert '"の下に"' not in body, "位置の語を手で書いている"
 
 
 def test_the_gate_is_passed_the_table_at_its_only_caller():
     """★ 呼び出し側 1 箇所から実表を渡していること。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    assert src.count("task_asks_for_a_conditional_write(") == 2, "定義 1 + 呼び出し 1 のはず"
+    from _product_source import count_in_product, product_text
+    src = product_text()
+    assert count_in_product("task_asks_for_a_conditional_write(") == 2, "定義 1 + 呼び出し 1 のはず"
     assert "task_asks_for_a_conditional_write(\n                a.task, book_meta, _sheet_h)" in src \
         or "a.task, book_meta, _sheet_h)" in src, "実表を渡していない"
 
@@ -166,4 +166,5 @@ def test_extraction_with_a_negation_is_untouched(roster):
     for task in ("営業以外を抜き出して", "営業以外の行だけ別シートに"):
         assert not ailine.task_asks_for_a_conditional_write(task, roster, "名簿"), task
     # ★ 抽出の読み直しは別の器官（except_extraction_reading）── そちらは触っていない
-    assert "except_extraction_reading" in Path(ailine.__file__).read_text(encoding="utf-8")
+    from _product_source import product_text
+    assert "except_extraction_reading" in product_text()

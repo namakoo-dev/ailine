@@ -37,6 +37,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
 
+# ★ 製品コードの並びは tests/_product_source（芯）から引く（scripts/blind_run.py と同じ作法）。
+sys.path.insert(0, str(REPO / "tests"))
+from _product_source import src_files  # noqa: E402
+
 
 def _modname(p: Path) -> str:
     rel = p.relative_to(SRC).with_suffix("")
@@ -45,7 +49,7 @@ def _modname(p: Path) -> str:
 
 
 def _sources() -> tuple:
-    prod = [SRC / "ailine" / "__init__.py"] + sorted((SRC / "ailine_core").rglob("*.py"))
+    prod = src_files()
     around = (sorted((REPO / "tests").rglob("*.py")) + sorted((REPO / "bench").rglob("*.py"))
               + sorted((REPO / "scripts").rglob("*.py")))
     return prod, around

@@ -27,22 +27,23 @@ NL = chr(10)
 
 def test_the_history_writer_is_a_single_function():
     """★ 履歴を書く実装が 2 つ無いこと（append_history の呼び出しは 1 箇所）。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src.split("def _record_history")[1].split(NL + "def ")[0]
+    import inspect
+    from _product_source import count_in_product
+    body = inspect.getsource(ailine._record_history)
     assert "append_history(" in body, "畳んだ関数が履歴を書いていない"
-    assert src.count("append_history(build_history_entry(") == 1, (
+    assert count_in_product("append_history(build_history_entry(") == 1, (
         "履歴を書く実装が 2 箇所ある（片方だけ直る）")
 
 
 def test_finish_run_goes_through_it():
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src.split("def _finish_run")[1].split(NL + "def ")[0]
+    import inspect
+    body = inspect.getsource(ailine._finish_run)
     assert "_record_history(" in body, "_finish_run が畳んだ関数を通っていない"
 
 
 def test_the_clarify_dead_end_is_recorded():
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src.split("def _translate_and_dispatch")[1].split(NL + "def ")[0]
+    import inspect
+    body = inspect.getsource(ailine._translate_and_dispatch)
     clarify = body.split('if op == "CLARIFY":')[1][:1400]
     assert "_record_history(" in clarify, "聞き返しが台帳に残らない"
     assert '"clarify"' in clarify, "理由のラベルが付いていない"

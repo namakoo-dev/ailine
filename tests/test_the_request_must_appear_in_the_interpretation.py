@@ -102,9 +102,14 @@ def test_the_judgment_lives_in_exactly_one_place():
       呼び出し側は材料を渡すだけ。★ ここが 2 以上になったら、**片方だけ直す**事故が
       起きる形に戻っている（同じ形の再来を 08-21〜08-24 に 3 波観測している）。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    assert src.count("unaccounted_request_words") == 1, "判定が 2 箇所以上に散っている"
-    # ★ 呼び出し側（_finish_apply(...) を呼ぶ行）の周辺に判定が無いこと
-    for m in re.finditer(r"_finish_apply\(a, book", src):
-        near = src[max(0, m.start() - 1200):m.start()]
-        assert "unaccounted_request_words" not in near, "呼び出し側が判定を持っている"
+    from _product_source import count_in_code, product_files
+    # ★ 2026-09-23: 本体 1 冊でなく製品全体で数える。定義（residue）と説明文は数えない ──
+    #   数えるのは**コードの中の使用**で、それが 1 箇所であること。
+    n = count_in_code("unaccounted_request_words") - count_in_code("def unaccounted_request_words")
+    assert n == 1, "判定が 2 箇所以上に散っている"
+    # ★ 呼び出し側（_finish_apply(...) を呼ぶ行）の周辺に判定が無いこと（窓はファイルごと）
+    for path in product_files():
+        src = path.read_bytes().decode("utf-8").replace(chr(13) + chr(10), chr(10))
+        for m in re.finditer(r"_finish_apply\(a, book", src):
+            near = src[max(0, m.start() - 1200):m.start()]
+            assert "unaccounted_request_words" not in near, "呼び出し側が判定を持っている"

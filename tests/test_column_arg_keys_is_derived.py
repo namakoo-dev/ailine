@@ -101,11 +101,13 @@ def test_the_roster_stays_a_literal_so_the_board_can_see_it():
     だから「導出は試験の側に置き、本体はリテラルで持つ」形にした。ここはその形を固定する。
     """
     import ast
-    src = (REPO / "src" / "ailine" / "__init__.py").read_bytes().decode("utf-8")
-    for n in ast.walk(ast.parse(src)):
-        if (isinstance(n, ast.Assign)
-                and any(getattr(t, "id", "") == "_COLUMN_ARG_KEYS" for t in n.targets)):
-            assert isinstance(n.value, ast.Dict), (
-                "_COLUMN_ARG_KEYS が dict リテラルでなくなった ── 配線盤の走査から消えます")
-            return
+    from _product_source import src_files
+    # ★ 2026-09-23: 本体 1 冊でなく src の下を全部見る（配線盤の走査と同じ視野）。
+    for path in src_files():
+        for n in ast.walk(ast.parse(path.read_bytes().decode("utf-8"))):
+            if (isinstance(n, ast.Assign)
+                    and any(getattr(t, "id", "") == "_COLUMN_ARG_KEYS" for t in n.targets)):
+                assert isinstance(n.value, ast.Dict), (
+                    "_COLUMN_ARG_KEYS が dict リテラルでなくなった ── 配線盤の走査から消えます")
+                return
     raise AssertionError("_COLUMN_ARG_KEYS の代入が見つからない")

@@ -96,7 +96,6 @@ def test_both_address_resolvers_know_the_edge_words():
 
     ★ 配線の形を静的に縛る（実機を起こさずに片配線を止める）。
     """
-    import pathlib
-    src = pathlib.Path(ailine.__file__).read_text(encoding="utf-8")
-    uses = src.count("_ANCHOR_TOP + _ANCHOR_BOTTOM")
+    from _product_source import count_in_product
+    uses = count_in_product("_ANCHOR_TOP + _ANCHOR_BOTTOM")
     assert uses >= 2, f"端の語を見ている住所の解決が {uses} 箇所（2 つとも要る）"

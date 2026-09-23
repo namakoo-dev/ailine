@@ -30,7 +30,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 
-MAIN = REPO / "src" / "ailine" / "__init__.py"
+from _product_source import product_files  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
+
+
+def _trees():
+    """★ 2026-09-23: 本体 1 冊でなく製品全体の AST（呼び出しが ailine_core へ移っても数える）。"""
+    return [ast.parse(p.read_bytes().decode("utf-8")) for p in product_files()]
 
 
 def ops_passed_literally() -> set:
@@ -38,9 +43,8 @@ def ops_passed_literally() -> set:
 
     ★ 実装から数える。ここを手書きにすると、呼び出しを足した日に誰も気づかない。
     """
-    tree = ast.parse(MAIN.read_bytes().decode("utf-8"))
     out = set()
-    for node in ast.walk(tree):
+    for node in (n for tree in _trees() for n in ast.walk(tree)):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id == "translate_task_fixed_op" and len(node.args) > 1
                 and isinstance(node.args[1], ast.Constant)
@@ -51,9 +55,8 @@ def ops_passed_literally() -> set:
 
 def ops_passed_as_a_variable() -> int:
     """op が**変数**の呼び出しの数（どの op でも来うる口）。"""
-    tree = ast.parse(MAIN.read_bytes().decode("utf-8"))
     n = 0
-    for node in ast.walk(tree):
+    for node in (x for tree in _trees() for x in ast.walk(tree)):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id == "translate_task_fixed_op" and len(node.args) > 1
                 and not isinstance(node.args[1], ast.Constant)):

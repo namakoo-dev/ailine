@@ -83,10 +83,9 @@ def test_both_gates_read_the_same_judgement():
     ★ 門ごとに書き足すと、また片方だけ直る（09-08 に 8 回見た形）。
       ここは配線の形を静的に縛る ── 実機を起こさずに、片配線を機械で止める。
     """
-    import pathlib
-    src = (pathlib.Path(ailine.__file__)).read_text(encoding="utf-8")
-    lands = src.count('"op": "SET_CELL_VALUE"')
-    reads = src.count("_wants_new_row")
+    from _product_source import count_in_product
+    lands = count_in_product('"op": "SET_CELL_VALUE"')
+    reads = count_in_product("_wants_new_row")
     assert lands == 2, f"1 セル書換へ着地する所が {lands} 箇所（2 のはず）── 増えたら配線も要る"
     # ★ 1 回の代入 + 2 つの門で読む = 3
     assert reads == 3, f"_wants_new_row の出現が {reads}（代入 1 + 門 2 = 3 のはず）"

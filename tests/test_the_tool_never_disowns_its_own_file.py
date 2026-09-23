@@ -144,19 +144,21 @@ def test_every_gate_exit_goes_through_the_finisher():
     """
     import ast
 
-    src = (REPO / "src" / "ailine" / "__init__.py").read_bytes().decode("utf-8")
-    tree = ast.parse(src)
+    from _product_source import product_files
+    # ★ 2026-09-23: 本体 1 冊でなく製品全体の try を見る（出口が ailine_core へ移っても縛る）。
     seen, bad = 0, []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Try):
-            continue
-        for handler in node.handlers:
-            text = ast.get_source_segment(src, handler) or ""
-            if "GateAbort" not in text:
+    for path in product_files():
+        src = path.read_bytes().decode("utf-8")
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Try):
                 continue
-            seen += 1
-            if "_finish_" not in text:
-                bad.append(str(handler.lineno))
+            for handler in node.handlers:
+                text = ast.get_source_segment(src, handler) or ""
+                if "GateAbort" not in text:
+                    continue
+                seen += 1
+                if "_finish_" not in text:
+                    bad.append(f"{path.name}:{handler.lineno}")
     assert seen, "★ 関所から抜ける出口が 1 つも見つからない（この検査が空回りしている）"
     assert not bad, (
         "★ 関所で抜ける出口が後始末を通っていない（`.out` が孤児になる）: 行 "

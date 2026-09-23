@@ -26,21 +26,49 @@ sys.path.insert(0, str(REPO / "src"))
 
 import ailine  # noqa: E402
 
-SRC = inspect.getsource(ailine)
-LINES = SRC.splitlines()
+from _product_source import product_files  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
+
+#: ★ 2026-09-23: `inspect.getsource(ailine)` は**モジュール丸ごと＝本体 1 冊**だった。
+#:   原本へ書く口が ailine_core へ移っても数えられるよう、製品全体を**ファイルごとに**行で持つ
+#:   （持ち主の関数を上へ辿るとき、隣のファイルへはみ出さないように）。
+FILE_LINES = [p.read_bytes().decode("utf-8").splitlines() for p in product_files()]
 
 
-def _owner(i: int) -> str:
-    for j in range(i, -1, -1):
-        m = re.match(r"def (\w+)\(", LINES[j])
-        if m:
-            return m.group(1)
-    return "?"
+def _owners_of(lines: list) -> list:
+    """行番号（0 起点）→ 持ち主の関数名。持ち主は**モジュール直下の関数か、クラス直下のメソッド**。
+
+    ★ 2026-09-23: 初版は「行頭の def を上へ辿る」だった。GUI のメソッド（`Handler.do_POST`）の中の口を、
+      上にある別の関数（`_default_dir`）の物と名指しした。字下げした def も数えるように緩めると、
+      今度は内側の関数（`_finish_apply` の中の `_say`）を持ち主にした ── ★ 構文で決める。
+    """
+    import ast
+    out = ["?"] * (len(lines) + 1)
+    try:
+        tree = ast.parse(chr(10).join(lines))
+    except SyntaxError:
+        return out
+    fns = []
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            fns.append(n)
+        elif isinstance(n, ast.ClassDef):
+            fns += [m for m in n.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for f in fns:
+        for k in range(f.lineno - 1, f.end_lineno):
+            out[k] = f.name
+    return out
+
+
+OWNERS = [_owners_of(lines) for lines in FILE_LINES]
+
+
+def _owner(lines: list, i: int) -> str:
+    return OWNERS[next(k for k, ls in enumerate(FILE_LINES) if ls is lines)][i]
 
 
 def _body(fn: str) -> str:
-    i = SRC.index(f"def {fn}(")
-    return SRC[i:SRC.index(chr(10) + "def ", i + 10)]
+    """★ 2026-09-23: 名前で引く（本体の中の位置で切らない）。"""
+    return inspect.getsource(getattr(ailine, fn))
 
 
 # --- ① 原本へ実際にバイトを書く低層（ここが増えたら経路が増えたということ）--------------
@@ -48,6 +76,11 @@ WRITERS = {
     "_finish_apply": "run の適用結果を原本へ被せる（原子的置換）",
     "restore_backup": "undo/restore が世代から原本へ戻す",
     "redo_last_undo": "redo が退避から原本へ戻す",
+    # ★★ 2026-09-23 に視野を GUI まで広げて初めて見えた口（それまでは本体 1 冊しか見ていなかった）。
+    #   GUI の「原本に反映」は、下書きを原本へ `shutil.copy2` で被せるだけ ──
+    #   ★ **ロックの関所もバックアップも通らない**（CLI は必ず控えを取り `ailine undo` で戻せると言う）。
+    #   既知の欠陥として載せる（切り出しの commit では直さない ── 挙動が変わる側）。直したらこの注記を外す。
+    "do_POST": "GUI の「原本に反映」が下書きを原本へ直にコピー（★ 関所・控え無し＝既知の欠陥）",
 }
 
 # --- ② 人の依頼が入る入口（ここが関所を通っていなければ素通り）--------------------------
@@ -61,19 +94,20 @@ ENTRIES = {
 
 def _actual_writers() -> set:
     out = set()
-    for i, ln in enumerate(LINES):
-        s = ln.strip()
-        if s.startswith("#"):
-            continue
-        if "atomic_replace_inplace(" in ln and "def atomic_replace_inplace" not in ln:
-            out.add(_owner(i))
-        if re.search(r"shutil\.copy2\([^)]*,\s*book\)", ln):
-            out.add(_owner(i))
+    for lines in FILE_LINES:
+        for i, ln in enumerate(lines):
+            s = ln.strip()
+            if s.startswith("#"):
+                continue
+            if "atomic_replace_inplace(" in ln and "def atomic_replace_inplace" not in ln:
+                out.add(_owner(lines, i))
+            if re.search(r"shutil\.copy2\([^)]*,\s*book\)", ln):
+                out.add(_owner(lines, i))
     return out
 
 
 def _actual_gate_callers() -> set:
-    return {_owner(i) for i, ln in enumerate(LINES)
+    return {_owner(lines, i) for lines in FILE_LINES for i, ln in enumerate(lines)
              if "refuse_if_locked(" in ln and "def refuse_if_locked" not in ln}
 
 

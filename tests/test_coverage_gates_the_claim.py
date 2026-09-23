@@ -38,8 +38,8 @@ def test_the_flag_ignores_non_dicts():
 
 def test_extent_gap_raises_the_flag_for_rows_and_for_columns():
     """★ 行が届かない時も、列が届かない時も旗が立つこと（片方だけにしない）。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src[src.index("def note_extent_gap"):src.index("\ndef check_chart")]
+    import inspect
+    body = inspect.getsource(ailine.note_extent_gap)
     assert body.count("_mark_coverage_incomplete(") == 2, \
         "行側・列側の両方から旗を立てること（片配線にしない）"
 
@@ -50,17 +50,21 @@ def test_finish_apply_is_the_only_place_that_decides():
     ここは既に同じ式を 4 回書き写していた（machine_verified=(status != "warn" and ...)）。
     同じ形の片配線を新しく作らない。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
+    import inspect
+    from _product_source import count_in_product, product_files
     # ★ 2026-09-23: 引数（helper_files）が 1 つ後ろに増え、閉じ括弧の位置が動いた。
     #   数えるのは「渡しているか」なので、括弧を含めない。
-    assert src.count("coverage_incomplete=_coverage_sink") == 4, "4 経路すべてから渡すこと"
-    body = src[src.index("def _finish_apply"):src.index("\ndef ", src.index("def _finish_apply") + 10)]
+    assert count_in_product("coverage_incomplete=_coverage_sink") == 4, "4 経路すべてから渡すこと"
+    body = inspect.getsource(ailine._finish_apply)
     assert "machine_verified = False" in body, "落とす判断は _finish_apply の中に置く"
-    # ★ 呼び出し側が「落とすかどうか」を決めていないこと
-    for chunk in src.split("coverage_incomplete=_coverage_sink")[:-1]:
-        tail = chunk[-400:]
-        assert "machine_verified=False" not in tail.replace(" ", ""), \
-            "呼び出し側で判断している（材料だけ渡すこと）"
+    # ★ 呼び出し側が「落とすかどうか」を決めていないこと（★ 2026-09-23: 手前の窓は
+    #   ファイルごとに切る ── 本体 1 冊でなく製品全体を見る）
+    for path in product_files():
+        text = path.read_bytes().decode("utf-8").replace(chr(13) + chr(10), chr(10))
+        for chunk in text.split("coverage_incomplete=_coverage_sink")[:-1]:
+            tail = chunk[-400:]
+            assert "machine_verified=False" not in tail.replace(" ", ""), \
+                "呼び出し側で判断している（材料だけ渡すこと）"
 
 
 def test_the_note_and_the_flag_stay_separate():
@@ -69,12 +73,14 @@ def test_the_note_and_the_flag_stay_separate():
     数値でない行を検算から外した回（範囲は分かっている）は今までどおり △ に留める。
     旗を note_unverified 側に混ぜると、その区別が消える。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    shared = (Path(ailine.__file__).parent.parent / "ailine_core" / "postconditions"
-              / "_shared.py").read_text(encoding="utf-8")
+    import inspect
+    from _product_source import product_text
+    # ★ 2026-09-23: 場所でなく名前で引く ── note_unverified が住むモジュールを見る。
+    from ailine_core.postconditions._shared import note_unverified
+    shared = inspect.getsource(inspect.getmodule(note_unverified))
     assert "_coverage_incomplete" not in shared, \
         "note_unverified の側に旗を持ち込まない（区別が消える）"
-    assert "_mark_coverage_incomplete" in src
+    assert "_mark_coverage_incomplete" in product_text()
 
 
 @pytest.mark.local
@@ -118,8 +124,8 @@ def test_a_declared_removal_explains_one_lost_validation():
 
 def test_the_removal_list_comes_from_the_declaration_not_a_hand_written_list():
     """★ op 名の if を書かない ── 宣言表から引くこと（列挙は漏れる）。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src[src.index("def _removal_was_declared"):src.index("\ndef check_round_trip_fidelity")]
+    import inspect
+    body = inspect.getsource(ailine._removal_was_declared)
     assert "OP_WRITE_TARGET" in body and "WRITE_REMOVE" in body
     assert "DELETE_COLUMN" not in body, "op 名を手で書いている（宣言から引くこと）"
 

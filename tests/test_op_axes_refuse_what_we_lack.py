@@ -126,12 +126,14 @@ def test_callers_pass_the_headers():
       渡しているのに名前が違うだけで赤くなった ── 番人が**意味でなく綴りを見ていた**。
       ★ 見るものを「引数が見出しに由来すること」へ変えた。空や None は今も赤い。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    n = src.count("judge_axis(")
+    from _product_source import count_in_product, product_files
+    # ★ 2026-09-23: 本体 1 冊でなく製品全体で数え、引数は**ファイルごとに**切る。
+    n = count_in_product("judge_axis(") - count_in_product("def judge_axis(")
     assert n >= 3, "配線が足りない（成功経路の関所を含めて 3 本以上）"
-    for chunk in src.split("judge_axis(")[1:]:
-        args = chunk.split(")")[0][:160]
-        assert "header" in args or "_ax_head" in args, f"実表を渡していない: {args[:70]}"
+    for path in product_files():
+        for chunk in path.read_bytes().decode("utf-8").split("judge_axis(")[1:]:
+            args = chunk.split(")")[0][:160]
+            assert "header" in args or "_ax_head" in args, f"実表を渡していない: {args[:70]}"
 
 
 @pytest.mark.local

@@ -21,6 +21,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
 
+#: ★ 本体（`src/ailine/__init__.py`）の場所を書く**唯一の所**（2026-09-23）。
+#:   契約を読む番人はここを使わない ── 名前で引く（`inspect.getsource(ailine.X)`）か、
+#:   下の芯を通す。★ 使ってよいのは「本体という**ファイルそのもの**を測る」番人だけで、
+#:   それは tests/test_guard_ledger.py の FILE_ITSELF に理由つきで載る。
+MAIN_FILE = SRC / "ailine" / "__init__.py"
+
 
 def product_files() -> list:
     """製品コードの .py を全部（本体 ＋ ailine_core ＋ ★ GUI）。
@@ -30,10 +36,22 @@ def product_files() -> list:
       「1 箇所だけ」の契約が「どこにも無い」と誤判定された。
       ★ 画面も製品の一部 ── 出荷されるコードは src/ だけではない。
     """
-    files = [SRC / "ailine" / "__init__.py"]
+    files = [MAIN_FILE]
     files += sorted(p for p in (SRC / "ailine_core").rglob("*.py"))
     files += sorted((REPO / "gui").glob("*.py"))
     return files
+
+
+def src_files() -> list:
+    """製品コードのうち **src/ の下**だけ（本体 ＋ ailine_core を再帰・GUI を除く）。
+
+    ★ なぜ別に要るか（2026-09-23）: `ailine_core` を**手で並べていた**番人を
+      芯へ寄せたとき、元の視野が「本体＋ailine_core」だったものがある
+      （モジュール名を src からの相対で組む道具・宣言表が src の関数だけを指す番人）。
+      視野を GUI まで勝手に広げると、直しが**挙動の変更**になる ── 広げるかは別に決める。
+    ★ 手で並べない ── product_files() から引くので、分割しても空振りしない。
+    """
+    return [p for p in product_files() if SRC in p.parents]
 
 
 def count_in_product(needle: str) -> int:

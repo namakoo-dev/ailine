@@ -95,16 +95,18 @@ def _clarify_branches() -> list:
     ★ 数を凍結しない ── 枝が増えたらこの試験が自動でその枝も縛る。
     """
     import ast
-    src = (REPO / "src" / "ailine" / "__init__.py").read_bytes().decode("utf-8")
-    tree = ast.parse(src)
+    from _product_source import product_files
+    # ★ 2026-09-23: 本体 1 冊でなく製品コード全体の枝を見る（分割で枝が動いても空振りしない）。
     out = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        test = ast.get_source_segment(src, node.test) or ""
-        if '"CLARIFY"' in test and "op ==" in test:
-            out.append((node.lineno, "\n".join(
-                ast.get_source_segment(src, s) or "" for s in node.body)))
+    for path in product_files():
+        src = path.read_bytes().decode("utf-8")
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.If):
+                continue
+            test = ast.get_source_segment(src, node.test) or ""
+            if '"CLARIFY"' in test and "op ==" in test:
+                out.append((f"{path.name}:{node.lineno}", "\n".join(
+                    ast.get_source_segment(src, s) or "" for s in node.body)))
     return out
 
 

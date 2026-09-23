@@ -85,8 +85,6 @@ def test_the_split_is_driven_by_the_declaration_not_by_a_list():
     creates = {op for op, wt in ailine.OP_WRITE_TARGET.items()
                if ailine.WRITE_NEW_COLUMN in (getattr(wt, "writes", None) or ())}
     assert creates == {"ADD_COLUMN", "COMPUTE_COLUMN", "LOOKUP_FILL", "SPLIT_CELL"}, creates
-    src = (Path(__file__).resolve().parent.parent
-           / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    i = src.index("def fabricated_subject_refusal")
-    body = src[i:src.index("\ndef ", i + 10)]
+    import inspect
+    body = inspect.getsource(ailine.fabricated_subject_refusal)
     assert "OP_WRITE_TARGET" in body, "宣言から引いていない（手書きの一覧になっている）"

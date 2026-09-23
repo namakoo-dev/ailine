@@ -15,8 +15,9 @@ import ast
 import re
 from pathlib import Path
 
+from _product_source import src_files
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AILINE_PY = REPO_ROOT / "src" / "ailine" / "__init__.py"
 CORE_DIR = REPO_ROOT / "src" / "ailine_core"
 REGISTRY_FILE = CORE_DIR / "filetypes.py"
 
@@ -24,8 +25,9 @@ _EXT_LITERAL_RE = re.compile(r"^\.[A-Za-z0-9]{1,6}$")
 
 
 def _files_to_scan():
-    yield AILINE_PY
-    for py in sorted(CORE_DIR.glob("*.py")):
+    # ★ 2026-09-23: 手で並べず芯から引く（再帰する ── 初版の `glob("*.py")` は
+    #   ailine_core/postconditions/ を見ていなかった）。視野は元と同じ src の下。
+    for py in src_files():
         if py.resolve() != REGISTRY_FILE.resolve():
             yield py
 

@@ -112,22 +112,25 @@ def test_the_gate_obeys_the_explicit_permission(monkeypatch):
 
 def test_the_url_can_only_be_built_in_one_place():
     """★ 叩く場所は 4 箇所ある。門を迂回する 5 箇所目が生えたらここが赤くなる。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
+    from _product_source import product_text
+    src = product_text()
     # ★ 画面に宛先を出すだけの行（「ollama に繋がらない (…)」）は URL の組み立てではない。
     #   組み立ては「{OLLAMA} の直後に道が続く」形だけを数える。
     builds = [ln.strip() for ln in src.splitlines()
               if re.search(r"\{OLLAMA\}\s*(?:/|\{)", ln)]
     assert len(builds) == 1, f"OLLAMA から直接 URL を組んでいる箇所がある: {builds}"
-    gate = src.split("def ollama_url")[1].split(NL + "def ")[0]
+    import inspect
+    gate = inspect.getsource(ailine.ollama_url)     # ★ 2026-09-23: 位置で切らず名前で引く
     assert "{OLLAMA}" in gate, "唯一の使用箇所が門の中に無い"
     assert "host_is_local" in gate and "ALLOW_REMOTE_MODEL" in gate
 
 
 def test_every_command_that_talks_to_ollama_has_the_flag():
     """★ 旗の定義は 1 箇所（_add_allow_remote）── run と doctor の両方に届くこと。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    assert src.count("add_argument(local_only.ALLOW_FLAG") == 1, "旗の定義が 2 箇所ある"
-    parser = src.split("def build_parser")[1].split(NL + "def ")[0]
+    import inspect
+    from _product_source import count_in_product
+    assert count_in_product("add_argument(local_only.ALLOW_FLAG") == 1, "旗の定義が 2 箇所ある"
+    parser = inspect.getsource(ailine.build_parser)
     assert parser.count("_add_allow_remote(") == 2, "run / doctor の片方に旗が無い"
     for cmd in ("run", "doctor"):
         out = subprocess.run([sys.executable, "-m", "ailine", cmd, "--help"],

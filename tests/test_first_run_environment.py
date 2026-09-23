@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src" / "ailine" / "__init__.py"
 
 
 def _run_without(module_name: str, *argv):
@@ -63,7 +62,16 @@ def test_the_bail_out_helper_is_defined_before_it_is_used():
     ★ 実行時のテスト（上の 2 本）だけだと、将来また import ガードを増やしたときに
       同じ順序事故が起きうる。ソースの構造そのものを見る。
     """
-    tree = ast.parse(SRC.read_text(encoding="utf-8"))
+    from _product_source import product_files
+    # ★ 2026-09-23: 本体を場所で読まない ── exit_environment を**定義しているファイル**を探す
+    #   （NameError はモジュールの中の話なので、見るのはそのファイルの中だけ）。
+    homes = []
+    for path in product_files():
+        t = ast.parse(path.read_bytes().decode("utf-8"))
+        if any(isinstance(n, ast.FunctionDef) and n.name == "exit_environment" for n in t.body):
+            homes.append((path, t))
+    assert len(homes) == 1, f"exit_environment を定義するファイルが {len(homes)} 本（1 本のはず）"
+    tree = homes[0][1]
     def_line = next(n.lineno for n in tree.body
                      if isinstance(n, ast.FunctionDef) and n.name == "exit_environment")
     use_lines = [n.lineno for n in ast.walk(tree)

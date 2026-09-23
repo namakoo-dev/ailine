@@ -29,7 +29,6 @@ sys.path.insert(0, str(REPO / "src"))
 
 import ailine  # noqa: E402
 
-SRC = inspect.getsource(ailine)
 
 
 #: 読み直しの層が住んでいる関数（★ 2026-09-05 に _translate_and_dispatch から切り出した。
@@ -37,16 +36,19 @@ SRC = inspect.getsource(ailine)
 HOME = "def _reread_the_plan("
 
 
+def _home_source() -> str:
+    """★ 2026-09-23: モジュール丸ごと（＝本体 1 冊）を読まず、関数を**名前で**引く。"""
+    fn = getattr(ailine, HOME[len("def "):-1], None)
+    return inspect.getsource(fn) if fn else ""
+
+
 def _reread_segment() -> list:
-    lines = SRC.splitlines()
-    i0 = next(i for i, l in enumerate(lines) if l.startswith(HOME))
-    i1 = next(i for i in range(i0 + 1, len(lines)) if lines[i].startswith("def "))
-    return lines[i0:i1]
+    return _home_source().splitlines()
 
 
 def test_the_layer_lives_in_its_own_function():
     """★ 層がまた本体へ溶けていないこと（溶けると、この台帳の分母が黙って 0 になる）。"""
-    assert any(l.startswith(HOME) for l in SRC.splitlines()), (
+    assert any(l.startswith(HOME) for l in _home_source().splitlines()), (
         f"{HOME} が無い ── 読み直しの層が別の場所へ移ったなら、HOME を向け直すこと")
     seg = _reread_segment()
     assert len(seg) > 100, f"層が {len(seg)} 行しか無い（切り出しが壊れている疑い）"

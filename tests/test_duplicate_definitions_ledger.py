@@ -66,10 +66,16 @@ INTENTIONAL_COPIES = {
 
 def _toplevel_defs():
     """(関数名) → [(場所, 実装ハッシュ, 参照している自国のトップレベル名)]"""
-    files = [("本体", REPO / "src/ailine/__init__.py", "ailine")]
-    files += [(p.name, p, f"ailine_core.{p.stem}")
-              for p in sorted((REPO / "src/ailine_core").glob("*.py"))
-              if p.stem != "__init__"]
+    from _product_source import SRC, src_files
+    # ★ 2026-09-23: 手で並べず芯から引く（再帰する ── 初版の `glob("*.py")` は
+    #   ailine_core/postconditions/ を見ていなかった）。モジュール名は src からの相対で組む。
+    files = []
+    for p in src_files():
+        parts = p.relative_to(SRC).with_suffix("").parts
+        if parts == ("ailine", "__init__"):
+            files.append(("本体", p, "ailine"))
+        elif parts[0] == "ailine_core" and parts[-1] != "__init__":
+            files.append((p.name, p, ".".join(parts)))
     out = {}
     for label, path, mod in files:
         text = path.read_bytes().decode("utf-8")

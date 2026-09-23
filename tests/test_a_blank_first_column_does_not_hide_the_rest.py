@@ -227,17 +227,15 @@ def test_the_generated_basic_also_asks_the_single_place():
 
 def test_no_op_generates_its_own_a_column_walk():
     """★ 生成関数のどれも、A 列だけを見る走査を**自前で**書いていないこと。"""
-    import ast
+    import inspect
     import sys as _sys
     _sys.path.insert(0, str(REPO / "src"))
     import ailine
-    src = (REPO / "src" / "ailine" / "__init__.py").read_bytes().decode("utf-8")
-    bodies = {n.name: (ast.get_source_segment(src, n) or "")
-              for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef)}
+    # ★ 2026-09-23: 生成関数を本体の場所で探さず**名前で引く**（分割で動いても追随する）。
     bad = []
     for op in sorted(ailine.OP_SCHEMA):
         fn = ailine.CODEGEN_BY_OP.get(op)
-        body = bodies.get(getattr(fn, "__name__", ""), "")
+        body = inspect.getsource(fn) if fn else ""
         if _A_COLUMN_WALK.search(body):
             bad.append(op)
     assert not bad, (

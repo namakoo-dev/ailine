@@ -57,9 +57,8 @@ NOT_MEASURED = {
 
 
 def _verify_source() -> str:
-    src = inspect.getsource(ailine)
-    i = src.index("def verify_dsl_args(")
-    return src[i:src.index(chr(10) + "def ", i + 10)]
+    # ★ 2026-09-23: モジュール丸ごと（＝本体 1 冊）でなく、関数を名前で引く。
+    return inspect.getsource(ailine.verify_dsl_args)
 
 
 def _branch_helpers() -> dict:
@@ -123,8 +122,8 @@ def test_the_declaration_is_made_exactly_once():
       **集計だけ書き忘れ**ており、合計行のある請求書で × を出していた（実測 2/2）。
     ★ ここが 2 箇所以上に戻ったら、また「1 つだけ書き忘れる」形に戻っている。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    made = src.count('resolved["_skip_rows"] = ')
+    from _product_source import count_in_product
+    made = count_in_product('resolved["_skip_rows"] = ')
     assert made == 1, f"除外の宣言が {made} 箇所ある（入口 1 箇所に畳んだはず）"
 
 
@@ -135,11 +134,14 @@ def _ops_consuming_the_declaration() -> set:
       問いは「どの op か」ではなく「**使う側が消えていないか**」なので、
       生成・検算・表示の 3 つの口が在ることを直接確かめる。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    users = src.count("_skip_rows") - src.count(chr(34) + "_skip_rows" + chr(34) + "] = ")
-    post = [p for p in (Path(ailine.__file__).parent.parent / "ailine_core"
-                        / "postconditions").glob("*.py")
-            if "_skip_rows" in p.read_text(encoding="utf-8")]
+    from _product_source import product_files
+    # ★ 2026-09-23: 場所で決め打ちしない ── 事後条件（postconditions パッケージ）と
+    #   それ以外（生成・表示・受け渡し）を**パッケージ名で**分ける。再帰して見る。
+    texts = {p: p.read_bytes().decode("utf-8") for p in product_files()}
+    rest = [t for p, t in texts.items() if "postconditions" not in p.parts]
+    users = sum(t.count("_skip_rows") - t.count(chr(34) + "_skip_rows" + chr(34) + "] = ")
+                for t in rest)
+    post = [p for p, t in texts.items() if "postconditions" in p.parts and "_skip_rows" in t]
     assert users >= 3, f"宣言を使う側が {users} 箇所しかない（生成・表示・受け渡し）"
     assert len(post) >= 2, f"事後条件で宣言を honor しているのが {len(post)} モジュール"
     return set(AWARE) | {"AGGREGATE"}

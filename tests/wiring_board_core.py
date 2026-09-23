@@ -55,8 +55,19 @@ def _codegen_source(op: str) -> str:
         return ""
 
 
-def _main_tree():
-    return ast.parse((SRC / "ailine" / "__init__.py").read_bytes().decode("utf-8"))
+def _toplevel_fns() -> dict:
+    """製品コード（src の下）のトップレベル関数 name → node。
+
+    ★ 2026-09-23: 本体 1 冊（`_main_tree`）だけを見ていた ── 検算関数が ailine_core へ
+      移ると `fns.get()` が None になり、その op は**黙って**盤から落ちる。芯から引く。
+    """
+    from _product_source import src_files
+    fns: dict = {}
+    for p in src_files():
+        for n in ast.parse(p.read_bytes().decode("utf-8")).body:
+            if isinstance(n, ast.FunctionDef):
+                fns.setdefault(n.name, n)
+    return fns
 
 
 def _verify_fn_by_op() -> dict:
@@ -68,7 +79,7 @@ def _verify_fn_by_op() -> dict:
       （2026-09-17: 導出が合わないので名簿を疑いかけたが、間違っていたのは測る側）。
     """
     out: dict = {}
-    fns = {n.name: n for n in _main_tree().body if isinstance(n, ast.FunctionDef)}
+    fns = _toplevel_fns()
     for node in ast.walk(fns["verify_dsl_args"]):
         if not isinstance(node, ast.If):
             continue
@@ -91,7 +102,7 @@ def _verify_fn_by_op() -> dict:
 
 def _ops_that_name_their_own_sheet() -> set:
     """出力シート名を**実行時に**決める op（検算が resolved["_new_sheet"] を積む）。"""
-    fns = {n.name: n for n in _main_tree().body if isinstance(n, ast.FunctionDef)}
+    fns = _toplevel_fns()
 
     def names(fname: str) -> bool:
         fn = fns.get(fname)

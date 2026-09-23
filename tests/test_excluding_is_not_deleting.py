@@ -82,10 +82,9 @@ def test_the_declaration_matches_what_the_machine_actually_skips():
       ★ 手書きをやめ、**実装から導いた集合**と突き合わせる番人へ畳んだ
         （tests/test_op_completeness.py の⑤）。縛りは 1 本にして、こちらは委譲する。
     """
-    import pathlib
+    from _product_source import count_in_product
     from test_op_completeness import ops_that_skip_non_data_rows_derived_from_codegen
-    src = pathlib.Path(ailine.__file__).read_text(encoding="utf-8")
-    assert src.count("データ行でないため") >= 3, "実体側の目印が減っている"
+    assert count_in_product("データ行でないため") >= 3, "実体側の目印が減っている"
     assert (ailine._OPS_THAT_SKIP_NON_DATA_ROWS
             == ops_that_skip_non_data_rows_derived_from_codegen())
 

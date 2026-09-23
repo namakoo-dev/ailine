@@ -23,13 +23,16 @@
 import ast
 from pathlib import Path
 
+from _product_source import product_files
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RENDERER_MODULE = REPO_ROOT / "src" / "ailine_core" / "claim.py"
 MARKER = "機械検証済み"
 
+#: ★ 2026-09-23: 製品コードは手で並べず芯から引く（再帰する ── 初版の `glob("*.py")` は
+#:   ailine_core/postconditions/ を見ていなかった）。★ 画面（GUI）も出力経路なので含める。
 _TARGET_FILES = (
-    [REPO_ROOT / "src" / "ailine" / "__init__.py"]
-    + sorted(p for p in (REPO_ROOT / "src" / "ailine_core").glob("*.py") if p != RENDERER_MODULE)
+    [p for p in product_files() if p != RENDERER_MODULE]
     + sorted((REPO_ROOT / "bench").glob("*.py"))
 )
 

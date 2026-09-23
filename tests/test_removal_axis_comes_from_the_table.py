@@ -72,8 +72,8 @@ def test_other_ops_are_untouched(stock):
 
 def test_the_judgement_reads_the_table_not_the_words():
     """★ 語の解釈をしないこと ── 実表に聞くだけ（誤爆の余地を作らない）。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src[src.index("def removal_axis_is_wrong"):src.index("\ndef ", src.index("def removal_axis_is_wrong") + 10)]
+    import inspect
+    body = inspect.getsource(ailine.removal_axis_is_wrong)
     assert "task_names_real_values" in body and "headers" in body
     for word in ("削除", "消して", "行を", "列を"):
         assert f'"{word}"' not in body, f"依頼文の語を見ている（{word}）── 表に聞くこと"
@@ -85,9 +85,9 @@ def test_the_gate_was_widened_not_duplicated():
     今日ここまでで片配線を 5 回踏んでいる。門が増えるほど
     「どちらが先に立つか」で事故が起きる（2026-08-27 に 5 つ並んで上書きし合った）。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    assert src.count("removal_reading(a.task") == 1, "行削除の読み直しが 2 箇所になっている"
-    assert src.count("_axis_wrong = removal_axis_is_wrong(") == 1
+    from _product_source import count_in_product
+    assert count_in_product("removal_reading(a.task") == 1, "行削除の読み直しが 2 箇所になっている"
+    assert count_in_product("_axis_wrong = removal_axis_is_wrong(") == 1
 
 
 def test_it_only_speaks_when_it_actually_fixed_something():
@@ -96,7 +96,9 @@ def test_it_only_speaks_when_it_actually_fixed_something():
     ★ 先に宣言して行が解決しなければ、**鳴ったのに何も起きない**（「在っても鳴らない」の
       反対側）。行が解けた後に言う順序であることを、コードの並びで縛る。
     """
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
+    from _product_source import window_around
+    # ★ 2026-09-23: 並びは**同じファイルの中**で比べる（連結した本文で比べるとファイルをまたぐ）。
+    src = window_around('_rm = removal_reading(a.task', after=10 ** 9)
     i = src.index('_rm = removal_reading(a.task')
     j = src.index('print(f"（軸を直しました', i)
     k = src.index('print(f"（『行削除』として読み直しました', i)

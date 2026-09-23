@@ -32,9 +32,13 @@ REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
 DOC = REPO / "docs" / "依存関係.md"
 
+# ★ 製品コードの場所は tests/_product_source（芯）が唯一の持ち主（scripts/blind_run.py と同じ作法）。
+sys.path.insert(0, str(REPO / "tests"))
+from _product_source import MAIN_FILE, src_files  # noqa: E402
+
 
 def modules() -> dict:
-    out = {"ailine": SRC / "ailine" / "__init__.py"}
+    out = {"ailine": MAIN_FILE}
     for p in sorted((SRC / "ailine_core").rglob("*.py")):
         rel = p.relative_to(SRC).with_suffix("")
         name = ".".join(rel.parts)
@@ -185,8 +189,7 @@ def _op_wiring() -> dict:
     #   `wrap()` が足す MoveColumnTo や、別経路の WriteInspectionSheet を
     #   「死んでいる」と誤って名指しする（試作で実際に踏んだ）。
     whole = "\n".join(p.read_text(encoding="utf-8", errors="replace")
-                       for p in [SRC / "ailine" / "__init__.py"]
-                       + sorted((SRC / "ailine_core").rglob("*.py")))
+                       for p in src_files())
     unreached = [a for a in arms
                  if not _re.search(r"\b" + a + r"\b", whole)
                  and not _re.search(r"\b" + a + r"\s*\(",

@@ -49,16 +49,17 @@ def test_the_run_subcommand_offers_the_flag():
 def test_the_consent_gate_still_shows_the_ai_written_code():
     """★★ 自由生成は畳まない ── 同意の前に人が見る物（畳めば「読まずに同意」を作る）。
 
-    ★ 本体は場所で決め打ちせず `inspect.getsource` で引く（分割で実装が動いても空振りしない）。
+    ★ 本体は場所で決め打ちしない（分割で実装が動いても空振りしない）。
+      ★ 2026-09-23: `inspect.getsource(ailine)` は**モジュール丸ごと＝本体 1 冊**だった。
+        窓は文言の在るファイルの中で切り（window_around）、数は製品全体で数える。
     """
-    import inspect
+    from _product_source import count_in_product, window_around
 
-    import ailine
-    text = inspect.getsource(ailine)
-    i = text.index("生成した .bas（語彙外・AI が直接作成）")
-    head = text.rfind("render_", 0, i)
-    assert text[head:i].startswith("render_code_block"), text[head:i][:60]
-    assert text.count("render_basic_block(") == 3, "ルール変換の 3 経路だけを畳む"
+    text = window_around("生成した .bas（語彙外・AI が直接作成）", after=0, before=10 ** 9)
+    head = text.rfind("render_")
+    assert text[head:].startswith("render_code_block"), text[head:][:60]
+    calls = count_in_product("render_basic_block(") - count_in_product("def render_basic_block(")
+    assert calls == 3, "ルール変換の 3 経路だけを畳む"
 
 
 # ── 元の表の合計行と明細の和（会計役の MISSING #3）────────────────────────

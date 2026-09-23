@@ -142,8 +142,17 @@ def test_exit_2_is_argparse_reserved_not_ailine_own(capsys):
         ailine.build_parser().parse_args(["badsubcommand"])
     assert exc2.value.code == 2
 
+    import inspect
     import re
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
+    from _product_source import product_text
+    from ailine_core.inspection import _char_width
+    # ★ 2026-09-23: 本体 1 冊でなく製品全体で見る（終了コードを返す関数が ailine_core へ
+    #   移っても空振りしない）。★ 終了コードでない「2」を返す関数は**名前で**外す ──
+    #   `_char_width` は全角 1 文字の幅（=2）を返すだけで、プロセスの終了コードではない。
+    src = product_text().replace(chr(13) + chr(10), chr(10))
+    not_exit = inspect.getsource(_char_width)
+    assert not_exit in src, "外すはずの関数が製品に見つからない（名前か形が変わった）"
+    src = src.replace(not_exit, "")
     own_codes = set(int(m) for m in re.findall(r"(?:return|sys\.exit\()\s*(\d+)\b", src))
     assert 2 not in own_codes, "ailine.py が独自に exit code 2 を使い始めた（表を更新すること）"
 

@@ -183,8 +183,11 @@ def test_the_third_renderer_is_gone():
     ★★ 「無いこと」だけの assert は**探す場所が空でも通る**（tests/test_guard_ledger.py が
       2026-09-18 にこの検体を捕まえた）。だから先に「在ること」を確かめてから無いと言う。
     """
-    for f in ("src/ailine_core/cli_render.py", "src/ailine/__init__.py"):
-        src = (REPO / f).read_text(encoding="utf-8")
+    from _product_source import product_text
+    # ★ 2026-09-23: 本体 1 冊でなく製品全体で「在ること／無いこと」を見る。
+    for f, src in (("src/ailine_core/cli_render.py",
+                    (REPO / "src/ailine_core/cli_render.py").read_text(encoding="utf-8")),
+                   ("製品コード全体", product_text())):
         assert "render_independent_verify_report" in src, (
             f"★ 探す場所が空か形が変わっている（この検体が空回りする）: {f}")
         assert "render_verify_match_report" not in src, f"照合専用の器が残っている: {f}"

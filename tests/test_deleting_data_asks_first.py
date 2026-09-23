@@ -134,7 +134,8 @@ def test_the_named_multi_row_delete_still_speaks_for_itself(tmp_path):
 
     ★ 新しい配線が古い配線を**黙って置き換える**のが、この repo の 2 番目に多い壊れ方。
     """
-    src = (REPO / "src" / "ailine" / "__init__.py").read_bytes().decode("utf-8")
+    from _product_source import product_text
+    src = product_text()
     assert "に当てはまる {len(_rows0)} 行" in src or "に当てはまる" in src, (
         "名前で複数行に当たった時の文言が消えている")
     assert 'if not resolved.get("_confirm_delete"):' in src, (
@@ -144,7 +145,8 @@ def test_the_named_multi_row_delete_still_speaks_for_itself(tmp_path):
 @pytest.mark.parametrize("op", ["DELETE_COLUMN", "DELETE_ROWS", "DEDUP_DELETE"])
 def test_the_gate_knows_how_to_say_delete(op):
     """★ 関所が『削除しますか？』と聞ける口を持っていること（文言は既に在った）。"""
-    src = (REPO / "src" / "ailine" / "__init__.py").read_bytes().decode("utf-8")
+    from _product_source import product_text
+    src = product_text()
     assert '削除しますか？' in src, "削除の聞き文が消えている"
     assert "削除を承知して続行する" in src, "削除時の逃げ道の文が消えている"
     assert op in ailine.OP_SCHEMA

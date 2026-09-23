@@ -68,7 +68,10 @@ def _exemptions_by_requirement(register: dict, requirement: str) -> set:
 
 
 def _scan_target_files() -> list:
-    return [REPO / "src" / "ailine" / "__init__.py"] + sorted((REPO / "src" / "ailine_core").glob("*.py"))
+    """★ 2026-09-23: 手で並べず芯から引く（再帰する ── 初版の `glob("*.py")` は
+    ailine_core/postconditions/ を見ていなかった）。視野は元と同じ src の下。"""
+    from _product_source import src_files
+    return src_files()
 
 
 def discover_op_rosters(min_hits: int = 1) -> dict:

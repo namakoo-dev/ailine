@@ -306,14 +306,14 @@ def test_a_wrong_answer_registers_nothing(book, tmp_path, capsys):
 # --- ⑩ 配線（★ 純ロジックだけでは守られない）------------------------------
 
 def test_the_refusal_gate_asks_about_the_word():
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    gate = src.split("def cmd_refuse_vocab_miss")[1].split(NL + "def ")[0]
+    import inspect
+    gate = inspect.getsource(ailine.cmd_refuse_vocab_miss)
     assert "_ask_about_a_suspicious_word(" in gate, "断りの門に配線されていない"
 
 
 def test_the_run_path_applies_what_was_learned():
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src.split("def _translate_and_dispatch")[1].split(NL + "def ")[0]
+    import inspect
+    body = inspect.getsource(ailine._translate_and_dispatch)
     assert "apply_known_attributes(" in body, "翻訳の前で登録が使われていない"
     head = body.split("apply_known_attributes(")[0]
     assert "translation is None" in head[-400:], "翻訳を使い回す回でも書き換えている"
@@ -321,6 +321,6 @@ def test_the_run_path_applies_what_was_learned():
 
 def test_the_word_extractor_is_not_a_second_implementation():
     """★ 残差検出を 2 つ持たない（持つと片方だけ直る）。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    body = src.split("def suspicious_words")[1].split(NL + "def ")[0]
+    import inspect
+    body = inspect.getsource(ailine.suspicious_words)
     assert "suggest_residue.find_unconsumed_words(" in body

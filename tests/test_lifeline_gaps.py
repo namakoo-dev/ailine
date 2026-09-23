@@ -272,16 +272,19 @@ def test_every_exit_that_leaves_a_file_records_it():
     「作業結果は…に残っています」と言う行の直後 3 行に、_finish_run か
     _finish_failed_apply のどちらかが在ること。書き写しでなく**数で**守る。
     """
-    src = (Path(REPO) / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    lines = src.split(chr(10))
+    from _product_source import product_files
+    # ★ 2026-09-23: 本体 1 冊でなく製品全体を、**ファイルごとに**行で見る
+    #   （直後 3 行の窓がファイルをまたがないように）。
     said, recorded = 0, 0
-    for n, ln in enumerate(lines):
-        if "_untouched_original_line(book" not in ln or "def " in ln:
-            continue
-        said += 1
-        nearby = chr(10).join(lines[n:n + 4])
-        if "_finish_run(" in nearby or "return False" in nearby:
-            recorded += 1
+    for path in product_files():
+        lines = path.read_bytes().decode("utf-8").replace(chr(13) + chr(10), chr(10)).split(chr(10))
+        for n, ln in enumerate(lines):
+            if "_untouched_original_line(book" not in ln or "def " in ln:
+                continue
+            said += 1
+            nearby = chr(10).join(lines[n:n + 4])
+            if "_finish_run(" in nearby or "return False" in nearby:
+                recorded += 1
     assert said >= 10, f"出口の数え方が変わった（{said} 件）── 契約を読み直すこと"
     assert said == recorded, (
         f"作業結果を案内しながら記録しない出口が {said - recorded} 件ある "

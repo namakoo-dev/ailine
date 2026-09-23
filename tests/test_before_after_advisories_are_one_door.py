@@ -28,8 +28,12 @@ sys.path.insert(0, str(REPO / "src"))
 import ailine  # noqa: E402
 from ailine_core import formula_health  # noqa: E402
 
-SRC = inspect.getsource(ailine)
+from _product_source import product_text  # noqa: E402 ── ★ 番人は本体決め打ちでなく製品コード全体を読む
+
 NL = chr(10)
+#: ★ 2026-09-23: `inspect.getsource(ailine)` は**モジュール丸ごと＝本体 1 冊**だった。
+#:   製品全体を見る（改行は LF に揃える ── getsource と同じ形で比べるため）。
+SRC = product_text().replace(chr(13) + NL, NL)
 
 def _advisories_behind_the_door() -> tuple:
     """扉（`before_after_advisories`）が**実際に呼んでいる**助言の名前を機械で引く。
@@ -63,8 +67,9 @@ DOOR = "before_after_advisories"
 
 def test_the_door_exists_and_is_used():
     assert hasattr(formula_health, DOOR), f"{DOOR} が無い"
-    assert SRC.count(DOOR + "(") >= 4, (
-        f"{DOOR} を通る呼び出しが {SRC.count(DOOR + '(')} 箇所しかない"
+    calls = SRC.count(DOOR + "(") - SRC.count("def " + DOOR + "(")
+    assert calls >= 4, (
+        f"{DOOR} を通る呼び出しが {calls} 箇所しかない"
         "（単発・確認つき・上書き・複合計画の 4 経路が在るはず）")
 
 
@@ -72,11 +77,16 @@ def test_no_caller_assembles_them_by_hand():
     """★ 本命: 呼び出し側が助言を**手で並べて**いないこと。"""
     door_body = SRC.split("def " + DOOR)[0]   # 定義そのものは対象外（下で別に見る）
     del door_body
+    # ★ 2026-09-23: 製品全体を見ると**扉そのもの**の中の呼び出しにも当たる ──
+    #   扉の関数は名前で引いて外す（扉の中で呼ぶのは正しい形）。
+    door = inspect.getsource(getattr(formula_health, DOOR))
+    assert door in SRC, "扉の本文が製品の中に見つからない（外す範囲が取れない）"
+    rest = SRC.replace(door, "")
     offenders = []
     for name in BEFORE_AFTER_ADVISORIES:
-        for m in re.finditer(re.escape(name) + r"\(", SRC):
-            line_no = SRC.count(NL, 0, m.start()) + 1
-            line = SRC.splitlines()[line_no - 1]
+        for m in re.finditer(re.escape(name) + r"\(", rest):
+            line_no = rest.count(NL, 0, m.start()) + 1
+            line = rest.splitlines()[line_no - 1]
             if line.lstrip().startswith(("from ", "import ", "def ")):
                 continue          # import と定義は入口ではない
             offenders.append((line_no, line.strip()[:70]))

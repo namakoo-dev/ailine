@@ -39,22 +39,29 @@ from ailine_core.stage_organs import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AILINE_PY = REPO_ROOT / "src" / "ailine" / "__init__.py"
 
 
-def _ailine_ast() -> ast.Module:
-    """ailine.py を AST として読む（import はしない＝BASRUN 等の実行時依存を引かない）。"""
-    src = AILINE_PY.read_text(encoding="utf-8")
-    return ast.parse(src, filename=str(AILINE_PY))
+def _ailine_ast() -> list:
+    """製品コード（src の下）を AST として読む（import はしない＝BASRUN 等の実行時依存を引かない）。
+
+    ★ 2026-09-23: 本体 1 冊だけを読んでいた ── 段の代表関数が ailine_core へ移ると
+      「見当たらない」で赤くなる（黙りはしないが、移動のたびに番人が止まる）。芯から引く。"""
+    from _product_source import src_files
+    return [ast.parse(p.read_bytes().decode("utf-8"), filename=str(p)) for p in src_files()]
 
 
-def _toplevel_functions(tree: ast.Module) -> dict:
+def _toplevel_functions(trees: list) -> dict:
     """モジュール直下（ネスト無し）の関数定義だけを name → node で拾う。
        ★ STAGE_ENTRY_FUNCTIONS が指す5関数はいずれもトップレベル定義（ailine.py に
-       class は _FreeformGateAbort の1つだけで、器官/段の対象関数はどれもその外）。"""
-    return {node.name: node
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+       class は _FreeformGateAbort の1つだけで、器官/段の対象関数はどれもその外）。
+       ★ 2026-09-23: 複数ファイルを見る。同じ名前が 2 つのファイルに在ると、どちらを
+         見たか分からなくなるので、その名前は None にして下の assert で止める。"""
+    out: dict = {}
+    for tree in trees:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out[node.name] = None if node.name in out else node
+    return out
 
 
 def _called_names(func_node: ast.AST) -> set:

@@ -75,8 +75,15 @@ def test_when_no_example_exists_the_parenthesis_is_dropped():
 
 def test_examples_are_not_re_listed_in_the_caller():
     """★ 文面は 1 箇所に置く（断り・聞き返し・提案で同じ言い方にする）。"""
-    src = Path(ailine.__file__).read_text(encoding="utf-8")
-    assert "けい線を引いて" not in src, "呼び出し側に例文を書き写している"
+    import inspect
+    from _product_source import count_in_code, product_text
+    from ailine_core import examples as _examples
+    # ★ 2026-09-23: 本体 1 冊だけを見ると、呼び出し側が ailine_core へ移った日に空振りする。
+    #   製品全体を見ると、例文の住所（examples の表）と説明のコメントにも当たる ──
+    #   だから「コードの中に 1 度だけ・それは examples の表」と縛る（どこに写しても赤）。
+    assert "けい線を引いて" in inspect.getsource(_examples), "例文の表から例が消えている"
+    assert count_in_code("けい線を引いて") == 1, "呼び出し側に例文を書き写している"
+    src = product_text()
     assert "render_example_line(" in src and "replace_examples_in_question(" in src
 
 

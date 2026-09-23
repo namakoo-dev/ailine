@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from _product_source import product_files
+
 ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
 
@@ -26,9 +28,9 @@ README = ROOT / "README.md"
 MARKS = "✓△⚠×？"
 
 #: 印を出す実装（見出しを組む場所）。
-SOURCES = (ROOT / "src" / "ailine" / "__init__.py",
-           ROOT / "src" / "ailine_core" / "claim.py",
-           ROOT / "src" / "ailine_core" / "cli_render.py")
+#: ★ 2026-09-23: 3 冊を手で並べていた ── 見出しを組む所が別のモジュールへ移ると黙る。
+#:   製品コード全体から引く（手で並べない）。
+SOURCES = tuple(product_files())
 
 
 def _documented() -> set:
