@@ -34,6 +34,74 @@ _SRC = str(Path(__file__).resolve().parent.parent / "src")
 os.environ["PYTHONPATH"] = _SRC + os.pathsep + os.environ.get("PYTHONPATH", "")
 import ailine  # noqa: E402
 
+# ★★ 2026-09-23: 本物の ~/.ailine/history.jsonl に、pytest の一時フォルダの冊が 126 行（全件 18 回分・
+#   毎回 7 行）書かれていた。出所は 1 か所 ── `tests/test_the_sheets_are_readable.py` の
+#   `scope="module"` の fixture。★ 下の切り離しはどれも**関数ごと**の autouse なので、
+#   module / session の fixture は**それより先に**走り、本物のホームに書く（切り離しの外）。
+#   全件の後に本物のホームの sha256 を照らし合わせて初めて見えた（試験は全部緑だった）。
+#   ★ 処方は 2 つ: ① セッションの最初に全体を切り離す（module の fixture もその内側で走る）
+#                   ② 終わった時に本物のホームが変わっていたら、全件を赤にする（在っても鳴らない、にしない）
+from _home_isolation import home_bound_paths  # noqa: E402
+
+#: 切り離す前の本物のホーム（AILINE_HOME を利用者が指定していればそれ）
+_REAL_HOME = Path(ailine.HISTORY_DIR)
+
+
+def _home_state(root: Path) -> dict:
+    """本物のホームの下のファイル（大きさ・更新時刻）。★ 中身は読まない（安い・機密を見ない）。"""
+    out = {}
+    if root.exists():
+        for p in root.rglob("*"):
+            try:
+                if p.is_file():
+                    st = p.stat()
+                    out[str(p)] = (st.st_size, st.st_mtime_ns)
+            except OSError:
+                continue
+    return out
+
+
+#: ★ 起点は conftest を読んだ瞬間に取る（どの試験・fixture よりも前）。
+#:   初版は pytest_sessionstart で取っていたが、tests/ の conftest からは呼ばれず、起点が無いまま
+#:   「何もしない」で抜けていた ── 変異（切り離しを外す）で本物のホームに 7 行書かれても鳴らなかった。
+_REAL_HOME_BEFORE = _home_state(_REAL_HOME)
+
+
+def _check_the_real_home(session):
+    """終わった時に本物のホームが変わっていたら全件を赤にする（下の pytest_sessionfinish から呼ぶ）。
+
+    ★ 初版は自分で `pytest_sessionfinish` を名乗り、**同じファイルの下にある同名の hook に黙って
+      上書きされていた**（Python の再定義）── 変異で本物のホームに 7 行書かれても鳴らなかった。
+      hook は 1 つに畳み、そこから呼ぶ。
+    """
+    before = _REAL_HOME_BEFORE
+    after = _home_state(_REAL_HOME)
+    changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+    if changed:
+        tr = session.config.pluginmanager.get_plugin("terminalreporter")
+        msg = ("✗ 試験が本物のホーム（" + str(_REAL_HOME) + "）を変えた ── 切り離しの外で製品が走った:"
+               + "".join(chr(10) + "    " + c for c in changed[:10])
+               + chr(10) + "  ★ 同じ時間に ailine を手で使っていたなら、それが出所（その時は流し直す）")
+        if tr is not None:
+            tr.write_line(msg, red=True)
+        else:
+            print(msg)
+        session.exitstatus = 1
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_the_whole_session(tmp_path_factory):
+    """★ セッションの最初に保存先を全部一時フォルダへ寄せる（module / session の fixture もこの内側）。
+    関数ごとの切り離し（下の _guard_real_home_writes）は、その上に後勝ちで重なる。"""
+    # ★ ホームの中の**構造を保って**寄せる（isolated_home と同じ）。初版は `root/_session_<名前>` と
+    #   ばらばらに置いたので、どれも HISTORY_DIR の下でなくなり、歩き手の isolated_home が
+    #   「ホームの下の保存先」を HISTORY_DIR 1 つしか見つけられず、残りをセッションで共用した
+    #   ── 前の試験の状態が次の歩きに漏れ、全件の中でだけ導線の歩きが落ちた（単独では緑）。
+    from _home_isolation import isolated_home
+    root = tmp_path_factory.mktemp("_session_ailine_home")
+    with isolated_home(ailine, root):
+        yield
+
 
 @pytest.fixture(autouse=True)
 def _default_normalize_book_is_passthrough(request, monkeypatch):
@@ -145,11 +213,14 @@ def pytest_sessionfinish(session, exitstatus):
       名前一括の kill は使わない（[[feedback_taskkill_kills_mcp]] の教訓）。
     ★ 実機を 1 本も走らせていない回は**何もしない**（起こしてもいないものを止めない）。
     ★ ここでの失敗は無視する ── 後始末が走行の合否を変えてはいけない。
+    ★★ 2026-09-23: 本物のホームの検算（_check_the_real_home）もここから呼ぶ ── hook は 1 つだけ
+      （2 つ書くと後の方が前の方を黙って消す。実際に消していた）。
 
     ★ 断り書き: 居残りが「実機テストの大量失敗」を起こしたという証拠は**無い**
       （2026-09-06 に再現を試みて失敗した ── 切られた後の待ち受けは健康だった）。
       これは**資源の後始末**として正しいから入れる。原因不明の失敗への処方ではない。
     """
+    _check_the_real_home(session)
     if not _LOCAL_RAN:
         return
     try:
