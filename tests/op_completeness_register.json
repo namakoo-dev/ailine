@@ -11,7 +11,7 @@
     "op_roster_coverage_rule": "op 名を並べた名簿（dict / set / frozenset / tuple / list）は、全部ここに被覆を宣言する。『全域』なら本当に全 op を持つこと。『部分』なら reason（正直な理由・分からなければ「未調査」）と unlock（何が起きたら見直すか）を必ず書く。番人は tests/test_op_completeness.py の④。★ 部分であること自体は多くの場合正しい。悪いのは、部分なのが意図か足し忘れかを誰も問わないまま置かれること ── 2026-09-16 にそれで合計行が消えていた。"
   },
   "registered_op_tables": [
-    "src/ailine/__init__.py:CODEGEN_BY_OP",
+    "src/ailine_core/codegen.py:CODEGEN_BY_OP",
     "src/ailine/__init__.py:OP_META",
     "src/ailine/__init__.py:OP_SUBJECT_SLOTS",
     "src/ailine/__init__.py:OP_WRITE_TARGET",
@@ -83,7 +83,7 @@
     "src/ailine/__init__.py:_CONFIRM_FIELDS": {
       "coverage": "full"
     },
-    "src/ailine/__init__.py:CODEGEN_BY_OP": {
+    "src/ailine_core/codegen.py:CODEGEN_BY_OP": {
       "coverage": "full"
     },
     "src/ailine/__init__.py:POSTCONDITIONS": {
