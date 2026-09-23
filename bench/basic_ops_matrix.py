@@ -294,11 +294,15 @@ class _Books:
 
     def new_sheets(self):
         """★ 操作が**新しく作ったシート**を {名前: 格子} で返す（順序は作られた順）。"""
+        # ★ 2026-09-23: ⚠ の回に製品が冊へ残す申し送り（盲検 6 体目 ⑪）は、操作の成果物では
+        #   ない ── 帳票段の「検分」と同じく製品自身の台帳。数えると重複除去が「2 枚（1 枚の
+        #   はず）」で落ちる。★ 名前は製品の定数から引く（字面を書き写さない）。
+        from ailine import NOTE_SHEET
         was = set(openpyxl.load_workbook(self.src).sheetnames)
         wb = openpyxl.load_workbook(self.out)
         out = {}
         for n in wb.sheetnames:
-            if n in was:
+            if n in was or n == NOTE_SHEET:
                 continue
             ws = wb[n]
             out[n] = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]

@@ -51,11 +51,13 @@ def test_finish_apply_is_the_only_place_that_decides():
     同じ形の片配線を新しく作らない。
     """
     src = Path(ailine.__file__).read_text(encoding="utf-8")
-    assert src.count("coverage_incomplete=_coverage_sink)") == 4, "4 経路すべてから渡すこと"
+    # ★ 2026-09-23: 引数（helper_files）が 1 つ後ろに増え、閉じ括弧の位置が動いた。
+    #   数えるのは「渡しているか」なので、括弧を含めない。
+    assert src.count("coverage_incomplete=_coverage_sink") == 4, "4 経路すべてから渡すこと"
     body = src[src.index("def _finish_apply"):src.index("\ndef ", src.index("def _finish_apply") + 10)]
     assert "machine_verified = False" in body, "落とす判断は _finish_apply の中に置く"
     # ★ 呼び出し側が「落とすかどうか」を決めていないこと
-    for chunk in src.split("coverage_incomplete=_coverage_sink)")[:-1]:
+    for chunk in src.split("coverage_incomplete=_coverage_sink")[:-1]:
         tail = chunk[-400:]
         assert "machine_verified=False" not in tail.replace(" ", ""), \
             "呼び出し側で判断している（材料だけ渡すこと）"

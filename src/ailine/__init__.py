@@ -10778,6 +10778,33 @@ def resolve_col_anchor(task: str, headers: list) -> tuple:
     return None, None
 
 
+def warnings_inspection_rows(advisories, verdict_line: str) -> list:
+    """画面に出した警告を、検分シートの 5 列（既存の形）に落とす。
+
+    ★★ なぜ在るか（盲検 6 体目 ⑪・致命）: 画面には警告が 4 つ出ているのに、
+      **出来た冊を後から開いた人には 1 つも見えない**。買い手の言葉:
+      「2 行しか入っていない仕訳帳が、**警告なしで**手元に残ります」。
+      ★ メールで転送された先では、画面はもう存在しない。
+
+    ★ 形は `ailine split` の `_検分` と**同じ 5 列**（種類/対象/行数/金額/なぜこうなったか）
+      ── 新しい様式を発明しない。買い手が一度覚えた読み方をそのまま使える。
+
+    ★★ 文字列は**画面に出したものをそのまま**渡す（ここで組み立て直さない）──
+      別々に組み立てると「画面と冊が違うことを言う」片配線になる。
+      この repo は 2026-09-18 に「台帳が画面と違う語を言う」で致命を出している。
+    """
+    rows = []
+    for a in (advisories or []):
+        t = str(a).strip()
+        if not t:
+            continue
+        kind = "⚠ 警告" if t.startswith("⚠") else ("★ 注記" if t.startswith("★") else "お知らせ")
+        rows.append([kind, "", "", "", t])
+    if verdict_line:
+        rows.append(["判定", "", "", "", str(verdict_line).strip()])
+    return rows
+
+
 def inspection_sheet_basic_call(sheet_name: str, header: list, rows: list,
                                  types: str) -> str:
     """検分シートを LibreOffice 側で書く Basic の 1 行を組む。
@@ -13462,10 +13489,87 @@ def _finish_gated(a: argparse.Namespace, book: Path, out_book: Path | None,
     return gate_exit
 
 
+# ★ 申し送りのシート名。書く所と消す所で 1 つを引く（文字列を 2 回書かない）。
+NOTE_SHEET = "_ailine の申し送り"
+
+
+def write_warnings_into_the_book(out_book: Path, workdir: Path, advisories,
+                                 verdict_line: str, helper_files=()) -> str | None:
+    """画面に出した警告を、出来た冊の中に**検分シート**として残す。
+
+    ★★ なぜ在るか（盲検 6 体目 ⑪・致命）: 画面には警告が 4 つ出ているのに、
+      **出来た冊を後から開いた人には 1 つも見えない**。
+      買い手:「2 行しか入っていない仕訳帳が、**警告なしで**手元に残ります」。
+      ★ メールで転送された先では、画面はもう存在しない。
+
+    ★ 書き手は **LibreOffice**（openpyxl で開き直さない）── openpyxl の往復は
+      xl/drawings の中の図形（角印・社判）を捨てる。2026-08-24 に実測して撤去した経路。
+      ★ 実測（2026-09-23）: LO 経路の 2 回目の往復で、グラフ付きの冊の飾り 6 件は
+        **すべて保たれた**。費用も 0.6 秒（run 全体 7.5 秒の 8%・翻訳は要らない）。
+
+    ★★ 書くのは **⚠ の回だけ**（⚠ の行が在るか、判定が ⚠ ＝機械保証なし）。
+      △ や ★ だけの回は書かない ── 冊の形（シートの顔ぶれ）が変わるのは、宣言の検査・
+      複合計画の後段・買い手の下流の道具すべてに効く。変えるのは事故が起きる回に絞る。
+      ★ 初版は △ と ★ でも書いており、全件で 5 本がシートの顔ぶれの変化で赤くなった。
+    ★★ 書かない回でも、**前回の申し送りが冊に残っていれば消す** ── 残すと、前回の警告が
+      今回の冊について嘘を言う（ヘルパは同名を消して作り直すので、書く回は自然に入れ替わる）。
+    ★ 失敗しても run を止めない ── 検分は添え物で、原本の反映はもう済んでいる。
+      ★ ただし黙らない: 書けなかったことは画面に出す（出ないことは信号でない）。
+    """
+    rows = warnings_inspection_rows(advisories, verdict_line)
+    if not rows:
+        return None
+    body = inspection_sheet_basic_call(
+        NOTE_SHEET, ["種類", "対象", "行数", "金額", "なぜこうなったか"], rows, "sssss")
+    return _apply_note_basic(out_book, workdir, body, helper_files,
+                             "申し送りのシートは書けませんでした")
+
+
+def note_is_due(lines, machine_verified: bool) -> bool:
+    """申し送りを書く回か（⚠ の行が在る、または機械保証が無い）。
+
+    ★ 読み戻しの**前に**決まる材料だけで決める ── 書かない回の古い申し送りは読み戻しの
+      前に消したいので、判定が読み戻しの後にしか出ないと順序が組めない。
+    ★ 初版は `if not rows` で見ていたが、判定の行は毎回在るので **✓ の回にも**書いていた。
+    """
+    return (not machine_verified) or any(str(x).strip().startswith("⚠") for x in (lines or []))
+
+
+def remove_stale_note(book: Path, workdir: Path, helper_files=()) -> str | None:
+    """前回の申し送りが冊に残っていれば消す（今回は書かない回）。
+
+    ★ 残すと、前回の警告が今回の冊について嘘を言う。
+    ★ 冊に無ければ何もしない ── 普段の回に LibreOffice の往復を足さない。
+    """
+    try:
+        if NOTE_SHEET not in (build_book_meta(book).get("sheets") or []):
+            return None
+    except Exception:
+        return None          # ★ 読めなければ黙る（測れないものを鳴らさない）
+    body = (f'    If oDoc.Sheets.hasByName("{NOTE_SHEET}") Then '
+            f'oDoc.Sheets.removeByName("{NOTE_SHEET}")' + chr(10))
+    return _apply_note_basic(book, workdir, body, helper_files,
+                             "前回までの申し送りのシートを消せませんでした")
+
+
+def _apply_note_basic(book: Path, workdir: Path, body: str, helper_files,
+                      failed: str) -> str | None:
+    """申し送りの Basic を 1 回流す。★ 失敗しても run を止めないが、黙らない。"""
+    try:
+        code = "Sub Run(oDoc As Object)" + chr(10) + body + "End Sub" + chr(10)
+        ok, err, _raw = basrun_apply(book, code, workdir, helper_files)
+        if not ok:
+            return f"（{failed}: {short_error_summary(err)}）"
+    except Exception as e:   # noqa: BLE001 ── 添え物が本体を止めない
+        return f"（{failed}: {type(e).__name__}）"
+    return None
+
+
 def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Path,
                    result: dict, machine_verified: bool, scope: str = "",
                    scope_note: str = "", warning_count: int = 0,
-                   coverage_incomplete: list | None = None) -> bool:
+                   coverage_incomplete: list | None = None,
+                   helper_files=()) -> bool:
     """--copy（a.inplace が False）なら .out のまま（原本は無変更）。既定(a.inplace)なら
        backup+原子的置換(atomic_replace_inplace)で原本へ反映する。そのうえで**最終ファイルを
        読み戻し**、machine_verified=True なら ✓（★ 決裁③: warning_count>0 なら△に降格）の
@@ -13484,9 +13588,20 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
     #   ★ 呼び出し側 4 箇所に配らない ── そこは既に同じ式を 4 回書き写しており
     #     （machine_verified=(status != "warn" and ...)）片配線の典型だった。
     #     判断はこの 1 箇所に置き、呼び出し側は材料を渡すだけにする。
+    # ★★ 2026-09-23（盲検 6 体目 ⑪）: この関数が画面に出す ⚠ は、**同じ文字列を**
+    #   冊の申し送りシートにも残す。★ print と溜めるのを 1 つの口に畳む ──
+    #   ⚠ ごとに「print して append」を書くと、次に足す ⚠ で片方を忘れる。
+    #   ★ 初版は advisories しか渡しておらず、ここで直接出す 8 種が 1 つも冊に
+    #     届いていなかった（番人が「画面の ⚠ は全部冊に在る」で捕まえた）。
+    _said: list = []
+
+    def _say(msg: str) -> None:
+        print(msg)
+        _said.append(msg)
+
     if coverage_incomplete:
         for _why in dict.fromkeys(coverage_incomplete):
-            print(f"⚠ 表の終わりまで走査できませんでした（{_why}）── "
+            _say(f"⚠ 表の終わりまで走査できませんでした（{_why}）── "
                   "操作した範囲を全部確かめたとは言えないため、機械保証は出しません")
         machine_verified = False
     # ★★ 2026-09-06（Namakoo 決裁 B「✓ を出さず ⚠ を出して、そのまま続ける」）:
@@ -13506,7 +13621,7 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         for _w in suggest_residue.unaccounted_request_words(
                 getattr(a, "task", "") or "", scope,
                 _op_match_pool(str(result.get("op") or "")), _heads):
-            print(f"⚠ 依頼にある『{_w}』が、実行した解釈のどこにも出ていません "
+            _say(f"⚠ 依頼にある『{_w}』が、実行した解釈のどこにも出ていません "
                   "── この語を反映したとは言えないため、機械保証は出しません")
             warning_count += 1
         # ★★ 2026-09-18（Namakoo に範囲 op が要るかを測っている途中で出た）: 上の関所は
@@ -13522,7 +13637,7 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
                     for _q in task_quotes_values(getattr(a, "task", "") or "")):
             if not _qv:
                 continue
-            print(f"⚠ 依頼が書くと言っている『{_qv}』が、実行した解釈のどこにも出ていません"
+            _say(f"⚠ 依頼が書くと言っている『{_qv}』が、実行した解釈のどこにも出ていません"
                   " ── この値を書いたとは言えないため、機械保証は出しません")
             warning_count += 1
         # ★★ 2026-09-07（外部の検品が最重として拾った）: 上の関所は**列名**しか見ないので、
@@ -13546,14 +13661,14 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             _tail = ("行や列を取り除きません（元の表はそのまま残っています）"
                      if not _removes else
                      f"『{OP_LABELS.get(_op_now, _op_now)}』です")
-            print(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は{_tail}"
+            _say(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は{_tail}"
                   "── 頼んだ通りかを「解釈:」行で確かめてください")
             # ★★ 2026-09-21: 断るだけで終わらせない ── **本当に消す道**が在るなら名指しする。
             #   消す op は自然語の振り分けから外してある（誤爆が許されないため）ので、
             #   ここで教えないと買い手は辿り着けない。
             _sib = destructive_sibling(_op_now)
             if _sib:
-                print(f"  → 本当に元の表から消すなら: "
+                _say(f"  → 本当に元の表から消すなら: "
                       f"ailine run <ブック> \"<依頼>\" --op {_sib}"
                       f"（{OP_LABELS.get(_sib, _sib)}・消える行を見せてから聞きます）")
             warning_count += 1
@@ -13568,7 +13683,7 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         #   ★ 判定は ailine_core/arith.py に 1 つだけ置き、ここは材料を渡すだけ。
         if (_calc := arith_request.calculation_mismatch(
                 getattr(a, "task", "") or "", scope)):
-            print(f"⚠ 依頼は『{_calc}』と読めますが、実行した計算はそれと違います "
+            _say(f"⚠ 依頼は『{_calc}』と読めますが、実行した計算はそれと違います "
                   "── 頼んだ式かを「解釈:」行で確かめてください")
             warning_count += 1
         # ★★ 2026-09-08（盲検 B が実害のある false ✓ として拾った）: 「合計より上の行だけ
@@ -13580,7 +13695,7 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         #   ★ op 名を列挙しない（材料は前後のファイルだけ）ので、新しい op を足しても
         #     自動で守られる。判定は ailine_core/new_sheet.py に 1 つだけ。
         for _empty in empty_new_sheets(book, out_book):
-            print(f"⚠ 新しく作った『{_empty}』に中身がありません（見出しだけ）"
+            _say(f"⚠ 新しく作った『{_empty}』に中身がありません（見出しだけ）"
                   "── 頼んだことが起きたとは言えないため、機械保証は出しません")
             warning_count += 1
         # ★★ 2026-09-08（曖昧な行の測定で出た・実害のある false ✓）:
@@ -13601,7 +13716,7 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             getattr(a, "task", "") or "", task_names_a_row_number(
                 getattr(a, "task", "") or ""), book, _sheet_rc, _hr_rc)
         if _clash:
-            print(f"⚠ 依頼は『{_clash}』と行番号の両方を指していますが、"
+            _say(f"⚠ 依頼は『{_clash}』と行番号の両方を指していますが、"
                   f"その行に『{_clash}』はありません "
                   "── どちらを指しているか確かめてください")
             warning_count += 1
@@ -13682,9 +13797,18 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             print(f"（承知のうえで飾りを失いました: {parts}）")
         else:
             msg = format_output_fidelity_warning(lost_in_output, final.name)
-            print(msg)
+            _say(msg)
             warning_count += count_suspicious_advisories([msg])
 
+    # ★★ 2026-09-23（⑪）: 申し送りを書く回かは、読み戻しの**前に**決まる。
+    #   書かない回の古い申し送りは**読み戻しの前に**消す ── 後で消すと、画面の
+    #   「✓ …読み戻して確認: …」が**もう無いシートを読み戻した**と言う。
+    _notes = list(result.get("advisories") or []) + _said
+    _note_due = note_is_due(_notes, machine_verified)
+    if not _note_due:
+        _gone = remove_stale_note(final, workdir, helper_files)
+        if _gone:
+            print(_gone)
     evidence, err = observe_book_state(final)
     # ★★ 2026-08-26: 判定（✓ / △ / ⚠）を**決めているこの場所で**機械可読にも出す。
     #   ★ なぜ: 画面に出る印は今まで**文字としてしか存在しなかった**ので、別の入口
@@ -13700,6 +13824,9 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
                           ("warned" if warning_count > 0 else "verified") if machine_verified
                           else "unverified")
     result["warning_count"] = warning_count
+    # ★ 判定の 1 行は**手前で空に持つ** ── 枝を数えて代入すると、通らない道が
+    #   1 つ増えた日に静かに未定義になる（今日その族を型の門が 2 回指した）。
+    _verdict_line = ""
     if err is not None:
         for ln in render_applied_unobservable(final.name, err):
             print(ln)
@@ -13715,6 +13842,7 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             lines = render_applied_claim(claim, final.name)
         for ln in lines:
             print(ln)
+        _verdict_line = lines[0] if lines else ""
         if scope_note:
             print(scope_note)
         # ★ --json: 既存キーの意味は変えず、claims を足すだけ（何と照合し・どのファイルを
@@ -13722,8 +13850,25 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         result["claims"] = [{"basis": claim.basis, "compared_with": claim.scope,
                               "observed_on": claim.observed_on}]
     else:
-        for ln in render_applied_unverified(final.name, evidence):
+        _unv = render_applied_unverified(final.name, evidence)
+        for ln in _unv:
             print(ln)
+        _verdict_line = _unv[0] if _unv else ""
+    # ★★ 2026-09-23（盲検 6 体目 ⑪・致命）: 画面に出した警告を**冊の中にも残す**。
+    #   ★ 事故: 画面には警告が 4 つ出ているのに、出来た冊を後から開いた人には
+    #     1 つも見えない（買い手「2 行しか入っていない仕訳帳が、警告なしで手元に残る」）。
+    #     メールで転送された先では、画面はもう存在しない。
+    #   ★ ここに置く理由: 判定の 3 枝（✓ / △ / ⚠）が合流する**唯一の点**。
+    #     呼び出し側（4 経路）に配ると、また片配線になる。
+    #   ★ 書くのは ⚠ の回だけ（note_is_due）── 冊の形を変える回を事故の回に絞る。
+    _wrote = None if not _note_due else write_warnings_into_the_book(
+        final, workdir, _notes,
+        # ★★ 2026-09-23: ここで「ヘルパは要らない」と判断して渡さなかったら、
+        #   Basic が `Call WriteInspectionSheet(...)` を解決できず**黙って何もしなかった**
+        #   （basrun は成功を返す）。★ 推測で経路を細くして壊した ── 今日 2 回目。
+        _verdict_line, helper_files)
+    if _wrote:
+        print(_wrote)
     print(trailer)
     return True
 
@@ -15718,7 +15863,8 @@ def cmd_run_dsl(a: argparse.Namespace, book: Path, source_book: Path, book_meta:
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count,
-                   coverage_incomplete=_coverage_sink)
+                   coverage_incomplete=_coverage_sink,
+                   helper_files=helper_files)
     if not _applied:
         return _finish_failed_apply(a, book, result)
 
@@ -15876,7 +16022,8 @@ def cmd_run_report_per_row(a: argparse.Namespace, book: Path, source_book: Path,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count,
-                   coverage_incomplete=_coverage_sink)
+                   coverage_incomplete=_coverage_sink,
+                   helper_files=helper_files)
     if not _applied:
         return _finish_failed_apply(a, book, result)
 
@@ -16030,7 +16177,8 @@ def cmd_run_format_map(a: argparse.Namespace, book: Path, source_book: Path,
                    machine_verified=(status != "warn" and not confirm.subject_warnings),
                    scope=confirm.label, scope_note="\n".join(render_scope_notes(list(confirm.unspoken))),
                    warning_count=warning_count,
-                   coverage_incomplete=_coverage_sink)
+                   coverage_incomplete=_coverage_sink,
+                   helper_files=helper_files)
     if not _applied:
         return _finish_failed_apply(a, book, result)
 
@@ -17183,7 +17331,8 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
                    scope="; ".join(label for _idx, label, _st, _det in items),
                    scope_note="\n".join(render_scope_notes(subject_sink["unspoken"])),
                    warning_count=warning_count,
-                   coverage_incomplete=_coverage_sink)
+                   coverage_incomplete=_coverage_sink,
+                   helper_files=helper_files)
     if not _applied:
         return _finish_failed_apply(a, book, result)
 

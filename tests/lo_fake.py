@@ -63,3 +63,13 @@ def apply_inspection_sheets(wb, code: str) -> int:
                     ws.cell(row=r, column=c, value=field)
         made += 1
     return made
+
+
+def is_note_call(code: str) -> bool:
+    """★ ⑪ の申し送り（⚠ の回に警告を冊へ残す、2 回目の往復）の Basic か。
+
+    偽 basrun が「1 段に 1 回呼ばれる」ことを前提に数えたり最後のコードを見たりする時は、
+    これを数えない。★ 判定を偽物ごとに書き写さない（ここ 1 つ）。
+    """
+    import ailine
+    return ailine.NOTE_SHEET in code

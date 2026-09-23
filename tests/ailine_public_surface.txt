@@ -45,6 +45,7 @@ value MISCLASS_FILE
 value NEEDS_MACHINE
 value NEW_COLUMN_ORIGIN
 value NOOP_MACRO
+value NOTE_SHEET
 value NOTICE_V2_FILE
 value NOTICE_V2_TEXT
 value NO_MODEL
@@ -199,6 +200,7 @@ def _announce_lookup_fill_target_sheet(a: 'argparse.Namespace', sheets: 'list', 
 def _announce_report_per_row_target_sheet(a: 'argparse.Namespace', sheets: 'list', args: 'dict') -> 'None'
 def _answer_before_asking(a: 'argparse.Namespace', book: 'Path', book_meta: 'dict', sheets: 'list') -> 'bool'
 def _apply_new_column_fallback(op: 'str', args: 'dict', headers: 'list', new_cols: 'list') -> 'dict'
+def _apply_note_basic(book: 'Path', workdir: 'Path', body: 'str', helper_files, failed: 'str') -> 'str | None'
 def _apply_operator(a, b, operator: 'str')
 def _ask_about_a_suspicious_word(a: 'argparse.Namespace', source_book: 'Path', book_meta: 'dict', *, input_fn=None, attr_path: 'Path | None' = None) -> 'bool'
 def _ask_which_reading(a: 'argparse.Namespace', source_book: 'Path', book_meta: 'dict', word: 'str', cands: 'list', *, input_fn=None, attr_path: 'Path | None' = None) -> 'bool'
@@ -292,7 +294,7 @@ def _extract_predicate(cmp: 'str', threshold, date_mode: 'bool' = False)
 def _fidelity_zip_members(path: 'Path') -> 'set'
 def _file_digest(path: 'Path') -> 'str | None'
 def _find_basrun_path() -> 'Path | None'
-def _finish_apply(a: 'argparse.Namespace', book: 'Path', out_book: 'Path', workdir: 'Path', result: 'dict', machine_verified: 'bool', scope: 'str' = '', scope_note: 'str' = '', warning_count: 'int' = 0, coverage_incomplete: 'list | None' = None) -> 'bool'
+def _finish_apply(a: 'argparse.Namespace', book: 'Path', out_book: 'Path', workdir: 'Path', result: 'dict', machine_verified: 'bool', scope: 'str' = '', scope_note: 'str' = '', warning_count: 'int' = 0, coverage_incomplete: 'list | None' = None, helper_files=()) -> 'bool'
 def _finish_failed_apply(a: 'argparse.Namespace', book: 'Path', result: 'dict') -> 'int'
 def _finish_gated(a: 'argparse.Namespace', book: 'Path', out_book: 'Path | None', result: 'dict', gate_exit: 'int') -> 'int'
 def _finish_run(a: 'argparse.Namespace', book: 'Path', result: 'dict', failure_kind: 'str', error_detail: 'str | None' = None) -> 'None'
@@ -722,6 +724,7 @@ def new_sheet_advisories(before: 'dict', after: 'dict') -> 'list'
 def normalize_book(book, workdir, timeout=None)
 def note_deleted(args: 'dict', rows) -> 'None'
 def note_extent_gap(out_book: 'Path', resolved_args: 'dict', header_row: 'int' = 1) -> 'None'
+def note_is_due(lines, machine_verified: 'bool') -> 'bool'
 def note_pre_existing_output(out_book: 'Path') -> 'None'
 def note_stringy_numbers(args: 'dict', values) -> 'None'
 def note_unverified(args: 'dict', count: 'int', why: 'str') -> 'None'
@@ -766,6 +769,7 @@ def refuse_if_run_cannot_open(book: 'Path') -> 'int | None'
 def release_run_lock(path: 'Path | None' = None) -> 'None'
 def removal_axis_is_wrong(op: 'str', resolved_args: 'dict', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1) -> 'str | None'
 def removal_reading(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)
+def remove_stale_note(book: 'Path', workdir: 'Path', helper_files=()) -> 'str | None'
 def render_aborted(step_prefix: 'str' = '') -> 'str'
 def render_accounts_report(today_label: 'str', out_label: 'str', result: 'dict') -> 'list'
 def render_alias_listing(aliases: 'dict', order: 'list', aliases_file: 'Path') -> 'list'
@@ -876,4 +880,6 @@ def value_written_in_task(task: 'str', llm_value, headers=None) -> 'str | None'
 def verify_dsl_args(op: 'str', args: 'dict', book_meta: 'dict', task: 'str' = '', vocab: 'dict | None' = None, target_sheet: 'str | None' = None) -> 'tuple'
 def version_report() -> 'tuple'
 def vocab_add(term: 'str', value, path: 'Path | None' = None) -> 'tuple'
+def warnings_inspection_rows(advisories, verdict_line: 'str') -> 'list'
 def wrap_basic_for_sheet(body: 'str', wrap_default: 'Callable[[str], str]', sheets: 'list', target_sheet: 'str | None') -> 'str'
+def write_warnings_into_the_book(out_book: 'Path', workdir: 'Path', advisories, verdict_line: 'str', helper_files=()) -> 'str | None'

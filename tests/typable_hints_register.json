@@ -26,7 +26,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 19029,
+   "line": 19178,
    "typable": "ailine undo",
    "text": "★ 原本は自動でバックアップされ、`ailine undo` で戻せます。",
    "walked": "未調査",
@@ -34,7 +34,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 19030,
+   "line": 19179,
    "typable": "ailine doctor",
    "text": "★ うまく動かないときは `ailine doctor` が在否を名指しで教えます。",
    "walked": "未調査",
@@ -42,7 +42,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 19929,
+   "line": 20078,
    "typable": "--past",
    "text": "過去の仕訳が 1 件もありません（`--past` に渡した先に仕訳の書き出しが見つかりません）── 先例が無ければ何も引けません",
    "walked": "未調査",
@@ -50,7 +50,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 13186,
+   "line": 13213,
    "typable": "ailine history",
    "text": "（このフォルダの冊を動かした記録はまだありません ── 全部見るなら `ailine history`）",
    "walked": "未調査",
@@ -58,7 +58,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 17876,
+   "line": 18025,
    "typable": "ailine csv",
    "text": "は csv 形式なので、このままでは照合できません。先に `ailine csv",
    "walked": "未調査",
@@ -66,7 +66,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 19016,
+   "line": 19165,
    "typable": "ailine doctor",
    "text": "揃ったら `ailine doctor` で全部 ○ になることを確かめてから、もう一度ここへ。",
    "walked": "未調査",
@@ -90,7 +90,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 19024,
+   "line": 19173,
    "typable": "ailine verify",
    "text": "→ 出来た一覧は `ailine verify <一覧.xlsx> <フォルダ>` で確かめられます",
    "walked": "未調査",
@@ -98,7 +98,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 20323,
+   "line": 20472,
    "typable": "ailine ops",
    "text": "-h`・入口の一覧は `ailine ops`",
    "walked": "未調査",
@@ -106,7 +106,7 @@
   },
   {
    "file": "__init__.py",
-   "line": 18670,
+   "line": 18819,
    "typable": "--sheet",
    "text": "× どのシートを書き出すか `--sheet` で指してください（ある:",
    "walked": "未調査",

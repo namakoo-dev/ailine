@@ -21,6 +21,7 @@ import ailine  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _book, _isolate, _run_main  # noqa: E402
+from lo_fake import is_note_call  # noqa: E402
 
 
 def _sort_book(tmp_path):
@@ -115,6 +116,8 @@ def test_freeform_step_disposed_retry_with_pristine_source(tmp_path, monkeypatch
     calls = {"n": 0}
 
     def fake_apply(out_book, c, workdir, helper_files=(), timeout=None):
+        if is_note_call(c):             # ★ ⑪ の申し送りは再試行の数に入れない
+            return True, None, "ok"
         calls["n"] += 1
         wb2 = openpyxl.load_workbook(out_book)
         ws2 = wb2.active

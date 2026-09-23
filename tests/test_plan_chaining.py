@@ -31,6 +31,7 @@ import ailine  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_golden_transcripts import _isolate, _run_main  # noqa: E402
+from lo_fake import is_note_call  # noqa: E402
 
 # ★★ 2026-09-17: ここは `PLAN_CHAIN_WARNING_OPS` の有無を見ていたが、その名簿は
 #   2026-09-15 に読み手を失い、**何も制御しない名前**として残っていただけだった
@@ -174,6 +175,8 @@ def test_extract_then_aggregate_chains_onto_the_derived_sheet(tmp_path, monkeypa
     seen = []
 
     def fake(out_book, code, workdir, helper_files=(), timeout=None):
+        if is_note_call(code):          # ★ ⑪ の申し送りは段に数えない
+            return True, None, "ok"
         seen.append(code)
         wb = openpyxl.load_workbook(out_book)
         if "ExtractRows" in code:
@@ -213,6 +216,8 @@ def test_explicitly_named_sheet_beats_the_chain(tmp_path, monkeypatch, capsys):
     seen = []
 
     def fake(out_book, code, workdir, helper_files=(), timeout=None):
+        if is_note_call(code):          # ★ ⑪ の申し送りは段に数えない
+            return True, None, "ok"
         seen.append(code)
         wb = openpyxl.load_workbook(out_book)
         if "ExtractRows" in code:
