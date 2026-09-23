@@ -39,7 +39,7 @@ def _touchable():
       ── そのせいで別の試験が偶然緑になった（1 回目は赤、2 回目は緑）。
       作業木を静かに変える試験は、次に走る試験の結果を汚す。触りうるものは全部退避する。
     """
-    out = [BUDGET, REPO / "docs" / "依存関係.md"]
+    out = [BUDGET, REPO / "tests" / "ailine_pure_logic_ceiling.txt", REPO / "docs" / "依存関係.md"]
     out += [p for p in sorted(REPO.rglob("*.md"))
             if ".git" not in str(p) and "node_modules" not in str(p)]
     return [p for p in out if p.exists()]

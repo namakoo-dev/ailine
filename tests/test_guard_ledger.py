@@ -62,18 +62,15 @@ FILE_ITSELF = {
     "scripts/refresh_records.py::<module>":
         "本体の行数の記録（ailine_py_line_budget.txt）を書き直す道具。"
         "ファイルそのものの行数を測るのが目的。",
-    "scripts/split_progress.py::<module>":
-        "本体の行数と関数を数えて分割の進み具合を出す道具（ファイルそのものを測る）。"
-        "★ 分割の作業中で別の手が触るので、ここでは書き換えない。",
+    "tests/split_progress_core.py::<module>":
+        "分割の分母を出す測定器（つめ車と scripts/split_progress.py が共有）。本体という"
+        "ファイルそのものの純ロジックを数えるのが目的で、場所は芯の MAIN_FILE から引く。",
 }
 
 #: ★ ailine_core を**再帰しない glob** で並べてよい所（理由つき）。
 #:   `glob("*.py")` は ailine_core/postconditions/ のような下位パッケージを見ない ──
 #:   2026-09-23 に 6 か所で見つかった（事後条件 5 ファイルが番人の視野の外だった）。
 SHALLOW_CORE_GLOB = {
-    "scripts/split_progress.py::main":
-        "分割の進み具合を出す道具で、分割の作業中に別の手が直す予定。それまでの間だけ"
-        "免除する（直したらこの行を消すこと ── 古い項目は下の番人が赤くする）。",
 }
 
 # --- ② quiet を単独で持つ番人（★ 理由つきで許すものだけ）--------------------------------

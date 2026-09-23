@@ -32,6 +32,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 MAIN = REPO / "src" / "ailine" / "__init__.py"
 BUDGET = REPO / "tests" / "ailine_py_line_budget.txt"
+#: ★ 2026-09-23: 本体の純ロジックの上限（tests/test_pure_logic_only_shrinks.py）。
+#:   ★ **下げる向きにだけ**書き直す ── 上がったら書かずに言う（上げるのは人が手で・理由を commit に）。
+PURE_CEILING = REPO / "tests" / "ailine_pure_logic_ceiling.txt"
 
 #: ★ この道具が**触らない**印（②測定の記録）。名前で守る ── 増えたらここに足す。
 MEASURED_MARKS = ("MATRIX", "MATRIX_CASES", "MATRIX_REFUSED", "BATTERY", "ACCURACY")
@@ -96,6 +99,17 @@ def main(argv=None):
                 BUDGET.write_bytes((str(lines) + "\n").encode("utf-8"))
         for f in _replace_mark("MAIN_FILE_LINES", str(lines), a.write):
             todo.append(f"  印 MAIN_FILE_LINES: {f}")
+        sys.path.insert(0, str(REPO / "tests"))
+        import split_progress_core as spc
+        pure, _n = spc.pure_logic(spc.survey())
+        ceiling = int(PURE_CEILING.read_bytes().decode("utf-8").split()[0])
+        if pure < ceiling:
+            todo.append(f"純ロジックの上限 {ceiling} → {pure}（下げる向きだけ自動）")
+            if a.write:
+                PURE_CEILING.write_bytes((str(pure) + chr(10)).encode("utf-8"))
+        elif pure > ceiling:
+            print(f"★ 本体の純ロジックが上限を超えた（{pure} 行 > {ceiling}）── 自動では上げない。"
+                  "ailine_core に置くか、手で上げて理由を commit に書く")
 
     if "tests" in parts:
         total, local = _count_tests()
