@@ -223,6 +223,12 @@ def near_headers(headers, role: str) -> list:
       **探している物の候補をその場に並べておきながら、近いとは言わなかった** ──
       人は「在るじゃないか」で止まる。
     ★ 近さは含有だけで見る（曖昧な類似度を持ち込まない）。決めるのは人。
+    ★★ 2026-09-23: 含有に加えて**部分列**（見出しの字が役割の中に同じ順で全部現れる・3 字以上）
+      も近いとみなす。会計ソフトの書き出しの『借方科目』は『借方勘定科目』に含まれない
+      （間に『勘定』が挟まる）ので、案内が「らしい列が見当たりません」と言っていた。
+      ★ 測ってから広げた: 実在しそうな見出し 25 個 × 役割で、増えるのは
+        借方勘定科目 ← 借方科目 / 借方補助科目 ← 借方科目 の 2 組だけ（後者は必須でなく案内に出ない）。
+      ★ 類似度は持ち込まない（字の順番の一致だけ）。決めるのは人のまま。
     """
     want = form_read.norm(role)
     out = []
@@ -230,12 +236,18 @@ def near_headers(headers, role: str) -> list:
         got = form_read.norm(h)
         if not got or got == want:
             continue
-        if got in want or want in got:
+        if got in want or want in got or (len(got) >= 3 and _is_subsequence(got, want)):
             out.append((i, str(h).strip()))
     return out
 
 
-def _refuse_columns(headers, role: str, hits: list) -> str:
+def _is_subsequence(short: str, long: str) -> bool:
+    """short の字が long の中に同じ順で全部現れるか。"""
+    it = iter(long)
+    return all(ch in it for ch in short)
+
+
+def _refuse_columns(headers, role: str, hits: list, suggest: bool = True) -> str:
     """列が決まらないときの断り文（0 列 / 2 列以上のどちらも名指しする）。
 
     ★★ 2026-09-20（⑤）: 0 列の時に**通る道**を示すようにした。旧版は別名を並べるだけで、
@@ -247,8 +259,12 @@ def _refuse_columns(headers, role: str, hits: list) -> str:
         if near:
             names = "／".join(f"『{n}』" for _i, n in near)
             lines.append(f"　★ 名前が近い列が在ります: {names}")
-            lines.append(f"　→ その列でよければ `--column {role}={near[0][1]}` を付けて"
-                         "もう一度実行してください")
+            # ★★ 2026-09-23（盲検 6 体目 ⑥ の残り・導線の台帳を歩いて発見）: 冊が何冊もある
+            #   文脈では、この 1 冊ぶんの「もう一度」は**嘘になる**── 従うと別の冊で落ちる。
+            #   そこでは呼ぶ側（cmd_accounts）が全部の冊の分を 1 行にまとめて出す（suggest=False）。
+            if suggest:
+                lines.append(f"　→ その列でよければ `--column {role}={near[0][1]}` を付けて"
+                             "もう一度実行してください")
         else:
             lines.append(f"　→ 読ませたい列があるなら `--column {role}=<見出し>` で教えてください"
                          f"（別名として自動で当たるのは: {'／'.join(COLUMN_ALIASES[role])}）")
@@ -267,6 +283,59 @@ def match_column(headers, role: str) -> list:
     wanted = {form_read.norm(a) for a in COLUMN_ALIASES[role]}
     return [i for i, h in enumerate(headers or [], start=1)
             if form_read.norm(h) in wanted and form_read.norm(h)]
+
+
+def combined_column_fix(books, given=None) -> tuple:
+    """全部の冊を読むための `--column` を 1 行にまとめる。戻り値 (並び, 選べないもの)。
+
+    books: [(冊の名, 見出しの並び, 足りない役割の並び), ...]
+    given: 既に教わった {役割: [見出し, ...]}（★ 捨てない ── 書き直しで消えると別の冊が落ちる）
+
+    ★★ 2026-09-23（盲検 6 体目 ⑥ の残り・導線の台帳を歩いて発見・2 回とも再現）:
+      道具は 1 回目に**今回の冊の分だけ**「`--column 借方勘定科目=科目` を付けてもう一度」と
+      案内し、従うと**過去の冊**（見出し『借方科目』）で落ち、2 回目の画面には次に打てる形が
+      無かった。正解（`--column` を冊の数だけ重ねる）は 09-22 に仕組みとしては入っていたのに、
+      **案内がそれを教えていなかった**。★ 1 回で全部の冊が通る 1 行を出す。
+    ★ 近い見出しが**同じ名前で 2 列以上**ある冊は `--column` では選べない（見出しでしか列を
+      指せない）── 案内すると「外せ → 付けろ」の往復になる（accounts_core.py:345 の家系）。
+      そこは「選べない」と正直に返す。近い見出しが無い役割も、推測で埋めずに返す。
+    """
+    flags: list = []
+    for role, wants in (given or {}).items():
+        for w in (wants if isinstance(wants, (list, tuple)) else [wants]):
+            if f"{role}={w}" not in flags:
+                flags.append(f"{role}={w}")
+    stuck: list = []
+    for name, headers, missing in books:
+        for role in missing:
+            normed = [form_read.norm(h) for h in headers or []]
+            near = [(i, h) for i, h in near_headers(headers, role)
+                    if normed.count(form_read.norm(h)) == 1]
+            if near:
+                flag = f"{role}={near[0][1]}"
+                if flag not in flags:
+                    flags.append(flag)
+            elif near_headers(headers, role):
+                dup = near_headers(headers, role)[0][1]
+                stuck.append(f"{name}: 『{role}』に近い『{dup}』が同じ見出しで 2 列以上あり、"
+                             "`--column` では選べません（見出しを 1 つにした写しを渡してください）")
+            else:
+                stuck.append(f"{name}: 『{role}』らしい列が見当たりません"
+                             f"（読ませたい列があるなら `--column {role}=<見出し>` で教えてください）")
+    return flags, stuck
+
+
+def render_column_fix(flags, stuck) -> str:
+    """まとめの案内の 1 行（★ 打てる形はここだけで出す）。"""
+    parts = []
+    if flags:
+        # ★ 選べない冊が混ざる時に「全部の冊を読むには」と言うと嘘になる（付けても読めない冊が残る）。
+        head = ("→ 全部の冊を読むには、これを付けてもう一度実行してください: " if not stuck else
+                "→ これを付けると読める冊が増えます（全部ではありません）: ")
+        parts.append(head + " ".join(f"`--column {f}`" for f in flags))
+    if stuck:
+        parts.append("★ " + "／".join(stuck))
+    return "　".join(parts)
 
 
 def parse_column_overrides(pairs) -> tuple:
@@ -299,12 +368,15 @@ def parse_column_overrides(pairs) -> tuple:
     return out, None
 
 
-def resolve_accounts_columns(rows, overrides=None, notes=None) -> tuple:
+def resolve_accounts_columns(rows, overrides=None, notes=None, missing_out=None,
+                             suggest: bool = True) -> tuple:
     """行の並びから (見出し行, 見出しの並び, {役割: 列番号}, 断り) を決める。
 
     rows: [(行番号, [値, ...]), ...]（原本の 1 起点の行番号）。
     ★ 見出し行は「2 つ以上埋まった最初の行」── 弥生（見出し行が無い）だけは列位置で受ける。
     ★ 断ったら header_map は空（推測で先へ進まない）。
+    ★ missing_out を渡すと、**足りなかった役割**をそこへ積む（文面を読み直さずに
+      呼ぶ側が `--column` の案内を組めるように ── 2026-09-23）。
     """
     notes = notes if notes is not None else []
     ordered = sorted(rows, key=lambda rv: rv[0])
@@ -343,7 +415,10 @@ def resolve_accounts_columns(rows, overrides=None, notes=None) -> tuple:
                 if len(got) > 1:
                     return head_row, headers, {}, (
                         f"`--column {role}={want}` と教わりましたが、同じ見出しが"
-                        f"{len(got)} 列あります ── どれを読むかは表からは決まりません")
+                        f"{len(got)} 列あります ── どれを読むかは表からは決まりません"
+                        # ★ 2026-09-23: 次の手を添える（`--column` は見出しでしか列を指せない ──
+                        #   ここで黙ると「外せ ⇄ 付けろ」の往復になった）
+                        "（`--column` では選べません ── 見出しを 1 つにした写しを渡してください）")
             if landed is None:
                 notes.append(
                     f"`--column {role}=" + "／".join(wants) + "` と教わりましたが、"
@@ -365,6 +440,10 @@ def resolve_accounts_columns(rows, overrides=None, notes=None) -> tuple:
         #   指定は打ち間違いであり、黙って自動照合に落ちたら「教えたのに無視された」に
         #   見える（2026-09-20 に置いた契約: 在ると思って渡した人に、何が見えているかを返す）。
         #   ★ 2 冊以上なら当たった冊で使われるので、そちらは note のままでよい。
+        # ★ 足りない役割は**先に**積む ── 下の「教わったが当たらない」で返る回（2 回目の実行）こそ
+        #   呼ぶ側がまとめの案内を出したい回だから。
+        if missing_out is not None:
+            missing_out.extend(missing)
         stray = [n for n in notes if any(f"{r}=" in n for r in missing)]
         if stray:
             return head_row, headers, {}, "／".join(stray)
@@ -372,7 +451,7 @@ def resolve_accounts_columns(rows, overrides=None, notes=None) -> tuple:
         #   名指ししており、人は直して走らせて次を知る ── 往復が必要列の数だけ増える。
         #   ★ 照合の側は最初からそうしている（「決まらなかった役割を全部集めてから報告」）
         #     ── 同じ考えがこちらに配線されていなかった。
-        refusal = "／".join(_refuse_columns(headers, r, []) for r in missing)
+        refusal = "／".join(_refuse_columns(headers, r, [], suggest) for r in missing)
     else:
         refusal = f"見出しの行が見つかりません（最初の行: {_seen_headers(ordered[0][1])}）"
 

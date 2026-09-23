@@ -93,3 +93,70 @@ def test_the_roles_still_come_from_the_declaration():
     assert why and "役割はありません" in why, why
     for role in accounts_core.COLUMN_ALIASES:
         assert role in why, f"{role} が案内に出ていない"
+
+
+# ---------------------------------------------------------------------------
+# ★★ 2026-09-23（盲検 6 体目 ⑥ の残り・導線の台帳を歩いて発見・2 回とも再現）
+#   09-22 の直しで「冊ごとに違う見出しを教えられる」仕組みは入ったが、**案内がそれを教えて
+#   いなかった**。1 回目は今回の冊の分だけ「`--column 借方勘定科目=科目` を付けてもう一度」と
+#   言い、従うと過去の冊（『借方科目』）で落ち、2 回目の画面に次に打てる形が無かった。
+# ---------------------------------------------------------------------------
+
+import re  # noqa: E402
+
+TODAY = [["社員", "日付", "科目", "借方金額", "摘要"],
+         ["佐藤", "2026-08-02", "旅費交通費", 1280, "電車代"]]
+PAST = [["日付", "摘要", "借方科目", "借方金額"],
+        ["2026-07-03", "電車代", "旅費交通費", 980]]
+
+
+def _accounts(tmp_path, capsys, today, past, extra=()):
+    import openpyxl
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import ailine
+    for name, rows in (("今回.xlsx", today), ("過去.xlsx", past)):
+        wb = openpyxl.Workbook()
+        for r in rows:
+            wb.active.append(r)
+        wb.save(tmp_path / name)
+    rc = ailine.main(["accounts", str(tmp_path / "今回.xlsx"), "--past", str(tmp_path / "過去.xlsx"),
+                      "--out", str(tmp_path / f"候補{len(extra)}.xlsx"), *extra])
+    return rc, capsys.readouterr().out
+
+
+def _flags(screen):
+    return [x for f in re.findall(r"`--column ([^`]+)`", screen) for x in ("--column", f)]
+
+
+def test_the_first_screen_names_every_book_in_one_line(tmp_path, capsys):
+    """★★ 本体: 1 回目の画面で、全部の冊の分を 1 行の `--column` にまとめて出す。"""
+    rc, out = _accounts(tmp_path, capsys, TODAY, PAST)
+    assert rc == 4, out
+    assert "全部の冊を読むには" in out, out
+    assert "`--column 借方勘定科目=科目`" in out and "`--column 借方勘定科目=借方科目`" in out, out
+    assert "その列でよければ" not in out, "1 冊ぶんの「もう一度」がまだ出ている（従うと別の冊で落ちる）"
+
+
+def test_the_one_line_typed_as_is_reaches(tmp_path, capsys):
+    """★ その 1 行を**そのまま**打つと通る（案内が嘘でない）。"""
+    _rc, out = _accounts(tmp_path, capsys, TODAY, PAST)
+    rc2, out2 = _accounts(tmp_path, capsys, TODAY, PAST, _flags(out.split("全部の冊を読むには")[1]))
+    assert rc2 == 0, out2
+
+
+def test_a_book_that_cannot_be_selected_is_named_not_looped(tmp_path, capsys):
+    """★ 同じ見出しが 2 列ある冊は `--column` では選べない ── 正直に言い、「全部」と言わない。
+       旧版は「外せ ⇄ 付けろ」の往復になった（accounts_core.py:345 の家系）。"""
+    past_dup = [["日付", "科目", "借方金額", "科目"], ["2026-07-03", "旅費交通費", 980, "現金"]]
+    rc, out = _accounts(tmp_path, capsys, TODAY, past_dup)
+    assert rc == 4
+    assert "全部の冊を読むには" not in out, "読めない冊が残るのに『全部』と言った"
+    assert "全部ではありません" in out and "写しを渡してください" in out, out
+    rc2, out2 = _accounts(tmp_path, capsys, TODAY, past_dup, _flags(out))
+    assert "写しを渡してください" in out2, f"従った後の画面に次の手が無い（往復の入口）\n{out2}"
+
+
+def test_a_software_export_header_counts_as_near():
+    """『借方科目』は『借方勘定科目』の近い見出し（部分列）。『借方金額』はならない。"""
+    near = {h for _i, h in accounts_core.near_headers(["借方科目", "借方金額", "摘要"], "借方勘定科目")}
+    assert near == {"借方科目"}, near

@@ -47,6 +47,8 @@ class JournalBook:
     #: ★ 2026-09-22: `--column` の指定がこの冊で当たらず自動照合へ落ちた等、
     #:   **黙って別の列を読んでいない**ことを人に返すための名指し。
     notes: list = field(default_factory=list)
+    #: ★ 2026-09-23: 列が足りずに断った時の、足りなかった役割（`--column` の案内を組む材料）
+    missing_roles: list = field(default_factory=list)
     refused: str | None = None
 
 
@@ -79,7 +81,7 @@ def _raw_rows_from_book(path) -> tuple:
         book.close()
 
 
-def read_journal(path, overrides=None) -> JournalBook:
+def read_journal(path, overrides=None, suggest: bool = True) -> JournalBook:
     """1 冊の仕訳（CSV / xlsx）を読み、列を解決して `JournalBook` を返す。
 
     ★ 断るのは 3 つ: 扱えない形式／文字コードが決められない／列が決まらない。
@@ -105,14 +107,16 @@ def read_journal(path, overrides=None) -> JournalBook:
         return JournalBook(name=path.name, path=str(path),
                            refused=f"{path.name}: {input_path.explain_unreadable(e, path)}")
 
+    missing: list = []
     header_row, headers, header_map, refusal = \
-        accounts_core.resolve_accounts_columns(raw_rows, overrides, notes=notes)
+        accounts_core.resolve_accounts_columns(raw_rows, overrides, notes=notes,
+                                               missing_out=missing, suggest=suggest)
     width = max((len(v) for _r, v in raw_rows), default=0)
     if refusal:
         return JournalBook(name=path.name, path=str(path), header_row=header_row,
                            headers=list(headers), width=width, encoding=encoding,
                            ambiguous=ambiguous, truncated=truncated,
-                           notes=list(notes),
+                           notes=list(notes), missing_roles=list(missing),
                            refused=f"{path.name}: {refusal}")
     rows = [(r, v) for r, v in sorted(raw_rows, key=lambda rv: rv[0])
             if header_row is None or r > header_row]

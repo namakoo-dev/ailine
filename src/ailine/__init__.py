@@ -20094,14 +20094,18 @@ def cmd_accounts(a: argparse.Namespace) -> int:
         result["refused"] = _why
         emit()
         return 4
-    today = accounts_read.read_journal(today_path, _cols)
+    # ★★ 2026-09-23（盲検 6 体目 ⑥ の残り）: 冊ごとの「もう一度」は出さない（suggest=False）──
+    #   1 冊ぶんの案内に従うと別の冊で落ちた。全部の冊を読んでから、1 行にまとめて出す。
+    today = accounts_read.read_journal(today_path, _cols, suggest=False)
     result.update({"header_row": today.header_row, "encoding": today.encoding,
                    "ambiguous": today.ambiguous})
     result["unreadable"] += [f"{today.name}: {n}" for n in (today.notes or [])]
     if today.truncated:
         result["unreadable"].append(f"{today.name} は {accounts_read.MAX_ROWS} 行で"
                                     "打ち切りました（それ以降は読んでいません）")
-    if today.refused:
+    # ★ 列の不足で断られた時だけは止まらずに過去の冊も読む（まとめの案内に要る）。
+    #   形式・文字コードの断りは `--column` では直らないので、従来どおりここで止める。
+    if today.refused and not today.missing_roles:
         result["refused"] = today.refused
         emit()
         return 4
@@ -20118,15 +20122,16 @@ def cmd_accounts(a: argparse.Namespace) -> int:
             past_paths.remove(path)
             continue
         seen_digest[digest] = path.name
+    refused_books = []
     for path in past_paths:
-        # ★ 過去の冊にも同じ指定を効かせる ── 今回だけ通って過去が全部断られるのは
-        #   「片方だけ直す」形（実際の冊は同じ書き出しなので、見出しも同じ）。
-        book = accounts_read.read_journal(path, _cols)
+        # ★ 過去の冊にも同じ指定を効かせる ── 当たらない冊では自動照合へ落ちる（2026-09-22）。
+        book = accounts_read.read_journal(path, _cols, suggest=False)
         # ★ 2026-09-22: `--column` がこの冊で当たらず自動照合へ落ちたことを名指しする
         #   （黙って別の列を読まない ── 既存の名指しの道に載せる）。
         result["unreadable"] += [f"{book.name}: {n}" for n in (book.notes or [])]
         if book.refused:
             result["unreadable"].append(book.refused)
+            refused_books.append(book)
             continue
         if book.ambiguous:
             result["ambiguous_books"].append(book.name)
@@ -20136,10 +20141,22 @@ def cmd_accounts(a: argparse.Namespace) -> int:
         past_books.append(book)
     result["past"] = [b.name for b in past_books]
     result["past_paths"] = [str(p) for p in past_paths]
-    if not past_books:
-        result["refused"] = "過去の仕訳を 1 冊も読めませんでした（上の名指しを見てください）"
+    # ★ 全部の冊を読むための `--column` を 1 行にまとめる（打てる形はここだけで出す）。
+    fix_books = [(b.name, b.headers, b.missing_roles) for b in [today] + refused_books
+                 if b.missing_roles]
+    fix_line = (accounts_core.render_column_fix(*accounts_core.combined_column_fix(fix_books, _cols))
+                if fix_books else "")
+    if today.refused:
+        result["refused"] = today.refused + (f"　{fix_line}" if fix_line else "")
         emit()
         return 4
+    if not past_books:
+        result["refused"] = ("過去の仕訳を 1 冊も読めませんでした（上の名指しを見てください）"
+                             + (f"　{fix_line}" if fix_line else ""))
+        emit()
+        return 4
+    if fix_line:
+        result["unreadable"].append(fix_line)
 
     # ★ 入力の指紋（D4「書き込みは 0」を機械にする・設計 §6.3）── 後で前後を比べる。
     digests = {str(p): _file_digest(p) for p in [today_path] + past_paths}
