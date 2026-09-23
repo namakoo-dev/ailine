@@ -82,6 +82,11 @@ def _guard_real_home_writes(monkeypatch, tmp_path):
     #   backups も明示的に tmp へ寄せる ── 実測で並行 pytest の相互妨害が続いていた。
     monkeypatch.setattr(ailine, "RUN_LOCK_FILE", tmp_path / "_guard_run.lock", raising=False)
     monkeypatch.setattr(ailine, "BACKUP_DIR", tmp_path / "_guard_backups", raising=False)
+    # ★★ 2026-09-23: 上の手書きの名簿には ATTRIBUTES_FILE と HISTORY_DIR が抜けていた（片配線）。
+    #   残りは**モジュールから導いて**寄せる ── 保存先が増えても自動で守られる。
+    from _home_isolation import home_bound_paths
+    for name, _p in home_bound_paths(ailine).items():
+        monkeypatch.setattr(ailine, name, tmp_path / f"_guard_{name.lower()}")
 
 
 @pytest.fixture(autouse=True)

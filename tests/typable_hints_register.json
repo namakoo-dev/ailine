@@ -5,328 +5,1966 @@
   "denominator": "機械で出す ── 製品の画面に出うる文字列のうち、バッククォートの中に**打てるもの**（`ailine <サブコマンド>` か `--フラグ`）を含むもの。番人は tests/test_every_typable_hint_is_accounted_for.py。",
   "walked_values": "walked=歩いて着いた / path_fails=歩いたが着かなかった（最悪）/ by_design=意図した行き止まり / 未調査=まだ誰も歩いていない",
   "how_to_read": "★ 未調査は『大丈夫』ではない ── **見ていない**という意味。walk_refusals と同じ線で、測れなかった回を判定に混ぜない。",
-  "measured": "2026-09-23 に機械で数えて 40 件。うち 40 件が既存の台帳の外だった。"
+  "measured": "2026-09-23 に機械で数えて 40 件。うち 40 件が既存の台帳の外だった。",
+  "key": "鍵は『ファイル＋文面の頭』（2026-09-23 から）── 行番号は上に 1 行足すだけで全部ずれた（同じ日に 2 回）。文面が変われば歩き直すべき時なので、鳴ってほしい時にだけ鳴る"
  },
  "hints": [
   {
    "file": "__init__.py",
-   "line": 939,
    "typable": "--header-row",
    "text": "見出しが何行目か分かりません。`--header-row 3` のように指定して再実行してください",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "曖昧.xlsx": {
+      "表": [
+       [
+        "名前",
+        "部署"
+       ],
+       [
+        "田中",
+        100
+       ],
+       [
+        "名前2",
+        "部署2"
+       ],
+       [
+        "鈴木",
+        200
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:曖昧.xlsx}",
+     "並べ替えて",
+     "--copy"
+    ],
+    "expect": "見出しが何行目か分かりません",
+    "path": {
+     "argv": [
+      "run",
+      "{book:曖昧.xlsx}",
+      "並べ替えて",
+      "--copy",
+      "--header-row",
+      "3",
+      "--dry"
+     ],
+     "plan": [
+      {
+       "op": "SORT",
+       "args": {
+        "col": "部署2",
+        "order": "desc"
+       }
+      }
+     ],
+     "expect_rc": 0,
+     "expect": "（--dry"
+    }
+   }
   },
   {
    "file": "__init__.py",
-   "line": 1059,
    "typable": "--header-row",
    "text": "・`--header-row` では直せません ── 何行目を指定しても、そこに見出しがありません",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "空.xlsx": {
+      "表": []
+     }
+    },
+    "argv": [
+     "run",
+     "{book:空.xlsx}",
+     "金額を合計して",
+     "--copy"
+    ],
+    "expect": "・`--header-row` では直せません",
+    "path": {
+     "argv": [
+      "run",
+      "{book:空.xlsx}",
+      "金額を合計して",
+      "--copy",
+      "--header-row",
+      "3"
+     ],
+     "expect_rc": 9,
+     "expect": "・`--header-row` では直せません"
+    }
+   }
   },
   {
    "file": "__init__.py",
-   "line": 19178,
    "typable": "ailine undo",
    "text": "★ 原本は自動でバックアップされ、`ailine undo` で戻せます。",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "検証用.xlsx": {
+      "表": [
+       [
+        "品名",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     }
+    },
+    "setup": [
+     {
+      "argv": [
+       "run",
+       "{book:検証用.xlsx}",
+       "金額で降順に並べ替えて",
+       "--timeout",
+       "60"
+      ],
+      "plan": [
+       {
+        "op": "SORT",
+        "args": {
+         "col": "金額",
+         "order": "desc"
+        }
+       }
+      ]
+     }
+    ],
+    "argv": [
+     "demo",
+     "--out",
+     "{root}/demo出力"
+    ],
+    "expect": "★ 原本は自動でバックアップされ、`ailine undo` で戻せます。",
+    "path": {
+     "argv": [
+      "undo",
+      "{book:検証用.xlsx}"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "__init__.py",
-   "line": 19179,
    "typable": "ailine doctor",
    "text": "★ うまく動かないときは `ailine doctor` が在否を名指しで教えます。",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "argv": [
+     "demo",
+     "--out",
+     "{root}/demo出力2"
+    ],
+    "expect": "★ うまく動かないときは `ailine doctor` が在否を名指しで教えます。",
+    "path": {
+     "argv": [
+      "doctor"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "__init__.py",
-   "line": 20078,
    "typable": "--past",
    "text": "過去の仕訳が 1 件もありません（`--past` に渡した先に仕訳の書き出しが見つかりません）── 先例が無ければ何も引けません",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "今回.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方勘定科目",
+        "借方金額"
+       ],
+       [
+        "2026-09-01",
+        "電車代",
+        "旅費交通費",
+        1000
+       ]
+      ]
+     },
+     "過去.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方勘定科目",
+        "借方金額"
+       ],
+       [
+        "2026-08-01",
+        "電車代",
+        "旅費交通費",
+        900
+       ]
+      ]
+     }
+    },
+    "dirs": [
+     "空の過去"
+    ],
+    "argv": [
+     "accounts",
+     "{book:今回.xlsx}",
+     "--past",
+     "{root}/空の過去",
+     "--out",
+     "{root}/候補.xlsx"
+    ],
+    "expect": "過去の仕訳が 1 件もありません",
+    "path": {
+     "argv": [
+      "accounts",
+      "{book:今回.xlsx}",
+      "--past",
+      "{book:過去.xlsx}",
+      "--out",
+      "{root}/候補2.xlsx"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "__init__.py",
-   "line": 13213,
    "typable": "ailine history",
    "text": "（このフォルダの冊を動かした記録はまだありません ── 全部見るなら `ailine history`）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "argv": [
+     "history",
+     "--folder",
+     "{root}"
+    ],
+    "expect": "（このフォルダの冊を動かした記録はまだありません ── 全部見るなら `ailine history`）",
+    "path": {
+     "argv": [
+      "history"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "__init__.py",
-   "line": 18025,
    "typable": "ailine csv",
    "text": "は csv 形式なので、このままでは照合できません。先に `ailine csv",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "照合先.xlsx": {
+      "表": [
+       [
+        "品名",
+        "金額"
+       ],
+       [
+        "ボルト",
+        150
+       ],
+       [
+        "ワッシャー",
+        300
+       ]
+      ]
+     }
+    },
+    "texts": {
+     "照合元.csv": "品名,金額\nボルト,120\nナット,80\n"
+    },
+    "argv": [
+     "run",
+     "{root}/照合元.csv",
+     "{book:照合先.xlsx}",
+     "品名で照合して"
+    ],
+    "expect": "は csv 形式なので、このままでは照合できません",
+    "path": {
+     "argv": [
+      "csv",
+      "{root}/照合元.csv"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "__init__.py",
-   "line": 19165,
    "typable": "ailine doctor",
    "text": "揃ったら `ailine doctor` で全部 ○ になることを確かめてから、もう一度ここへ。",
    "walked": "未調査",
-   "note": ""
+   "note": "2026-09-23 補助スクリプトで一度歩いた（doctor の点検を一時的に差し替え（モデルだけ欠けた状態）て発火を確認し、実環境の doctor が rc 0）── 盤では歩けない: 盤では doctor の点検を差し替えられない（実機は全項目 ○ なので案内が出ない）"
   },
   {
    "file": "__init__.py",
-   "line": 1064,
    "typable": "--sheet",
    "text": "（`--sheet <名前>` で選べます）",
    "walked": "未調査",
-   "note": ""
+   "note": "2026-09-23 補助スクリプトで一度歩いた（1 枚目が空の 2 シートの冊で発火・`--sheet 商品` で解消（--dry・適用が遅く最後の書き換えまでは見ていない））── 盤では歩けない: 盤の歩きは適用まで走る ── 実機の LibreOffice が要り A 群では時間がかかる"
   },
   {
    "file": "__init__.py",
-   "line": 1087,
    "typable": "--header-row",
    "text": "行目に見出しがあるようです。`--header-row",
    "walked": "未調査",
-   "note": ""
+   "note": "2026-09-23 補助スクリプトで一度歩いた（5 行目の単独セルで敗者復活を発火・`--header-row 5` で解消（--dry・人工的な形））── 盤では歩けない: 同上"
   },
   {
    "file": "__init__.py",
-   "line": 19173,
    "typable": "ailine verify",
    "text": "→ 出来た一覧は `ailine verify <一覧.xlsx> <フォルダ>` で確かめられます",
    "walked": "未調査",
-   "note": ""
+   "note": "2026-09-23 補助スクリプトで一度歩いた（doctor を差し替えて発火・forms → verify の道を実演（rc 0・破れなし））── 盤では歩けない: 盤では doctor の点検を差し替えられない"
   },
   {
    "file": "__init__.py",
-   "line": 20472,
    "typable": "ailine ops",
    "text": "-h`・入口の一覧は `ailine ops`",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "argv": [
+     "run"
+    ],
+    "expect": "入口の一覧は `ailine ops`",
+    "path": {
+     "argv": [
+      "ops"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "__init__.py",
-   "line": 18819,
    "typable": "--sheet",
    "text": "× どのシートを書き出すか `--sheet` で指してください（ある:",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "多シート.xlsx": {
+      "シート1": [
+       [
+        "a",
+        "b"
+       ],
+       [
+        1,
+        2
+       ]
+      ],
+      "シート2": [
+       [
+        "c",
+        "d"
+       ],
+       [
+        3,
+        4
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "export-csv",
+     "{book:多シート.xlsx}"
+    ],
+    "expect": "× どのシートを書き出すか `--sheet` で指してください（ある:",
+    "path": {
+     "argv": [
+      "export-csv",
+      "{book:多シート.xlsx}",
+      "--sheet",
+      "シート1"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "accounts_core.py",
-   "line": 250,
    "typable": "--column",
    "text": "→ その列でよければ `--column",
-   "walked": "path_fails",
-   "note": "★ 盲検 6 体目 ⑥（致命）: この案内どおり `--column 借方勘定科目=科目` を打つと過去の仕訳が全部落ちた。2026-09-22 に『冊ごとの手がかり』へ直して歩けるようにした"
+   "walked": "walked",
+   "note": "★ 盲検 6 体目 ⑥（致命）: この案内どおり `--column 借方勘定科目=科目` を打つと過去の仕訳が全部落ちた。2026-09-22 に『冊ごとの手がかり』へ直して歩けるようにした",
+   "walk": {
+    "books": {
+     "候補.xlsx": {
+      "候補": [
+       [
+        "元行",
+        "候補の科目",
+        "採用"
+       ],
+       [
+        2,
+        "旅費交通費",
+        "○"
+       ]
+      ]
+     },
+     "今回.xlsx": {
+      "精算": [
+       [
+        "社員",
+        "日付",
+        "科目",
+        "借方金額",
+        "摘要"
+       ],
+       [
+        "佐藤",
+        "2026-08-02",
+        "",
+        1280,
+        "電車代"
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "accounts-apply",
+     "{book:候補.xlsx}",
+     "{book:今回.xlsx}",
+     "--out",
+     "{root}/取込.xlsx"
+    ],
+    "expect": "その列でよければ",
+    "path": {
+     "argv": [
+      "accounts-apply",
+      "{book:候補.xlsx}",
+      "{book:今回.xlsx}",
+      "--out",
+      "{root}/取込2.xlsx"
+     ],
+     "expect_rc": 0,
+     "follow": "--column"
+    }
+   }
   },
   {
    "file": "accounts_core.py",
-   "line": 253,
    "typable": "--column",
    "text": "→ 読ませたい列があるなら `--column",
    "walked": "walked",
-   "note": "★ 盲検 6 体目 ⑥ と同じ家系。直し後は両方の冊が読めることを実機で確認"
+   "note": "★ 盲検 6 体目 ⑥ と同じ家系。直し後は両方の冊が読めることを実機で確認",
+   "walk": {
+    "books": {
+     "今回.xlsx": {
+      "精算": [
+       [
+        "社員",
+        "日付",
+        "部署コード",
+        "借方金額",
+        "摘要"
+       ],
+       [
+        "佐藤",
+        "2026-08-02",
+        "旅費交通費",
+        1280,
+        "電車代"
+       ],
+       [
+        "鈴木",
+        "2026-08-07",
+        "会議費",
+        3500,
+        "打合せ"
+       ]
+      ]
+     },
+     "過去.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方勘定科目",
+        "借方金額"
+       ],
+       [
+        "2026-07-03",
+        "電車代",
+        "旅費交通費",
+        980
+       ],
+       [
+        "2026-07-09",
+        "打合せ",
+        "会議費",
+        2400
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "accounts",
+     "{book:今回.xlsx}",
+     "--past",
+     "{book:過去.xlsx}",
+     "--out",
+     "{root}/候補.xlsx"
+    ],
+    "expect": "読ませたい列があるなら",
+    "path": {
+     "argv": [
+      "accounts",
+      "{book:今回.xlsx}",
+      "--past",
+      "{book:過去.xlsx}",
+      "--out",
+      "{root}/候補2.xlsx",
+      "--column",
+      "借方勘定科目=部署コード"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "accounts_core.py",
-   "line": 287,
    "typable": "--column",
    "text": "`--column` の形が違います（",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "今回.xlsx": {
+      "精算": [
+       [
+        "社員",
+        "日付",
+        "借方勘定科目",
+        "借方金額",
+        "摘要"
+       ],
+       [
+        "佐藤",
+        "2026-08-02",
+        "",
+        1280,
+        "電車代"
+       ]
+      ]
+     },
+     "過去.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方勘定科目",
+        "借方金額"
+       ],
+       [
+        "2026-07-03",
+        "電車代",
+        "旅費交通費",
+        980
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "accounts",
+     "{book:今回.xlsx}",
+     "--past",
+     "{book:過去.xlsx}",
+     "--out",
+     "{root}/候補.xlsx",
+     "--column",
+     "借方勘定科目"
+    ],
+    "expect": "`--column` の形が違います（",
+    "path": {
+     "argv": [
+      "accounts",
+      "{book:今回.xlsx}",
+      "--past",
+      "{book:過去.xlsx}",
+      "--out",
+      "{root}/候補2.xlsx",
+      "--column",
+      "借方勘定科目=借方勘定科目"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "accounts_core.py",
-   "line": 295,
    "typable": "--column",
    "text": "』に渡す見出しが空です（`--column",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "今回.xlsx": {
+      "精算": [
+       [
+        "社員",
+        "日付",
+        "借方勘定科目",
+        "借方金額",
+        "摘要"
+       ],
+       [
+        "佐藤",
+        "2026-08-02",
+        "",
+        1280,
+        "電車代"
+       ]
+      ]
+     },
+     "過去.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方勘定科目",
+        "借方金額"
+       ],
+       [
+        "2026-07-03",
+        "電車代",
+        "旅費交通費",
+        980
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "accounts",
+     "{book:今回.xlsx}",
+     "--past",
+     "{book:過去.xlsx}",
+     "--out",
+     "{root}/候補.xlsx",
+     "--column",
+     "借方勘定科目="
+    ],
+    "expect": "に渡す見出しが空です（`--column",
+    "path": {
+     "argv": [
+      "accounts",
+      "{book:今回.xlsx}",
+      "--past",
+      "{book:過去.xlsx}",
+      "--out",
+      "{root}/候補2.xlsx",
+      "--column",
+      "借方勘定科目=借方勘定科目"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "accounts_core.py",
-   "line": 345,
    "typable": "--column",
    "text": "`--column",
-   "walked": "未調査",
-   "note": ""
+   "walked": "by_design",
+   "note": "",
+   "nth": 2,
+   "walk": {
+    "kind": "by_design",
+    "why": "同じ見出しが 2 列ある冊は `--column` では選べない（見出しでしか列を指せない）。直し方はファイルの写しの見出しを 1 つにすることで CLI の道ではない ── 画面はそう言い、往復に入らない（2026-09-23 に再現して止めた）"
+   }
   },
   {
    "file": "accounts_core.py",
-   "line": 349,
    "typable": "--column",
    "text": "`--column",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "nth": 3,
+   "walk": {
+    "books": {
+     "今回.xlsx": {
+      "精算": [
+       [
+        "社員",
+        "日付",
+        "科目",
+        "借方金額",
+        "摘要"
+       ],
+       [
+        "佐藤",
+        "2026-08-02",
+        "",
+        1280,
+        "電車代"
+       ]
+      ]
+     },
+     "過去.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方勘定科目",
+        "借方金額"
+       ],
+       [
+        "2026-07-03",
+        "電車代",
+        "旅費交通費",
+        980
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "accounts",
+     "{book:今回.xlsx}",
+     "--past",
+     "{book:過去.xlsx}",
+     "--out",
+     "{root}/候補.xlsx",
+     "--column",
+     "借方勘定科目=科目"
+    ],
+    "expect": "と教わりましたが、その見出しはこの冊にありません",
+    "path": {
+     "argv": [
+      "accounts",
+      "{book:今回.xlsx}",
+      "--past",
+      "{book:過去.xlsx}",
+      "--out",
+      "{root}/候補2.xlsx",
+      "--column",
+      "借方勘定科目=科目"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "cli_render.py",
-   "line": 49,
    "typable": "--show-basic",
    "text": "（生成した .bas は出していません ── ルール変換（LLM 不使用）で作りました。見るなら `--show-basic`。何をしたかは下の「変更点」と検証で確かめられます）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "在庫.xlsx": {
+      "シート1": [
+       [
+        "商品",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:在庫.xlsx}",
+     "並べ替えて",
+     "--copy",
+     "--out",
+     "{root}/o1.xlsx"
+    ],
+    "plan": [
+     {
+      "op": "SORT",
+      "args": {
+       "col": "金額",
+       "order": "desc"
+      }
+     }
+    ],
+    "expect": "見るなら `--show-basic`",
+    "path": {
+     "argv": [
+      "run",
+      "{book:在庫.xlsx}",
+      "並べ替えて",
+      "--copy",
+      "--out",
+      "{root}/o2.xlsx",
+      "--show-basic"
+     ],
+     "plan": [
+      {
+       "op": "SORT",
+       "args": {
+        "col": "金額",
+        "order": "desc"
+       }
+      }
+     ],
+     "expect_rc": 0,
+     "expect": "生成した .bas（ルール変換・LLM不使用）"
+    }
+   }
   },
   {
    "file": "cli_render.py",
-   "line": 163,
    "typable": "ailine ops",
    "text": "AI が直接生成します（機械保証なし・適用の確認は出ません。次の手: `ailine ops` / 依頼を言い換える）。",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "在庫2.xlsx": {
+      "シート1": [
+       [
+        "商品",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:在庫2.xlsx}",
+     "並べ替えてから謎の処理をして",
+     "--copy",
+     "--out",
+     "{root}/p1.xlsx"
+    ],
+    "plan": [
+     {
+      "op": "SORT",
+      "args": {
+       "col": "金額",
+       "order": "desc"
+      }
+     },
+     {
+      "op": "UNKNOWN_OP",
+      "about": "謎の処理"
+     }
+    ],
+    "expect": "AI が直接生成します（機械保証なし・適用の確認は出ません。次の手: `ailine ops` / 依頼を言い換える）。",
+    "path": {
+     "argv": [
+      "ops"
+     ],
+     "expect_rc": 0,
+     "expect": "ailine に頼めること"
+    }
+   }
   },
   {
    "file": "cli_render.py",
-   "line": 138,
    "typable": "ailine doctor",
    "text": "→ `ailine doctor` で、何が足りないかを名指しします",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "在庫4.xlsx": {
+      "シート1": [
+       [
+        "商品",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:在庫4.xlsx}",
+     "よしなにして",
+     "--copy",
+     "--out",
+     "{root}/e1.xlsx"
+    ],
+    "plan": [
+     {
+      "op": "FREEFORM",
+      "args": {},
+      "_fail_reason": "translate_error"
+     }
+    ],
+    "expect": "→ `ailine doctor` で、何が足りないかを名指しします",
+    "path": {
+     "argv": [
+      "doctor"
+     ],
+     "expect_rc": 0,
+     "expect": "ollama 到達"
+    }
+   }
   },
   {
    "file": "cli_render.py",
-   "line": 830,
    "typable": "--amount",
    "text": "金額は数えていません（`--amount <金額の見出し>` を付けると、行数と同じやり方で金額の和も証明します）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "一覧.xlsx": {
+      "シート1": [
+       [
+        "担当者",
+        "金額"
+       ],
+       [
+        "田中",
+        100
+       ],
+       [
+        "田中",
+        50
+       ],
+       [
+        "鈴木",
+        200
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "split",
+     "{book:一覧.xlsx}",
+     "--by",
+     "担当者",
+     "--out",
+     "{root}/dist1"
+    ],
+    "expect": "金額は数えていません（`--amount <金額の見出し>` を付けると、",
+    "path": {
+     "argv": [
+      "split",
+      "{book:一覧.xlsx}",
+      "--by",
+      "担当者",
+      "--amount",
+      "金額",
+      "--out",
+      "{root}/dist2"
+     ],
+     "expect_rc": 0,
+     "expect": "／金額"
+    }
+   }
   },
   {
    "file": "cli_render.py",
-   "line": 147,
    "typable": "ailine run",
    "text": "は `ailine run` では受け取れません。",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "在庫3.xlsx": {
+      "シート1": [
+       [
+        "商品",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:在庫3.xlsx}",
+     "PDFにして",
+     "--copy",
+     "--out",
+     "{root}/q1.xlsx"
+    ],
+    "plan": [
+     {
+      "op": "FREEFORM",
+      "args": {}
+     }
+    ],
+    "expect": "は `ailine run` では受け取れません。",
+    "path": {
+     "argv": [
+      "export-pdf",
+      "{book:在庫3.xlsx}",
+      "--out",
+      "{root}/q1.pdf"
+     ],
+     "expect_rc": 0,
+     "expect": "■ ailine export-pdf"
+    }
+   }
   },
   {
    "file": "cli_render.py",
-   "line": 222,
    "typable": "ailine vocab",
    "text": "に登録するか `ailine vocab add <語> <値>` で追加）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "argv": [
+     "vocab",
+     "list"
+    ],
+    "expect": "（用語集は空。",
+    "path": {
+     "argv": [
+      "vocab",
+      "add",
+      "消費税",
+      "1.1"
+     ],
+     "expect_rc": 0,
+     "expect": "✓ "
+    }
+   }
   },
   {
    "file": "cli_render.py",
-   "line": 235,
    "typable": "ailine alias",
    "text": "に登録するか `ailine alias add <言い回し> <OP>` で追加）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "argv": [
+     "alias",
+     "list"
+    ],
+    "expect": "（別名ストアは空。",
+    "path": {
+     "argv": [
+      "alias",
+      "add",
+      "大きい順にして",
+      "SORT"
+     ],
+     "expect_rc": 0,
+     "expect": "✓ "
+    }
+   }
   },
   {
    "file": "cli_render.py",
-   "line": 447,
    "typable": "ailine csv",
    "text": "件（1本ずつなら `ailine csv` で扱ってください）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "在庫.xlsx": {
+      "シート1": [
+       [
+        "商品",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     }
+    },
+    "texts": {
+     "請求.csv": "商品,金額\nボルト,120\nナット,80\n"
+    },
+    "argv": [
+     "scan",
+     "{root}"
+    ],
+    "expect": "件（1本ずつなら `ailine csv` で扱ってください）",
+    "path": {
+     "argv": [
+      "csv",
+      "{root}/請求.csv"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "input_path.py",
-   "line": 81,
    "typable": "ailine csv",
    "text": "この入口は CSV を直接は受け取りません ── `ailine csv <ファイル>` で xlsx にすると（0 落ちを守って・原本は無変更）そのまま渡せます",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "texts": {
+     "請求2.csv": "担当者,金額\n山田,100\n"
+    },
+    "argv": [
+     "split",
+     "{root}/請求2.csv",
+     "--by",
+     "担当者",
+     "--out",
+     "{root}/dist"
+    ],
+    "expect": "この入口は CSV を直接は受け取りません",
+    "path": {
+     "argv": [
+      "csv",
+      "{root}/請求2.csv"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "input_path.py",
-   "line": 97,
    "typable": "ailine ops",
    "text": "・この入口は 1 冊を受け取ります（フォルダを渡す入口は `ailine ops` に出ています）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "argv": [
+     "split",
+     "{root}",
+     "--by",
+     "担当者",
+     "--out",
+     "{root}/x9"
+    ],
+    "expect": "この入口は 1 冊を受け取ります（フォルダを渡す入口は `ailine ops` に出ています）",
+    "path": {
+     "argv": [
+      "ops"
+     ],
+     "expect_rc": 0,
+     "expect": "ailine に頼めること"
+    }
+   }
   },
   {
    "file": "multifile.py",
-   "line": 66,
    "typable": "ailine csv",
    "text": "件あります ── `ailine csv <ファイル>` で 1 本ずつ xlsx にできます",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "texts": {
+     "請求.csv": "商品,金額\nボルト,120\nナット,80\n"
+    },
+    "argv": [
+     "scan",
+     "{root}"
+    ],
+    "expect": "件あります ── `ailine csv <ファイル>` で 1 本ずつ xlsx にできます",
+    "path": {
+     "argv": [
+      "csv",
+      "{root}/請求.csv"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "pdf_export.py",
-   "line": 308,
    "typable": "--orientation",
    "text": "→ それでも収まらないなら `--orientation landscape` を試してください",
    "walked": "未調査",
-   "note": ""
+   "note": "2026-09-23 補助スクリプトで一度歩いた（soffice を偽物に差し替えて発火・`--orientation landscape` で正直な行き止まり（exit 3）に着地）── 盤では歩けない: PDF の書き出しは実 soffice が要る（盤は差し替えの口を持たない）"
   },
   {
    "file": "split_people.py",
-   "line": 260,
    "typable": "--exact",
    "text": "（打った文字とそのまま一致する見出しが 1 つあります ── その列でよければ `--exact` を付けてください。列番号では指せません）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "一覧.xlsx": {
+      "表": [
+       [
+        "担当者",
+        "営業担当者",
+        "金額"
+       ],
+       [
+        "山田",
+        100,
+        50
+       ],
+       [
+        "田中",
+        200,
+        80
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "split",
+     "{book:一覧.xlsx}",
+     "--by",
+     "担当者",
+     "--out",
+     "{root}/out1"
+    ],
+    "expect": "`--exact` を付けてください",
+    "path": {
+     "argv": [
+      "split",
+      "{book:一覧.xlsx}",
+      "--by",
+      "担当者",
+      "--exact",
+      "--out",
+      "{root}/out2"
+     ],
+     "expect_rc": 0,
+     "expect": "--exact の指定どおり"
+    }
+   }
   },
   {
    "file": "split_people.py",
-   "line": 505,
    "typable": "--amount",
    "text": "金額の見出しが指されていないので、金額は数えていません（`--amount <見出し>` を付けると行数と同じやり方で証明します）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "一覧2.xlsx": {
+      "表": [
+       [
+        "担当者",
+        "金額"
+       ],
+       [
+        "山田",
+        100
+       ],
+       [
+        "田中",
+        200
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "split",
+     "{book:一覧2.xlsx}",
+     "--by",
+     "担当者",
+     "--out",
+     "{root}/outA"
+    ],
+    "expect": "金額は数えていません",
+    "path": {
+     "argv": [
+      "split",
+      "{book:一覧2.xlsx}",
+      "--by",
+      "担当者",
+      "--amount",
+      "金額",
+      "--out",
+      "{root}/outB"
+     ],
+     "expect_rc": 0,
+     "expect": "／金額"
+    }
+   }
   },
   {
    "file": "verify.py",
-   "line": 231,
    "typable": "ailine verify",
    "text": "照合出力の検算には原本2冊の指定が必要です（`ailine verify <出力> <元A> <元B>` の形で実行してください）。",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "match_out.xlsx": {
+      "表": [
+       [
+        "品名",
+        "金額_A",
+        "金額_B"
+       ],
+       [
+        "ボルト",
+        120,
+        120
+       ]
+      ]
+     },
+     "A.xlsx": {
+      "表": [
+       [
+        "品名",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     },
+     "B.xlsx": {
+      "表": [
+       [
+        "品名",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     }
+    },
+    "marks": {
+     "match_out.xlsx": {
+      "creator": "ailine match"
+     }
+    },
+    "setup": [
+     {
+      "argv": [
+       "run",
+       "{book:A.xlsx}",
+       "{book:B.xlsx}",
+       "品名をキーに金額を照合して"
+      ]
+     }
+    ],
+    "argv": [
+     "verify",
+     "{book:match_out.xlsx}",
+     "{root}"
+    ],
+    "expect": "原本2冊の指定が必要です",
+    "path": {
+     "argv": [
+      "verify",
+      "{root}/A_照合_cc8989.xlsx",
+      "{book:A.xlsx}",
+      "{book:B.xlsx}"
+     ],
+     "expect_rc": 0,
+     "expect": "破れはありません"
+    }
+   }
   },
   {
    "file": "verify.py",
-   "line": 237,
    "typable": "ailine csv",
    "text": "CSV 検疫の出力は `ailine csv <元のcsv>` を再実行して確認してください（独立の検算はまだ実装していません）。",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "csv_out.xlsx": {
+      "表": [
+       [
+        "行",
+        "内容"
+       ],
+       [
+        1,
+        "OK"
+       ]
+      ]
+     }
+    },
+    "marks": {
+     "csv_out.xlsx": {
+      "creator": "ailine csv"
+     }
+    },
+    "texts": {
+     "検疫元.csv": "品名,金額\nボルト,120\nナット,80\n"
+    },
+    "argv": [
+     "verify",
+     "{book:csv_out.xlsx}",
+     "{root}"
+    ],
+    "expect": "独立の検算はまだ実装していません",
+    "path": {
+     "argv": [
+      "csv",
+      "{root}/検疫元.csv"
+     ],
+     "expect_rc": 0,
+     "expect": "■ ailine csv"
+    }
+   }
   },
   {
    "file": "verify.py",
-   "line": 250,
    "typable": "ailine verify",
    "text": "分けた冊の検算はフォルダで受けます（和は『全部の冊 ＋ 空欄 ＋ 複数担当』で初めて閉じるため）: `ailine verify <出力フォルダ> <元の冊> [--amount <見出し>]`",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "split_single_out.xlsx": {
+      "表": [
+       [
+        "担当者",
+        "金額"
+       ],
+       [
+        "佐藤",
+        100
+       ]
+      ]
+     },
+     "一覧.xlsx": {
+      "表": [
+       [
+        "担当者",
+        "金額"
+       ],
+       [
+        "佐藤",
+        100
+       ],
+       [
+        "鈴木",
+        200
+       ]
+      ]
+     }
+    },
+    "marks": {
+     "split_single_out.xlsx": {
+      "creator": "ailine split"
+     }
+    },
+    "setup": [
+     {
+      "argv": [
+       "split",
+       "{book:一覧.xlsx}",
+       "--by",
+       "担当者",
+       "--amount",
+       "金額",
+       "--out",
+       "{root}/配布"
+      ]
+     }
+    ],
+    "argv": [
+     "verify",
+     "{book:split_single_out.xlsx}",
+     "{root}"
+    ],
+    "expect": "フォルダで受けます",
+    "path": {
+     "argv": [
+      "verify",
+      "{root}/配布",
+      "{book:一覧.xlsx}",
+      "--amount",
+      "金額"
+     ],
+     "expect_rc": 0,
+     "expect": "破れはありません"
+    }
+   }
   },
   {
    "file": "verify.py",
-   "line": 257,
    "typable": "ailine verify",
    "text": "科目の候補の冊の検算は、今回の仕訳と過去の仕訳を渡して受けます（先例の番地のセルを読むため）: `ailine verify <候補の冊> <今回の仕訳> <過去の仕訳…>`",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "今回.xlsx": {
+      "精算": [
+       [
+        "社員",
+        "日付",
+        "借方勘定科目",
+        "借方金額",
+        "摘要"
+       ],
+       [
+        "佐藤",
+        "2026-08-02",
+        "",
+        1280,
+        "電車代"
+       ]
+      ]
+     },
+     "過去.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方勘定科目",
+        "借方金額"
+       ],
+       [
+        "2026-07-03",
+        "電車代",
+        "旅費交通費",
+        980
+       ]
+      ]
+     }
+    },
+    "setup": [
+     {
+      "argv": [
+       "accounts",
+       "{book:今回.xlsx}",
+       "--past",
+       "{book:過去.xlsx}",
+       "--out",
+       "{root}/候補.xlsx"
+      ]
+     }
+    ],
+    "argv": [
+     "verify",
+     "{root}/候補.xlsx",
+     "{root}"
+    ],
+    "expect": "先例の番地のセルを読むため",
+    "path": {
+     "argv": [
+      "verify",
+      "{root}/候補.xlsx",
+      "{book:今回.xlsx}",
+      "{book:過去.xlsx}"
+     ],
+     "expect_rc": 0
+    }
+   }
   },
   {
    "file": "verify_split.py",
-   "line": 243,
    "typable": "--amount",
    "text": "測っていません（`--amount <見出し>` を渡すと和も検算します）",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "一覧.xlsx": {
+      "表": [
+       [
+        "担当者",
+        "金額"
+       ],
+       [
+        "佐藤",
+        100
+       ],
+       [
+        "鈴木",
+        200
+       ]
+      ]
+     }
+    },
+    "setup": [
+     {
+      "argv": [
+       "split",
+       "{book:一覧.xlsx}",
+       "--by",
+       "担当者",
+       "--amount",
+       "金額",
+       "--out",
+       "{root}/配布"
+      ]
+     }
+    ],
+    "argv": [
+     "verify",
+     "{root}/配布",
+     "{book:一覧.xlsx}"
+    ],
+    "expect": "測っていません（`--amount <見出し>` を渡すと和も検算します）",
+    "path": {
+     "argv": [
+      "verify",
+      "{root}/配布",
+      "{book:一覧.xlsx}",
+      "--amount",
+      "金額"
+     ],
+     "expect_rc": 0,
+     "expect": "破れはありません"
+    }
+   }
   },
   {
    "file": "verify_split.py",
-   "line": 131,
    "typable": "ailine split",
    "text": "このフォルダの冊に `ailine split` の印がありません（人のファイルを検算したことにしない）。",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "在庫.xlsx": {
+      "表": [
+       [
+        "品名",
+        "数量"
+       ],
+       [
+        "ボルト",
+        5
+       ]
+      ]
+     },
+     "一覧.xlsx": {
+      "表": [
+       [
+        "担当者",
+        "金額"
+       ],
+       [
+        "佐藤",
+        100
+       ],
+       [
+        "鈴木",
+        200
+       ]
+      ]
+     }
+    },
+    "setup": [
+     {
+      "argv": [
+       "split",
+       "{book:一覧.xlsx}",
+       "--by",
+       "担当者",
+       "--amount",
+       "金額",
+       "--out",
+       "{root}/配布"
+      ]
+     }
+    ],
+    "argv": [
+     "verify",
+     "{root}",
+     "{book:在庫.xlsx}"
+    ],
+    "expect": "`ailine split` の印がありません",
+    "path": {
+     "argv": [
+      "verify",
+      "{root}/配布",
+      "{book:一覧.xlsx}",
+      "--amount",
+      "金額"
+     ],
+     "expect_rc": 0,
+     "expect": "破れはありません"
+    }
+   }
   },
   {
    "file": "verify_split.py",
-   "line": 145,
    "typable": "--amount",
    "text": "」の列がありません（`--amount` に元の冊の見出しを渡してください）。",
-   "walked": "未調査",
-   "note": ""
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "一覧.xlsx": {
+      "表": [
+       [
+        "担当者",
+        "金額"
+       ],
+       [
+        "佐藤",
+        100
+       ],
+       [
+        "鈴木",
+        200
+       ]
+      ]
+     }
+    },
+    "setup": [
+     {
+      "argv": [
+       "split",
+       "{book:一覧.xlsx}",
+       "--by",
+       "担当者",
+       "--amount",
+       "金額",
+       "--out",
+       "{root}/配布"
+      ]
+     }
+    ],
+    "argv": [
+     "verify",
+     "{root}/配布",
+     "{book:一覧.xlsx}",
+     "--amount",
+     "存在しない見出し"
+    ],
+    "expect": "の列がありません（`--amount` に元の冊の見出しを渡してください）",
+    "path": {
+     "argv": [
+      "verify",
+      "{root}/配布",
+      "{book:一覧.xlsx}",
+      "--amount",
+      "金額"
+     ],
+     "expect_rc": 0,
+     "expect": "破れはありません"
+    }
+   }
+  },
+  {
+   "file": "accounts_core.py",
+   "typable": "--column",
+   "text": "』が同じ見出しで 2 列以上あり、`--column` では選べません（見出しを 1 つにした写しを渡してください）",
+   "walked": "by_design",
+   "note": "",
+   "walk": {
+    "kind": "by_design",
+    "why": "同じ見出しが 2 列ある冊は `--column` では選べない（見出しでしか列を指せない）。直し方はファイルの写しの見出しを 1 つにすることで CLI の道ではない ── 画面はそう言い、往復に入らない（2026-09-23 に再現して止めた）"
+   }
+  },
+  {
+   "file": "accounts_core.py",
+   "typable": "--column",
+   "text": "』らしい列が見当たりません（読ませたい列があるなら `--column",
+   "walked": "walked",
+   "note": "",
+   "walk": {
+    "books": {
+     "今回.xlsx": {
+      "精算": [
+       [
+        "社員",
+        "日付",
+        "部署コード",
+        "借方金額",
+        "摘要"
+       ],
+       [
+        "佐藤",
+        "2026-08-02",
+        "旅費交通費",
+        1280,
+        "電車代"
+       ],
+       [
+        "鈴木",
+        "2026-08-07",
+        "会議費",
+        3500,
+        "打合せ"
+       ]
+      ]
+     },
+     "過去.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方勘定科目",
+        "借方金額"
+       ],
+       [
+        "2026-07-03",
+        "電車代",
+        "旅費交通費",
+        980
+       ],
+       [
+        "2026-07-09",
+        "打合せ",
+        "会議費",
+        2400
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "accounts",
+     "{book:今回.xlsx}",
+     "--past",
+     "{book:過去.xlsx}",
+     "--out",
+     "{root}/候補.xlsx"
+    ],
+    "expect": "らしい列が見当たりません（読ませたい列があるなら `--column",
+    "path": {
+     "argv": [
+      "accounts",
+      "{book:今回.xlsx}",
+      "--past",
+      "{book:過去.xlsx}",
+      "--out",
+      "{root}/候補2.xlsx",
+      "--column",
+      "借方勘定科目=部署コード"
+     ],
+     "expect_rc": 0
+    }
+   }
+  },
+  {
+   "file": "accounts_core.py",
+   "typable": "--column",
+   "text": "列あります ── どれを読むかは表からは決まりません（`--column` では選べません ── 見出しを 1 つにした写しを渡してください）",
+   "walked": "by_design",
+   "note": "",
+   "walk": {
+    "kind": "by_design",
+    "why": "同じ見出しが 2 列ある冊は `--column` では選べない（見出しでしか列を指せない）。直し方はファイルの写しの見出しを 1 つにすることで CLI の道ではない ── 画面はそう言い、往復に入らない（2026-09-23 に再現して止めた）"
+   }
+  },
+  {
+   "file": "accounts_core.py",
+   "typable": "--column",
+   "text": "`--column",
+   "nth": 1,
+   "walked": "walked",
+   "walk": {
+    "books": {
+     "今回.xlsx": {
+      "精算": [
+       [
+        "社員",
+        "日付",
+        "科目",
+        "借方金額",
+        "摘要"
+       ],
+       [
+        "佐藤",
+        "2026-08-02",
+        "旅費交通費",
+        1280,
+        "電車代"
+       ],
+       [
+        "鈴木",
+        "2026-08-07",
+        "会議費",
+        3500,
+        "打合せ"
+       ]
+      ]
+     },
+     "過去.xlsx": {
+      "仕訳": [
+       [
+        "日付",
+        "摘要",
+        "借方科目",
+        "借方金額"
+       ],
+       [
+        "2026-07-03",
+        "電車代",
+        "旅費交通費",
+        980
+       ],
+       [
+        "2026-07-09",
+        "打合せ",
+        "会議費",
+        2400
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "accounts",
+     "{book:今回.xlsx}",
+     "--past",
+     "{book:過去.xlsx}",
+     "--out",
+     "{root}/候補.xlsx"
+    ],
+    "expect": "全部の冊を読むには",
+    "path": {
+     "argv": [
+      "accounts",
+      "{book:今回.xlsx}",
+      "--past",
+      "{book:過去.xlsx}",
+      "--out",
+      "{root}/候補2.xlsx"
+     ],
+     "follow": "--column"
+    }
+   },
+   "note": "★ 盲検 6 体目 ⑥ の残り（2026-09-23）: 全部の冊の `--column` を 1 行にまとめた案内。旧版は 1 冊ぶんの「もう一度」で、従うと別の冊で落ちた（path_fails・2 回とも再現）"
   }
  ]
 }

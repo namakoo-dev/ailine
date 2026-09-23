@@ -50,6 +50,22 @@ def typable_hints() -> list:
     return out
 
 
+def occurrences() -> list:
+    """(ファイル, 断片, 何番目か) の並び。★ 同じ断片が同じファイルに 2 つ在る時だけ番号が効く
+    （f-string の先頭が同じ `--column {役割}=…` になる所が在る）。上に行を足しても順番は変わらない。"""
+    seen: dict = {}
+    out = []
+    for name, _ln, _t, v in typable_hints():
+        k = (name, v.strip())
+        seen[k] = seen.get(k, 0) + 1
+        out.append((name, v.strip(), seen[k]))
+    return out
+
+
+def entry_key(e: dict) -> tuple:
+    return (e["file"], e["text"], e.get("nth", 1))
+
+
 def _register() -> dict:
     return json.loads(REGISTER.read_text(encoding="utf-8"))
 
@@ -67,9 +83,10 @@ def test_every_typable_hint_is_in_the_register():
     ★ 足す時は `walked`（その道を実際に歩いて確かめたか）を書く。
       書けないなら `未調査` と書く ── **見ていないものを「見た」にしない**。
     """
-    known = {f"{e['file']}:{e['line']}" for e in _register()["hints"]}
-    now = {f"{name}:{ln}" for name, ln, _t, _v in typable_hints()}
-    missing = sorted(now - known)
+    # ★ 2026-09-23: 鍵は『ファイル＋断片（完全一致）＋何番目か』（行番号は上に 1 行足すだけで
+    #   全部ずれた）。★ 頭の一致にすると「`--column」が別の断片にも当たる ── 完全一致で見る。
+    known = {entry_key(e) for e in _register()["hints"]}
+    missing = sorted(f"{f}:{t[:40]}#{n}" for f, t, n in occurrences() if (f, t, n) not in known)
     assert not missing, (
         f"台帳に無い導線が {len(missing)} 件あります: {missing[:6]}" + chr(10)
         + "  ★ 『こう打てば進める』と書いたなら、その道が通ることを誰かが確かめる"
@@ -78,8 +95,9 @@ def test_every_typable_hint_is_in_the_register():
 
 def test_the_register_does_not_keep_stale_rows():
     """★ 実体から消えた導線を台帳に残さない（古い不安を配らない）。"""
-    now = {f"{name}:{ln}" for name, ln, _t, _v in typable_hints()}
-    stale = sorted({f"{e['file']}:{e['line']}" for e in _register()["hints"]} - now)
+    now = set(occurrences())
+    stale = sorted(f"{e['file']}:{e['text'][:40]}#{e.get('nth', 1)}" for e in _register()["hints"]
+                   if entry_key(e) not in now)
     assert not stale, f"実体に無い行が台帳に残っています: {stale[:6]}"
 
 
@@ -89,7 +107,7 @@ def test_every_row_says_whether_anyone_walked_it():
     bad = [e for e in _register()["hints"] if e.get("walked") not in ok]
     assert not bad, (
         f"walked が {sorted(ok)} のどれでもない行: "
-        f"{[(e['file'], e['line'], e.get('walked')) for e in bad][:6]}")
+        f"{[(e['file'], e['text'][:30], e.get('walked')) for e in bad][:6]}")
 
 
 def test_the_one_that_bit_us_is_marked():
@@ -139,10 +157,12 @@ def test_every_advertised_name_actually_exists():
 def test_existing_is_not_the_same_as_walkable():
     """★ 「在る」と「歩ける」を混ぜない ── 台帳にまだ歩いていない行が在ることを認める。
 
-    ★ ここが緑でなくなったら、38 件を歩き終えたということ（その時はこの試験を消す）。
+    ★ ここが緑でなくなったら、残りを歩き終えたということ（その時はこの試験を消す）。
+    ★ 2026-09-23: 38 → 5（歩き手が 38 件を機械で歩くようになった）。残る 5 件は盤では歩けず、
+      台帳の note に「補助スクリプトで一度歩いた・歩けない理由」を書いてある。歯止めは下げる向きにだけ動かす。
       ★ 0 件でも通る試験にしない ── 数が減ったら**気づく**側に倒す。
     """
     todo = [e for e in _register()["hints"] if e.get("walked") == "未調査"]
     assert todo, "★ 未調査が 0 件 ── 歩き終えたならこの試験は消してよい"
-    assert len(todo) <= 38, (
+    assert len(todo) <= 5, (
         f"未調査が増えています（{len(todo)} 件）── 新しい導線を足したなら歩いてから")
