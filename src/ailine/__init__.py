@@ -206,7 +206,7 @@ from ailine_core.sum_identity import rows_matching_sum_above   # noqa: F401 ─�
 from ailine_core import row_identity   # ★ 行内の等式（金額＝件数×単価）が操作で崩れたら言う
 from ailine_core import attributes   # ★ 語 → 実表の何か（2026-09-05）
 from ailine_core import local_only   # ★「外に出ない」を機械にする（2026-09-05）
-from ailine_core.target_sheet import (
+from ailine_core.target_sheet import (   # noqa: F401 ── wrap_basic_for_sheet は再輸出（使う側は codegen へ移った）
     drop_names_covered_by_longer, sheets_named_explicitly,   # ★ 挙動変更#2/#3: 対象シートの決定を一箇所に閉じ込める
     sheet_named_but_missing, render_missing_sheet_refusal,   # ★ 無いシート名を機械が名指しする（2026-09-05）
     resolve_target_sheet, describe_target_sheet,
