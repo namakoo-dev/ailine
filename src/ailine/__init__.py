@@ -20343,8 +20343,8 @@ def cmd_verify(a: argparse.Namespace) -> int:
     #   ★ 振り分けは**印だけ**で見る（列署名まで見ると、壊れた冊が照合の経路へ落ちる）。
     if xml_readback.read_core_properties(out)[0] == accounts_core.CREATOR_MARK:
         if len(sources) < 2 or not all(Path(s).is_file() for s in sources):
-            print("× 科目の候補の冊の検算は次の形です: "
-                  "ailine verify <候補の冊> <今回の仕訳> <過去の仕訳…>")
+            # ★ 文面は verify.py の 1 つを使う（2 か所に違う文面が在り、片方が死んでいた）
+            print(f"× {multifile_verify.ACCOUNTS_VERIFY_FORM}")
             return 4
         today_src = Path(sources[0]).resolve()
         past_src = [Path(s).resolve() for s in sources[1:]]

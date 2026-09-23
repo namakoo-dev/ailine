@@ -271,3 +271,23 @@ def test_the_verifier_does_not_reproduce_the_rules():
     for forbidden in ("plan_accounts", "KEYS", "candidate_rows", "inspection_rows",
                       "reason_of", "lookalike_pairs", "_precedent_index"):
         assert forbidden not in used, f"検算器が規則を呼んでいる: {forbidden}"
+
+
+def test_the_verify_form_for_a_candidate_book_is_said_once(tmp_path, capsys):
+    """★★ 2026-09-23（導線の台帳を歩いて発見）: 同じ案内が 2 か所に**違う文面**で在り、
+       CLI に出るのは理由もバッククォートも無い方、丁寧な方は一度も画面に出ない死んだ文だった。
+       ★ 画面に出るのは 1 つにした文面（打てる形の印つき）で、書き写しは残っていない。"""
+    import ailine
+    from ailine_core import verify as multifile_verify
+    book = tmp_path / "候補.xlsx"
+    wb = openpyxl.Workbook()
+    wb.properties.creator = accounts_core.CREATOR_MARK
+    wb.save(book)
+    today = tmp_path / "今回.xlsx"
+    openpyxl.Workbook().save(today)
+    rc = ailine.main(["verify", str(book), str(today)])   # ★ 元の冊が 2 つ未満 ── 形を案内する回
+    out = capsys.readouterr().out
+    assert rc == 4, out
+    assert multifile_verify.ACCOUNTS_VERIFY_FORM in out, out
+    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
+    assert "科目の候補の冊の検算は次の形です" not in src, "古い別の文面が残っている（片配線）"

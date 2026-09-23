@@ -214,6 +214,14 @@ def _attribution_mismatch(out_data: dict, base_headers: list, out_rows: list, sr
     return None
 
 
+#: ★★ 2026-09-23（導線の台帳を歩いて発見）: 科目の候補の冊の検算の形。以前は同じ案内が
+#:   2 か所に**違う文面**で在り、CLI に出るのは理由もバッククォートも無い方、こちらの
+#:   丁寧な方は**一度も画面に出ない死んだ文**だった（cmd_verify が先に受けるため）。1 つに畳む。
+ACCOUNTS_VERIFY_FORM = ("科目の候補の冊の検算は、今回の仕訳と過去の仕訳を渡して"
+                        "受けます（先例の番地のセルを読むため）: "
+                        "`ailine verify <候補の冊> <今回の仕訳> <過去の仕訳…>`")
+
+
 def verify_output(out_path, src_folder) -> dict:
     """★ M2（architect 致命3）: 検算の入口。出力ブックの印（creator）と焼いた条件
        （description）から**種類**を先に決め、種類ごとの検算へ振り分ける。
@@ -254,9 +262,9 @@ def verify_output(out_path, src_folder) -> dict:
         # ★ 需要③（2026-09-13）: 独立の検算は在る（verify_accounts）が、測るのに
         #   **今回の仕訳と過去の仕訳**が要る（番地のセルを読むため）。元フォルダ 1 個の
         #   形では閉じないので、{"unmarked": True} に混ぜず通る形を名指しする。
-        return {"unsupported": "科目の候補の冊の検算は、今回の仕訳と過去の仕訳を渡して"
-                                "受けます（先例の番地のセルを読むため）: "
-                                "`ailine verify <候補の冊> <今回の仕訳> <過去の仕訳…>`"}
+        # ★ 2026-09-23: CLI からはここに着かない（cmd_verify が印を見て先に受ける）── 文面は
+        #   ACCOUNTS_VERIFY_FORM 1 つを両方で使う（ライブラリとして呼ばれた時の守りに残す）。
+        return {"unsupported": ACCOUNTS_VERIFY_FORM}
     if creator in _CREATOR_MARKS and description:
         try:
             cond = json.loads(description)
