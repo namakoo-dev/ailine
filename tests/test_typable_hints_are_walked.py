@@ -53,3 +53,20 @@ def test_the_register_says_what_the_machine_saw(rows):
         elif seen in MACHINE_DECIDES and h.get("walked") != seen:
             wrong.append(f"  {key}  台帳は {h.get('walked')}・歩いたら {seen}")
     assert not wrong, "台帳と歩いた結果が食い違う:\n" + "\n".join(wrong)
+
+
+@pytest.mark.local
+def test_typable_hints_walk_on_the_machine(monkeypatch):
+    """★ 機械の状態に左右される歩き（machine: true）を、実機で実際に歩く（素の環境では歩かない分）。
+       ── 素の環境でも実機でも見ていない、という穴を作らない。"""
+    monkeypatch.setenv("AILINE_WALK_ON_MACHINE", "1")
+    hints = [h for h in walk.load_hints() if (h.get("walk") or {}).get("machine")]
+    assert hints, "machine の歩きが 0 件 ── 印が外れていないか"
+    import tempfile
+    bad = []
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        for i, h in enumerate(hints):
+            r = walk.walk_hint(h, Path(td) / f"m{i:02d}")
+            if r["verdict"] != h.get("walked"):
+                bad.append(f"  {r['key'][:70]}  台帳は {h.get('walked')}・歩いたら {r['verdict']}（{r['detail'][:80]}）")
+    assert not bad, "実機で歩いた結果が台帳と食い違う:\n" + "\n".join(bad)

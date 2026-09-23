@@ -40,6 +40,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import re
 import shutil
 import sys
@@ -408,6 +409,8 @@ def render(rows: list) -> str:
 #           ── follow を書くと、引き金の画面の `expect` より後ろに出た `` `--column …` `` を
 #              **画面から拾って** argv の後ろに足す（★ 正解を手で書かない ── 案内どおりに打つ）
 #           ── 示した道。expect_rc（既定 0）で着いたとみなす。expect を書けばその文面も要る
+#   machine true ── その場の機械の状態（ollama・LibreOffice・doctor の点検・demo）に左右される歩き。
+#           素の環境（CI）では歩かず「実機で歩く」と数え、実機の番人（-m local）が AILINE_WALK_ON_MACHINE=1 で歩く
 #   kind    "by_design"（意図した行き止まり・why 必須）/
 #           "walked_on_the_real_machine"（walked_by に歩いている試験名）── 歩かない種類
 
@@ -492,6 +495,11 @@ def _walk_hint(h: dict, root: Path) -> dict:
     if not w.get("expect"):
         return {"key": key, "verdict": "引き金が引けない",
                 "detail": "expect が無い ── 案内が出たことを確かめられない（歩き方の側を直す）"}
+    if w.get("machine") and not os.environ.get("AILINE_WALK_ON_MACHINE"):
+        # ★ 2026-09-23: 素の環境（pre-push の CI 相当）で demo・doctor・翻訳を固定しない run の 4 件が落ちた ──
+        #   歩き方が悪いのでなく、機械の状態で答えが変わる歩き。判定に混ぜず、実機の番人で歩く。
+        return {"key": key, "verdict": "実機で歩く",
+                "detail": "機械の状態に左右される歩き ── test_typable_hints_walk_on_the_machine が歩く"}
     why = _prepare(root, w)
     if why:
         return {"key": key, "verdict": "引き金が引けない", "detail": why}

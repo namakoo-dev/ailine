@@ -159,7 +159,8 @@
       "{book:検証用.xlsx}"
      ],
      "expect_rc": 0
-    }
+    },
+    "machine": true
    }
   },
   {
@@ -180,7 +181,8 @@
       "doctor"
      ],
      "expect_rc": 0
-    }
+    },
+    "machine": true
    }
   },
   {
@@ -936,7 +938,8 @@
      ],
      "expect_rc": 0,
      "expect": "ollama 到達"
-    }
+    },
+    "machine": true
    }
   },
   {
@@ -1038,7 +1041,8 @@
      ],
      "expect_rc": 0,
      "expect": "■ ailine export-pdf"
-    }
+    },
+    "machine": true
    }
   },
   {
