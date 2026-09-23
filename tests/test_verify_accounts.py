@@ -289,5 +289,5 @@ def test_the_verify_form_for_a_candidate_book_is_said_once(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 4, out
     assert multifile_verify.ACCOUNTS_VERIFY_FORM in out, out
-    src = (REPO / "src" / "ailine" / "__init__.py").read_text(encoding="utf-8")
-    assert "科目の候補の冊の検算は次の形です" not in src, "古い別の文面が残っている（片配線）"
+    from _product_source import product_text   # ★ 場所で決め打ちしない（分割で実装が動いても空振りしない）
+    assert "科目の候補の冊の検算は次の形です" not in product_text(), "古い別の文面が残っている（片配線）"
