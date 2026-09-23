@@ -320,7 +320,8 @@ def _walk_one(key: str, entry: dict, root: Path) -> dict:
 def survey() -> list:
     reg = load_register()
     rows = []
-    with tempfile.TemporaryDirectory() as td:
+    # ★ 片付けの失敗で判定を落とさない（導線の盤と同じ ── 2026-09-23 に素の環境で「使用中」で落ちた）。
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         for key, entry in reg["refusals"].items():
             if str(entry.get("unlock", "")).startswith("無い"):
                 rows.append({"key": key, "verdict": "by_design",
