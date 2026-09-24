@@ -31,7 +31,9 @@ def _declared() -> set:
     # ★ repo 自身のモジュール（src/ 配下）は当然 CI にも在る ── 常に許可する。
     #   初版はこれを忘れて ailine_core を止めた（遮断器が働きすぎた）。
     #   tests/ 配下も同じ（検体同士が import し合う: golden / _run_argv 等）。
-    for base in (ROOT / "src", ROOT / "tests"):
+    #   ★ 2026-09-24: bench/ も同じ（bench/_bench_home.py を bench の道具が import する ──
+    #     試験がその道具をファイルから読み込むと、素の環境だけ『宣言外』と止めた・27 本）。
+    for base in (ROOT / "src", ROOT / "tests", ROOT / "bench"):
         if not base.is_dir():
             continue
         for child in base.iterdir():
