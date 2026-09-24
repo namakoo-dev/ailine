@@ -418,7 +418,9 @@ def test_applying_to_the_original_copies_the_draft_instead_of_re_asking():
     ★ これは「✓ の意味」と同じ線の話: 確かめた物と渡す物が違ってはいけない。
     """
     block = _run_handler()
-    assert "shutil.copy2(_draft, book)" in block, "下書きを清書していない（翻訳し直している）"
+    # ★ 2026-09-24: 清書は本体の `ailine adopt` に頼む（控え・関所を通す ──
+    #   tests/test_adopting_a_draft_is_undoable.py）。翻訳し直さない、の線は同じ。
+    assert '["adopt", _draft, book]' in block, "下書きを清書していない（翻訳し直している）"
     assert "_DRAFTS.get(book)" in block
     js = _script(HTML, code_only=True)
     assert 'task: ""' in js, "画面が反映で依頼文を送っている（頼み直しになる）"

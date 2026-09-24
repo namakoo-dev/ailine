@@ -10809,6 +10809,114 @@ def cmd_redo(a: argparse.Namespace) -> int:
     return under_run_lock(_body)
 
 
+def cmd_adopt(a: argparse.Namespace) -> int:
+    """`ailine adopt <下書き> <原本>` ── 下書きの中身を原本に清書する（翻訳も適用もやり直さない）。
+
+    ★★ 2026-09-24（原本へ書く口の台帳 tests/test_write_routes_ledger.py が「既知の欠陥」として
+      載せていた GUI の口）: 画面の「原本に反映」は下書きを原本へ `shutil.copy2` で被せるだけで、
+      ロックの関所も実行ロックもバックアップも通らなかった ── CLI は「原本は自動でバックアップされ、
+      `ailine undo` で戻せます」と約束しているのに、その経路だけ戻せなかった。
+      ★ 直しは GUI に関所を書き写すことではなく、**CLI に口を 1 つ足して GUI はそれを叩く**
+        （GUI は本体を import しない・薄い殻の線）。置換は run と同じ `atomic_replace_inplace`
+        （控え → 同じボリュームで原子的置換 → undo の位置のリセット）。
+    ★ 下書きは消さない・変えない: atomic_replace_inplace は成功時に渡された作業ファイルを消すので、
+      下書きそのものでなく**作業フォルダへの複写**を渡す（画面は「下書きはそのまま残しています」と言う）。
+    ★ `--base-sha`: 下書きを作った時の原本の sha256。今の原本と違えば、その後に人が原本を
+      直している ── 清書するとその変更が**黙って**消えるので、止めて打てる形で選ばせる。
+    ★ 形は cmd_redo と同じ（実行ロックの中で、最初に Excel ロックの関所）。
+    """
+    draft = input_path.require_file(a.draft, what="下書き")
+    book = input_path.require_file(a.book, what="原本")
+    if draft == book:
+        print(f"× 下書きと原本が同じファイルです: {book}")
+        print("  → 清書するものがありません（原本は触っていません）")
+        return EXIT_APPLY_FAILED
+    # ★ 拡張子は登録簿（filetypes）に倣う ── run が操作できる形式だけを清書の先にする。
+    #   形式の違う下書きを被せると、原本の拡張子と中身が食い違う（xlsx の中身の .xlsm 等）。
+    if book.suffix.lower() not in RUN_SUPPORTED_SUFFIXES:
+        print(f"× {book.name} は、この道具が清書できる形式ではありません"
+              f"（{book.suffix.lower() or '拡張子なし'}）。")
+        print("  → 清書できるのは: " + "／".join(sorted(RUN_SUPPORTED_SUFFIXES))
+              + "（原本も下書きも触っていません）")
+        return EXIT_APPLY_FAILED
+    if draft.suffix.lower() != book.suffix.lower():
+        print(f"× 下書き {draft.name} と原本 {book.name} の形式が違います"
+              f"（{draft.suffix.lower() or '拡張子なし'} と {book.suffix.lower()}）。")
+        print("  → 形式が違うまま被せると、原本の拡張子と中身が食い違います"
+              "（原本も下書きも触っていません）")
+        return EXIT_APPLY_FAILED
+
+    def _body() -> int:
+        blocked = refuse_if_locked(book)
+        if blocked is not None:
+            return blocked
+        want = (getattr(a, "base_sha", None) or "").strip().lower()
+        if want:
+            try:
+                now = hashlib.sha256(book.read_bytes()).hexdigest()
+            except OSError as e:
+                print(f"× 原本 {book.name} を読めませんでした（{e}）。原本は変更していません")
+                return EXIT_APPLY_FAILED
+            if now != want:
+                print(f"× 下書きを作った後に原本 {book.name} が変わっています"
+                      "（Excel などで直した分が在るかもしれません）。")
+                print("  → 清書すると、その変更が消えます。原本も下書きも触っていません")
+                print("  → 今の原本から下書きを作り直してください（画面なら「原本からやり直す」）")
+                print("  → 原本の今の変更を捨てて、下書きで上書きするなら:")
+                print(f'    ailine adopt "{draft}" "{book}"')
+                return 7
+        else:
+            print("（下書きを作った時の原本と照合していません ── "
+                  "--base-sha を付けると、その後に原本が変わっていれば止めます）")
+        # ★ 原本へ被せる前の最後の確認（_why_output_is_unusable と同じ物差し）── 開けない下書きで
+        #   原本を潰さない。★ 理由は人の言葉で（例外名は出さない ── input_path.explain_unreadable）。
+        try:
+            with BookView(draft) as bv:
+                drafted_sheets = list(bv.sheetnames)
+        except Exception as e:   # noqa: BLE001 ── どの例外でも、生の名前は見せない
+            print(f"× 下書き {draft.name}: {input_path.explain_unreadable(e, draft)}")
+            print(f"  → 原本 {book.name} には反映していません（変更していません）")
+            return EXIT_APPLY_FAILED
+        if not drafted_sheets:
+            print(f"× 下書き {draft.name} にシートが 1 枚もないため、原本には反映しませんでした")
+            print(f"  → 原本 {book.name} は変更していません")
+            return EXIT_APPLY_FAILED
+        try:
+            with BookView(book) as bv:
+                book_sheets = list(bv.sheetnames)
+        except Exception:   # noqa: BLE001 ── 原本が読めなくても清書は止めない（undo と同じく命綱側）
+            book_sheets = None
+        workdir = book.parent / f".ailine_{book.stem}"
+        workdir.mkdir(exist_ok=True)
+        try:
+            staged = workdir / f"adopt_draft{book.suffix}"
+            try:
+                shutil.copy2(draft, staged)
+            except OSError as e:
+                print(f"× 下書き {draft.name} を読めませんでした（{e}）。原本は変更していません")
+                return EXIT_APPLY_FAILED
+            ok, err = atomic_replace_inplace(book, staged, workdir)
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        if not ok:
+            print(f"× {err}")
+            print(f"  → 下書き {draft.name} はそのまま残しています")
+            return EXIT_APPLY_FAILED
+        # ★ 出所を残す（行為した本人が記録する ── 出所追跡・2026-09-21 の線）。
+        #   作ったシートは**差分から**出す（下書きで増えたシート＝道具の作業の結果）。
+        #   原本が読めず前が分からない時は、推し量らずに空にする（空は「全部 人のもの」側）。
+        result: dict = {}
+        record_diff(result, {"sheets": book_sheets or drafted_sheets}, {"sheets": drafted_sheets}, [])
+        _record_side_command_history("adopt", book, f"（下書き {draft.name} を清書しました）",
+                                     book, True, "none", made_sheets=result["made_sheets"])
+        print(f"✓ 下書き {draft.name} の内容を原本 {book.name} に反映しました"
+              "（下書きはそのまま残しています）")
+        print(f'（もとに戻す: ailine undo "{book}"）')
+        return 0
+
+    return under_run_lock(_body)
+
+
 def cmd_restore(a: argparse.Namespace) -> int:
     """`ailine restore` は `ailine undo` と**同じ仕事**をする（undo は restore の昇格版）。
 
@@ -10942,7 +11050,7 @@ def refuse_if_locked(book: Path) -> int | None:
         run（2 冊照合）:   **「Excel で開かれています」と断定**・しかも
                           `{lock_a}` で **タプルをそのまま印字**していた
       ★ 直しは「3 つとも直す」ではなく **1 つに畳んで呼び出し側に持たせない**
-        （今日までに片配線を 8 回踏んでいる）。番人も 1 本で 4 経路を縛る。
+        （今日までに片配線を 8 回踏んでいる）。番人も 1 本で 5 経路を縛る。
 
     ★ 重大7（復元の盲検 3 回目）の一部: Excel が異常終了すると `~$` が残り、
       undo まで恒久的に塞がれる。**回避フラグは足さない**（設計判断は別途）が、
@@ -11682,6 +11790,7 @@ NEEDS_MACHINE = {
     "scan": False, "stack": False, "forms": False, "split": False, "accounts": False,
     "accounts-apply": False,
     "verify": False, "history": False, "restore": False, "undo": False, "redo": False,
+    "adopt": False,       # 下書きの複写を原本へ置き換えるだけ（翻訳も適用もやり直さない）
     "vocab": False, "alias": False, "attr": False,
 }
 
@@ -19532,6 +19641,7 @@ ROUTE_KIND = {
     "stop": "single", "doctor": "single", "ops": "single", "csv": "single",
     "export-csv": "single", "demo": "single", "export-pdf": "single",
     "history": "single", "restore": "single", "undo": "single", "redo": "single",
+    "adopt": "single",           # 下書きと原本の 2 つを取るが、清書する先は 1 冊
     "vocab": "single", "alias": "single", "attr": "single",
 }
 
@@ -19793,6 +19903,15 @@ def build_parser() -> argparse.ArgumentParser:
     rd = sub.add_parser("redo", help="直前の undo をやり直す（あと何回やり直せるかを表示）")
     rd.add_argument("book", help="対象の文書 (.xlsx)")
     rd.set_defaults(func=cmd_redo)
+
+    ad = sub.add_parser("adopt", help="下書きの中身を原本に清書する"
+                                     "（控えを取ってから置き換える・ailine undo で戻せる）")
+    ad.add_argument("draft", help="下書きのファイル（原本の複製に ailine で操作したもの）")
+    ad.add_argument("book", help="清書する先の原本")
+    ad.add_argument("--base-sha", dest="base_sha", default=None, metavar="HEX",
+                    help="下書きを作った時の原本の sha256。今の原本と違えば止める"
+                         "（その後に原本へ入れた変更を黙って消さない）")
+    ad.set_defaults(func=cmd_adopt)
 
     v = sub.add_parser("vocab", help="用語集（税率等の取り決め値）を編集・表示する")
     vsub = v.add_subparsers(dest="vocab_cmd", required=True)

@@ -588,6 +588,7 @@ def classify_slots(slots, *, task: 'str', columns=(), header_row: 'int' = 1, she
 def classify_subject_provenance(op: 'str', resolved: 'dict', meta: 'dict', task: 'str', a=None) -> 'list'
 def cmd_accounts(a: 'argparse.Namespace') -> 'int'
 def cmd_accounts_apply(a: 'argparse.Namespace') -> 'int'
+def cmd_adopt(a: 'argparse.Namespace') -> 'int'
 def cmd_alias(a: 'argparse.Namespace') -> 'int'
 def cmd_attr(a: 'argparse.Namespace') -> 'int'
 def cmd_demo(a: 'argparse.Namespace') -> 'int'

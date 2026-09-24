@@ -139,11 +139,13 @@ def test_the_side_routes_all_go_through_the_helper():
       run の folder・match）の漏斗**なので、ここは 1 本のまま数える。
       ★ この本数は手で持つ**意図的な引っかけ**（配線が黙って増減したら気づくため）──
         増やす時は理由を書いて更新する。
+    ★★ 2026-09-24: 6 本目 ── `ailine adopt`（下書きの清書）。原本を置き換える道で、
+      下書きで増えたシートの出所を残す（冊まるごとではないので record_made_book には乗せない）。
     """
     n = len(_calls("_record_side_command_history"))
-    assert n == 5, (
-        f"★ 呼び手が {n} 本（期待 5: csv / export-csv / 照合の成功 / 照合の断り / "
-        "冊を作った記録）── どれかが畳まれていないか、配線が増減した")
+    assert n == 6, (
+        f"★ 呼び手が {n} 本（期待 6: csv / export-csv / 照合の成功 / 照合の断り / "
+        "冊を作った記録 / 下書きの清書）── どれかが畳まれていないか、配線が増減した")
 
 
 def test_every_side_route_stamps_its_output():

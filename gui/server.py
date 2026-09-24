@@ -78,6 +78,10 @@ def _ailine(args: list, answer: str | None = None) -> tuple:
 _DRAFTS: dict = {}
 _LAST_MULTI: dict = {}
 _DRAFT_LAST_TASK: dict = {}
+# ★ 下書きを原本から作った時の原本の sha256（本 → hex）。清書の時に `--base-sha` で渡し、
+#   その後に人が原本を直していたら本体に止めてもらう（黙って上書きしない）。
+#   ★ 積み上げ（continue）の時は作り直さないので、覚えていなければ（再起動の後など）渡さない。
+_DRAFT_BASE: dict = {}
 DRAFT_SUFFIX = "（下書き）"
 
 
@@ -495,16 +499,21 @@ class Handler(BaseHTTPRequestHandler):
                     _draft = _DRAFTS.get(book)
                     _before = _read_sheet(Path(book), None)
                     if _draft and Path(_draft).exists() and not task.strip():
-                        try:
-                            shutil.copy2(_draft, book)
+                        # ★★ 2026-09-24: ここは下書きを原本へ `shutil.copy2` で被せるだけだった ──
+                        #   ロックの関所も実行ロックもバックアップも通らず、`ailine undo` で戻せなかった。
+                        #   ★ 殻は関所を書き写さない。清書は本体の `ailine adopt` に頼む
+                        #     （控え・原子的置換・undo・Excel ロック・原本がその後に変わったかの照合）。
+                        _args = ["adopt", _draft, book]
+                        _base = _DRAFT_BASE.get(book)
+                        if _base:
+                            _args += ["--base-sha", _base]
+                        rc, out, payload = _ailine(_args)
+                        if rc == 0:
+                            # ★ 片付けは成功した時だけ（断られた時に下書きの記憶を消さない）
                             _DRAFTS.pop(book, None)
                             _DRAFT_LAST_TASK.pop(_draft, None)
-                            out = (f"✓ 下書き {Path(_draft).name} の内容を原本 "
-                                    f"{Path(book).name} に反映しました"
-                                    "（下書きはそのまま残しています）")
-                            rc, payload = 0, {"verdict": "not_applied"}
-                        except OSError as e:
-                            rc, out, payload = 1, f"× 反映できませんでした: {e}", None
+                            _DRAFT_BASE.pop(book, None)
+                            payload = payload or {"verdict": "not_applied"}
                     else:
                         _extra = ["--overwrite"] if req.get("overwrite") else []
                         _extra += _sheet_args(req) + _op_args(req)
@@ -550,6 +559,7 @@ class Handler(BaseHTTPRequestHandler):
                             except OSError:
                                 _note = ""
                         shutil.copy2(book, draft)
+                        _DRAFT_BASE[book] = hashlib.sha256(Path(book).read_bytes()).hexdigest()
                     _DRAFTS[book] = str(draft)
                     # ★★ 2026-08-27（Namakoo が実測・俺の画面の壊れ方）:
                     #   「操作する前」に**原本**を、「操作したあと」に**下書き**を出していた。

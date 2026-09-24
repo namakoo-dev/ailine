@@ -19,6 +19,15 @@ sys.path.insert(0, str(REPO / "src"))
 
 from test_a_typo_in_the_path_is_refused_the_same_way import _path_routes   # noqa: E402
 
+def _adopt_onto_a_real_book(broken, folder, work):
+    """adopt は壊れた**下書き**を、開ける原本へ清書しようとする形で測る（原本が無いと 9 の別の断りになる）。"""
+    import openpyxl
+    book = work / "原本.xlsx"
+    if not book.exists():
+        openpyxl.Workbook().save(book)
+    return ["adopt", str(broken), str(book)]
+
+
 #: 壊れたブックを渡す形（★ `broken` は中身がテキストの .xlsx・`folder` はそれが 1 冊入ったフォルダ）。
 CASES = {
     "run":        lambda broken, folder, work: ["run", str(broken), "合計を出して"],
@@ -34,6 +43,7 @@ CASES = {
     "verify":     lambda broken, folder, work: ["verify", str(broken), str(folder)],
     "accounts-apply": lambda broken, folder, work: ["accounts-apply", str(broken), str(broken),
                                                     "--out", str(work / "o.xlsx")],
+    "adopt":      _adopt_onto_a_real_book,
 }
 
 #: 「壊れたブック」が当たらない入口（宣言・理由つき）。

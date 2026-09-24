@@ -468,8 +468,12 @@ function show(res){
   // ★ 選んだシートが在るならそれを出す（選択と表示が食い違うと、人は自分が何を
   //   触っているのか分からなくなる ── 実測で「シート 売上」と出たまま別シートを触っていた）。
   const sh = window._sheet || (res.before && res.before.sheet) || (lastAfter && lastAfter.sheet) || "";
+  // ★★ 2026-09-24: 「（原本に反映）」は**反映できた時だけ**（rc が 0）。初版は target だけを見ていて、
+  //   清書が断られた回（原本が下書きの後に変わっていた・Excel が開いている …）でも
+  //   見出しが「（原本に反映）」になった ── 何もしていないのに、したと言う形。
+  const _applied = res.target === bookPath() && res.rc === 0;
   setWorking(baseName(res.target || bookPath()), sh,
-             (res.target && res.target !== bookPath()) ? "（原本は無変更）" : "（原本に反映）");
+             _applied ? "（原本に反映）" : "（原本は無変更）");
   // ★ verdict 以外から印を導かない
   setBadge(j.verdict, "");
   const lines = $("#lines"); lines.innerHTML = "";
