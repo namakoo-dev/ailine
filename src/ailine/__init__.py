@@ -5428,129 +5428,13 @@ def task_asks_for_a_swap(task: str) -> bool:
     return bool(_re_swap_ask.search(task or ""))
 
 
-def _swap_pair_resolves(book_meta: dict, sheet: str | None, a: str, b: str) -> bool:
-    """2 つの名前が、実表で**行としても列としても**ちょうど 1 つに解けるか（どちらかでよい）。
-
-    ★ なぜ「読み直す前」に確かめるのか: 一段目が SORT を返す言い方があり（実測:
-      「順番を逆にして」）、黙って横取りすると**正当な並べ替えを壊す**。
-      読み直してよいのは、機械が対象を解けている時だけ ── ADD_ROW で同じ線を引いた。
-    ★ ここでは軸を決めない（決めるのは verify_dsl_args 1 箇所）。解けるかだけを見る。
-    """
-    if not a or not b or a == b:
-        return False
-    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or [])]
-    if a in headers and b in headers:
-        return True
-    ra, _ = _resolve_named_row(book_meta, sheet, a)
-    rb, _ = _resolve_named_row(book_meta, sheet, b)
-    return ra is not None and rb is not None
-
-
-def swap_targets_are_rows(task: str, book_meta: dict, sheet: str | None,
-                           header_row: int = 1) -> list | None:
-    """依頼文が **2 つの行**の入れ替えを指しているなら [行番号, 行番号]（でなければ None）。
-
-    ★★ 2026-09-02（入れ替えを効果の検体に載せて初めて見えた）:
-      「あかね商事とうえだ物産の行を入れ替えて」で、読み直しの二段目（op を SWAP に
-      固定して LLM に聞き直す）が **a='取引先' b='件数'** を返した ── 人が言っていない
-      **列名**。しかも実在の列なので `_swap_pair_resolves` は True を返す。
-      止まったのは三項の番人が「依頼文の語と照合できない」と気づいたからで、判断は
-      正しいが、**利用者の正当な依頼が通らない**。
-      ★ 3 表（在庫・名簿・献立）では同じ言い方が 6/6 通っていた ── **LLM の揺れ**。
-
-    ★ 処方は 8/31 にセルでやったものと同じ:
-      **LLM に聞く前に、機械だけで 2 つ解けているならそれを使う。**
-      依頼文と実表しか見ていないので、LLM の返事より確かで、速い。
-    ★ 語彙を数え上げない ── 実表の値が依頼文に literal で現れ、それが**ちょうど 2 行**に
-      決まる時だけ。決まらなければ None（推測しない）。
-    ★ 見出しの語と、数のように見える値は行の名前にしない
-      （`_row_named_anywhere_in_task` と同じ理由 ── 揺れを増幅しない）。
-    """
-    rows, heads = _table_rows_for_anchor(book_meta, sheet, header_row)
-    if not rows:
-        return None
-    text = _task_outside_quotes(task)
-    head_set = {h for h in heads if h}
-    hits = {}
-    for r, vals in rows.items():
-        for v in vals:
-            if (not v or v in head_set or len(v) < 2 or v not in text
-                    or _is_number_like(v)):
-                continue
-            hits.setdefault(v, set()).add(r)
-    # ★ 1 行に決まる名前だけを採る（同じ値が 2 行に在るなら名前で指せていない）
-    named = sorted({next(iter(rs)) for v, rs in hits.items() if len(rs) == 1})
-    return named if len(named) == 2 else None
+from ailine_core.anchor import (  # noqa: F401 ── 再輸出（公開面の凍結が守る名前・2026-09-24 に本体から移した）
+    _swap_pair_resolves, anchor_column_name, row_anchor_names, swap_targets_are_rows,
+    task_names_a_table_edge_row,
+)
 
 
 _re_value_assign = re.compile(r"[^\s、。]+\s*(?:は|を|＝|=)\s*[0-9０-９]")
-
-
-def row_anchor_names(task: str) -> list:
-    """依頼文が**位置の目印**として使っている名前（「丸和物流と近江スチールの間に」の 2 つ）。
-
-    ★ 目印は「置く物」ではない ── ここを分けないと、目印がそのまま新しい行の値になる
-      （実測: 「丸和物流と近江スチールの間に北斗精機を作って」で `取引先=丸和物流`）。
-    """
-    text = _task_outside_quotes(task).replace("　", " ")   # ★ 引用符の中は値（上と同じ線）
-    out = []
-    m = _re_between.search(text)
-    if m:
-        out += [m.group(1).strip(), m.group(2).strip()]
-    else:
-        for suf in list(_ANCHOR_AFTER) + list(_ANCHOR_BEFORE):
-            m = _re_anchor(suf).search(text)
-            if m:
-                out.append(m.group(1).strip())
-                break
-        else:
-            m2 = _re_row_of.search(text)
-            if m2:
-                out.append(m2.group(1).strip())
-    return [s for s in out if s]
-
-
-def anchor_column_name(book_meta: dict, sheet: str | None, names: list,
-                        header_row: int = 1) -> str | None:
-    """目印の名前が**実際に入っている列**の見出し（決まらなければ None）。
-
-    ★ 「A と B の間に X」の X は、A・B と**同じ列**の住人（取引先の間には取引先が入る）。
-      置き場所を LLM に決めさせると別の列へ入る（実測: `項目=北斗精機`）。
-    ★★ 2026-08-29（Namakoo「どうしても中身でさせない場面が出てくる」→ 効果検体で実測）:
-      目印が**行番号**（「3行目の上に新品を入れて」）だと、名前が表のどこにも無いので
-      列が決まらず、値の行き先を失って**空行**になっていた ── 位置の解決・op の選択に
-      続いて、これが同じ非対称の 3 層目。
-      ★ ここも表に訊けば決まる: その行が**自分の名前を持っている列**（左から見て最初に
-        値の在る列）。「A の隣には A と同じ列の住人が入る」を、行番号で言われた時に
-        言い直しただけ ── 語の一覧は増やさない。
-      ★ 決めた列は解釈行の「入れる値」にそのまま出る（黙って置かない）。
-    """
-    path = book_meta.get("path")
-    headers = (book_meta.get("headers") or {}).get(sheet) or []
-    if not path or not headers or not names:
-        return None
-    try:
-        with BookView(Path(path)) as bv:
-            ws = bv.sheet(sheet)
-            last, last_col = data_extent(ws, header_row)
-            cols = set()
-            width = min(last_col, len(headers))
-            for nm in names:
-                if _re_row_number_word.fullmatch(nm):
-                    rn = _row_word_number(nm)
-                    if header_row < rn <= last:
-                        for c in range(1, width + 1):
-                            if str(ws.cell(row=rn, column=c).value or "").strip():
-                                cols.add(c)
-                                break
-                    continue
-                for r in range(header_row + 1, last + 1):
-                    for c in range(1, width + 1):
-                        if str(ws.cell(row=r, column=c).value or "").strip() == nm:
-                            cols.add(c)
-    except Exception:
-        return None
-    return headers[cols.pop() - 1] if len(cols) == 1 else None
 
 
 def add_row_values_from_request(task: str, book_meta: dict, sheet: str | None,
@@ -6512,58 +6396,6 @@ def resolve_named_cell(book_meta: dict, sheet: str | None, name: str,
         return None, None, (f"『{name}』が {len(hits)} 箇所あります（{where}）"
                              " ── どれか決められません")
     return hits[0][0], hits[0][1], f"『{name}』＝{hits[0][0]}行{hits[0][1]}列"
-
-
-def task_names_a_table_edge_row(task: str, book_meta: dict,
-                                 sheet: str | None) -> tuple | None:
-    """依頼文が**表の端の 1 行**を指していれば (行番号, 説明)。指していなければ None。
-
-    ★★ 2026-09-18（記法の盤の在庫 2 件）: `_ANCHOR_TOP` / `_ANCHOR_BOTTOM` は
-      2026-09-08 に列側と対称化するため既に在ったが、**この番人へは未配線**だった。
-      ただし既存の 2 箇所はどちらも `_last + 1`（表の終わりの**次**）を返す ──
-      あれは行を**足す**側の意味で、ここが要るのは `_last`（最後の**既存**行）。
-      ★ 語は同じでも**指す行が 1 つずれる**。配線ではなく別の解き方として置く。
-
-    ★★ 語で拾わない ── 「商品の列を**末尾**に移動して」が検体に実在する（列の依頼）。
-      素朴に端の語を拾うと、列の依頼を行と読む（棚: 語彙は共食いする）。
-      だから**接地した形**で切る: 「端の語 ＋ の ＋ **実表に在る列名**」。
-        最終行の担当を「佐藤」にして   → 最終行 + の + 担当（実在）→ 採る
-        一番下に行を足して             → 「に」なので採らない
-        税込み合計を一番下に出して     → 同上（APPEND_TOTAL の検体）
-        商品の列を末尾に移動して       → 同上
-        最後の列を「済」にして         → 「列」は実表の列名ではない → 採らない
-      ★ 判定の材料が三項そろっている（端の語・助詞「の」・実在する列名）。
-    """
-    text = str(task or "").replace("　", " ")
-    heads = [str(h) for h in ((book_meta.get("headers") or {}).get(sheet) or []) if h]
-    if not heads or not text:
-        return None
-    hr = int((book_meta.get("header_rows") or {}).get(sheet, 1) or 1)
-    for words, top in ((_ANCHOR_TOP, True), (_ANCHOR_BOTTOM, False)):
-        for w in words:
-            i = text.find(w + "の")
-            if i < 0:
-                continue
-            rest = text[i + len(w) + 1:]
-            # ★ 「最終行の**行**の担当」のような言い方も受ける（1 語だけ読み飛ばす）。
-            if rest.startswith("行の"):
-                rest = rest[2:]
-            if not any(h in rest for h in heads):
-                continue          # ★ 続くのが実表の列名でないなら、行の話ではない
-            if top:
-                return hr + 1, f"依頼文が『{w}』＝{hr + 1}行目（見出しの次）を指しています"
-            path = book_meta.get("path")
-            if not path:
-                return None
-            try:
-                with BookView(Path(path)) as bv:
-                    last, _c = data_extent(bv.sheet(sheet), hr)
-            except Exception:
-                return None
-            if last <= hr:
-                return None       # ★ データが 0 行なら端も無い（決めない）
-            return last, f"依頼文が『{w}』＝{last}行目（表の最後の行）を指しています"
-    return None
 
 
 _re_quoted_value = re.compile(r"[「『\"“]([^」』\"”]{1,40})[」』\"”]")
