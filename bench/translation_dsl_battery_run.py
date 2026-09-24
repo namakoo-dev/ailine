@@ -1,4 +1,6 @@
 
+import sys as _sys, pathlib as _pl  # noqa: E401,E402 ── ファイルから直に読み込まれても _bench_home が見つかるように
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
 import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
 _bench_home.isolate()
 # M2b battery 再実行: bench/translation_spike.py と同じ battery（凍結済み・改変しない）・

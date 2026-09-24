@@ -14,6 +14,8 @@ opt-in・bench 層専用（resilience_check.py と同じ理由で cmd_run の既
 出力: 標準出力の表 + bench/realworld/FIDELITY.md
 """
 
+import sys as _sys, pathlib as _pl  # noqa: E401,E402 ── ファイルから直に読み込まれても _bench_home が見つかるように
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
 import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
 _bench_home.isolate()
 import shutil

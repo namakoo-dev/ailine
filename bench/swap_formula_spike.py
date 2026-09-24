@@ -11,6 +11,8 @@
   Q3 入れ替えに使う API（moveRange / 値の入れ替え）で結果が変わるか
 """
 
+import sys as _sys, pathlib as _pl  # noqa: E401,E402 ── ファイルから直に読み込まれても _bench_home が見つかるように
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
 import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
 _bench_home.isolate()
 import subprocess
