@@ -12781,7 +12781,10 @@ _COLUMN_ARG_KEYS = {
 #   verify_dsl_args 直解決(target が最初から新規列の実名と一致した場合)のどちらでも
 #   同じ理屈で疑わしいため、fallback の発火有無ではなく new_cols 所属の有無で判定する
 #   （fallback 有無だけを見ると後者を取りこぼす＝実測の再現形はむしろ後者に近い）。
-_HEADER_WORD_RE = re.compile(r"見出し")
+# ★★ 2026-09-24: 「見出し」の語の名簿を 1 本に。本体は『見出し』だけ、subject は『見出し|ヘッダー|ヘッダ』と
+#   **同じ概念で 2 つの名簿**を持っていた（同じ名前は同じ物の番人の棚卸しで見えた）── 「ヘッダーを太字に」は
+#   主語の照合では見出し行に届くのに、この助言は黙っていた。広い方（subject）へ畳む（Namakoo 決裁 A）。
+from ailine_core.subject import _HEADER_WORD_RE
 
 
 def _maybe_warn_header_col_mismatch(op: str, resolved: dict, new_cols: list, task: str) -> str | None:
@@ -12799,10 +12802,12 @@ def _maybe_warn_header_col_mismatch(op: str, resolved: dict, new_cols: list, tas
     col_name = target[4:]
     if col_name not in (new_cols or []):
         return None
-    if not _HEADER_WORD_RE.search(task or ""):
+    hm = _HEADER_WORD_RE.search(task or "")
+    if not hm:
         return None
+    # ★ 引用するのは依頼で**実際に使われた語**（「ヘッダー」と言った人に「見出し」とあると言わない）
     return (f"⚠ 対象の列『{col_name}』は{NEW_COLUMN_ORIGIN}です。"
-            "依頼に「見出し」とあるため、見出し行（行全体）を意図していないか確認してください")
+            f"依頼に「{hm.group(0)}」とあるため、見出し行（行全体）を意図していないか確認してください")
 
 
 def _apply_new_column_fallback(op: str, args: dict, headers: list, new_cols: list) -> dict:

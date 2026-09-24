@@ -25,9 +25,6 @@ KNOWN = {
         "本体の total_row は ailine_core.total_row モジュールで、こちらは合計行を返す関数。種類が違う。",
     "ailine_core.suggest:suggest_ops":
         "本体の suggest_ops は op の台帳を注いで core を呼ぶ薄い配線（引数の形が違う）。正当な別物。",
-    "ailine_core.subject:_HEADER_WORD_RE":
-        "★ 既知の欠陥: 本体は『見出し』だけ、subject は『見出し|ヘッダー|ヘッダ』── 同じ概念で名簿が違う。"
-        "切り出しとは別の commit で 1 本に畳む（挙動が変わる側）。",
     "ailine_core.alias_store:_CJK_KANJI_RE":
         "★ 既知の欠陥の候補: 見た目は同じ漢字の範囲だが、パターンの文字列が一致しない。"
         "どちらが正しいかを確かめて 1 本に畳む（別 commit）。",
