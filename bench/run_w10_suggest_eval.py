@@ -21,6 +21,9 @@
 
 使い方: python bench/run_w10_suggest_eval.py [model]
 """
+
+import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
+_bench_home.isolate()
 import json
 import sys
 from pathlib import Path

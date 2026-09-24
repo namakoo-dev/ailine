@@ -1,3 +1,6 @@
+
+import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
+_bench_home.isolate()
 # M2b battery 再実行: bench/translation_spike.py と同じ battery（凍結済み・改変しない）・
 # 同じ採点基準（score_slots/norm）で、本実装 ailine.translate_task を直接叩く。
 # ★ 一段翻訳スパイク(translation_spike.py)とはプロンプトが違う（本実装は few-shot 5例つき・

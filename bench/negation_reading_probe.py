@@ -31,6 +31,9 @@
 """
 from __future__ import annotations
 
+import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
+_bench_home.isolate()
+
 import os
 import re
 import subprocess

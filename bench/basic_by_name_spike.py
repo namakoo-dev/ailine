@@ -10,6 +10,9 @@
   C. 名前で列を見つけて、その右に列を挿せるか
   D. 見つからない/複数ある時に、Basic が**それと分かる形で**止まれるか
 """
+
+import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
+_bench_home.isolate()
 import sys
 import tempfile
 from pathlib import Path

@@ -241,8 +241,15 @@ def test_the_matrix_record_still_matches_the_machine():
     ★ 外すだけだと**誰も測らなくなる**ので、下の「記録が古くなっていない」が
       measured_on を見て赤くする ── 在っても鳴らない、を作らない。
     """
+    # ★★ 2026-09-24: 初版は --out を付けずに呼び、35 分の実測の数字を捨てていた ── 記録が古くなって
+    #   「測り直して記録を更新すること」と言われても、この走行からは更新に使う数字が取れなかった
+    #   （bench を直に流し直し、そのとき本物のホームに 246 行を書いた）。結果を決まった場所に残し、
+    #   三つ組と在り処を**緑の時も**画面に出す（warnings は pytest の要約に必ず出る）。
+    import tempfile
+    import warnings
+    last = Path(tempfile.gettempdir()) / "ailine_matrix_last.json"
     r = subprocess.run(
-        [sys.executable, str(REPO / "bench" / "basic_ops_matrix.py")],
+        [sys.executable, str(REPO / "bench" / "basic_ops_matrix.py"), "--out", str(last)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=3600, cwd=str(REPO),
         env={**__import__("os").environ, "PYTHONPATH": str(REPO / "src")})
@@ -251,6 +258,8 @@ def test_the_matrix_record_still_matches_the_machine():
     assert m, r.stdout[-800:]
     rec = _matrix()
     cases, ok = int(m.group(1)), int(m.group(2))
+    warnings.warn(f"matrix の実測: {cases} 件 ✓{ok} ？{m.group(3)} ×{m.group(4)} ── 結果 {last}"
+                  "（記録 tests/battery_recorded.json を更新する時はこの三つ組と observed を使う）")
     assert cases == rec["cases"], f"検体の数が変わった: {cases}（記録は {rec['cases']}）"
     center = _tolerance_center(rec)
     width = int(rec.get("tolerance_width", 1))

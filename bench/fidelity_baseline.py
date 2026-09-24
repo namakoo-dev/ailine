@@ -13,6 +13,9 @@ opt-in・bench 層専用（resilience_check.py と同じ理由で cmd_run の既
 実行: python bench/fidelity_baseline.py
 出力: 標準出力の表 + bench/realworld/FIDELITY.md
 """
+
+import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
+_bench_home.isolate()
 import shutil
 import sys
 from pathlib import Path

@@ -11,6 +11,9 @@
    使い方: python translation_battery_run.py <v2|v3|v4|v5> [model]
    （旧: python translation_battery_vN_run.py [model] → 新: 第1引数に battery id を追加するだけ）。
 """
+
+import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
+_bench_home.isolate()
 import json
 import sys
 import urllib.request

@@ -10,6 +10,9 @@
   Q2 列を途中に挿したら、右側の式は**ずれた参照**に追随するか
   Q3 入れ替えに使う API（moveRange / 値の入れ替え）で結果が変わるか
 """
+
+import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
+_bench_home.isolate()
 import subprocess
 import sys
 import tempfile

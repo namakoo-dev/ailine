@@ -1,3 +1,6 @@
+
+import _bench_home  # noqa: E402 ── ★ ailine より先に（本物の ~/.ailine に書かない）
+_bench_home.isolate()
 # ★ 変更耐性テスト（opt-in・bench 層専用。cmd_run/cmd_run_plan の既定パイプラインには入れない）
 #   設計 B: APPEND_TOTAL の合計式が「後からデータ行を1本挿入しても正しく追従するか」を、
 #   実際に LibreOffice で挿入 → calculateAll() で再計算 → 読み戻して測る。
