@@ -132,7 +132,14 @@ def compare(a: Path, b: Path) -> int:
     print(f"前 {da['count']} 件 / 後 {db['count']} 件")
     gone = sorted(set(ka) - set(kb))
     added = sorted(set(kb) - set(ka))
-    changed = [k for k in set(ka) & set(kb) if ka[k]["outs"] != kb[k]["outs"]]
+    # ★ 赤は「出力の**種類**が変わった」時。呼ばれた回数だけが違うのは、試験の流れの違い
+    #   （導線の歩き手が 1 回目の揺れで 2 周目を歩いた等）で、挙動の変化ではない ── 報告だけ。
+    #   ★ 種類で見ても、同じ鍵の中の 1 回が別の出力に変われば種類が増えるので捕まる。
+    changed = [k for k in set(ka) & set(kb) if set(ka[k]["outs"]) != set(kb[k]["outs"])]
+    recount = [k for k in set(ka) & set(kb)
+               if set(ka[k]["outs"]) == set(kb[k]["outs"]) and ka[k]["outs"] != kb[k]["outs"]]
+    if recount:
+        print(f"（出力は同じで呼ばれた回数だけ違う: {len(recount)} 件 ── 挙動の変化ではない）")
     if gone:
         print(f"★ 通らなくなった入力: {len(gone)} 件")
         for k in gone[:5]:

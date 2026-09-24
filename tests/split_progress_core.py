@@ -109,6 +109,39 @@ def home_names() -> set:
     return set(home_bound_paths(ailine))
 
 
+def impure_core_imports(tree: ast.Module) -> set:
+    """本体が ailine_core から import した名前のうち、**I/O を持つ core の関数**を指すもの。
+
+    ★★ 2026-09-24（切り出し f1 で実測）: 初版は不純さを本体の中だけで辿っていた。呼び先が core へ
+      移った瞬間、それは本体の「def」でなく「import 名」になり、**呼んでいる側が純に化けた**
+      ── 関数を外へ出したのに、つめ車が「本体の純ロジックが 4378 → 4444 行に増えた」と赤くなった。
+      core の関数も同じ規則（IMPURE の名前・同じモジュールの中の推移）で数え、本体から辿る。
+    """
+    impure_by_mod = {}
+    for p in sorted(CORE.rglob("*.py")):
+        t = ast.parse(p.read_bytes().decode("utf-8"))
+        rel = p.relative_to(CORE.parent).with_suffix("")
+        mod = ".".join(rel.parts[:-1] if rel.name == "__init__" else rel.parts)
+        fns = {n.name: n for n in t.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        bad = {k for k, fn in fns.items() if _called_names(fn) & IMPURE}
+        changed = True
+        while changed:
+            changed = False
+            for k, fn in fns.items():
+                if k not in bad and _loaded_names(fn) & bad:
+                    bad.add(k)
+                    changed = True
+        impure_by_mod[mod] = bad
+    out = set()
+    for n in tree.body:
+        if isinstance(n, ast.ImportFrom) and n.level == 0 and (n.module or "").startswith("ailine_core"):
+            bad = impure_by_mod.get(n.module, set())
+            for a in n.names:
+                if a.name in bad:
+                    out.add(a.asname or a.name)
+    return out
+
+
 def survey(patched: set | None = None, home: set | None = None) -> dict:
     """本体のトップレベル関数を 1 つずつ、残る理由と連れて行くものつきで。"""
     src = MAIN.read_bytes().decode("utf-8")
@@ -133,8 +166,12 @@ def survey(patched: set | None = None, home: set | None = None) -> dict:
             "imports": sorted({x for x in loaded if kinds.get(x) == "import"}),
             "patched_itself": name in held,
         }
-    # ③ 推移: 残る関数を呼ぶ関数も残る（不動点まで）
-    stays = {k for k, r in info.items() if r["io"] or r["held"] or r["patched_itself"]}
+    # ③ 推移: 残る関数を呼ぶ関数も残る（不動点まで）。★ core へ移った I/O の関数を呼ぶのも「残る」
+    core_io = impure_core_imports(tree)
+    for k, r in info.items():
+        r["core_io"] = sorted(set(r["imports"]) & core_io)
+    stays = {k for k, r in info.items()
+             if r["io"] or r["held"] or r["patched_itself"] or r["core_io"]}
     changed = True
     while changed:
         changed = False
