@@ -858,13 +858,7 @@ def check_insert_rows(path: Path, args: dict, header_row: int = 1,
         return "fail", f"期待より多くの行にデータがある（{expect_last_after}行より下に想定外のデータ）"
     return "pass", f"{count}行挿入・{checked}セル分のシフトを確認（挿入行は空欄・行数も+{count}ぴったり）"
 
-def _dedup_normalize_key_part(v):
-    """DEDUP のキー正規化: 前後空白除去のみ・型が違えば別キー（match.normalize_key と
-       同じ規則・ailine_core/match.py には触れず、ここに独立で書く ── 単一ブックの
-       check_dedup が ailine_core を追加 import しない、という既存の作法を保つ）。"""
-    if isinstance(v, str):
-        return ("str", v.strip())
-    return (type(v).__name__, v)
+from ailine_core.dedup_key import _dedup_normalize_key_part  # noqa: E402 ── 2026-09-24 に dedup_key.py へ移した
 
 def check_split_cell(path: Path, args: dict, header_row: int = 1,
                       source_book: Path | None = None) -> tuple:

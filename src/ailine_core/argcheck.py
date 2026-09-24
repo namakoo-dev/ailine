@@ -14,7 +14,7 @@ from ailine_core import cellmap, inspection, intent as intent_mismatch, report_g
 from ailine_core.anchor import _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _resolve_named_row, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, task_names_a_row_number
 from ailine_core.book_view import BookView
 from ailine_core.column_type import column_is_all_numeric
-from ailine_core.postconditions.move import _dedup_normalize_key_part
+from ailine_core.dedup_key import _dedup_normalize_key_part
 from ailine_core.quotes import _task_outside_quotes, extract_quoted_literal
 from ailine_core.report_per_row import cells_with_multiple_placeholders, scan_placeholders, unique_sheet_name
 from ailine_core.subject import name_matches_task

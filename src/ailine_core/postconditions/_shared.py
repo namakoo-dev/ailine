@@ -33,13 +33,7 @@ from ailine_core.primitives import is_number as _is_number
 # ★ _ZERO_TARGET_REASON は 3 群すべてが使う「対象が 0 件だった時の言い方」。
 #   同じ事情を op ごとに違う文で言うと、同じ穴が別の穴に見える。
 
-COLOR_MAP = {
-    "red": "FF0000", "green": "00B050", "blue": "0000FF", "yellow": "FFFF00",
-    "orange": "FFA500", "purple": "800080", "pink": "FFC0CB", "black": "000000",
-    "white": "FFFFFF", "gray": "808080", "grey": "808080",
-    "lightblue": "ADD8E6", "lightgreen": "90EE90", "lightyellow": "FFFFE0",
-    "lightred": "FFCCCC", "lightgray": "D3D3D3", "lightgrey": "D3D3D3",
-}
+from ailine_core.colors import COLOR_MAP  # noqa: E402,F401 ── 再輸出（2026-09-24 に colors.py へ移した）
 
 PIVOT_CAVEAT = "書式なしの素の表になります。書式つきは『集計表』"
 

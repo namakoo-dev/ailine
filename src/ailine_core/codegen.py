@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from ailine_core.chart_range import chart_data_last_row
-from ailine_core.postconditions._shared import COLOR_MAP
+from ailine_core.colors import COLOR_MAP
 from ailine_core.primitives import is_number as _is_number
 from ailine_core.target_sheet import wrap_basic_for_sheet
 from openpyxl.utils import column_index_from_string, get_column_letter
