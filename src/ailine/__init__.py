@@ -2224,8 +2224,8 @@ def vocab_add(term: str, value, path: Path | None = None) -> tuple:
 #   ため、上限だけ揃えて枠は分けない判断）。
 #
 #   照合（lookup_alias）は「語として含む」── 断片ガードは単位B の
-#   `_raw_target_not_embedded_in_task` と同じ判定を ailine_core/alias_store.py に写経した
-#   ものを使う（3度目の断片問題を踏まないため独立に持つ・設計ノート③）。
+#   `_raw_target_not_embedded_in_task` と同じ判定（★ 2026-09-24 から ailine_core/word_boundary.py の
+#   1 本。以前は alias_store に写経していて、写しの漢字の範囲にだけ異文字が紛れていた）。
 # ---------------------------------------------------------------------------
 
 def load_aliases(path: Path | None = None) -> tuple:

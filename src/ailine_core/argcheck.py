@@ -183,7 +183,7 @@ def _resolve_tax_rescue(context_word: str, context_text: str, vocab: dict | None
 #   偶然一致しすぎる」）と同じ理由で、①長さ2未満は最初から証拠にしない、②2文字以上でも
 #   依頼文中の全出現が「より長い連続した漢字の内部」（＝別の複合語の内側）でしかないなら
 #   証拠にしない。
-_CJK_KANJI_RE = re.compile(u"[㐀-䶿一-鿿豈-﫿]")
+from ailine_core.word_boundary import CJK_KANJI_RE as _CJK_KANJI_RE, stands_alone  # noqa: E402,F401 ── _CJK_KANJI_RE は再輸出。★ 2026-09-24: 判定は word_boundary の 1 本（写しの範囲に異文字が紛れていた）
 
 
 def _raw_target_not_embedded_in_task(raw_target: str, task: str) -> bool:
@@ -191,19 +191,7 @@ def _raw_target_not_embedded_in_task(raw_target: str, task: str) -> bool:
        ではない（＝独立した語としての出現がある）なら True。ひらがな/カタカナ/記号は
        日本語の語境界（助詞など）として扱う ―― 漢字が両隣にも続く場合だけ『内部』とみなす。
        出現が無ければ False（そもそも証拠が無い）。"""
-    if not raw_target or not task:
-        return False
-    at = task.find(raw_target)
-    if at < 0:
-        return False
-    n = len(raw_target)
-    while at >= 0:
-        before_ok = at == 0 or not _CJK_KANJI_RE.match(task[at - 1])
-        after_ok = (at + n) >= len(task) or not _CJK_KANJI_RE.match(task[at + n])
-        if before_ok and after_ok:
-            return True
-        at = task.find(raw_target, at + 1)
-    return False
+    return stands_alone(raw_target, task)
 
 
 def _verify_sort(resolved: dict, inferred: set, first_sheet: str, book_meta: dict,

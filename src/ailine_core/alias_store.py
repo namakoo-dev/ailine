@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
-_CJK_KANJI_RE = re.compile(u"[㐀-䶿一-鿿豈-﫿]")
+from ailine_core.word_boundary import CJK_KANJI_RE as _CJK_KANJI_RE, stands_alone  # noqa: E402,F401 ── _CJK_KANJI_RE は再輸出。★ 2026-09-24: 判定は word_boundary の 1 本（写しの範囲に異文字が紛れていた）
 
 
 def sanitize_phrase(phrase, max_len: int) -> str | None:
@@ -36,19 +36,7 @@ def phrase_is_standalone_in_task(phrase: str, task: str) -> bool:
        ではない（＝独立した語としての出現がある）なら True。ひらがな/カタカナ/記号は
        語境界として扱う ── 漢字が両隣にも続く場合だけ『内部』とみなす。
        出現が無ければ False（そもそも証拠が無い）。"""
-    if not phrase or not task:
-        return False
-    at = task.find(phrase)
-    if at < 0:
-        return False
-    n = len(phrase)
-    while at >= 0:
-        before_ok = at == 0 or not _CJK_KANJI_RE.match(task[at - 1])
-        after_ok = (at + n) >= len(task) or not _CJK_KANJI_RE.match(task[at + n])
-        if before_ok and after_ok:
-            return True
-        at = task.find(phrase, at + 1)
-    return False
+    return stands_alone(phrase, task)
 
 
 def parse_aliases_json(raw, is_valid_op, max_entries: int, max_phrase_len: int) -> tuple:
