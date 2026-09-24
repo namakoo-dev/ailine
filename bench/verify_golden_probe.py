@@ -105,15 +105,34 @@ def _dump():
                                ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def _by_key(rows: list) -> dict:
+    """鍵ごとに、出力を**全部**（多重集合として）持つ。
+
+    ★★ 2026-09-24（設計レビューが数えた）: 初版は `{r["key"]: r}` の辞書で、同じ鍵の中では
+      **最後の 1 行しか比べていなかった**。入力の要約で冊の中身を落としているので同じ鍵は重なる ──
+      重複した鍵 63 個・属する行 230・その中で出力が食い違う鍵 9 個。組み替えでその 230 行の
+      どれかが動いても、最後の 1 行が同じなら「挙動不変」と言っていた。
+    """
+    from collections import Counter
+    out: dict = {}
+    for r in rows:
+        if "out" not in r:
+            continue
+        slot = out.setdefault(r["key"], {"in": r["in"], "outs": Counter()})
+        slot["outs"][json.dumps(r["out"], ensure_ascii=False, sort_keys=True)] += 1
+    return out
+
+
 def compare(a: Path, b: Path) -> int:
-    """2 つの基準線を比べる。★ 1 件でも出力が動いたら赤。"""
+    """2 つの基準線を比べる。★ 1 件でも出力が動いたら赤（鍵ごとの**多重集合**で比べる）。"""
     da, db = (json.loads(p.read_text(encoding="utf-8")) for p in (a, b))
-    ia = {r["key"]: r for r in da["rows"] if "out" in r}
-    ib = {r["key"]: r for r in db["rows"] if "out" in r}
+    ka, kb = _by_key(da["rows"]), _by_key(db["rows"])
+    ia = {k: {"in": v["in"], "out": json.loads(v["outs"].most_common(1)[0][0])} for k, v in ka.items()}
+    ib = {k: {"in": v["in"], "out": json.loads(v["outs"].most_common(1)[0][0])} for k, v in kb.items()}
     print(f"前 {da['count']} 件 / 後 {db['count']} 件")
-    gone = sorted(set(ia) - set(ib))
-    added = sorted(set(ib) - set(ia))
-    changed = [k for k in set(ia) & set(ib) if ia[k]["out"] != ib[k]["out"]]
+    gone = sorted(set(ka) - set(kb))
+    added = sorted(set(kb) - set(ka))
+    changed = [k for k in set(ka) & set(kb) if ka[k]["outs"] != kb[k]["outs"]]
     if gone:
         print(f"★ 通らなくなった入力: {len(gone)} 件")
         for k in gone[:5]:
