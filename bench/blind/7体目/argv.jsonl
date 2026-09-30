@@ -1,0 +1,38 @@
+{"ts": "2026-09-30T12:25:41+00:00", "argv": ["doctor"], "cwd": "C:\\Windows\\System32"}
+{"ts": "2026-09-30T12:26:19+00:00", "argv": ["run", "請求一覧.xlsx", "入金状況が未入金の請求だけを抜き出して", "--copy", "--out", "未入金.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:26:43+00:00", "argv": ["run", "請求一覧.xlsx", "取引先マスタ.xlsx", "取引先コードをキーにして、取引先マスタの担当者を請求一覧に転記して"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:26:52+00:00", "argv": ["run", "請求一覧.xlsx", "取引先マスタ.xlsx から取引先コードで担当者を引いてきて、担当者の列を作って", "--copy", "--out", "担当者つき.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:27:09+00:00", "argv": ["run", "請求一覧_マスタ付.xlsx", "取引先マスタのシートから取引先コードで担当者を引いてきて、担当者の列を作って", "--copy", "--out", "担当者つき.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:27:22+00:00", "argv": ["run", "請求一覧_マスタ付.xlsx", "取引先マスタのシートから取引先コードで担当者を引いてきて、担当者の列を作って", "--header-row", "4", "--copy", "--out", "担当者つき.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:27:36+00:00", "argv": ["run", "--help"], "cwd": "C:\\Windows\\System32"}
+{"ts": "2026-09-30T12:27:42+00:00", "argv": ["run", "請求一覧_マスタ付.xlsx", "取引先コードで取引先マスタを参照して、担当者を転記して", "--sheet", "2026年9月", "--header-row", "4", "--copy", "--out", "担当者つき.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:28:02+00:00", "argv": ["run", "請求一覧.xlsx", "入金明細.xlsx", "請求番号をキーに、請求の税込金額と入金額を突き合わせて、入金が足りないものを教えて"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:28:16+00:00", "argv": ["run", "仕訳帳.xlsx", "勘定科目ごとに9月の経費の合計を出して", "--copy", "--out", "科目別.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:28:35+00:00", "argv": ["run", "請求一覧.xlsx", "INV-0902 の入金状況を入金済に変えて"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:28:49+00:00", "argv": ["run", "請求一覧.xlsx", "INV-0902 の入金状況を入金済に変えて", "--op", "SET_CELL_VALUE"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:28:58+00:00", "argv": ["run", "請求一覧.xlsx", "INV-0902 の入金状況を入金済に変えて", "--op", "SET_CELL_VALUE", "--overwrite"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:29:17+00:00", "argv": ["undo", "請求一覧.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:29:23+00:00", "argv": ["run", "請求一覧.xlsx", "未入金の請求の行を黄色で塗って、目立たせて", "--copy", "--out", "黄色.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:29:35+00:00", "argv": ["ops"], "cwd": "C:\\Windows\\System32"}
+{"ts": "2026-09-30T12:29:40+00:00", "argv": ["run", "請求一覧.xlsx", "入金状況が未入金の行を黄色に塗りつぶして", "--copy", "--out", "黄色.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:29:54+00:00", "argv": ["run", "請求一覧.xlsx", "見出しの行を太字にして、薄い青で塗って", "--copy", "--out", "見出し.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:30:15+00:00", "argv": ["run", "請求一覧.xlsx", "税込金額から税抜金額を引いて、差額という列を作って確認したい", "--copy", "--out", "差額.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:30:34+00:00", "argv": ["run", "請求一覧.xlsx", "取引先ごとに税込金額を合計して、今月いくら請求したか一覧にして", "--copy", "--out", "取引先別.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:31:01+00:00", "argv": ["accounts", "仕訳_10月.xlsx", "--past", "仕訳帳.xlsx", "--out", "科目候補.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:31:13+00:00", "argv": ["accounts-apply", "科目候補.xlsx", "仕訳_10月.xlsx", "--out", "取込用.csv"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:31:19+00:00", "argv": ["accounts-apply", "科目候補.xlsx", "仕訳_10月.xlsx", "--out", "取込用.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:31:26+00:00", "argv": ["accounts-apply", "科目候補.xlsx", "仕訳_10月.xlsx", "--out", "取込用.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:31:40+00:00", "argv": ["split", "担当者つき.xlsx", "--by", "担当者", "--out", "配る"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:31:53+00:00", "argv": ["run", "売掛残高.csv", "売掛残高の大きい順に並べ替えて", "--copy", "--out", "売掛残高_並べ替え.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:32:12+00:00", "argv": ["run", "請求一覧.xlsx", "入金済みの請求はもう見なくていいので、その行を削除して", "--copy", "--out", "削除.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:32:24+00:00", "argv": ["run", "請求一覧.xlsx", "入金状況が入金済の行を削除して", "--copy", "--out", "削除.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:32:49+00:00", "argv": ["run", "請求一覧.xlsx", "入金状況が入金済の行を削除して", "--copy", "--out", "削除2.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:33:13+00:00", "argv": ["run", "試算表.xlsx", "当月残高から前月残高を引いて、増減という列を右に作って", "--copy", "--out", "試算表_増減.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:33:20+00:00", "argv": ["run", "試算表.xlsx", "当月残高から前月残高を引いて、増減という列を右に作って", "--header-row", "4", "--copy", "--out", "試算表_増減.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:33:41+00:00", "argv": ["run", "試算表.xlsx", "前月残高＋借方−貸方が当月残高と合っているか確かめて、合わない科目を教えて", "--header-row", "4", "--copy", "--out", "試算表_検算.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:33:54+00:00", "argv": ["run", "試算表.xlsx", "前月残高に借方を足して貸方を引いた値を、検算という列に計算して", "--header-row", "4", "--copy", "--out", "試算表_検算.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:34:17+00:00", "argv": ["run", "請求一覧_書式.xlsx", "請求日の古い順に並べ替えて"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:34:27+00:00", "argv": ["run", "請求一覧_書式.xlsx", "請求日の新しい順に並べ替えて"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:34:34+00:00", "argv": ["run", "請求一覧_書式.xlsx", "請求日の新しい順に並べ替えて", "--copy", "--out", "並べ替え.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:34:52+00:00", "argv": ["run", "請求一覧.xlsx", "請求日の新しい順に並べ替えて", "--copy", "--out", "並べ替え2.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}
+{"ts": "2026-09-30T12:35:18+00:00", "argv": ["run", "請求一覧.xlsx", "請求日が新しいものが上に来るように並べて", "--copy", "--out", "並べ替え3.xlsx"], "cwd": "C:\\Dev\\ailine\\bench\\blind\\7体目\\work"}

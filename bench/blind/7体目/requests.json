@@ -1,0 +1,317 @@
+{
+ "head": "dc3da97ebbe79cc69dbf9c4f8de238edc44dd69a",
+ "version_line": "✓ ailine 版（この道具の版です（README の記載と合っているか確かめてください）） (0.2.5（作業木 C:\\Dev\\ailine）)",
+ "frozen_at": "2026-09-30T12:36:48.781123+00:00",
+ "requests": [
+  {
+   "ts": "2026-09-30T12:26:27+00:00",
+   "task": "入金状況が未入金の請求だけを抜き出して",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "dsl",
+   "op": "EXTRACT",
+   "ok": true,
+   "verdict": "warned"
+  },
+  {
+   "ts": "2026-09-30T12:26:44+00:00",
+   "task": "取引先コードをキーにして、取引先マスタの担当者を請求一覧に転記して",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "match",
+   "op": null,
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:26:59+00:00",
+   "task": "取引先マスタ.xlsx から取引先コードで担当者を引いてきて、担当者の列を作って",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "freeform",
+   "op": "LOOKUP_FILL",
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:27:16+00:00",
+   "task": "取引先マスタのシートから取引先コードで担当者を引いてきて、担当者の列を作って",
+   "book": "964a075f22eb.xlsx",
+   "book_name": "請求一覧_マスタ付.xlsx",
+   "path": "freeform",
+   "op": "LOOKUP_FILL",
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:27:30+00:00",
+   "task": "取引先マスタのシートから取引先コードで担当者を引いてきて、担当者の列を作って",
+   "book": "964a075f22eb.xlsx",
+   "book_name": "請求一覧_マスタ付.xlsx",
+   "path": "freeform",
+   "op": "LOOKUP_FILL",
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:27:50+00:00",
+   "task": "取引先コードで取引先マスタを参照して、担当者を転記して",
+   "book": "964a075f22eb.xlsx",
+   "book_name": "請求一覧_マスタ付.xlsx",
+   "path": "dsl",
+   "op": "LOOKUP_FILL",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-30T12:28:03+00:00",
+   "task": "（run が作りました）",
+   "book": "2af29025a934.xlsx",
+   "book_name": "請求一覧_照合_ea9e00.xlsx",
+   "path": "run",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:28:03+00:00",
+   "task": "請求番号をキーに、請求の税込金額と入金額を突き合わせて、入金が足りないものを教えて",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "match",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:28:24+00:00",
+   "task": "勘定科目ごとに9月の経費の合計を出して",
+   "book": "3a252c7b3e88.xlsx",
+   "book_name": "仕訳帳.xlsx",
+   "path": "dsl",
+   "op": "AGGREGATE",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-30T12:29:03+00:00",
+   "task": "INV-0902 の入金状況を入金済に変えて",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "dsl",
+   "op": "SET_CELL_VALUE",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-30T12:29:30+00:00",
+   "task": "未入金の請求の行を黄色で塗って、目立たせて",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "vocab_miss",
+   "op": null,
+   "ok": false,
+   "verdict": "not_applied"
+  },
+  {
+   "ts": "2026-09-30T12:29:46+00:00",
+   "task": "入金状況が未入金の行を黄色に塗りつぶして",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "vocab_miss",
+   "op": null,
+   "ok": false,
+   "verdict": "not_applied"
+  },
+  {
+   "ts": "2026-09-30T12:30:03+00:00",
+   "task": "見出しの行を太字にして、薄い青で塗って",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "plan",
+   "op": "PLAN",
+   "ok": true,
+   "verdict": "warned"
+  },
+  {
+   "ts": "2026-09-30T12:30:23+00:00",
+   "task": "税込金額から税抜金額を引いて、差額という列を作って確認したい",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "dsl",
+   "op": "COMPUTE_COLUMN",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-30T12:30:45+00:00",
+   "task": "取引先ごとに税込金額を合計して、今月いくら請求したか一覧にして",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "dsl",
+   "op": "AGGREGATE",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-30T12:31:01+00:00",
+   "task": "（accounts が作りました）",
+   "book": "d612ff63c32f.xlsx",
+   "book_name": "科目候補.xlsx",
+   "path": "accounts",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:31:26+00:00",
+   "task": "（accounts-apply が作りました）",
+   "book": "aae8c1689b01.xlsx",
+   "book_name": "取込用.xlsx",
+   "path": "accounts-apply",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:31:40+00:00",
+   "task": "（split が作りました）",
+   "book": "656c38e34b8f.xlsx",
+   "book_name": "山田.xlsx",
+   "path": "split",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:31:40+00:00",
+   "task": "（split が作りました）",
+   "book": "cd92fa1514d5.xlsx",
+   "book_name": "佐藤.xlsx",
+   "path": "split",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:31:40+00:00",
+   "task": "（split が作りました）",
+   "book": "8419eccb0124.xlsx",
+   "book_name": "高橋.xlsx",
+   "path": "split",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:31:40+00:00",
+   "task": "（split が作りました）",
+   "book": "e4d3bde9c4b1.xlsx",
+   "book_name": "_検分.xlsx",
+   "path": "split",
+   "op": null,
+   "ok": true,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:32:00+00:00",
+   "task": "売掛残高の大きい順に並べ替えて",
+   "book": "9a9d49059124.xlsx",
+   "book_name": "売掛残高.xlsx",
+   "path": "dsl",
+   "op": "SORT",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-30T12:32:18+00:00",
+   "task": "入金済みの請求はもう見なくていいので、その行を削除して",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "freeform",
+   "op": "DELETE_ROWS",
+   "ok": false,
+   "verdict": null
+  },
+  {
+   "ts": "2026-09-30T12:32:33+00:00",
+   "task": "入金状況が入金済の行を削除して",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "dsl",
+   "op": "DELETE_ROWS",
+   "ok": true,
+   "verdict": "unverified"
+  },
+  {
+   "ts": "2026-09-30T12:32:57+00:00",
+   "task": "入金状況が入金済の行を削除して",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "dsl",
+   "op": "DELETE_ROWS",
+   "ok": true,
+   "verdict": "unverified"
+  },
+  {
+   "ts": "2026-09-30T12:33:28+00:00",
+   "task": "当月残高から前月残高を引いて、増減という列を右に作って",
+   "book": "045149774149.xlsx",
+   "book_name": "試算表.xlsx",
+   "path": "dsl",
+   "op": "COMPUTE_COLUMN",
+   "ok": true,
+   "verdict": "warned"
+  },
+  {
+   "ts": "2026-09-30T12:33:47+00:00",
+   "task": "前月残高＋借方−貸方が当月残高と合っているか確かめて、合わない科目を教えて",
+   "book": "045149774149.xlsx",
+   "book_name": "試算表.xlsx",
+   "path": "vocab_miss",
+   "op": null,
+   "ok": false,
+   "verdict": "not_applied"
+  },
+  {
+   "ts": "2026-09-30T12:34:03+00:00",
+   "task": "前月残高に借方を足して貸方を引いた値を、検算という列に計算して",
+   "book": "045149774149.xlsx",
+   "book_name": "試算表.xlsx",
+   "path": "plan",
+   "op": "PLAN",
+   "ok": false,
+   "verdict": "not_applied"
+  },
+  {
+   "ts": "2026-09-30T12:34:45+00:00",
+   "task": "請求日の新しい順に並べ替えて",
+   "book": "514acc028638.xlsx",
+   "book_name": "請求一覧_書式.xlsx",
+   "path": "dsl",
+   "op": "SORT",
+   "ok": true,
+   "verdict": "warned"
+  },
+  {
+   "ts": "2026-09-30T12:35:07+00:00",
+   "task": "請求日の新しい順に並べ替えて",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "dsl",
+   "op": "SORT",
+   "ok": true,
+   "verdict": "verified"
+  },
+  {
+   "ts": "2026-09-30T12:35:25+00:00",
+   "task": "請求日が新しいものが上に来るように並べて",
+   "book": "e906716422f8.xlsx",
+   "book_name": "請求一覧.xlsx",
+   "path": "dsl",
+   "op": "SORT",
+   "ok": true,
+   "verdict": "verified"
+  }
+ ]
+}
