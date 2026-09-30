@@ -480,11 +480,15 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
         return "fail", f"{at}行目は表の範囲外です（データは {len(before_rows)} 行）"
     # ★★ 2026-09-07: 名前が複数行に当たった削除は、**その行を全部**消す。
     #   ここも at+count でなく宣言された一覧を見る（生成と同じ宣言を読む）。
+    # ★★ 2026-09-30: 消した添字の集合は**ここで 1 回だけ**作り、残りの突き合わせ（expected）と
+    #   「消した中身」（note_deleted）の両方がこれを読む。以前は note_deleted だけが at から
+    #   連続で拾っていて、5・7・11 行目を消したのに画面は 5・6・7 行目を「消した」と言った。
     if (_rows := sorted(int(x) for x in (args.get("_delete_rows") or []))):
-        _drop = {r - header_row - 1 for r in _rows}
-        expected = [row for i2, row in enumerate(before_rows) if i2 not in _drop]
+        _drop = sorted({r - header_row - 1 for r in _rows})
     else:
-        expected = before_rows[:k] + before_rows[k + count:]
+        _drop = list(range(k, k + count))
+    _drop_set = set(_drop)
+    expected = [row for i2, row in enumerate(before_rows) if i2 not in _drop_set]
     if len(after_rows) != len(expected):
         return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行から {count} 行消えて "
                          f"{len(expected)} 行のはずが {len(after_rows)} 行）")
@@ -493,7 +497,7 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     if st == "broken":
         return "fail", "残った行の並びが元と違う ── 詰め方が正しくない疑いがあります"
     note_deleted(args, [tuple(c[1] for c in before_rows[i])
-                         for i in range(k, min(k + count, len(before_rows)))])
+                         for i in _drop if 0 <= i < len(before_rows)])
     if info:
         return "warn", _moved_rows_note(info)
     # ★★ 2026-09-07: 同上 ── 消した下の行は上へ詰まる。

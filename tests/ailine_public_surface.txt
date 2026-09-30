@@ -493,7 +493,7 @@ def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_i
 def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers, op)
 def _verify_set_column_value(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers)
 def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op)
-def _verify_sort(resolved: 'dict', inferred: 'set', first_sheet: 'str', book_meta: 'dict', resolve_in) -> 'tuple | None'
+def _verify_sort(resolved: 'dict', inferred: 'set', first_sheet: 'str', book_meta: 'dict', resolve_in, task: 'str | None' = None) -> 'tuple | None'
 def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in, task)
 def _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, headers)
 def _vocab_miss_reason(step: 'dict') -> 'str'

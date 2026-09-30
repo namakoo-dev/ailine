@@ -17,6 +17,7 @@ from ailine_core.column_type import column_is_all_numeric
 from ailine_core.dedup_key import _dedup_normalize_key_part
 from ailine_core.quotes import _task_outside_quotes, extract_quoted_literal
 from ailine_core.report_per_row import cells_with_multiple_placeholders, scan_placeholders, unique_sheet_name
+from ailine_core.sort_direction import read_direction
 from ailine_core.subject import name_matches_task
 from ailine_core.table_scan import _col_index_by_header, _scan_last_row, data_extent
 from pathlib import Path
@@ -195,7 +196,7 @@ def _raw_target_not_embedded_in_task(raw_target: str, task: str) -> bool:
 
 
 def _verify_sort(resolved: dict, inferred: set, first_sheet: str, book_meta: dict,
-                  resolve_in) -> tuple | None:
+                  resolve_in, task: str | None = None) -> tuple | None:
     """SORT の引数を確かめる（★ verify_dsl_args から切り出した・挙動は 1 ビットも変えていない）。
 
     ★ 切り出しの形（2026-09-04）: 元は `if op == "SORT":` の分岐だった。分岐は
@@ -209,6 +210,17 @@ def _verify_sort(resolved: dict, inferred: set, first_sheet: str, book_meta: dic
     """
     if (err := resolve_in("col", first_sheet)):
         return False, resolved, inferred, err
+    # ★★ 2026-09-30（盲検 7 体目の致命）: 「請求日の新しい順に並べ替えて」を模型が昇順と読み、
+    #   古い順に並んだ表は何も動かず ✓ が出た。事後条件は宣言↔実体しか見ないので、
+    #   **依頼の項**をここで足す ── 向きは依頼文から literal で取り、食い違えば依頼文が勝つ。
+    #   ★ 置き換えたことは**解釈行**に出す（_sources の出典 ─ 「順:降順（依頼文: 『新しい順』）」）。
+    #     警告にしない理由は合計行の除外と同じ（依頼どおりに動いて検算も通るなら ✓ でよい）。
+    #   ★ 読めない（語が無い／両向きが残る）時と、食い違わない時は何も変えない。
+    #   ★ 引用符の中（『昇順番号』のような列名・値）は向きの語として読まない。
+    if (_dir := read_direction(_task_outside_quotes(task or ""))) and _dir[0] != resolved.get("order"):
+        resolved["order"] = _dir[0]
+        resolved["_sources"] = {**resolved.get("_sources", {}),
+                                "order": f"依頼文: 『{_dir[1]}』"}
     if resolved.get("order") not in ("asc", "desc"):
         return False, resolved, inferred, f"順序『{resolved.get('order')}』は asc/desc のどちらでもありません"
     # ★★ 2026-08-29（Namakoo が実測）: 合計行まで並べ替えの範囲に入れていたので、

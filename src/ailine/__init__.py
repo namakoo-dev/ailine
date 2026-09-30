@@ -4753,7 +4753,7 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
         return None
 
     if op == "SORT":
-        r = _verify_sort(resolved, inferred, first_sheet, book_meta, resolve_in)
+        r = _verify_sort(resolved, inferred, first_sheet, book_meta, resolve_in, task)
         if r is not None:
             return r
 
