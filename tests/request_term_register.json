@@ -1,0 +1,748 @@
+{
+ "_meta": {
+  "purpose": "依頼の項の台帳。op の 1 項目ずつが、何と突き合わされてから文書に効くかを 4 区分で持つ。番人は tests/test_request_term_register.py。",
+  "why": "「嘘の ✓」は宣言↔実体しか見ない所で生まれる（2026-09-30 盲検 7 体目: 並べ替えの向きを LLM だけが決めていた）。事後条件は宣言どおりかを証明するが、宣言が依頼どおりかは誰も見ていない項目が在った。在り処を名簿にし、増えたら赤にする。",
+  "classes": {
+   "A": "依頼と突き合わせる（依頼文から機械が読む／依頼文に名指しが無ければ ✓ を出さない）",
+   "B": "実表とだけ突き合わせる（実在するかは見るが、依頼がそれを指したかは見ない）",
+   "C": "機械が決める（LLM の値を使わない）",
+   "D": "何とも突き合わせない（形だけ見て LLM の値がそのまま文書に効く）"
+  },
+  "denominator": "(op, 項目) の集合は宣言から導く: OP_SCHEMA ∪ OP_SUBJECT_SLOTS ∪ _CONFIRM_FIELDS ∪ CODEGEN_BY_OP・POSTCONDITIONS・verify_dsl_args の振り分け先が読む resolved の鍵（_ で始まらないもの・他の op の枝は除く）。この台帳と等号で縛る。",
+  "caps": {
+   "B": 9,
+   "D": 4
+  },
+  "caps_rule": "B と D は縮める在庫。数が上限を超えたら赤・下回ったら上限を下げるまで赤（下がる向きにしか動かない）。",
+  "basis_rule": "basis は『ファイル:関数』。番人が実在を確かめる（腐った根拠を残さない）。",
+  "history": [
+   {
+    "date": "2026-10-01",
+    "counts": {
+     "A": 48,
+     "B": 10,
+     "C": 2,
+     "D": 6
+    },
+    "note": "初版（地図 form1 を読んで確かめた区分）"
+   },
+   {
+    "date": "2026-10-01",
+    "counts": {
+     "A": 51,
+     "B": 9,
+     "C": 2,
+     "D": 4
+    },
+    "note": "DELETE_ROWS.count D→A・COMPUTE_COLUMN.operator D→A・SET_CELL_VALUE.row B→A"
+   }
+  ],
+  "frozen": "2026-10-01"
+ },
+ "items": [
+  {
+   "op": "ADD_COLUMN",
+   "item": "name",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_add_column"
+   ],
+   "how": "依頼文に無い名前は採らない"
+  },
+  {
+   "op": "ADD_ROW",
+   "item": "at",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_add_row",
+    "src/ailine_core/anchor.py:resolve_row_anchor"
+   ],
+   "how": "resolve_row_anchor＋subject ROW"
+  },
+  {
+   "op": "ADD_ROW",
+   "item": "values",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_add_row",
+    "src/ailine_core/intent.py:values_not_grounded_in_the_request"
+   ],
+   "how": "依頼に無い値は落とす values_not_grounded_in_the_request＋読み直しの篩"
+  },
+  {
+   "op": "AGGREGATE",
+   "item": "group_col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_aggregate",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "AGGREGATE",
+   "item": "value_col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_aggregate",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所＋件数語の断り"
+  },
+  {
+   "op": "APPEND_TOTAL",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_append_total",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "APPEND_TOTAL",
+   "item": "factor",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_append_total",
+    "src/ailine_core/argcheck.py:extract_rate_factor"
+   ],
+   "how": "依頼文/用語集から機械が決める（LLM 値は捨てて食い違えば⚠）"
+  },
+  {
+   "op": "APPEND_TOTAL",
+   "item": "label",
+   "class": "D",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_append_total"
+   ],
+   "how": "LLM 値（無ければ『合計』）。subject の LABEL は税込/税抜の限定語が依頼に在る時だけ③",
+   "note": "限定語以外の食い違い（例:「総額」「小計」）は照合なし"
+  },
+  {
+   "op": "BOLD",
+   "item": "target",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_bold",
+    "src/ailine_core/subject.py:name_matches_task"
+   ],
+   "how": "見出し行を機械が決める(23f249c)＋見出しセル 4519＋subject.py③(REGION)＋最終の残差の関所"
+  },
+  {
+   "op": "CENTER_ALIGN",
+   "item": "target",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_bold",
+    "src/ailine_core/subject.py:name_matches_task"
+   ],
+   "how": "同上（_verify_bold 共有）"
+  },
+  {
+   "op": "CHART",
+   "item": "category_col",
+   "class": "B",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_chart"
+   ],
+   "how": "実在列か・無指定なら先頭列(1602-1606)。SUBJ_INPUT＝消費だけで判定しない",
+   "note": "事後条件(check_chart_series)は種類と値列しか見ない。PENDING-20260910 に「発火は LLM がどの列を項目に選ぶかで決まる」"
+  },
+  {
+   "op": "CHART",
+   "item": "kind",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_chart",
+    "src/ailine_core/argcheck.py:extract_chart_kind_from_task"
+   ],
+   "how": "extract_chart_kind_from_task"
+  },
+  {
+   "op": "CHART",
+   "item": "value_col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_chart",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "COMPUTE_COLUMN",
+   "item": "factor",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_compute_column",
+    "src/ailine_core/argcheck.py:extract_rate_factor",
+    "src/ailine_core/argcheck.py:lookup_vocab_factor"
+   ],
+   "how": "extract_rate_factor/用語集（LLM 値は使わない）"
+  },
+  {
+   "op": "COMPUTE_COLUMN",
+   "item": "operands",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_compute_column",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所＋向き＋arith"
+  },
+  {
+   "op": "COMPUTE_COLUMN",
+   "item": "operator",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_compute_column",
+    "src/ailine_core/arith.py:read_operator"
+   ],
+   "how": "2 列の計算で、演算子を依頼文の語（足す・引く・掛ける・割る・差・率…）と記号（arith.stated_calculation と同じ読み手）から読む。1 つに決まって LLM と食い違えば依頼文が勝ち、解釈行に出典を出す。語が両方出る・読めない時・依頼文が 2 列を名指ししていない時は何も変えない。列名に含まれる語は数えない",
+   "was": "D",
+   "note": "直す前: 「引いた」「掛けた」を語で書いた依頼で LLM が別の演算子を返すと、check_compute_column は宣言どおりの式を確かめて pass。★自動解析は 379 の if を A と誤判定（向きの関所の発火条件に operator が居るだけ）"
+  },
+  {
+   "op": "COMPUTE_COLUMN",
+   "item": "target",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_compute_column",
+    "src/ailine_core/argcheck.py:new_column_name_from_task"
+   ],
+   "how": "依頼文の名前 new_column_name_from_task＋上書きの関所"
+  },
+  {
+   "op": "DEDUP",
+   "item": "keys",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_dedup",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "DEDUP_DELETE",
+   "item": "at",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_dedup_delete",
+    "src/ailine_core/codegen.py:_codegen_delete_rows"
+   ],
+   "how": "消す行は機械が数える _delete_rows"
+  },
+  {
+   "op": "DEDUP_DELETE",
+   "item": "count",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_dedup_delete",
+    "src/ailine_core/codegen.py:_codegen_delete_rows"
+   ],
+   "how": "同上"
+  },
+  {
+   "op": "DEDUP_DELETE",
+   "item": "keys",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_dedup_delete",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "DELETE_COLUMN",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_delete_column",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所（捏造列は『〜の列』でも断る 09-04）"
+  },
+  {
+   "op": "DELETE_ROWS",
+   "item": "at",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_add_row",
+    "src/ailine_core/anchor.py:resolve_row_anchor"
+   ],
+   "how": "resolve_row_anchor（名前の行）＋subject ROW（N行目）"
+  },
+  {
+   "op": "DELETE_ROWS",
+   "item": "count",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_add_row",
+    "src/ailine_core/anchor.py:row_count_in_task"
+   ],
+   "how": "件数は機械が決める: 名前で当たった行の一覧（_delete_rows）が在ればその数・位置で指した依頼は依頼文の数（「5行目から3行」「5〜7行目」「5行目を削除」＝1）・名前で 1 行を指し数を言わなければ 1。LLM と食い違えば機械の数を採り解釈行に出典を出す。読めない形（数の無い「N行」・複数の範囲）は何も変えない",
+   "was": "D",
+   "note": "直す前: 値の在る行なら削除の関所が「N行目から k 行」と聞く（件数は画面に出る）"
+  },
+  {
+   "op": "EXTRACT",
+   "item": "cmp",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_extract",
+    "src/ailine_core/compare_words.py:read"
+   ],
+   "how": "compare_words.read が LLM に勝つ"
+  },
+  {
+   "op": "EXTRACT",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_extract",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "EXTRACT",
+   "item": "value",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_extract"
+   ],
+   "how": "依頼が名指す実在値/数値"
+  },
+  {
+   "op": "EXTRACT_COLUMNS",
+   "item": "cols",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_extract_columns"
+   ],
+   "how": "依頼文に現れる実在列を機械が拾う"
+  },
+  {
+   "op": "FILL_COLOR",
+   "item": "color",
+   "class": "D",
+   "basis": [
+    "src/ailine/__init__.py:_verify_bold"
+   ],
+   "how": "COLOR_MAP に在るかだけ",
+   "note": "check_fill_color は宣言の色を確かめて pass"
+  },
+  {
+   "op": "FILL_COLOR",
+   "item": "target",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_bold",
+    "src/ailine_core/subject.py:name_matches_task"
+   ],
+   "how": "同上（_verify_bold 共有）"
+  },
+  {
+   "op": "FORMAT_MAP",
+   "item": "template_sheet",
+   "class": "B",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_format_map"
+   ],
+   "how": "実在シート＋印の検査",
+   "note": "同上"
+  },
+  {
+   "op": "INSERT_ROWS",
+   "item": "at",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_insert_rows",
+    "src/ailine_core/anchor.py:resolve_row_anchor"
+   ],
+   "how": "resolve_row_anchor(task)＋subject ROW",
+   "note": "位置語が無い時は LLM の行番号（subject の ROW が N行目 と照合）"
+  },
+  {
+   "op": "INSERT_ROWS",
+   "item": "count",
+   "class": "D",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_insert_rows"
+   ],
+   "how": "1 以上の整数か（無指定だけ機械が 1）",
+   "note": "★自動は C（無指定の既定値を機械決定と数えた）→ 目視で D"
+  },
+  {
+   "op": "LOOKUP_FILL",
+   "item": "key_col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_lookup_fill",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "LOOKUP_FILL",
+   "item": "source_sheet",
+   "class": "B",
+   "basis": [
+    "src/ailine/__init__.py:verify_dsl_args"
+   ],
+   "how": "check_sheet（実在シート）。OP_SUBJECT_SLOTS は SHEET_INPUT＝語を消費するだけで判定しない",
+   "note": "★自動は A（540 の if に source_headers が居るだけ）→ 目視で B"
+  },
+  {
+   "op": "LOOKUP_FILL",
+   "item": "target_col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_lookup_fill"
+   ],
+   "how": "依頼に書かれているか転記元の値列と同名でないと信用しない"
+  },
+  {
+   "op": "LOOKUP_FILL",
+   "item": "target_sheet",
+   "class": "B",
+   "basis": [
+    "src/ailine/__init__.py:verify_dsl_args"
+   ],
+   "how": "check_sheet（実在シート）＋複数シートの冊だけ _target_sheet の3段階",
+   "note": "★自動は A → 目視で B"
+  },
+  {
+   "op": "MERGE",
+   "item": "range",
+   "class": "D",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_merge"
+   ],
+   "how": "A1:C1 の形かだけ",
+   "note": "OP_SUBJECT_SLOTS も空（「実在名との照合対象が無い」と宣言）。check_merge は宣言の範囲が結合されたかだけ"
+  },
+  {
+   "op": "MOVE_COLUMN",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_move_column",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所",
+   "note": "行き先は依頼文から機械(resolve_col_anchor argcheck.py:1929)"
+  },
+  {
+   "op": "NUMBER_FORMAT",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_number_format",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "NUMBER_FORMAT",
+   "item": "row_number",
+   "class": "B",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_number_format",
+    "src/ailine/__init__.py:_reread_the_plan"
+   ],
+   "how": "見出し行より下か"
+  },
+  {
+   "op": "NUMBER_FORMAT",
+   "item": "style",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_number_format"
+   ],
+   "how": "値は thousands 1 つしか通さない＋依頼が未対応の書式(¥ など)なら断る"
+  },
+  {
+   "op": "PIVOT",
+   "item": "group_col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_pivot",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "PIVOT",
+   "item": "value_col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_pivot",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "REPORT_PER_ROW",
+   "item": "name_col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_report_per_row",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "REPORT_PER_ROW",
+   "item": "template_sheet",
+   "class": "B",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_report_per_row"
+   ],
+   "how": "実在シート＋印の検査",
+   "note": "SHEET_INPUT＝判定しない"
+  },
+  {
+   "op": "SET_CELL_VALUE",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_set_cell_value",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所＋依頼の『A列』表記"
+  },
+  {
+   "op": "SET_CELL_VALUE",
+   "item": "row",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_set_cell_value",
+    "src/ailine_core/anchor.py:_resolve_named_row",
+    "src/ailine_core/argcheck.py:_row_named_by_the_request"
+   ],
+   "how": "名前で解いた行が依頼文に名指しされているか（その行のどれかの値が name_matches_task で依頼文と照合できるか）。名指しが無ければ ⚠ を出して ✓ を降ろす（書き込みは止めない）",
+   "was": "B",
+   "note": "直す前: 実在する別の行名を LLM が返すと別の行に書く。履歴 14 件では食い違い 0"
+  },
+  {
+   "op": "SET_CELL_VALUE",
+   "item": "row_number",
+   "class": "B",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_set_cell_value",
+    "src/ailine_core/row_conflict.py:value_not_in_the_named_row"
+   ],
+   "how": "表の範囲内か・見出し行なら依頼の行番号と一致か＋最終の value_not_in_the_named_row"
+  },
+  {
+   "op": "SET_CELL_VALUE",
+   "item": "value",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_set_cell_value"
+   ],
+   "how": "引用／依頼文から機械が取る"
+  },
+  {
+   "op": "SET_COLUMN_VALUE",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_column_value",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所＋既存列だけ書く op の『〜列』名指し"
+  },
+  {
+   "op": "SET_COLUMN_VALUE",
+   "item": "value",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_column_value"
+   ],
+   "how": "引用から（空の列だけ引用なしを許す）"
+  },
+  {
+   "op": "SET_WHERE",
+   "item": "cmp",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_where",
+    "src/ailine_core/compare_words.py:read"
+   ],
+   "how": "compare_words.read＋否定の読み"
+  },
+  {
+   "op": "SET_WHERE",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_where",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所＋既存列だけ書く op の『〜列』名指し(c1a044c)"
+  },
+  {
+   "op": "SET_WHERE",
+   "item": "cond2_cmp",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_where"
+   ],
+   "how": "二つ目の条件は機械が決める: 依頼文に条件の形で書かれ、かつ実表のその列に在る値だけ（_verify_set_where の _c2_hits）",
+   "note": "★ 2026-10-01 に読んで確かめた: LLM が cond2_* を返した回は消されずに codegen へ届く（プロンプトに cond2 の語は無いので出る見込みは低い・実走行では未測定）"
+  },
+  {
+   "op": "SET_WHERE",
+   "item": "cond2_col",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_where"
+   ],
+   "how": "二つ目の条件は機械が決める: 依頼文に条件の形で書かれ、かつ実表のその列に在る値だけ（_verify_set_where の _c2_hits）",
+   "note": "★ 2026-10-01 に読んで確かめた: LLM が cond2_* を返した回は消されずに codegen へ届く（プロンプトに cond2 の語は無いので出る見込みは低い・実走行では未測定）"
+  },
+  {
+   "op": "SET_WHERE",
+   "item": "cond2_value",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_where"
+   ],
+   "how": "二つ目の条件は機械が決める: 依頼文に条件の形で書かれ、かつ実表のその列に在る値だけ（_verify_set_where の _c2_hits）",
+   "note": "★ 2026-10-01 に読んで確かめた: LLM が cond2_* を返した回は消されずに codegen へ届く（プロンプトに cond2 の語は無いので出る見込みは低い・実走行では未測定）"
+  },
+  {
+   "op": "SET_WHERE",
+   "item": "cond_col",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_where",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "SET_WHERE",
+   "item": "cond_value",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_where"
+   ],
+   "how": "依頼文の数値/実表の値"
+  },
+  {
+   "op": "SET_WHERE",
+   "item": "value",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_verify_set_where"
+   ],
+   "how": "引用から"
+  },
+  {
+   "op": "SORT",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_sort",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "SORT",
+   "item": "order",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_sort",
+    "src/ailine_core/sort_direction.py:read_direction"
+   ],
+   "how": "sort_direction.read_direction→（504efb6）",
+   "note": "向きの語が依頼に在る時だけ。語が無ければ LLM 値のまま（依頼が無言なので嘘ではない）"
+  },
+  {
+   "op": "SPLIT_CELL",
+   "item": "col",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_split_cell",
+    "src/ailine_core/subject.py:name_matches_task",
+    "src/ailine/__init__.py:fabricated_subject_refusal",
+    "src/ailine_core/residue.py:unaccounted_request_words"
+   ],
+   "how": "subject.py③で✓不可＋捏造列の断り＋最終の残差の関所"
+  },
+  {
+   "op": "SPLIT_CELL",
+   "item": "sep",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_split_cell"
+   ],
+   "how": "引用/区切りの語（依頼に無ければ LLM 値を正規化して使う）",
+   "note": "依頼が区切りを言わない時は LLM 値"
+  },
+  {
+   "op": "SWAP",
+   "item": "a",
+   "class": "B",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_swap"
+   ],
+   "how": "実在の列名/行の名前か。列として解いた時だけ subject の COLUMN",
+   "note": "★自動は A（swap_targets_are_cells(task) の if に居るだけ）→ 目視で B。読み直し経路(fixed-op)だけは a,b が依頼に在ることを要求 __init__.py:10602"
+  },
+  {
+   "op": "SWAP",
+   "item": "b",
+   "class": "B",
+   "basis": [
+    "src/ailine_core/argcheck.py:_verify_swap"
+   ],
+   "how": "同上",
+   "note": "同上"
+  }
+ ]
+}

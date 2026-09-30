@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import openpyxl
 import re
-from ailine_core import cellmap, inspection, intent as intent_mismatch, report_group, split_cell, threshold, total_row
-from ailine_core.anchor import _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _resolve_named_row, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, task_names_a_row_number
+from ailine_core import arith as arith_request, cellmap, inspection, intent as intent_mismatch, report_group, split_cell, threshold, total_row
+from ailine_core.anchor import _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _resolve_named_row, _table_rows_for_anchor, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, row_count_in_task, task_names_a_row_number
 from ailine_core.book_view import BookView
 from ailine_core.column_type import column_is_all_numeric
 from ailine_core.dedup_key import _dedup_normalize_key_part
@@ -369,6 +369,26 @@ def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers
         resolved["operands"] = new_operands
         if resolved.get("operator") not in ("+", "-", "*", "/"):
             return False, resolved, inferred, f"演算子『{resolved.get('operator')}』が不明です"
+        # ★★ 2026-10-01（依頼の項の台帳で D だった項目）: 演算子は LLM だけが決めていた。
+        #   「売上から原価を引いた利益」に + が返ると、事後条件は宣言どおりの式を確かめて ✓。
+        #   ★ 依頼文の語（引いた・掛けた・割った…）と記号（÷×）から読む ── 読み手は
+        #     arith.py の 1 本（最終の「依頼が書いた式」の関所と同じ記号の読み）。
+        #   ★ 食い違えば依頼文が勝ち、解釈行に出典を出す（並べ替えの向きと同じ作法）。
+        #   ★ 読めない（語が無い・2 種類の演算が読める）時は何も変えない。列の名前の中の語
+        #     （『差額』『利益率』）は数えない。★ 下の向きの関所より**前**に置く ──
+        #     引き算に直した回も「どちらから引くか」を依頼文に問う。
+        #   ★ 依頼文が**その 2 列を名指ししている時だけ**読む（向きの関所と同じ条件）。
+        #     実走行 417 件で測ったら、名指しの無い 2 件（「合計を出して」→ 数量×単価、
+        #     「残業時間を加算」→ 退勤−出勤）で、語は 2 列の関係でなく別の事を言っていて、
+        #     読むと正しかった計算を壊した（直しすぎは嘘の反対側の欠陥）。
+        _op_read = (arith_request.read_operator(
+            _task_outside_quotes(task or ""),
+            [str(h) for h in (headers.get(first_sheet) or [])] + [str(o) for o in new_operands])
+            if task and all(str(o) in task for o in new_operands) else None)
+        if _op_read is not None and _op_read[0] != resolved["operator"]:
+            resolved["operator"] = _op_read[0]
+            resolved["_sources"] = {**resolved.get("_sources", {}),
+                                    "operator": f"依頼文: 『{_op_read[1]}』"}
         # ★★ 2026-09-14（盲検・誤配の家系③）: 「出勤と退勤の時刻から実働時間を計算する列を」で
         #   `出勤 − 退勤`（符号が逆）が黙って通っていた。引き算と割り算は**向きで答えが変わる**
         #   ── 依頼文が向きを言っていなければ聞き返す（並び順をそのまま演算の順にしない）。
@@ -1022,6 +1042,18 @@ def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers,
         _hitrow, _note_c = _resolve_named_row(book_meta, _sheet_c, _row_name)
         if _hitrow is None:
             return False, resolved, inferred, _note_c
+        # ★★ 2026-10-01（依頼の項の台帳で B だった項目・1 セルの上書き）: 行の名前は
+        #   「実表に在るか」しか見ていなかった。依頼が行を言っていないのに LLM が実在する
+        #   別の行の名前を返すと、その行に書いて ✓ が出る（宣言↔実体は合っている）。
+        #   ★ 依頼文がその行を名指ししているかを確かめ、名指しが無ければ ⚠ で開示して
+        #     ✓ を降ろす（書き込みは止めない ── 値も列も依頼から取れていて、行だけが
+        #     推し量りなので、断るより見せる。残差の関所と同じ作法）。
+        #   ★ 依頼文が空・表が読めない時は黙る（測れないものを鳴らさない）。
+        if task and _row_named_by_the_request(
+                task, book_meta, _sheet_c, _hitrow, _row_name, _headers_c) is False:
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"依頼文に『{_row_name}』の行を指す語が見当たりません"
+                f"（{_hitrow}行目は解釈が選んだ行です）── 頼んだ行かを「解釈:」行で確かめてください"]
     resolved["_row_index"] = _hitrow
     # ★ 見出しを書き換えると、**その列は元の名前で引けなくなる** ── 位置を残す
     #   （検算は名前でなく座標で見る）。実測で「列『税込み金額』が見つからない」と
@@ -1075,6 +1107,30 @@ def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers,
     except ValueError:
         pass
     return None
+
+
+def _row_named_by_the_request(task, book_meta, sheet, row, row_name, headers) -> bool | None:
+    """依頼文が、その行（row）を名指ししているか。表を読めなければ None（黙る）。
+
+    ★ 名指し＝その行のどれかの値、または LLM が挙げた行の名前が、依頼文と
+      name_matches_task で照合できること（位置の語「最後」で解いた行は、その語が在れば名指し）。
+    ★ 照合の「他の実在名」には表の全部の値と見出しを渡す ── 別の行の名前の断片
+      （『山田』商事 と『山田』工業）を、この行の証拠にしない。
+    ★ 数だけの値（金額・件数）は行の名前として数えない（依頼文の数は閾値や書く値のことが多い）。
+    """
+    hr = int((book_meta.get("header_rows") or {}).get(sheet, 1) or 1)
+    rows, heads = _table_rows_for_anchor(book_meta, sheet, hr)
+    if not rows:
+        return None
+    text = _task_outside_quotes(task or "")
+    everything = ({v for vals in rows.values() for v in vals if v}
+                  | {str(h) for h in (headers or ()) if h} | {h for h in heads if h})
+    cands = [v for v in rows.get(int(row), []) if v and v not in heads
+             and not re.fullmatch(r"[\d,.\-]+", v)]
+    if row_name:
+        cands.append(str(row_name))
+    return any(name_matches_task(v, text, others=everything - {v})
+               for v in dict.fromkeys(cands))
 
 
 def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers):
@@ -1364,6 +1420,12 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
     #   ★ 「その op にしてよいか」を依頼文に問い返す器官（OP_META の requires_word）は在るのに、
     #     宣言していたのは PIVOT ただ 1 つ ── 行を足す op は「足す意図」を何も要求していなかった。
     #   ★ 判定は ailine_core/intent.py に 1 つだけ置き、ここは材料を渡すだけ（既存の作法）。
+    # ★ 削除の件数を LLM が何と言ったかを、下の「名前が複数行に当たった」枝が上書きする
+    #   前に控える（食い違いを解釈行に出すため）。★ op の枝の中で読む ── 行追加は件数を
+    #   持たない（台帳の番人が「ADD_ROW.count」という項目が生えたのを捕まえた）。
+    _llm_count0 = None
+    if op == "DELETE_ROWS":
+        _llm_count0 = resolved.get("count")
     _sheet0 = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
     _hr0 = int((book_meta.get("header_rows") or {}).get(_sheet0, 1) or 1)
     _anchor0: dict = {}
@@ -1414,6 +1476,21 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
             if not (cs.isdigit() and int(cs) >= 1):
                 return False, resolved, inferred, f"削除行数『{c}』が不正です（1以上の整数）"
             resolved["count"] = int(cs)
+        # ★★ 2026-10-01（依頼の項の台帳で D だった項目）: 件数を LLM だけが決めていた。
+        #   「5行目を削除して」に count=3 が返ると 3 行消え、事後条件は「宣言どおり 3 行
+        #   減った」を確かめて ✓ を出す ── 宣言↔実体は合っていて、依頼の項が欠けていた。
+        #   ★ 件数は機械が決める（_delete_count_from_request）。食い違えば機械が勝ち、
+        #     解釈行に出典を出す（並べ替えの向きと同じ作法・警告にはしない）。
+        #   ★ 読めない形は何も変えない。★ 下の「値の在る行なら聞く」より**前**に置く
+        #     ── 聞く文の件数も、消す件数も、同じ 1 つの値から出す。
+        _machine_n = _delete_count_from_request(task, resolved, _anchor0, _at_anchor)
+        if _machine_n is not None:
+            _llm_n = str(_llm_count0 if _llm_count0 is not None else "").strip()
+            if _machine_n[0] != resolved["count"] or _llm_n not in ("", str(_machine_n[0])):
+                resolved["_sources"] = {**resolved.get("_sources", {}), "count": _machine_n[1]}
+            if _machine_n[0] != resolved["count"]:
+                resolved["count"] = _machine_n[0]
+                inferred.discard("count")
         # ★★ 2026-09-17（盲検 3 体目から辿った・同じ家系の片割れ）: 上の「名前が複数行に
         #   当たった」回だけが関所に載っていて、**行番号で指した削除は素通り**していた
         #   （実測:「3行目を削除して」で値 11 個が消えて exit 0）。
@@ -1509,6 +1586,27 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
                 resolved["_inherit_label"] = "／".join(
                     (_hd[c] if 0 <= c < len(_hd) else f"{c + 1}列目")
                     for c in _ih_cols) + f"（{_ih_from}行目から）"
+    return None
+
+
+def _delete_count_from_request(task, resolved, anchor_out, anchor_at) -> tuple | None:
+    """削除する行の**件数**を機械が決める。戻りは (件数, 出典)。決められなければ None。
+
+    ① 名前が複数行に当たった（_delete_rows が在る）→ その行の数（機械が数えた）
+    ② 依頼文が数字で言っている（「5行目から3行」「5〜7行目」「5行目を削除」）→ その数。
+       ★ ただし始まりの行が宣言（at）と違う時は決めない ── 件数だけ直すと別の行を消す
+    ③ 名前で 1 行を指し（位置は機械が解いた）、依頼文に数字が 1 つも無い → 1
+    それ以外（「空行を削除して」のように位置も数も言っていない等）は None。
+    """
+    rows = resolved.get("_delete_rows")
+    if rows:
+        return len(rows), f"『{(anchor_out or {}).get('name')}』に当たった行の数"
+    read = row_count_in_task(task)
+    if read is not None:
+        n, start, word = read
+        return (n, f"依頼文: 『{word}』") if start == resolved.get("at") else None
+    if anchor_at is not None and not re.search(r"[0-9０-９]", _task_outside_quotes(task or "")):
+        return 1, "依頼文が名指しした 1 行"
     return None
 
 

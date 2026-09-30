@@ -488,9 +488,13 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     else:
         _drop = list(range(k, k + count))
     _drop_set = set(_drop)
+    # ★★ 2026-10-01: 画面に出す件数も**実際に消した添字**から数える。宣言の count は
+    #   一覧（_delete_rows）が在る時は使われないので、そちらを言うと宣言と実体がずれた回に
+    #   「3 行」と言って 2 行消したことになる（同じ関数の中の片配線を作らない）。
+    n_drop = len(_drop_set)
     expected = [row for i2, row in enumerate(before_rows) if i2 not in _drop_set]
     if len(after_rows) != len(expected):
-        return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行から {count} 行消えて "
+        return "fail", (f"行数が合わない（適用前 {len(before_rows)} 行から {n_drop} 行消えて "
                          f"{len(expected)} 行のはずが {len(after_rows)} 行）")
     # ★ 削除でも式は上へ追随する ── 挿入と**同じ 1 箇所**で比べる（片配線を作らない）
     st, info = compare_moved_rows(after_rows, expected, "残った行")
@@ -501,8 +505,11 @@ def check_delete_rows(path: Path, args: dict, header_row: int = 1,
     if info:
         return "warn", _moved_rows_note(info)
     # ★★ 2026-09-07: 同上 ── 消した下の行は上へ詰まる。
-    return "pass", (f"{at}行目から {count} 行を削除（下の行は上へ詰まりますが、"
-                    "中身と式は保たれています）")
+    # ★ 飛び飛びの一覧（5・7・11 行目）を「5行目から 3 行」と言わない（2026-10-01）。
+    _where = (f"{at}行目から {n_drop} 行"
+              if _drop == list(range(k, k + n_drop)) else
+              "、".join(str(i + header_row + 1) for i in _drop) + f"行目の {n_drop} 行")
+    return "pass", f"{_where}を削除（下の行は上へ詰まりますが、中身と式は保たれています）"
 
 def check_add_column(path: Path, args: dict, header_row: int = 1,
                       source_book: Path | None = None) -> tuple:

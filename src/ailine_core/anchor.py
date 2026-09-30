@@ -164,6 +164,49 @@ def task_names_a_row_number(task: str) -> int | None:
     return nums.pop() if len(nums) == 1 else None
 
 
+# ★★ 2026-10-01（依頼の項の台帳で D だった項目・消す op）: 削除の**件数**を LLM だけが
+#   決めていた。「5行目を削除して」に count=3 が返ると 3 行消え、事後条件は
+#   「宣言どおり 3 行減った」を確かめて ✓ を出す ── 依頼の項が欠けていた。
+#   ★ 件数は依頼文の数字から読む。読めない形は None（推測しない・呼び出し側は何も変えない）。
+#     - 「5行目から3行」「5行目以降3行」        → 3（始まりは 5）
+#     - 「5〜7行目」「5行目から7行目まで」       → 3（始まりは 5）
+#     - 「5行目を削除して」（行番号が 1 つだけ）   → 1
+#     - 「5行」（目の無い裸の数）・行番号が 2 つ以上・範囲が逆向き → None
+#   ★ 引用符の中は値なので読まない（位置の語と同じ約束）。
+_re_row_range = re.compile(
+    r"([0-9０-９]{1,4})\s*行?目?\s*(?:から|〜|～|~|－|-)\s*([0-9０-９]{1,4})\s*行目(?:まで)?")
+_re_row_count_from = re.compile(
+    r"([0-9０-９]{1,4})\s*行目\s*(?:から|以降)\s*([0-9０-９]{1,4})\s*行(?!目)(?:分)?")
+_re_row_word_any = re.compile(r"[0-9０-９]{1,4}\s*行(目)?")
+
+
+def row_count_in_task(task: str | None) -> tuple | None:
+    """依頼文が言っている行の**数**。戻りは (件数, 始まりの行, 根拠の語)。読めなければ None。"""
+    text = _task_outside_quotes(task or "").replace("　", " ")
+    spans, found = [], []
+    for pat, kind in ((_re_row_range, "range"), (_re_row_count_from, "from")):
+        for m in pat.finditer(text):
+            if any(s <= m.start() < e for s, e in spans):
+                continue
+            a = int(m.group(1).translate(_ZENKAKU_DIGITS))
+            b = int(m.group(2).translate(_ZENKAKU_DIGITS))
+            n = b - a + 1 if kind == "range" else b
+            if n < 1:
+                return None                  # 逆向きの範囲・0 行 ── 決めない
+            spans.append((m.start(), m.end()))
+            found.append((n, a, m.group(0).strip()))
+    rest = [m for m in _re_row_word_any.finditer(text)
+            if not any(s <= m.start() < e for s, e in spans)]
+    if found:
+        return found[0] if len(found) == 1 and not rest else None
+    if any(not m.group(1) for m in rest):
+        return None                          # 「3行」は件数か位置か決められない
+    nums = {int(re.sub(r"\D", "", m.group(0).translate(_ZENKAKU_DIGITS))) for m in rest}
+    if len(nums) == 1:
+        return 1, nums.pop(), rest[0].group(0).strip()
+    return None
+
+
 def _resolve_named_row(book_meta: dict, sheet: str | None, name: str) -> tuple:
     """行の名前 → 行番号（1 起点）。決められなければ (None, 断りの文)。
 

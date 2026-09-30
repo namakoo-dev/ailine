@@ -102,6 +102,67 @@ def stated_calculation(task: str) -> tuple | None:
     return (left, right, SIGNS[task[i]], task[i])
 
 
+# ★★ 2026-10-01（依頼の項の台帳で D だった項目）: 2 列の計算の**演算子**は LLM だけが
+#   決めていた。「売上から原価を引いた利益の列」に `+` が返ると、事後条件は宣言どおりの
+#   式（売上+原価）を確かめて ✓ を出す ── 上の記号の読み手は `A÷B` の形しか読まないので、
+#   語で書いた依頼（引いた・掛けた・割った）は誰も見ていなかった。
+#   ★ 読み手は 1 本: 記号は上の stated_calculation をそのまま使い、語はこの表で読む。
+#   ★ 語は**列挙で増やさない**（足す前に、何を奪うかを測る ── sort_direction と同じ約束）。
+#     誤読の元を先に外してある: 不足/満足（足）・取引/値引き/引き継ぐ（引）・差し替え（差）・
+#     比較/比べ（比）・減価（減）。
+#   ★ 列の名前（『差額』『利益率』）の中の語は数えない ── 呼び出し側が見出しを渡す。
+OPERATOR_WORDS = (
+    (r"(?<![不満補])足[しすさ]", "+"),
+    (r"加え", "+"),
+    (r"加算", "+"),
+    (r"合計", "+"),
+    (r"合算", "+"),
+    (r"の和", "+"),
+    (r"(?<![取値])引[いく]", "-"),
+    (r"引き算", "-"),
+    (r"差(?!し[替換込])", "-"),
+    (r"減(?:算|ら|じ)", "-"),
+    (r"掛[けかる]", "*"),
+    (r"かけ[たてる]", "*"),
+    (r"倍", "*"),
+    (r"の積", "*"),
+    (r"乗じ", "*"),
+    (r"割[っりるれ]", "/"),
+    (r"割合", "/"),
+    (r"比(?![較べ])", "/"),
+    (r"率", "/"),
+)
+
+
+def read_operator(task: str | None, names=()) -> tuple | None:
+    """依頼文から 2 列の計算の演算子を読む。戻りは (演算子, 根拠の語)。演算子は + - * /。
+
+    ★ 読めない時は None（推測しない）: 語も記号も無い／2 種類以上の演算が読める
+      （「売上から原価を引いた利益率」は - と / ── どちらか決めない）。
+    ★ names（列の名前）の中の語と記号は数えない。
+    """
+    text = task or ""
+    if not text:
+        return None
+    found: dict = {}
+    masked = text
+    for n in sorted({str(x) for x in names if x}, key=len, reverse=True):
+        masked = masked.replace(n, "・")
+    for pat, op in OPERATOR_WORDS:
+        m = re.search(pat, masked)
+        if m:
+            found.setdefault(op, m.group(0))
+    # ★ 記号は上の読み手（`A÷B` の形）に任せる ── 記号を持つ列名が依頼に出ている回は読まない。
+    if not any(n in text and any(s in n for s in SIGNS) for n in map(str, names or ())):
+        stated = stated_calculation(text)
+        if stated:
+            found.setdefault(stated[2], stated[3])
+    if len(found) != 1:
+        return None
+    op, word = next(iter(found.items()))
+    return op, word
+
+
 def declared_calculation(declaration: str) -> tuple | None:
     """宣言（解釈行）が `演算対象:X と Y 演算子:Z` を持てば `(X, Y, Z)` を返す。"""
     m, o = _DECL.search(declaration or ""), _OPER.search(declaration or "")
