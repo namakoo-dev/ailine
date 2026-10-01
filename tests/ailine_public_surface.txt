@@ -336,6 +336,7 @@ def _mark_coverage_incomplete(args: 'dict', why: 'str') -> 'None'
 def _match_after_filling_values(book_a: 'Path', book_b: 'Path', formula_only: 'dict', task: 'str', timeout=None) -> 'dict | None'
 def _match_condition(key_a: 'str', key_b: 'str', amount_a: 'str', amount_b: 'str', book_b_name: 'str', headers_a: 'list', headers_b: 'list') -> 'dict'
 def _match_postcondition_fail(label: 'str', source, output) -> 'int'
+def _match_sheet_reading(book: 'Path', task: 'str', vocabulary: 'list', what: 'str' = '2冊の照合') -> 'tuple'
 def _maybe_own_prior_output_notice(op: 'str', before: 'dict', after: 'dict', resolved: 'dict | None' = None) -> 'list'
 def _maybe_suggest_or_refuse(a: 'argparse.Namespace', book: 'Path', source_book: 'Path', book_meta: 'dict', sheets: 'list', step: 'dict') -> 'int'
 def _maybe_warn_header_col_mismatch(op: 'str', resolved: 'dict', new_cols: 'list', task: 'str') -> 'str | None'
@@ -460,6 +461,7 @@ def _translate_and_dispatch(a: 'argparse.Namespace', book: 'Path', source_book: 
 def _truncation_notice(before: 'dict', after: 'dict', exhaustive_postcondition: 'bool') -> 'str | None'
 def _try_os_lock(fd) -> 'bool'
 def _ts_sort_key(ts: 'str')
+def _uncached_formula_cells(book: 'Path') -> 'int'
 def _undo_pointer_path(book: 'Path') -> 'Path'
 def _undo_position(book: 'Path', backups: 'list') -> 'int | None'
 def _undo_word_right_after(text: 'str', hit: 'str', words) -> 'str | None'
@@ -495,6 +497,7 @@ def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers,
 def _verify_set_column_value(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers)
 def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, task, headers, op)
 def _verify_sort(resolved: 'dict', inferred: 'set', first_sheet: 'str', book_meta: 'dict', resolve_in, task: 'str | None' = None) -> 'tuple | None'
+def _verify_sources_with_values(paths: 'list', workdir: 'Path') -> 'tuple'
 def _verify_split_cell(resolved, inferred, first_sheet, book_meta, resolve_in, task)
 def _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, headers)
 def _vocab_miss_reason(step: 'dict') -> 'str'

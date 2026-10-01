@@ -482,6 +482,13 @@
    }
   },
   "cmd_run_folder#7": {
+   "text": "境目の数が依頼文から 1 つに決まらない（threshold.ground の断り・数が無い／複数）",
+   "escape": false,
+   "example": false,
+   "why": "ambiguous",
+   "unlock": "★ 2026-10-01（入口の台帳）: フォルダ抽出の値は LLM の数がそのまま通っていた（1 冊の抽出は09-14 に直してあった兄弟間の片配線）。器官 threshold.ground を呼ぶようにした。数を依頼文に書けば到達する ── 「少ない」の境目を機械が決めないのは意図した線"
+  },
+  "cmd_run_folder#8": {
    "text": "辞書に当たらない数値の比較は LLM の不等号だけで通さない（compare_words.unconfirmed）",
    "escape": false,
    "example": false,
@@ -507,7 +514,21 @@
     "why": "辞書に当たらない不等号 ── 断り文の例をそのまま歩く"
    }
   },
+  "cmd_run_folder#9": {
+   "text": "依頼の『…』シートは読みません ── フォルダ抽出（基準ファイル）は 1 枚目だけを読みます",
+   "escape": false,
+   "example": false,
+   "why": "precondition",
+   "unlock": "★ 2026-10-01（入口の台帳）: 依頼が別のシートを名指ししても黙って基準ファイルの1 枚目で抜き出していた。2冊の照合と同じ器官（_match_sheet_reading）で断る。読むシートを依頼から選べるようにすれば到達へ動く（他の冊は同名シートを読むので、基準を選び直すだけで足りる見込み ── 未測定）"
+  },
   "cmd_run_match#1": {
+   "text": "依頼の『…』シートは読みません ── 2冊の照合は 1 枚目だけを読みます",
+   "escape": false,
+   "example": false,
+   "why": "precondition",
+   "unlock": "★ 2026-10-01（入口の台帳）: 依頼が別のシートを名指ししても黙って 1 枚目で照合していた。読むシートを依頼から選べるようにすれば到達へ動く（照合と検算の両方が同じシートを読む配線が要る ── 片方だけ変えると検算が別のシートを読む）"
+  },
+  "cmd_run_match#2": {
    "text": "…の…列が依頼文から決まりません。候補: …（★ 2026-10-01 から例はこの行に無い ── 締めの 1 行（match.rewording_line）に全部の役割ぶんを並べ、書き足せば通ると確かめた時だけ出す）",
    "escape": false,
    "example": false,
@@ -524,7 +545,7 @@
     "why": "★ 断りが示したとおりに列名を入れて言い直す（この経路は LLM を呼ばないので A 群で歩ける）"
    }
   },
-  "cmd_run_match#2": {
+  "cmd_run_match#3": {
    "text": "…に…に使える列が見つかりません",
    "escape": false,
    "example": false,

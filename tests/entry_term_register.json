@@ -1,0 +1,1294 @@
+{
+ "_meta": {
+  "purpose": "入口の項の台帳。run（31 op）以外の入口が、依頼文やオプションから決める項目（列・シート・見出し行・値）が、何と突き合わされてから答えに効くかを 4 区分で持つ。番人は tests/test_entry_term_register.py。★ run の 1 冊の道（31 op）は tests/request_term_register.json が持つ。",
+  "why": "2026-10-01 盲検 7 体目: 2 冊の照合で依頼が名指しした『税込金額』が式のままで値が無く、残った『税抜金額』が断りなく選ばれた（正しく払われた請求まで全部『差額あり』・exit 0）。照合は op ではないので依頼の項の台帳に載っておらず、同じ形が地図の外に在った。",
+  "classes": {
+   "A": "依頼（依頼文・指定）と突き合わせる ── 名指しが当たらない／使えないなら断る、食い違えば依頼が勝って開示、名指しが無ければ機械の決定を画面で言う",
+   "B": "実表とだけ突き合わせる（実在や型は見るが、依頼がそれを指したかは見ない）",
+   "C": "機械が決める（依頼がそれを指す手段が無い、または指した時は A の扱い）── 開示の有無は how に書く",
+   "D": "何とも突き合わせない（依頼が別のものを指していても、値が欠けていても黙って進む）"
+  },
+  "denominator": "入口 ＝ argparse の登録簿（等号）。項目 ＝ 入口のオプション ∪ 入口の関数から 3 段までに届く『決める器官』が決める項目（worksheets[0]→シート／load_workbook(data_only=True)→式の値／resolve_columns→ColumnResolution の列／read_journal→COLUMN_ALIASES の役割／translate_task→入口が読む LLM の引数／下の deciders）。",
+  "deciders": {
+   "detect_header_row": [
+    "見出し行"
+   ],
+   "find_header_row": [
+    "見出し行"
+   ],
+   "verify_match_output": [
+    "式の値"
+   ],
+   "verify_split_folder": [
+    "式の値"
+   ],
+   "verify_output": [
+    "式の値"
+   ]
+  },
+  "route_functions": {
+   "run": {
+    "functions": {
+     "2冊の照合": "cmd_run_match",
+     "フォルダ抽出": "cmd_run_folder"
+    },
+    "note": "1 冊の道（31 op）は request_term_register.json が持つ。ここで数えるのは run のうち op を通らない 2 つの道"
+   }
+  },
+  "caps": {
+   "B": 0,
+   "D": 1
+  },
+  "caps_rule": "B と D は縮める在庫。数が上限を超えたら赤・下回ったら上限を下げるまで赤（下がる向きにしか動かない）。",
+  "basis_rule": "basis は『ファイル:関数』。番人が実在を確かめる。",
+  "limits": "『決める器官』の名簿（deciders と番人の中の 5 つの形）は手で持つ。新しい種類の器官は名簿に足すまで見えない。帳票の項目（forms の請求額など）・縦積みの列の揃え方は器官として名簿に載せていない（依頼が指す手段が無い機械の判断）。",
+  "history": [
+   {
+    "date": "2026-10-01",
+    "counts": {
+     "A": 68,
+     "B": 6,
+     "C": 45,
+     "D": 7
+    },
+    "note": "初版の地図（HEAD 801c1e9 の実体で分類・was の欄が直す前の区分）"
+   },
+   {
+    "date": "2026-10-01",
+    "counts": {
+     "A": 80,
+     "C": 45,
+     "D": 1
+    },
+    "note": "2冊の照合の key/amount B→A・シート D→A・式の値 D→A／フォルダ抽出の LLM:col・column B→A・LLM:value D→A・シート D→A／split 式の値 D→A／verify 式の値 D→A。残り D 1（accounts 式の値・在庫）"
+   }
+  ],
+  "frozen": "2026-10-01"
+ },
+ "routes": {
+  "run": "オプション＋2冊の照合・フォルダ抽出の道（1 冊の道は request_term_register）",
+  "stop": "決める項目なし（起動した LibreOffice を落とすだけ）",
+  "doctor": "表の中身を選ばない（セットアップの診断）",
+  "ops": "表の中身を選ばない（一覧の表示）",
+  "csv": "決める項目なし（CSV の文字コードと型は検疫が機械で決め、曖昧なら断る ── 器官の名簿外）",
+  "export-csv": "シートは --sheet か 1 枚だけの時だけ",
+  "demo": "表の中身を選ばない",
+  "export-pdf": "シートと式の値",
+  "scan": "読むだけの棚卸し",
+  "stack": "縦積み",
+  "forms": "帳票の一覧",
+  "accounts-apply": "採用の写し",
+  "split": "担当者別に分けて配る",
+  "accounts": "科目の候補",
+  "verify": "後からの独立検算",
+  "history": "表の中身を選ばない",
+  "restore": "表の中身を選ばない",
+  "undo": "表の中身を選ばない",
+  "redo": "決める項目なし（直前の undo をやり直すだけ）",
+  "adopt": "下書きの清書（--base-sha は原本が変わっていないかの指紋）",
+  "vocab": "決める項目なし（用語集の編集・位置引数だけ）",
+  "alias": "決める項目なし（別名の編集・位置引数だけ）",
+  "attr": "決める項目なし（属性の表示・削除・位置引数だけ）"
+ },
+ "items": [
+  {
+   "route": "accounts",
+   "item": "--column",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_accounts",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "役割=見出しを人が教える ── 当たらない冊は自動照合へ落ちたことを名指しする"
+  },
+  {
+   "route": "accounts",
+   "item": "--json",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_accounts"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "accounts",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_accounts"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "accounts",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_accounts"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "accounts",
+   "item": "--past",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_accounts"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "accounts",
+   "item": "シート",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal"
+   ],
+   "how": "仕訳の書き出しの 1 枚目（依頼が指す手段が無い・画面では言わない）"
+  },
+  {
+   "route": "accounts",
+   "item": "列:借方勘定科目",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "列:借方取引先",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "列:借方税区分",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "列:借方補助科目",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "列:借方金額",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "列:取引No",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "列:取引日",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "列:摘要",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "列:貸方取引先",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "別名（COLUMN_ALIASES）で機械が当てる・決まらなければ断る・--column が当たらない冊は名指し"
+  },
+  {
+   "route": "accounts",
+   "item": "式の値",
+   "class": "D",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal"
+   ],
+   "stock": "仕訳の書き出しの xlsx で金額が式のまま（計算結果なし）だと、data_only の読みで空になる。借方金額は『候補を出す行』の条件なので、その行は黙って候補の外へ落ちうる（画面で理由を言っていない）。未測定 ── 実物の書き出しは CSV が本流で、xlsx の式のままの金額は検体に無い。塞ぎ方は split と同じ器官（read_with_values_filled_in）だが、accounts は『LO を起動しない（読むだけ）』と設計で決めてあるので、断る（値の無い金額の行を名指しする）か器官を呼ぶかは設計の判断が要る"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "--column",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_accounts_apply",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "役割=見出しを人が教える ── 当たらない冊は自動照合へ落ちたことを名指しする"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_accounts_apply"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_accounts_apply"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "シート",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_apply.py:apply_to_book"
+   ],
+   "how": "元の仕訳の 1 枚目（候補の冊を作った時と同じ読み）"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:借方勘定科目",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:借方取引先",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:借方税区分",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:借方補助科目",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:借方金額",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:取引No",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:取引日",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:摘要",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "列:貸方取引先",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "accounts と同じ読み手（read_journal）・写すのは借方勘定科目だけ"
+  },
+  {
+   "route": "accounts-apply",
+   "item": "式の値",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_apply.py:apply_to_book"
+   ],
+   "how": "写す先は式のまま開く（data_only を使わない）── 値の読みは列の見出しを引くためだけ"
+  },
+  {
+   "route": "adopt",
+   "item": "--base_sha",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_adopt"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "demo",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_demo"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "demo",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_demo"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "doctor",
+   "item": "--allow_remote_model",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_doctor"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "doctor",
+   "item": "--model",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_doctor"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "export-csv",
+   "item": "--encoding",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_csv"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "export-csv",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_csv"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "export-csv",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_csv"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "export-csv",
+   "item": "--sheet",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_csv"
+   ],
+   "how": "無いシートは断る・省略時は 1 枚だけの時だけそれを選び、複数なら名前を並べて断る"
+  },
+  {
+   "route": "export-pdf",
+   "item": "--fit_to_width",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_pdf"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "export-pdf",
+   "item": "--orientation",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_pdf"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "export-pdf",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_pdf"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "export-pdf",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_pdf"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "export-pdf",
+   "item": "--sheet",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_pdf"
+   ],
+   "how": "無いシートは断る"
+  },
+  {
+   "route": "export-pdf",
+   "item": "シート",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_pdf"
+   ],
+   "how": "--sheet か 1 枚目（画面の見出しに sheet= を出す）"
+  },
+  {
+   "route": "export-pdf",
+   "item": "式の値",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_export_pdf",
+    "src/ailine_core/pdf_export.py:verify_values_in_pdf"
+   ],
+   "how": "式のままのセルは『見なかった数』として分母から外したと言う"
+  },
+  {
+   "route": "forms",
+   "item": "--json",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_forms"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "forms",
+   "item": "--month",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_forms"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "forms",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_forms"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "forms",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_forms"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "forms",
+   "item": "--recursive",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_forms"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "forms",
+   "item": "式の値",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_forms",
+    "src/ailine_core/form_read.py:read_book"
+   ],
+   "how": "帳票の層が『値が無い』と『式が在るのに値が無い』を区別して返し、空欄には理由を付ける"
+  },
+  {
+   "route": "history",
+   "item": "--folder",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_history"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "history",
+   "item": "--max",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_history"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "ops",
+   "item": "--json",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_ops"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "restore",
+   "item": "--list",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_restore"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--accept_loss",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--allow_freeform",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--allow_remote_model",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--ask",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--copy",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--dry",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--header_row",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_cmd_run_body"
+   ],
+   "how": "見出し行を明示（自動検出を飛ばす）"
+  },
+  {
+   "route": "run",
+   "item": "--helpers",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--inplace",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--json",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--keep_backups",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--model",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--op",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_cmd_run_body"
+   ],
+   "how": "操作を人が固定する（言い回しから当てる段を飛ばす）"
+  },
+  {
+   "route": "run",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--refs",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--repair",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--sheet",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_cmd_run_body"
+   ],
+   "how": "シート名で明示。無ければ『？ シート『…』がありません』で断る（実測）"
+  },
+  {
+   "route": "run",
+   "item": "--show_basic",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--temperature",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--timeout",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "--values",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "run",
+   "item": "2冊の照合:amount_a",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/match.py:resolve_role",
+    "src/ailine_core/match.py:named_but_unusable",
+    "src/ailine/__init__.py:cmd_run_match"
+   ],
+   "how": "★ 2026-10-01（盲検 7 体目の実例）: 名指しした列に値が無い（式のまま）時、残った数値の列へ黙って替えていた ── 決めずに返し、器官が値を入れて読み直す／入れられなければ断る",
+   "was": "B"
+  },
+  {
+   "route": "run",
+   "item": "2冊の照合:amount_b",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/match.py:resolve_role",
+    "src/ailine_core/match.py:named_but_unusable"
+   ],
+   "how": "amount_a と同じ器官",
+   "was": "B"
+  },
+  {
+   "route": "run",
+   "item": "2冊の照合:key_a",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/match.py:resolve_role",
+    "src/ailine_core/match.py:named_but_unusable"
+   ],
+   "how": "名指し→役割の語→型が 1 本→決まらなければ断る。★ 2026-10-01: 「Xをキーに」と言われた列が数値だけの列でも、唯一の文字の列へ黙って替えていた（②）── 決めずに断る",
+   "was": "B"
+  },
+  {
+   "route": "run",
+   "item": "2冊の照合:key_b",
+   "class": "A",
+   "basis": [
+    "src/ailine_core/match.py:resolve_role",
+    "src/ailine_core/match.py:named_but_unusable"
+   ],
+   "how": "key_a と同じ器官",
+   "was": "B"
+  },
+  {
+   "route": "run",
+   "item": "2冊の照合:シート",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_match_sheet_reading",
+    "src/ailine/__init__.py:_peek_match_book"
+   ],
+   "how": "1 枚目を読む。★ 2026-10-01: 依頼が別のシートを名指ししたら断る・複数枚なら読んだシートを言う（以前は黙って 1 枚目）",
+   "was": "D"
+  },
+  {
+   "route": "run",
+   "item": "2冊の照合:式の値",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:_match_after_filling_values",
+    "src/ailine/__init__.py:read_with_values_filled_in"
+   ],
+   "how": "列が決まらない時に道具が LibreOffice で値を入れて読み直し、誰が計算したかを言う（e58d9fa）。★ 2026-10-01: 列が黙って決まってしまうと器官まで届かなかった（amount_a の実例）",
+   "was": "D"
+  },
+  {
+   "route": "run",
+   "item": "2冊の照合:見出し行",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:_peek_match_book",
+    "src/ailine/__init__.py:detect_header_row"
+   ],
+   "how": "機械が推定（画面では言わない）。外れると列が決まらず断りに落ちる（黙った誤答にはならない側）"
+  },
+  {
+   "route": "run",
+   "item": "フォルダ抽出:LLM:cmp",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run_folder",
+    "src/ailine_core/compare_words.py:read"
+   ],
+   "how": "compare_words.read が LLM に勝つ・否定と 2 つの比較は断る"
+  },
+  {
+   "route": "run",
+   "item": "フォルダ抽出:LLM:col",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run_folder",
+    "src/ailine_core/subject.py:name_matches_task"
+   ],
+   "how": "実在は基準ファイルで確かめる。★ 2026-10-01: 依頼文に名指しが無ければ ⚠（以前は実在だけ）",
+   "was": "B"
+  },
+  {
+   "route": "run",
+   "item": "フォルダ抽出:LLM:column",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run_folder",
+    "src/ailine_core/subject.py:name_matches_task"
+   ],
+   "how": "col と同じ（LLM が鍵を column で返した形）",
+   "was": "B"
+  },
+  {
+   "route": "run",
+   "item": "フォルダ抽出:LLM:value",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run_folder",
+    "src/ailine_core/threshold.py:ground"
+   ],
+   "how": "★ 2026-10-01: 境目の数は依頼文から（threshold.ground・1 冊の抽出と同じ器官）・数が無い／複数なら断る・文字の値が依頼文に無ければ ⚠（以前は LLM の値がそのまま）",
+   "was": "D"
+  },
+  {
+   "route": "run",
+   "item": "フォルダ抽出:シート",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run_folder",
+    "src/ailine/__init__.py:_match_sheet_reading"
+   ],
+   "how": "基準ファイルの 1 枚目・他の冊は同名シート（落ちたら開示）。★ 2026-10-01: 依頼が別のシートを名指ししたら断る",
+   "was": "D"
+  },
+  {
+   "route": "run",
+   "item": "フォルダ抽出:式の値",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/extract_multi.py:evaluate_and_extract"
+   ],
+   "how": "条件列の『式だが値が無い』セルの数を ⚠ で言う（抜き出しの対象に数えない）"
+  },
+  {
+   "route": "run",
+   "item": "フォルダ抽出:見出し行",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_run_folder",
+    "src/ailine/__init__.py:detect_header_row"
+   ],
+   "how": "基準ファイルで推定・冊ごとのずれは開示"
+  },
+  {
+   "route": "scan",
+   "item": "--json",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_scan"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "scan",
+   "item": "シート",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_scan"
+   ],
+   "how": "棚卸し（読むだけ・答えを作らない）"
+  },
+  {
+   "route": "scan",
+   "item": "式の値",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_scan"
+   ],
+   "how": "棚卸し（読むだけ）"
+  },
+  {
+   "route": "scan",
+   "item": "見出し行",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_scan"
+   ],
+   "how": "棚卸し（読むだけ）"
+  },
+  {
+   "route": "split",
+   "item": "--amount",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split",
+    "src/ailine_core/split_people.py:plan_split"
+   ],
+   "how": "人が打った見出しの文字を実表に当てる ── 当たらない／2 つ以上当たれば断る"
+  },
+  {
+   "route": "split",
+   "item": "--by",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split",
+    "src/ailine_core/split_people.py:plan_split"
+   ],
+   "how": "人が打った見出しの文字を実表に当てる ── 当たらない／2 つ以上当たれば断る（--exact で打った文字そのものに一致する 1 つ・何を採ったかを画面で言う）"
+  },
+  {
+   "route": "split",
+   "item": "--exact",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "split",
+   "item": "--json",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "split",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "split",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "split",
+   "item": "--sheet",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split"
+   ],
+   "how": "無いシートは名指しで断る"
+  },
+  {
+   "route": "split",
+   "item": "シート",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split"
+   ],
+   "how": "--sheet か 1 枚目。見なかったシートを名指しで言う"
+  },
+  {
+   "route": "split",
+   "item": "式の値",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split",
+    "src/ailine/__init__.py:read_with_values_filled_in"
+   ],
+   "how": "★ 2026-10-01（実測）: 式のままの列が配った冊で空欄・--amount の証明は『金額 0 ＝ 0』で ✓ だった。道具が LibreOffice で値を入れて配る／入れられなければ分けない",
+   "was": "D"
+  },
+  {
+   "route": "split",
+   "item": "見出し行",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_split",
+    "src/ailine_core/multifile.py:find_header_row"
+   ],
+   "how": "推定し、--by の見出しが在る行へ寄せる。何行目を読んだかを言う"
+  },
+  {
+   "route": "stack",
+   "item": "--json",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_stack"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "stack",
+   "item": "--out",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_stack"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "stack",
+   "item": "--overwrite",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_stack"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "stack",
+   "item": "シート",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_stack"
+   ],
+   "how": "基準の 1 枚目・他の冊は同名シート（落ちたら開示）"
+  },
+  {
+   "route": "stack",
+   "item": "式の値",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_stack",
+    "src/ailine_core/multifile.py:formula_columns_without_cache"
+   ],
+   "how": "式のままの列は Σ を出さず名指しする（検算していないことを言う）"
+  },
+  {
+   "route": "stack",
+   "item": "見出し行",
+   "class": "C",
+   "basis": [
+    "src/ailine/__init__.py:cmd_stack"
+   ],
+   "how": "推定・冊ごとのずれは開示"
+  },
+  {
+   "route": "undo",
+   "item": "--list",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_undo"
+   ],
+   "how": "人が打った指定そのものを使う（表の中身を選ばない）"
+  },
+  {
+   "route": "verify",
+   "item": "--amount",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_verify",
+    "src/ailine_core/verify_split.py:verify_split_folder"
+   ],
+   "how": "分けた冊の和を確かめる金額の見出し（省略すると『測っていません』と言う）"
+  },
+  {
+   "route": "verify",
+   "item": "--column",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_verify",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "役割=見出しを人が教える ── 当たらない冊は自動照合へ落ちたことを名指しする"
+  },
+  {
+   "route": "verify",
+   "item": "シート",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/verify_accounts.py:verify_accounts_book"
+   ],
+   "how": "作った時と同じシートを読む"
+  },
+  {
+   "route": "verify",
+   "item": "列:借方勘定科目",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "列:借方取引先",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "列:借方税区分",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "列:借方補助科目",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "列:借方金額",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "列:取引No",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "列:取引日",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "列:摘要",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "列:貸方取引先",
+   "class": "C",
+   "basis": [
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_core.py:parse_column_overrides"
+   ],
+   "how": "作った時と同じ読み手（read_journal）"
+  },
+  {
+   "route": "verify",
+   "item": "式の値",
+   "class": "A",
+   "basis": [
+    "src/ailine/__init__.py:cmd_verify",
+    "src/ailine/__init__.py:_verify_sources_with_values"
+   ],
+   "how": "★ 2026-10-01（実測）: 照合・分けるは LibreOffice の値で答えを作るのに、検算は原本を読み正しい出力に『破れ 9 件』と言っていた。作った時と同じく値を入れて読む／入れられなければ検算しない",
+   "was": "D"
+  }
+ ]
+}

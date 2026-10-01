@@ -224,6 +224,7 @@ from ailine_core.subject import (   # ★ 単位E: A' 原則を「値」から�
     name_matches_task,   # ★ W3 改定(2026-08-20): 実在しない target が「依頼文の名指し」か
                           #   「翻訳の捏造」かの照合に、単位B の部分文字列規律を再利用する
 )
+from ailine_core import subject as subject_names   # ★ 2冊の照合: 依頼がシートを名指ししたか（designates_a_sheet）
 from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/照合/保存形式（純関数）
 from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もしかして提案の候補生成（語としての厳格一致+about）
 from ailine_core import intent as intent_mismatch   # ★ 依頼が名指しした操作の種類と食い違わないか
@@ -6991,6 +6992,50 @@ def read_with_values_filled_in(book: Path, workdir: Path, timeout=None) -> tuple
         return None, f"{type(e).__name__}: {e}"
 
 
+def _uncached_formula_cells(book: Path) -> int:
+    """冊の全シートで、式のままで計算結果（キャッシュ値）を持たないセルの数（読めなければ 0）。"""
+    try:
+        wb = openpyxl.load_workbook(book, read_only=True)
+        names = list(wb.sheetnames)
+        wb.close()
+        return sum(len(xml_readback.read_grid(book, sheet_name=n).get("uncached_formulas") or ())
+                   for n in names)
+    except Exception:   # noqa: BLE001 ── 読めない冊はこの先の検算が名指しで断る
+        return 0
+
+
+def _verify_sources_with_values(paths: list, workdir: Path) -> tuple:
+    """検算の元の冊に式のままのセルが在れば、**作った時と同じく**道具が値を入れたコピーを読む。
+
+    戻り値 `(読む冊の並び, 画面に出す行, 断りの理由か None)`。
+    ★★ 2026-10-01（入口の台帳）: 照合（e58d9fa）と分ける（同日）は LibreOffice で値を入れた冊で
+      答えを作るのに、検算は**原本**を読んでいた ── 正しい出力に「破れ 9 件」と言っていた（実測）。
+      検算は使ったデータを読む（e58d9fa の約束⑤）。入れられなければ検算しない（破れと誤って言わない）。
+    ★ コピーは原本と**同じ名前**にする（出所の列は冊の名前で突き合わせる）。
+    """
+    out, notes = [], []
+    for i, p in enumerate(paths):
+        n = _uncached_formula_cells(p)
+        if not n:
+            out.append(p)
+            continue
+        wd = Path(workdir) / str(i)
+        wd.mkdir(parents=True, exist_ok=True)
+        filled, why = read_with_values_filled_in(p, wd)
+        if filled is None:
+            return list(paths), notes, (
+                f"『{p.name}』に計算結果の入っていない式のセルが {n} 個あり、LibreOffice で"
+                f"値を入れられませんでした（{why}）── 値の無い冊と突き合わせると正しい出力を"
+                "破れと言ってしまうので、検算しません")
+        same_name = wd / "src" / p.name
+        same_name.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(filled, same_name)
+        notes.append(f"　★『{p.name}』の式のままのセル {n} 個は、LibreOffice で開いて計算させた値で"
+                     "読み直しました（原本は変えていません／この値は LibreOffice が計算したものです）")
+        out.append(same_name)
+    return out, notes, None
+
+
 def _match_after_filling_values(book_a: Path, book_b: Path, formula_only: dict,
                                  task: str, timeout=None) -> dict | None:
     """照合で式のままの列が邪魔をした時、**道具が自分で値を入れて**読み直す。
@@ -13674,6 +13719,14 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     if value in (None, ""):
         print("？ 抽出する値が依頼文から読み取れません（例:『金額が40000以上の行を抜き出して』）。")
         return 3
+    # ★★ 2026-10-01（入口の台帳）: この経路は LLM の列と値を**依頼文と突き合わせていなかった**
+    #   （列は実在だけ・値は何とも）。1 冊の抽出（_verify_extract）は 09-14 に「境目の数は
+    #   依頼文から機械が取る」と直してあり、兄弟のこちらに届いていなかった（兄弟間の片配線）。
+    #   ★ 器官は同じ物を呼ぶ（threshold.ground・subject.name_matches_task）。読めない時は変えずに言う。
+    folder_warnings = []
+    if a.task and not name_matches_task(col, a.task, others=base_headers):
+        folder_warnings.append(f"列『{col}』は依頼文に名指しがありません（LLM が選んだ列です）"
+                               "── 違う列なら列名を依頼文に書いてください")
     if cmp == "contains":
         value = str(value)
     else:
@@ -13684,12 +13737,30 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                 print(f"？ 『{value}』は数値として読めないので {_EXTRACT_CMP_LABELS[cmp]} の"
                       "比較ができません。数値で言い直してください。")
                 return 3
+        if a.task and isinstance(value, float):
+            _g = threshold.ground(a.task, value,
+                                  example=f"{col}が10{_EXTRACT_CMP_LABELS.get(cmp, '')}の行を抜き出して")
+            if _g.refusal:
+                print(f"？ {_g.refusal}")
+                return 3
+            if _g.warning:
+                folder_warnings.append(_g.warning)
+            value = _g.value
         # ★ 辞書に当たらない数値の比較は LLM の不等号だけで通さない（2026-09-15・規則 ④・
         #   兄弟と同じく値の検査の後ろ）。
         if a.task and cmp in compare_words.NUMERIC_CMPS and not _cmp_read.hit:
             print("？ " + compare_words.unconfirmed(
                 cmp, example=f"{col}が40000{_EXTRACT_CMP_LABELS.get(cmp, '')}の行を抜き出して"))
             return 3
+    if a.task and isinstance(value, str) and value.strip() not in a.task:
+        folder_warnings.append(f"抽出する値『{value}』は依頼文に見当たりません（LLM が読んだ値です）"
+                               "── 違う値なら依頼文に書いてください")
+    # ★ 2026-10-01: 読むシート（基準ファイルの 1 枚目）を依頼文と突き合わせる（2冊の照合と同じ器官）。
+    _no_sheet, _sheet_note = _match_sheet_reading(base_path, a.task or "", base_headers,
+                                                  what="フォルダ抽出（基準ファイル）")
+    if _no_sheet:
+        print(f"？ {_no_sheet}")
+        return 3
 
     # ⑤ 出力先（Q7: フォルダの親・機械命名）と書き込みの関所（40 冊読む前に判定して印字）。
     #    ★ review3#1/#5: 黙って作り直してよいのは「印」だけでなく「条件も一致」する時だけ。
@@ -13726,6 +13797,10 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     say(f"条件: {col} {_format_extract_value(value)} {cmp_label}")
     if cmp_mismatch_warning:
         say(f"⚠ {cmp_mismatch_warning}")
+    for _w in folder_warnings:
+        say(f"⚠ {_w}")
+    if _sheet_note:
+        say(_sheet_note)
 
     # ⑥ ファイルごとの評価（★ 一括検出: 欠陥が出ても止めず全部集める）。
     skipped, files_json, excluded_detail, mismatches = [], [], [], []
@@ -14048,6 +14123,34 @@ def _peek_match_book(path: Path):
         wb.close()
 
 
+def _match_sheet_reading(book: Path, task: str, vocabulary: list, what: str = "2冊の照合") -> tuple:
+    """2冊の照合が読むシート（1 枚目）を、依頼文と突き合わせる。戻り値 `(断りの文 か None, 開示の行 か None)`。
+
+    ★★ 2026-10-01（入口の台帳）: 照合は冊の 1 枚目しか読まないのに、依頼が別のシートを
+      名指ししても**黙って 1 枚目で照合**し、何枚あるかも言っていなかった（依頼の項が欠けた嘘の形）。
+    ★ 名指しの判定は既存の器官（extract_task_mentions・subject.designates_a_sheet）── 書き写さない。
+    ★ 読めない時は変えない: 別のシートを読みに行くのでなく、断る（1 枚目を読む契約は検算も同じ）。
+    """
+    try:
+        wb = openpyxl.load_workbook(book, read_only=True)
+        names = list(wb.sheetnames)
+        wb.close()
+    except Exception:   # noqa: BLE001 ── 読めない冊は呼び出し側が名指しで断る
+        return None, None
+    if len(names) < 2:
+        return None, None
+    read = names[0]
+    mentioned = [s for s in extract_task_mentions(task, names, header_names=vocabulary)["sheets"]
+                 if subject_names.designates_a_sheet(task, s)]
+    elsewhere = [s for s in names if s in mentioned and s != read]
+    if elsewhere:
+        return (f"依頼の『{'』『'.join(elsewhere)}』シートは読みません ── {what}は"
+                f"『{book.name}』の 1 枚目（『{read}』）だけを読みます（そのシートで行うなら、"
+                "1 枚目に置いた冊で実行してください）"), None
+    others = "".join(f"『{n}』" for n in names if n != read)
+    return None, f"（『{book.name}』はシート『{read}』を読みました ── 同じ冊に{others}もあります）"
+
+
 def _match_condition(key_a: str, key_b: str, amount_a: str, amount_b: str, book_b_name: str,
                      headers_a: list, headers_b: list) -> dict:
     """出力ブックの docProps/description へ焼く条件（機械可読・verify の入口が読む）。
@@ -14110,6 +14213,21 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
     if headers_b is None:
         print(_unreadable_book_for_match_message(book_b))
         return 3
+    def _refused(kind: str) -> int:
+        """断った回も残す（出口は 1 本 ── 断りの種類ごとに記録を書き写さない）。"""
+        _record_side_command_history("match", book_a, task, None, False, failure_kind=kind)
+        return 3
+
+    # ★ 2026-10-01: 読むシートを依頼文と突き合わせる（別のシートの名指しは断る・複数枚なら開示）。
+    _sheet_notes = []
+    for _bk in (book_a, book_b):
+        _no, _note = _match_sheet_reading(_bk, task, list(headers_a) + list(headers_b))
+        if _no:
+            say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
+            say(f"？ {_no}")
+            return _refused("match_sheet_not_read")
+        if _note:
+            _sheet_notes.append(_note)
 
     # ★ 列対応（機械3段・LLM ゼロ）: 依頼文の名指し → 型で絞る → 曖昧なら exit 3（候補つき）。
     #   ★ 一括検出: 決まらなかった役割を全部集めてから報告する（1件目で止めない）。
@@ -14144,6 +14262,8 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
     if not resolution.ok:
         if not _tried_filling:
             say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
+        for _ln in _sheet_notes:
+            say(_ln)
         # ★★ 2026-09-17（盲検 3 体目）: 「依頼文に列名を含めて（例:『品目をキーに』）」と
         #   案内していたが、買い手は**既にそう書いていた** ── 本当の理由は別に在り
         #   （『金額』が式のままで計算結果を持たない）、道具はそれを**持っていたのに
@@ -14172,15 +14292,19 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
                         else "Excel か LibreOffice で一度開いて保存すると値が入ります")
                 say(f"　★『{"』『".join(str(h) for h in _named_formula)}』は式のままで計算結果が入っていないため、"
                     f"{label}の列として使えません（{_how}）。")
+            # ★★ 2026-10-01（盲検 7 体目）: 依頼が名指しした列が使えない時は、他の列で黙って
+            #   照合しない（match.named_but_unusable）── 式のまま以外の理由もここで言う。
+            for _s, _r, _h, _why in resolution.unusable:
+                if (_s, _r) == (side, role) and _h not in _named_formula:
+                    say(f"　★ 依頼の『{_h}』は{_why}。{label}の列として使えないので、"
+                        "別の列で黙って照合はしません。")
         # ★ 2026-10-01: 例は全部の役割ぶんを 1 行に・書き足せば通ると確かめた時だけ（match.py）
         say(multifile_match.rewording_line(task, headers_a, rows_a, headers_b, rows_b,
                                            resolution.unresolved, {"A": book_a.name, "B": book_b.name}))
         # ★ 断った回も残す ── 単一ブックの run は語彙外も台帳に残している。
         #   「何を頼んで通らなかったか」は月次の証跡として成功と同じだけ要る
         #   （2026-09-05 に CLARIFY が台帳に 1 行も無かったのと同じ線）。
-        _record_side_command_history("match", book_a, task, None, False,
-                                      failure_kind="match_columns_unresolved")
-        return 3
+        return _refused("match_columns_unresolved")
     key_a, key_b, amount_a, amount_b = (resolution.key_a, resolution.key_b,
                                          resolution.amount_a, resolution.amount_b)
 
@@ -14212,6 +14336,8 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
         say(f"■ ailine run（2冊の照合）  A={book_a}  B={book_b}")
     say(f"出力先: {out}")
     say(f"キー: {key_a}(A) / {key_b}(B)　金額: {amount_a}(A) / {amount_b}(B)")
+    for _ln in _sheet_notes:
+        say(_ln)
 
     workdir = Path(tempfile.mkdtemp(prefix="ailine_match_"))
     try:
@@ -15658,8 +15784,35 @@ def cmd_split(a: argparse.Namespace) -> int:
     # ★ 「無い」は関所（4）ではなく**前提が無い**（9）── 打ち間違いの出口は 1 本
     #   （`input_path` が文面も番号も持つ・心当たりまで言う）。
     input_path.require_file(book)
+    # ★★ 2026-10-01（入口の台帳・盲検 7 体目の冊で実測）: 式のままで計算結果の無い列は
+    #   data_only の読みで空に見え、配った冊では**空欄**・`--amount` の証明は「金額 0 ＝ 0」で ✓ だった
+    #   （照合が e58d9fa で直した形の兄弟）。器官は同じ物を呼ぶ ── 道具が LibreOffice で値を入れ、
+    #   入れられなければ分けない（空欄の冊を配らない）。
+    src = book
+    fill_dir = None
     try:
-        wb = openpyxl.load_workbook(book, data_only=True)
+        uncached = list(xml_readback.read_grid(book, sheet_name=a.sheet or None)
+                        .get("uncached_formulas") or ())
+    except Exception:   # noqa: BLE001 ── 読めない冊は下の openpyxl が名指しで断る
+        uncached = []
+    if uncached:
+        from openpyxl.utils import get_column_letter as _col_letter
+        _cells = "、".join(f"{_col_letter(c)}{r}" for r, c in uncached[:3])
+        fill_dir = Path(tempfile.mkdtemp(prefix="ailine_split_fill_"))
+        filled, why = read_with_values_filled_in(book, fill_dir)
+        if filled is None:
+            shutil.rmtree(fill_dir, ignore_errors=True)
+            result["refused"] = (f"計算結果の入っていない式のセルが {len(uncached)} 個あります"
+                                 f"（{_cells} など）── LibreOffice で開いて計算させようとしましたが、"
+                                 f"値を入れられませんでした（{why}）。このまま配ると空欄になるので分けません")
+            emit()
+            return 4
+        src = filled
+        result["filled_note"] = (f"　★ 式のままで計算結果が入っていなかったセル {len(uncached)} 個（{_cells} など）を、"
+                                 "LibreOffice で開いて計算させました（原本は変えていません／"
+                                 "この値は LibreOffice が計算したものです）")
+    try:
+        wb = openpyxl.load_workbook(src, data_only=True)
     except Exception as e:   # noqa: BLE001 ── 名指しして断る（推測で先へ進まない）
         result["refused"] = f"{book.name}: {input_path.explain_unreadable(e, book)}"
         emit()
@@ -15708,6 +15861,8 @@ def cmd_split(a: argparse.Namespace) -> int:
                                        exact=bool(getattr(a, "exact", False)))
     finally:
         wb.close()
+        if fill_dir is not None:      # ★ 値は読み終えて手元に在る（コピーは要らない）
+            shutil.rmtree(fill_dir, ignore_errors=True)
 
     result.update({"sheet": sheet_title, "header_row": header_row,
                    "other_sheets": other_sheets, "refused": plan.refused,
@@ -16274,12 +16429,19 @@ def cmd_verify(a: argparse.Namespace) -> int:
                   "ailine verify <出力フォルダ> <元の冊> [--amount <金額の見出し>]")
             return 4
         source = Path(sources[0]).resolve()
-        result = verify_split.verify_split_folder(out, source, getattr(a, "amount", None))
+        with tempfile.TemporaryDirectory(prefix="ailine_verify_fill_") as _td:
+            (_read_src,), _fill_notes, _no_fill = _verify_sources_with_values([source], Path(_td))
+            if _no_fill:
+                print(f"× {_no_fill}")
+                return 4
+            result = verify_split.verify_split_folder(out, _read_src, getattr(a, "amount", None))
         if result.get("unsupported"):
             print(f"× {result['unsupported']}")
             return 4
         for ln in render_independent_verify_report("分けた冊", str(out), str(source), result):
             print(ln)
+        for _ln in _fill_notes:
+            print(_ln)
         return _independent_verify_exit(result)
     if not out.is_file():
         print(f"× ファイルが見つかりません: {out}")
@@ -16361,7 +16523,17 @@ def cmd_verify(a: argparse.Namespace) -> int:
     if len(sources) == 2:
         book_a = Path(sources[0]).resolve()
         book_b = Path(sources[1]).resolve()
-        result = multifile_verify.verify_match_output(out, book_a, book_b)
+        _fill_notes = []
+        if multifile_stack.own_output_mark(out) == multifile_match.CREATOR_MARK:
+            with tempfile.TemporaryDirectory(prefix="ailine_verify_fill_") as _td:
+                (_ra, _rb), _fill_notes, _no_fill = _verify_sources_with_values(
+                    [book_a, book_b], Path(_td))
+                if _no_fill:
+                    print(f"× {_no_fill}")
+                    return 4
+                result = multifile_verify.verify_match_output(out, _ra, _rb)
+        else:
+            result = multifile_verify.verify_match_output(out, book_a, book_b)
         if result.get("unmarked"):
             print(f"× ailine の印がありません。検算できません: {out}")
             return 4
@@ -16375,6 +16547,8 @@ def cmd_verify(a: argparse.Namespace) -> int:
         for ln in render_independent_verify_report(
                 "照合", str(out), f"{book_a} / {book_b}", result):
             print(ln)
+        for _ln in _fill_notes:
+            print(_ln)
         return _independent_verify_exit(result)
     print("× verify の引数は「元フォルダ1個」または「元A 元B の2冊」のどちらかです"
           f"（{len(sources)} 個渡されました）。")

@@ -776,6 +776,8 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
                      "見出しとして読みました")
     for name in result.get("other_sheets", ()) or ():
         lines.append(f"  （見たのはこのシートだけです ── 同じ冊に『{name}』もあります）")
+    if result.get("filled_note"):
+        lines.append(result["filled_note"])
     if result.get("refused"):
         lines.append(f"× 分けていません: {result['refused']}")
         lines.append("（1 冊も作っていません ── 表から決まらないことは、こちらで決めません）")

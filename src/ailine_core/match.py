@@ -66,6 +66,16 @@ def numeric_columns(headers: list, rows: list) -> set:
     return out
 
 
+def empty_columns(headers: list, rows: list) -> set:
+    """headers のうち、データ行のどこにも値が無い列名（式のままで計算結果の無い列はこう見える）。"""
+    out = set()
+    for i, name in enumerate(headers):
+        if name and not any(i < len(values) and values[i] not in (None, "")
+                            for _r, values, _f in rows):
+            out.add(name)
+    return out
+
+
 def _is_swallowed_fragment(h: str, task: str, vocabulary: list) -> bool:
     """★ review5#4 の直し（単位B の轍・W3 断片ガードと同じ型）: h の task 中の出現が、
        すべて『h を含む・h より長い、vocabulary 内の別の語』の出現に完全に包含されるか。
@@ -128,6 +138,12 @@ def rewording_that_resolves(task: str, headers_a: list, rows_a: list,
     ★ 案内は「その通りに打てば通る」ものだけ ── 通るかは、ここで同じ解決をやり直して確かめる。
       依頼文に既に在る言い方は案内にならない（同じ文を言わせない）。
     """
+    # ★★ 2026-10-01（盲検 7 体目）: 依頼が名指しした列が使えなかった役割に、別の列を勧めない
+    #   （『税込金額』が式のままの冊で『税抜金額を金額に』と案内すると、打てば通るが答えが違う）。
+    before = resolve_columns(task or "", headers_a, rows_a, headers_b, rows_b)
+    blocked = {(s, r) for s, r, _h, _w in before.unusable}
+    if any((side, role) in blocked for side, role, _c in unresolved):
+        return None
     phrases = []
     for _side, role, candidates in unresolved:
         if not candidates:
@@ -143,19 +159,24 @@ def rewording_that_resolves(task: str, headers_a: list, rows_a: list,
         return None
     # ★ 書き足した言い方が、**もう決まっていた役割**を黙って別の列へ動かすなら案内しない
     #   （例: B 側のために勧めた『請求番号をキーに』が、A 側のキー『取引先』を『請求番号』へ替える）。
-    before = resolve_columns(task or "", headers_a, rows_a, headers_b, rows_b)
     for attr in ("key_a", "key_b", "amount_a", "amount_b"):
         if getattr(before, attr) is not None and getattr(before, attr) != getattr(after, attr):
             return None
     return phrases
 
 
-def why_rewording_does_not_resolve(task: str, unresolved: list, names: dict) -> str:
-    """言い直しでは決まらない回の 1 行（★ 例を出さず、何が足りないかを言う）。names は {"A": 冊名, "B": 冊名}。"""
+def why_rewording_does_not_resolve(task: str, unresolved: list, names: dict,
+                                   unusable: list = ()) -> str:
+    """言い直しでは決まらない回の 1 行（★ 例を出さず、何が足りないかを言う）。names は {"A": 冊名, "B": 冊名}。
+       unusable は ColumnResolution.unusable（依頼が名指ししたのに使えなかった列）。"""
     reasons = []
     for side, role, candidates in unresolved:
         label = ROLE_WORDS[role]
-        if not candidates:
+        named_bad = [h for s, r, h, _w in unusable if (s, r) == (side, role)]
+        if named_bad:
+            reasons.append(f"依頼の『{'』『'.join(str(h) for h in named_bad)}』は『{names[side]}』の"
+                           f"{label}に使えません ── 別の列で黙って照合はしません")
+        elif not candidates:
             kind = "数値だけの列" if role == "amount" else "文字の列"
             reasons.append(f"『{names[side]}』に{label}に使える列（{kind}）がありません")
         elif f"{candidates[0]}を{label}に" in (task or ""):
@@ -177,11 +198,12 @@ def rewording_line(task: str, headers_a: list, rows_a: list, headers_b: list, ro
     if phrases:
         return ("→ 依頼文に" + "".join(f"『{p}』" for p in phrases)
                 + "を書き足して、もう一度実行してください（例は候補の先頭です）")
-    return why_rewording_does_not_resolve(task, unresolved, names)
+    unusable = resolve_columns(task or "", headers_a, rows_a, headers_b, rows_b).unusable
+    return why_rewording_does_not_resolve(task, unresolved, names, unusable)
 
 
 def resolve_role(task: str, headers: list, numeric: set, role: str,
-                  vocabulary: list | None = None) -> tuple:
+                  vocabulary: list | None = None, empty: set | None = None) -> tuple:
     """機械3段（LLM ゼロ）: ①依頼文に名指しされ、かつ役割に合う型の列がちょうど1本なら採用
        ②それが決まらなければ、役割に合う型の列（依頼文の名指しは問わない）がちょうど1本なら採用
        ③それでも決まらなければ (None, 候補列) を返す（呼び出し側が exit 3 で列挙する）。
@@ -189,7 +211,9 @@ def resolve_role(task: str, headers: list, numeric: set, role: str,
        候補が2本以上でも1本も無くても None のまま返す（ここで折衷しない）。
        ★ review5#4: ①の名指し判定は部分文字列包含だが、より長い別ヘッダーに完全に呑まれる
        出現は名指しと数えない（_is_swallowed_fragment）。vocabulary 省略時は headers 自身
-       （後方互換・単独呼び出しの検体向け）。"""
+       （後方互換・単独呼び出しの検体向け）。
+       ★ empty は値が 1 つも無い列（empty_columns）── 依頼が名指しした列が使えない時に
+       ②へ落ちないための材料（named_but_unusable）。"""
     def type_ok(h):
         return (h not in numeric) if role == "key" else (h in numeric)
 
@@ -206,10 +230,45 @@ def resolve_role(task: str, headers: list, numeric: set, role: str,
     if len(marked) == 1:
         return marked[0], []
     typed = [h for h in headers if type_ok(h)]
+    # ★★ 2026-10-01（盲検 7 体目・請求と入金の突き合わせ）: 依頼が『税込金額』を名指ししたのに、
+    #   その列が式のままで値が無く（数値の列に数えられず）、残った数値の列『税抜金額』が
+    #   ②で**断りなく**選ばれた ── 正しく税込で払われた請求まで全部「差額あり」になった。
+    #   ★ 依頼が名指しした列が使えない時は、他の列へ黙って替えない（決めずに返す）。
+    if not named_typed and named_but_unusable(task, headers, numeric, empty, role, vocab):
+        return None, typed
     if len(typed) == 1:
         return typed[0], []
     candidates = named_typed if len(named_typed) > 1 else typed
     return None, candidates
+
+
+def named_but_unusable(task: str, headers: list, numeric: set, empty: set | None, role: str,
+                       vocabulary: list | None = None) -> list:
+    """依頼文が名指ししているのに、その役割に使えない列と理由（[(列名, 理由)]）。
+
+    ・金額: 名指しした列に値が 1 つも無い（式のままで計算結果が無い等）
+    ・役割の語つき（「Xをキーに」「Xを金額に」）で名指しした列の型が役割に合わない
+    ★ ただの名指しで型が違う列は数えない（「請求番号をキーに、税込金額と…」の『請求番号』は
+      金額の役割から見れば型違いだが、キーとして名指しされている）。"""
+    vocab = vocabulary if vocabulary is not None else headers
+    empty = empty or set()
+
+    def type_ok(h):
+        return (h not in numeric) if role == "key" else (h in numeric)
+
+    named = [h for h in headers if h and h in task and not _is_swallowed_fragment(h, task, vocab)]
+    wrong = [h for h in named if not type_ok(h)]
+    marked = set(named_with_role(task, wrong, role, vocab))
+    other = set(named_with_role(task, wrong, "key" if role == "amount" else "amount", vocab))
+    out = []
+    for h in wrong:
+        if h in other:          # 別の役割として名指しされている（「備考をキーに」の『備考』）
+            continue
+        if role == "amount" and h in empty:
+            out.append((h, "値が 1 つも入っていません"))
+        elif h in marked:
+            out.append((h, "数値でない列です" if role == "amount" else "数値だけの列です"))
+    return out
 
 
 @dataclass(frozen=True)
@@ -223,6 +282,8 @@ class ColumnResolution:
     amount_a: str | None = None
     amount_b: str | None = None
     unresolved: list = field(default_factory=list)
+    #: 依頼が名指ししたのに使えなかった列 [(side, role, 列名, 理由)]（決まらなかった役割の分だけ）
+    unusable: list = field(default_factory=list)
 
 
 def resolve_columns(task: str, headers_a: list, rows_a: list,
@@ -234,10 +295,20 @@ def resolve_columns(task: str, headers_a: list, rows_a: list,
     vocabulary = list(dict.fromkeys(list(headers_a) + list(headers_b)))
     num_a = numeric_columns(headers_a, rows_a)
     num_b = numeric_columns(headers_b, rows_b)
-    key_a, cand_ka = resolve_role(task, headers_a, num_a, "key", vocabulary)
-    key_b, cand_kb = resolve_role(task, headers_b, num_b, "key", vocabulary)
-    amount_a, cand_aa = resolve_role(task, headers_a, num_a, "amount", vocabulary)
-    amount_b, cand_ab = resolve_role(task, headers_b, num_b, "amount", vocabulary)
+    emp_a = empty_columns(headers_a, rows_a)
+    emp_b = empty_columns(headers_b, rows_b)
+    key_a, cand_ka = resolve_role(task, headers_a, num_a, "key", vocabulary, emp_a)
+    key_b, cand_kb = resolve_role(task, headers_b, num_b, "key", vocabulary, emp_b)
+    amount_a, cand_aa = resolve_role(task, headers_a, num_a, "amount", vocabulary, emp_a)
+    amount_b, cand_ab = resolve_role(task, headers_b, num_b, "amount", vocabulary, emp_b)
+    unusable = [
+        (side, role, h, why)
+        for side, role, got, headers, num, emp in (
+            ("A", "key", key_a, headers_a, num_a, emp_a), ("B", "key", key_b, headers_b, num_b, emp_b),
+            ("A", "amount", amount_a, headers_a, num_a, emp_a),
+            ("B", "amount", amount_b, headers_b, num_b, emp_b))
+        if got is None
+        for h, why in named_but_unusable(task, headers, num, emp, role, vocabulary)]
     unresolved = []
     if key_a is None:
         unresolved.append(("A", "key", cand_ka))
@@ -248,7 +319,8 @@ def resolve_columns(task: str, headers_a: list, rows_a: list,
     if amount_b is None:
         unresolved.append(("B", "amount", cand_ab))
     return ColumnResolution(ok=not unresolved, key_a=key_a, key_b=key_b,
-                             amount_a=amount_a, amount_b=amount_b, unresolved=unresolved)
+                             amount_a=amount_a, amount_b=amount_b, unresolved=unresolved,
+                             unusable=unusable)
 
 
 def normalize_key(v):
