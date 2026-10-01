@@ -175,6 +175,7 @@ from ailine_core.report_per_row import (  # noqa: F401
 from ailine_core import report_group   # ★ 帳票段（まとめ版）: 同じ取引先を 1 枚にまとめる純ロジック   # noqa: F401 ── 残置（使う側は ailine_core/argcheck へ移った・2026-09-24）
 from ailine_core import cellmap   # ★ 座標の層: 写像・数式の参照・参照のズレ検出   # noqa: F401 ── 残置（使う側は ailine_core/argcheck へ移った・2026-09-24）
 from ailine_core import match as multifile_match   # ★ M3: `ailine run <A> <B>`（2冊の照合）の本体
+from ailine_core import header_row_advice   # ★ `--header-row N` の案内を、実際に見た行から組み立てる
 from ailine_core import total_row   # ★ operator 盲検7度目: 語のトリップワイヤ（第二の独立検出器）
 from ailine_core import csv_quarantine   # ★ CSV 検疫: `ailine csv` / run 暗黙前段の本体
 from ailine_core import csv_export   # ★ CSV_EXPORT: `ailine export-csv`（検疫の逆方向）の本体
@@ -936,8 +937,9 @@ def detect_header_row(sheet_struct: dict) -> tuple:
 
 # ★ W8a 項目3: 旧文言は「答えて」と聞くだけで答え方(CLI で何を打てばいいか)が無い行き止まり
 #   だった（architect 発見）。--header-row フラグの使い方まで添えて、次のコマンドが打てる形にする。
-CLARIFY_HEADER_ROW_QUESTION = ("見出しが何行目か分かりません。"
-                                "`--header-row 3` のように指定して再実行してください")
+#   ★ 2026-10-01: 例の行番号は決め打ちの 3 をやめ、その冊で見出しらしく見えた行から出す（header_row_advice）。
+#     この定数は「見出しらしい行が 1 つも見えなかった時」の問い（行番号を当て推量で出さない）。
+CLARIFY_HEADER_ROW_QUESTION = header_row_advice.NO_CANDIDATE_QUESTION
 
 
 def resolve_header_rows(struct_dump: dict, sheets: list, target_sheet: str | None = None) -> tuple:
@@ -963,7 +965,7 @@ def resolve_header_rows(struct_dump: dict, sheets: list, target_sheet: str | Non
     if confident:
         header_rows[target] = row
         return header_rows, None
-    return header_rows, CLARIFY_HEADER_ROW_QUESTION
+    return header_rows, header_row_advice.clarify_question(info.get("rows", {}))
 
 
 def _struct_dump_info_missing(struct_dump: dict, sheets: list, target_sheet: str | None) -> bool:
@@ -1084,8 +1086,8 @@ def _header_row_hint_for_missing_col(book_meta: dict, sheet_name: str, raw_col) 
         if r == current:
             continue
         if raw in scan[r]:
-            return (f"列『{raw}』は{r}行目に見出しがあるようです。"
-                    f"`--header-row {r}` のように指定して再実行してください")
+            return header_row_advice.missing_column_hint(
+                raw, r, sheet_name, book_meta.get("_header_row_sheet"))
     return None
 
 
@@ -11121,6 +11123,7 @@ def _translate_and_dispatch(a: argparse.Namespace, book: Path, source_book: Path
     # ★ 対象シートの**出どころ**を運ぶ（cli=人が --sheet や画面で明示指定した）。
     #   ここに載せれば verify_dsl_args の署名を変えずに全経路へ届く。
     book_meta["_sheet_source"] = getattr(a, "_sheet_source", None)
+    book_meta["_header_row_sheet"] = target_sheet   # ★ --header-row が掛かるシート（案内に --sheet が要るかの判定）
     translation = getattr(a, "_reuse_translation", None)
     a._reuse_translation = None
     # ★★ 2026-09-05（属性の登録）: 前に人が「この語はこの列のこと」と教えてくれていたら、
@@ -14156,8 +14159,7 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
                               if h and str(h) in (task or "") and h not in (candidates or [])]
             if candidates:
                 cand_txt = "、".join(str(c) for c in candidates)
-                say(f"？ {book_label} の{label}列が依頼文から決まりません。候補: {cand_txt}。"
-                    f"依頼文に列名を含めて（例:『{candidates[0]}を{label}に』）もう一度実行してください。")
+                say(f"？ {book_label} の{label}列が依頼文から決まりません。候補: {cand_txt}。")
             else:
                 say(f"？ {book_label} に{label}に使える列が見つかりません。")
             # ★ 理由は候補の有無に関わらず言う（上の if/else の**外**に置く ──
@@ -14170,6 +14172,9 @@ def cmd_run_match(a: argparse.Namespace, book_a: Path, book_b: Path, task: str) 
                         else "Excel か LibreOffice で一度開いて保存すると値が入ります")
                 say(f"　★『{"』『".join(str(h) for h in _named_formula)}』は式のままで計算結果が入っていないため、"
                     f"{label}の列として使えません（{_how}）。")
+        # ★ 2026-10-01: 例は全部の役割ぶんを 1 行に・書き足せば通ると確かめた時だけ（match.py）
+        say(multifile_match.rewording_line(task, headers_a, rows_a, headers_b, rows_b,
+                                           resolution.unresolved, {"A": book_a.name, "B": book_b.name}))
         # ★ 断った回も残す ── 単一ブックの run は語彙外も台帳に残している。
         #   「何を頼んで通らなかったか」は月次の証跡として成功と同じだけ要る
         #   （2026-09-05 に CLARIFY が台帳に 1 行も無かったのと同じ線）。

@@ -6,69 +6,12 @@
   "walked_values": "walked=歩いて着いた / path_fails=歩いたが着かなかった（最悪）/ by_design=意図した行き止まり / 未調査=まだ誰も歩いていない",
   "how_to_read": "★ 未調査は『大丈夫』ではない ── **見ていない**という意味。walk_refusals と同じ線で、測れなかった回を判定に混ぜない。",
   "measured": "2026-09-23 に機械で数えて 40 件。うち 40 件が既存の台帳の外だった。",
-  "key": "鍵は『ファイル＋文面の頭』（2026-09-23 から）── 行番号は上に 1 行足すだけで全部ずれた（同じ日に 2 回）。文面が変われば歩き直すべき時なので、鳴ってほしい時にだけ鳴る"
+  "key": "鍵は『ファイル＋文面の頭』（2026-09-23 から）── 行番号は上に 1 行足すだけで全部ずれた（同じ日に 2 回）。文面が変われば歩き直すべき時なので、鳴ってほしい時にだけ鳴る",
+  "guidance_denominator": "機械で出す ── 製品の画面に出うる文字列（docstring を除く定数と f-string の固定部分）のうち、日本語の文の中に次の一手を示す印（日本語の文の中の --フラグ／ailine <サブコマンド>（バッククォート無し）・例:／例えば・と書いて／書き足して／のように指定／付けてください／再実行／もう一度実行／言い直して／と頼んで）を含むもので、hints（バッククォートの打てるもの）に載らないもの。いま走っている入口の名札（『■ ailine …』）は除く。f-string・連結の丸ごとにしか印が無いもの（断片に割ると消える）は丸ごとの型で載せる。番人は tests/test_every_guidance_site_is_accounted_for.py、数えるのは tests/guidance_sites_core.py（scripts/guidance_sites.py）。",
+  "guidance_why": "盲検で同じ形が 6 回（嘘の案内 ── 道具が『こう打て／こう書け』と言った通りにすると落ちる・抜けられない・手段が無い）。★「例:『取引先コードをキーに』」も「`--header-row 4` のように」も、hints の分母（バッククォートの中の打てるもの）では片方しか拾えず、例文と『〜と書いて』は分母の外だった。",
+  "guidance_measured": "2026-10-01 に機械で数えて guidance 156 件（うち歩いている 4 件・意図した行き止まり 1 件・未調査 151 件）。★ 未調査は『大丈夫』ではなく『見ていない』。"
  },
  "hints": [
-  {
-   "file": "__init__.py",
-   "typable": "--header-row",
-   "text": "見出しが何行目か分かりません。`--header-row 3` のように指定して再実行してください",
-   "walked": "walked",
-   "note": "",
-   "walk": {
-    "books": {
-     "曖昧.xlsx": {
-      "表": [
-       [
-        "名前",
-        "部署"
-       ],
-       [
-        "田中",
-        100
-       ],
-       [
-        "名前2",
-        "部署2"
-       ],
-       [
-        "鈴木",
-        200
-       ]
-      ]
-     }
-    },
-    "argv": [
-     "run",
-     "{book:曖昧.xlsx}",
-     "並べ替えて",
-     "--copy"
-    ],
-    "expect": "見出しが何行目か分かりません",
-    "path": {
-     "argv": [
-      "run",
-      "{book:曖昧.xlsx}",
-      "並べ替えて",
-      "--copy",
-      "--header-row",
-      "3",
-      "--dry"
-     ],
-     "plan": [
-      {
-       "op": "SORT",
-       "args": {
-        "col": "部署2",
-        "order": "desc"
-       }
-      }
-     ],
-     "expect_rc": 0,
-     "expect": "（--dry"
-    }
-   }
-  },
   {
    "file": "__init__.py",
    "typable": "--header-row",
@@ -329,13 +272,6 @@
    "text": "（`--sheet <名前>` で選べます）",
    "walked": "未調査",
    "note": "2026-09-23 補助スクリプトで一度歩いた（1 枚目が空の 2 シートの冊で発火・`--sheet 商品` で解消（--dry・適用が遅く最後の書き換えまでは見ていない））── 盤では歩けない: 盤の歩きは適用まで走る ── 実機の LibreOffice が要り A 群では時間がかかる"
-  },
-  {
-   "file": "__init__.py",
-   "typable": "--header-row",
-   "text": "行目に見出しがあるようです。`--header-row",
-   "walked": "未調査",
-   "note": "2026-09-23 補助スクリプトで一度歩いた（5 行目の単独セルで敗者復活を発火・`--header-row 5` で解消（--dry・人工的な形））── 盤では歩けない: 同上"
   },
   {
    "file": "__init__.py",
@@ -1969,6 +1905,1964 @@
     }
    },
    "note": "★ 盲検 6 体目 ⑥ の残り（2026-09-23）: 全部の冊の `--column` を 1 行にまとめた案内。旧版は 1 冊ぶんの「もう一度」で、従うと別の冊で落ちた（path_fails・2 回とも再現）"
+  },
+  {
+   "file": "header_row_advice.py",
+   "typable": "--header-row",
+   "text": "）。`--header-row",
+   "walked": "walked",
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: 旧版は決め打ちの `--header-row 3`（試算表の見出しは 4 行目）。例は見出しらしく見えた行の 1 番手 ── 歩き手は画面から拾って打つ（follow）",
+   "walk": {
+    "books": {
+     "曖昧.xlsx": {
+      "表": [
+       [
+        "名前",
+        "部署"
+       ],
+       [
+        "田中",
+        100
+       ],
+       [
+        "名前2",
+        "部署2"
+       ],
+       [
+        "鈴木",
+        200
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:曖昧.xlsx}",
+     "並べ替えて",
+     "--copy"
+    ],
+    "expect": "見出しが何行目か分かりません（見出しらしい行",
+    "path": {
+     "argv": [
+      "run",
+      "{book:曖昧.xlsx}",
+      "並べ替えて",
+      "--copy",
+      "--dry"
+     ],
+     "follow": "--header-row",
+     "plan": [
+      {
+       "op": "SORT",
+       "args": {
+        "col": "部署",
+        "order": "desc"
+       }
+      }
+     ],
+     "expect_rc": 0,
+     "expect": "（--dry"
+    }
+   }
+  },
+  {
+   "file": "header_row_advice.py",
+   "typable": "--header-row",
+   "text": "見出しが何行目か分かりません（文字の見出しが 2 つ以上並ぶ行が見当たりません）。見出しの行番号を `--header-row <行番号>` で指定して再実行してください",
+   "walked": "walked",
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: 見出しらしい行が 1 つも無い時は行番号を当て推量で出さない。道は『正しい行番号を渡せば通る』ことを歩く（番号は画面に無いので歩き方に書いた）",
+   "walk": {
+    "books": {
+     "年.xlsx": {
+      "表": [
+       [
+        "品名",
+        2024
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:年.xlsx}",
+     "並べ替えて",
+     "--copy"
+    ],
+    "expect": "文字の見出しが 2 つ以上並ぶ行が見当たりません",
+    "path": {
+     "argv": [
+      "run",
+      "{book:年.xlsx}",
+      "並べ替えて",
+      "--copy",
+      "--dry",
+      "--header-row",
+      "1"
+     ],
+     "plan": [
+      {
+       "op": "SORT",
+       "args": {
+        "col": "品名",
+        "order": "desc"
+       }
+      }
+     ],
+     "expect_rc": 0,
+     "expect": "（--dry"
+    }
+   }
+  },
+  {
+   "file": "header_row_advice.py",
+   "typable": "--header-row",
+   "text": "行目に見出しがあるようです。`--header-row",
+   "walked": "walked",
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: 列が在るシートと --header-row が掛かるシートが同じ回。旧版は『盤の歩きは適用まで走る』で未調査だった ── --dry で歩けた",
+   "walk": {
+    "books": {
+     "請求.xlsx": {
+      "表": [
+       [
+        "請求一覧"
+       ],
+       [],
+       [
+        "品名",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:請求.xlsx}",
+     "金額で並べ替えて",
+     "--copy",
+     "--header-row",
+     "1"
+    ],
+    "plan": [
+     {
+      "op": "SORT",
+      "args": {
+       "col": "金額",
+       "order": "desc"
+      }
+     }
+    ],
+    "expect": "行目に見出しがあるようです。",
+    "path": {
+     "argv": [
+      "run",
+      "{book:請求.xlsx}",
+      "金額で並べ替えて",
+      "--copy",
+      "--dry"
+     ],
+     "follow": "--header-row",
+     "expect_rc": 0,
+     "expect": "（--dry"
+    }
+   }
+  },
+  {
+   "file": "header_row_advice.py",
+   "typable": "--sheet",
+   "text": "行目に見出しがあるようです。`--sheet",
+   "walked": "walked",
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: ★ 事故の形そのもの: 旧版は `--header-row 4` だけを案内し、従っても同じ文で止まった（--header-row は run が最初に選んだ参照表に掛かる）。--sheet と --header-row を 1 行に並べる",
+   "walk": {
+    "books": {
+     "請求.xlsx": {
+      "請求": [
+       [
+        "請求一覧（9月分）"
+       ],
+       [
+        "作成：山田"
+       ],
+       [],
+       [
+        "請求番号",
+        "取引先コード",
+        "金額"
+       ],
+       [
+        "INV-1",
+        "0012",
+        100
+       ],
+       [
+        "INV-2",
+        "0045",
+        200
+       ]
+      ],
+      "取引先マスタ": [
+       [
+        "取引先コード",
+        "担当者"
+       ],
+       [
+        "0012",
+        "山田"
+       ],
+       [
+        "0045",
+        "佐藤"
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:請求.xlsx}",
+     "取引先マスタのシートから取引先コードで担当者を引いてきて",
+     "--copy"
+    ],
+    "plan": [
+     {
+      "op": "LOOKUP_FILL",
+      "args": {
+       "target_sheet": "請求",
+       "target_col": "担当者",
+       "source_sheet": "取引先マスタ",
+       "key_col": "取引先コード"
+      }
+     }
+    ],
+    "expect": "シートの4行目に見出しがあるようです。",
+    "path": {
+     "argv": [
+      "run",
+      "{book:請求.xlsx}",
+      "取引先マスタのシートから取引先コードで担当者を引いてきて",
+      "--copy",
+      "--dry"
+     ],
+     "follow": "--sheet",
+     "expect_rc": 0,
+     "expect": "（--dry"
+    }
+   }
+  }
+ ],
+ "guidance": [
+  {
+   "file": "__init__.py",
+   "text": "★ このバージョンから、既定で原本に直接反映します（自動バックアップ+undo つき）。従来のコピー方式は --copy。この告知は一度だけ表示されます",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "## 定義済みヘルパ（★ 呼ぶだけ・再定義しない）\narcane な操作（並べ替え等）は、自分で書かず次のヘルパを使うこと。\n★ 呼び方は必ず `Call 名前(引数)` の形（Call を付ける。括弧つきで Call 無しは誤動作する）。\n★ ヘルパの中身は絶対に書き写すな（SummaryTable 等が長くても）。必ず `Call 名前(...)` の1行だけで呼ぶ。\n★ W10b: 依頼に無い操作のヘルパは絶対に呼ぶな（『何か効くかもしれない』で総当たりに色々呼ぶのは禁止。依頼を達成するのに要る分だけを呼ぶ）。\n★ headerRow 引数は見出し行（0起点）。見出しが物理1行目ならほぼ常に 0。\n例: 列0〜4の表で金額が列1なら、金額で降順に並べ替え → `Call SortByColumn(oDoc, 0, 4, 1, False)`（第2引数 lastCol=表の最終列）\n例: 金額(列1)の棒グラフ（項目名は列0）→ `Call InsertChart(oDoc, 0, 0, 1, \"bar\", 4)`（第3引数=項目名の列・第4引数=値の列・第5引数=\"bar\"/\"line\"/\"pie\"・第6引数=データ範囲の最終行(0起点・省略可・省略時は自動検出)）\n例: A1とB1を結合 → `Call MergeCells(oDoc, 0, 0, 1, 0)`\n例: 先頭データ行(2行目)の前に1行挿入 → `Call InsertRows(oDoc, 1, 1)`\n例: 表に罫線を引く → `Call DrawTableBorders(oDoc)`\n例: 各列の幅を内容に合わせる → `Call AutoFitColumns(oDoc)`\n例: C列(列2)に、商品名(列0)をキーに『単価表』から値を引く（VLOOKUP相当） → `Call VLookupFromTable(oDoc, 0, 0, 2, \"単価表\")`（参照表は 既定で 列0=キー・列1=値。違う列なら 6・7 番目の引数で渡せる）\n例: 『ピボット』で部門(列0)ごとに金額(列1)を集計（本物の DataPilot・Excel で操作可） → `Call PivotSum(oDoc, 0, 1)`\n例: 『集計表／まとめ』を作る＝部門(列0)ごとの金額(列1)を見栄えのする普通の表に（罫線・カンマ・太字つき。★『ピボット』と明示されない集計は基本こちら） → `Call SummaryTable(oDoc, 0, 0, 1)`\n例: 見出し行(行0, 列0〜4)を太字に → `Call StyleBold(oDoc, 0, 0, 4, 0)`\n--- 定義済み（この通り既に存在する。再定義するな）---",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "{\"plan\": [{\"op\": \"CLARIFY\", \"question\": \"「整える」とは具体的に何をしますか\"\"（例: けい線を引く／列幅を合わせる／太字にする）\"}]}",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "{\"plan\": [{\"op\": \"CLARIFY\", \"question\": \"どの列が同じなら重複とみなしますか（例: 取引先が同じなら重複）\"}]}",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "読み方そのものが違うなら、言い直してください（頼める操作の一覧: ailine ops）",
+   "marks": [
+    "bare_sub",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 2,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで書いてください（例:「原価が500以上の行のチェック列に『◎』を付けて」）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "原本直接（v2〜）。--copy で従来のコピー方式",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "？ --out は --copy と一緒に指定してください（原本に直接反映する時は、書き先は原本そのものです）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "★ --inplace は廃止されました。既定で原本に直接適用します（従来の .out 挙動が欲しい場合は --copy を使ってください）。",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "片方を選ぶなら、その候補を --op で固定して再実行してください",
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "どちらの意味かが分かるように、言い直してください",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（--dry プレビュー・語彙外の段は実行時に AI が直接作成（機械保証なし）で対応します。未実行）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（--dry: 適用しない。レビュー後に --dry を外して実行）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "は ailine が作った物ですが、そのあと変更されています。作業内容が消えるので上書きしません ── 別の場所へ移すか削除してから、もう一度実行してください）",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "。run にはフラグでの上書き許可がありません ── そのファイルを別の場所へ移すか削除してから、もう一度実行してください）",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "？ 抽出する値が依頼文から読み取れません（例:『金額が40000以上の行を抜き出して』）。",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "）── 自分を先例に数えると、どの行も裏が取れたことになります（過去のフォルダに今回のファイルが入っているなら、今回のファイルをフォルダの外に出すか、過去の冊を 1 つずつ --past に並べてください）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "操作を人が固定する（言い回しから当てる段を飛ばす・一覧: ailine ops）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（廃止・後方互換のため受理のみ）既定で原本に直接適用するため不要。旧 .out 挙動が欲しければ --copy",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "往復忠実度ゲートが検出した喪失を承知の上で原本への反映を続行する（ailine undo で戻せる）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "原本には触らず <book>.out に結果を作る（既定の原本直接適用をしない・旧 --inplace 無指定と同じ挙動。往復忠実度ゲートも走らせない）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "--copy の書き出し先を指定する（省略時は <book>.out.xlsx）。同じ原本に複数の作業結果を残したい時に使う。★ 原本直接（--copy 無し）とは併用できません",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "破壊の関所（既存データを持つ列への上書き確認）を承知の上で続行する（ailine undo で戻せる）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "候補の冊（ailine accounts の出力・右端に『採用』列を足して ○ を入れたもの）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "今回の仕訳（ailine accounts に渡した元のファイル・CSV か xlsx）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "出力の検算だけを独立に再実行する（stack/extract/match/分けた冊・読むだけ）",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "原本への反映前のバックアップから復元する（ailine undo と同じ）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "下書きの中身を原本に清書する（控えを取ってから置き換える・ailine undo で戻せる）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "語を登録する（例: ailine vocab add 消費税 1.1）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "語（例: 消費税）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "値（倍率。例: 1.1）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "言い回しを登録する（例: ailine alias add 大きい順にして SORT）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "言い回し（例: 大きい順にして）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "op 名（例: SORT。実在する操作名のみ・一覧: ailine ops）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "--- 参考例:",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "』は存在しません（実在する操作名のみ登録可。一覧: ailine ops）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "行目）には対応していません ── 抜き出しは「どの列がどうなっている行か」で指してください（例:「取引先がヤマノ食品の行を抜き出して」）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（下書きを作った時の原本と照合していません ── --base-sha を付けると、その後に原本が変わっていれば止めます）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（もとに戻す: ailine undo \"",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "）。終わるのを待ってから、もう一度実行してください",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（もとに戻す: ailine undo \"",
+   "nth": 2,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 3,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "値を入れるなら、列名か 1 セルで言ってください ── 例:",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（--dry: 適用しない。レビュー後に --dry を外して実行）",
+   "nth": 2,
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（--dry: 適用しない。レビュー後に --dry を外して実行）",
+   "nth": 3,
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（--dry: 適用しない。レビュー後に --dry を外して実行）",
+   "nth": 4,
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 4,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 5,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 6,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 7,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "のどれでもありません。言い方を変えて（例:『金額が40000以上の行を抜き出して』）もう一度お願いします。",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "冊（内訳は --json）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "冊で除外（内訳は --json）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "冊すべてで成立（データ行 = 一致 + 不一致 + 合計行の除外・内訳は --json）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（内容を確認し、『ailine run",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "が既にあります。別名にするなら --out、上書きしてよければ --overwrite を付けてください",
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "が既にあります。別の場所に出すなら --out、上書きしてよければ --overwrite を付けてください",
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "ailine forms <請求書のフォルダ> --out 一覧.xlsx",
+   "marks": [
+    "bare_flag",
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "× --out は元の仕訳と同じ形式で（元",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "× 分けた冊の検算は次の形です: ailine verify <出力フォルダ> <元の冊> [--amount <金額の見出し>]",
+   "marks": [
+    "bare_flag",
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "YYYY-MM の形で（例: 2026-09）:",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "書き込む値が依頼文から一意に読み取れません。値を「」または『』で囲んで書いてください（例:「備考列を全部『確認済み』にして」）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "→ 戻すなら ailine undo、世代の一覧は ailine undo --list",
+   "marks": [
+    "bare_flag",
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "バックアップに失敗したため --inplace を中止した（原本は無変更）:",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "』が見つかりません。パスを確認してから、もう一度実行してください（1冊だけの依頼なら、依頼文だけを1つの引数として渡してください）。",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "』シートの1行目を見出しとみなしています。違う場合は --header-row で指定してください）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "』（一覧: ailine ops）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 8,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 9,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "段が未対応です（この依頼は --dry を外しても実行できません ── 上の理由を読んで言い直してください）",
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "は ailine の出力ではありません。承知の上で上書きするなら --overwrite を付けて実行してください）",
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "個変わりました（例:",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "・縦積み・抽出の出力 → 元はフォルダ 1 つ（例: ailine verify 縦積み.xlsx 受領フォルダ）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "・2 冊照合の出力 → 元は冊 2 つ（例: ailine verify 照合.xlsx 請求書.xlsx 発注記録.xlsx）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "★ 分けた冊（split）を確かめる時は、出力の側がフォルダです（例: ailine verify 配る/ 一覧.xlsx）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "列の見出しを教える（例: --column 借方勘定科目=勘定科目）。複数回書けます。役割:",
+   "marks": [
+    "bare_flag",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "argparse の説明（`-h` の画面）── 歩いていない。名前の実在は番人が見る"
+  },
+  {
+   "file": "__init__.py",
+   "text": "` で取得してから再実行して。",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "』を含む行は 1 行もありません（在る値の例: 『",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "→ 本当に元の表から消すなら: ailine run <ブック> \"<依頼>\" --op",
+   "marks": [
+    "bare_flag",
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "→ --accept-loss 指定のため続行します（失われても ailine undo で元に戻せます）",
+   "marks": [
+    "bare_flag",
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "--sheet / 列名を依頼文に明記",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "対象を依頼文で名指しして、もう一度実行する",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "削除を承知して続行する（バックアップから ailine undo で戻せる）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "上書きを承知して続行する（バックアップから ailine undo で戻せる）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "（前回の --copy の結果を置き換えます:",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "」で作った物です。残すなら --out <名前.xlsx> で別の名前に出してください）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "の比較ができません。数値で言い直してください。",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "です。承知の上なら --overwrite を付けて実行してください）",
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "は ailine forms の前回出力ではありません。承知の上で上書きするなら --overwrite を付けて実行してください）",
+   "marks": [
+    "bare_flag",
+    "bare_sub",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "は ailine split の前回出力ではありません。承知の上でこのフォルダへ配るなら --overwrite を付けて実行してください）",
+   "marks": [
+    "bare_flag",
+    "bare_sub",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "です。承知の上なら --overwrite を付けて実行してください）",
+   "nth": 2,
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "です。承知の上なら --overwrite を付けて実行してください）",
+   "nth": 3,
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "は ailine accounts の前回出力ではありません。承知の上で上書きするなら --overwrite を付けて実行してください）",
+   "marks": [
+    "bare_flag",
+    "bare_sub",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "失われてよい（バックアップから ailine undo で復元可能）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "その 1 セルだけを書き換える（行番号で言い直してください・例:「7行目の",
+   "marks": [
+    "example",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "）。承知の上なら --overwrite を付けて実行してください）",
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "は ailine stack の前回出力ではありません。承知の上で上書きするなら --overwrite を付けて実行してください）",
+   "marks": [
+    "bare_flag",
+    "bare_sub",
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "accounts_apply.py",
+   "text": "候補の冊の見出しに『元行』か『候補の科目』がありません（ailine accounts の出力ですか）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "accounts_core.py",
+   "text": "→ 全部の冊を読むには、これを付けてもう一度実行してください:",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "accounts_core.py",
+   "text": "` を付けてもう一度実行してください",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "anchor.py",
+   "text": "行目） ── どれか決められません。行番号で指してください（例:「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "と書いて",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "』は税/込を含みますが倍率が分かりません。依頼文に税率を書く（例:「消費税10%」）か、用語集に登録してください（例: ailine vocab add 消費税 1.1）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "見出しも値も無い列を末尾に足しても、ファイルの中身は何も変わりません（空の列はセルを持たないので機械にも見えません）── 見出しの名前を言ってください（例: 「原価の右にチェックという列を追加して」）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "重複を判定する列が依頼文から読み取れません。どの列が同じなら重複とみなすか、依頼文に列名を書いてください（例:「取引先が同じ行を重複として除いて」）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "）。どちらを使うか依頼文に書いてください（例:「消費税10%」）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "はこの道具の数値書式では扱えません（扱えるのは桁区切りだけです）── 桁区切りだけでよければ「桁区切りを付けて」と頼んでください。要望として記録します",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "どこへ動かすかが依頼文から読み取れません（例:「取引先の列を一番左に」「担当を金額の右に」）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "』の形式が不正です（例: A1:C1）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "）。依頼文にそう書いてください。例:「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "』は列の見出しにも、行の中身にも両方あります ── どちらを入れ替えるのか決められません（『〜の列を入れ替えて』『〜の行を入れ替えて』と書いてください）",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "のかが依頼文から決まりません（例:「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "行目は見出し行です ── 見出しの名前を変えるなら、行番号と列で名指ししてください（例:「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "』列に何らかの倍率（税率等）を掛ける操作として解釈しましたが、依頼文に倍率らしき手がかりが見当たりません。列の値をそのまま書き換える操作は今のところ対応していません。倍率を掛ける処理であれば、依頼文に率を書く（例:「消費税10%」）か、用語集に登録してください（例: ailine vocab add 消費税 1.1）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "倍率（税率等）が分かりません。依頼文に率を書く（例:「消費税10%」）か、用語集に登録してください（例: ailine vocab add 消費税 1.1）",
+   "marks": [
+    "bare_sub",
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "argcheck.py",
+   "text": "。新しい列として作る場合は、依頼文にその列名を書いてください（例:「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "claim.py",
+   "text": "Claim(verified=True) は observed_after_apply=True が必須 — 原本(--copy なら .out)が確定する前に決まった結果を『✓』と名乗ることはできない（docs/behavior-corpus/nodes/verified-means-readback.md 参照）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "cli_render.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "cli_render.py",
+   "text": "言い換えるか、2 冊の突き合わせなら: ailine run 入金.xlsx 請求.xlsx \"…\"",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "cli_render.py",
+   "text": "ailine run <folder> \"<依頼>\"   フォルダ内の全ブックから条件で抜き出す",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "cli_render.py",
+   "text": "ailine run <a.xlsx> <b.xlsx> \"<依頼>\"   2 冊をキーで突き合わせて差額を出す",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "cli_render.py",
+   "text": "この処理を続けるには、以下のいずれかを指定して再実行してください:",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "cli_render.py",
+   "text": "（頼める操作の一覧: ailine ops）",
+   "nth": 2,
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "cli_render.py",
+   "text": "あとから確かめる: ailine verify",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "compare_blocked.py",
+   "text": "セルは、数字に見えますが文字列として入っています（例:",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "compare_words.py",
+   "text": ")を機械で確かめられないので実行しません（例: 「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "compare_words.py",
+   "text": "』）── 1 つの条件だけ書いてください（範囲の抽出も、2 つの列の条件も、この道具にはありません。例: 「金額が5000以上の行を抜き出して」）",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "compare_words.py",
+   "text": "（列に在る値を名指しして「〜以外」と書いてください）",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "compare_words.py",
+   "text": "（例: 「金額が5000",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "dsl_step.py",
+   "text": "行）── 戻すなら ailine undo:",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "examples.py",
+   "text": "（例:",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "header_row_advice.py",
+   "text": "` のように指定して再実行してください",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "walked",
+   "walk": {
+    "books": {
+     "曖昧.xlsx": {
+      "表": [
+       [
+        "名前",
+        "部署"
+       ],
+       [
+        "田中",
+        100
+       ],
+       [
+        "名前2",
+        "部署2"
+       ],
+       [
+        "鈴木",
+        200
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:曖昧.xlsx}",
+     "並べ替えて",
+     "--copy"
+    ],
+    "expect": "見出しが何行目か分かりません（見出しらしい行",
+    "path": {
+     "argv": [
+      "run",
+      "{book:曖昧.xlsx}",
+      "並べ替えて",
+      "--copy",
+      "--dry"
+     ],
+     "follow": "--header-row",
+     "plan": [
+      {
+       "op": "SORT",
+       "args": {
+        "col": "部署",
+        "order": "desc"
+       }
+      }
+     ],
+     "expect_rc": 0,
+     "expect": "（--dry"
+    }
+   },
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: clarify_question の案内（hints 側と同じ歩き）"
+  },
+  {
+   "file": "header_row_advice.py",
+   "text": "` のように指定して再実行してください",
+   "nth": 2,
+   "marks": [
+    "imperative"
+   ],
+   "walked": "walked",
+   "walk": {
+    "books": {
+     "請求.xlsx": {
+      "表": [
+       [
+        "請求一覧"
+       ],
+       [],
+       [
+        "品名",
+        "金額"
+       ],
+       [
+        "ボルト",
+        120
+       ],
+       [
+        "ナット",
+        80
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:請求.xlsx}",
+     "金額で並べ替えて",
+     "--copy",
+     "--header-row",
+     "1"
+    ],
+    "plan": [
+     {
+      "op": "SORT",
+      "args": {
+       "col": "金額",
+       "order": "desc"
+      }
+     }
+    ],
+    "expect": "行目に見出しがあるようです。",
+    "path": {
+     "argv": [
+      "run",
+      "{book:請求.xlsx}",
+      "金額で並べ替えて",
+      "--copy",
+      "--dry"
+     ],
+     "follow": "--header-row",
+     "expect_rc": 0,
+     "expect": "（--dry"
+    }
+   },
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: missing_column_hint の案内（hints 側と同じ歩き）"
+  },
+  {
+   "file": "header_row_advice.py",
+   "text": "` を付けて再実行してください（--header-row だけだと『",
+   "marks": [
+    "bare_flag",
+    "imperative"
+   ],
+   "walked": "walked",
+   "walk": {
+    "books": {
+     "請求.xlsx": {
+      "請求": [
+       [
+        "請求一覧（9月分）"
+       ],
+       [
+        "作成：山田"
+       ],
+       [],
+       [
+        "請求番号",
+        "取引先コード",
+        "金額"
+       ],
+       [
+        "INV-1",
+        "0012",
+        100
+       ],
+       [
+        "INV-2",
+        "0045",
+        200
+       ]
+      ],
+      "取引先マスタ": [
+       [
+        "取引先コード",
+        "担当者"
+       ],
+       [
+        "0012",
+        "山田"
+       ],
+       [
+        "0045",
+        "佐藤"
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:請求.xlsx}",
+     "取引先マスタのシートから取引先コードで担当者を引いてきて",
+     "--copy"
+    ],
+    "plan": [
+     {
+      "op": "LOOKUP_FILL",
+      "args": {
+       "target_sheet": "請求",
+       "target_col": "担当者",
+       "source_sheet": "取引先マスタ",
+       "key_col": "取引先コード"
+      }
+     }
+    ],
+    "expect": "シートの4行目に見出しがあるようです。",
+    "path": {
+     "argv": [
+      "run",
+      "{book:請求.xlsx}",
+      "取引先マスタのシートから取引先コードで担当者を引いてきて",
+      "--copy",
+      "--dry"
+     ],
+     "follow": "--sheet",
+     "expect_rc": 0,
+     "expect": "（--dry"
+    }
+   },
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: --sheet と --header-row を 1 行に（hints 側の同じ案内と同じ歩き）"
+  },
+  {
+   "file": "inspection.py",
+   "text": "凡例:",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "intent.py",
+   "text": "なら、その言葉で書いてください（例:「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "local_only.py",
+   "text": "を付けてください。",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "match.py",
+   "text": "→ 依頼文を言い直しても決まりません:",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "by_design",
+   "walk": {
+    "kind": "by_design",
+    "why": "言い直しでは決まらない（片方の冊に金額の列が無い等）ことを言う行き止まり ── 例を出さず、何が足りないかを名指す（7 体目: 取引先マスタに金額の列が無いのに『例:…をキーに』と言っていた）"
+   },
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: 意図した行き止まり"
+  },
+  {
+   "file": "match.py",
+   "text": "を書き足して、もう一度実行してください（例は候補の先頭です）",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "walked",
+   "walk": {
+    "books": {
+     "A.xlsx": {
+      "請求": [
+       [
+        "請求番号",
+        "取引先",
+        "税抜",
+        "税込"
+       ],
+       [
+        "INV-1",
+        "丸山",
+        100,
+        110
+       ],
+       [
+        "INV-2",
+        "さくら",
+        200,
+        220
+       ]
+      ]
+     },
+     "B.xlsx": {
+      "入金": [
+       [
+        "請求番号",
+        "入金額"
+       ],
+       [
+        "INV-1",
+        110
+       ],
+       [
+        "INV-2",
+        200
+       ]
+      ]
+     }
+    },
+    "argv": [
+     "run",
+     "{book:A.xlsx}",
+     "{book:B.xlsx}",
+     "請求番号をキーに突き合わせて"
+    ],
+    "expect": "を書き足して、もう一度実行してください",
+    "path": {
+     "argv": [
+      "run",
+      "{book:A.xlsx}",
+      "{book:B.xlsx}",
+      "請求番号をキーに突き合わせて"
+     ],
+     "follow_quoted": 3,
+     "expect_rc": 0,
+     "expect": "キー: 請求番号(A) / 請求番号(B)"
+    }
+   },
+   "note": "2026-10-01 盲検 7 体目（嘘の案内）: ★ 旧版は役割ごとに『例:『品目をキーに』』と言い、依頼者が既に書いた言い方を返した（3・6・7 体目）。例は全部の役割ぶんを 1 行に並べ、書き足せば通ると同じ解決で確かめた時だけ出す。歩き手は画面の『…』を拾って書き足す（follow_quoted）"
+  },
+  {
+   "file": "pdf_export.py",
+   "text": "` を付けて出し直してください",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "move.py",
+   "text": "行が元と一致しません）。例: 元にあった行",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "move.py",
+   "text": "行で、割った断片を繋ぎ直すと元と一致しません（例:",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "required_word.py",
+   "text": "』と書かれた時だけ使えます ── 頼みたいなら、その語を入れて言い直してください",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "split_people.py",
+   "text": "も当たりますが、--exact の指定どおり、打った文字とそのまま一致する方を採りました）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "target_sheet.py",
+   "text": "シート名を確かめるか、--sheet で明示してください",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "target_sheet.py",
+   "text": "』（--sheet 指定）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "threshold.py",
+   "text": "境目の数が依頼文にありません ── 「多い／少ない」だけでは機械が線を引けません（例: 「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "threshold.py",
+   "text": "）── 1 つだけ書いてください（例: 「",
+   "marks": [
+    "example"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "verify.py",
+   "text": "照合出力に条件（dc:description）が焼かれていません（壊れているか、ailine match 以外が作った可能性があります）。検算できません。",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "verify_accounts.py",
+   "text": "と書いてあるのに、引いている鍵が",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "verify_forms.py",
+   "text": "対象外の冊（--month で外した・『対象外』シートに理由あり）",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "server.py",
+   "text": "2 つ並べて比べたいときは --port で別の番号を指定してください。",
+   "marks": [
+    "bare_flag"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "server.py",
+   "text": "に改名しました（消していません）。もう一度実行できます。",
+   "marks": [
+    "imperative"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
+  },
+  {
+   "file": "__init__.py",
+   "text": "ailine run {…} \"売上から原価を引いた利益の列を作って\"",
+   "marks": [
+    "bare_sub"
+   ],
+   "walked": "未調査",
+   "note": "歩いていない（2026-10-01 に分母を広げて載せた）"
   }
  ]
 }

@@ -89,6 +89,97 @@ def _is_swallowed_fragment(h: str, task: str, vocabulary: list) -> bool:
     return True
 
 
+#: 役割の語（依頼文で列名の直後に付くもの）。★ 案内の例文（rewording_that_resolves）と同じ語 ──
+#:   道具が勧める言い方を、道具自身が読めること。
+ROLE_WORDS = {"key": "キー", "amount": "金額"}
+
+
+def named_with_role(task: str, headers: list, role: str, vocabulary: list | None = None) -> list:
+    """依頼文で、直後に役割の語が付いている列名（「取引先コードをキーに」「税込金額を金額に」
+       「取引先コードがキー」）。★ より長い別の列名の中に埋もれた出現は数えない
+       （「税込金額を金額に」の中の『金額』は、『税込金額』の一部であって名指しではない）。"""
+    word = ROLE_WORDS[role]
+    after = re.compile(r"\s*[をが]?\s*" + re.escape(word))
+    vocab = [str(v) for v in (vocabulary if vocabulary is not None else headers) if v]
+    out = []
+    for h in headers:
+        if not h:
+            continue
+        h = str(h)
+        longer = [(m.start(), m.end()) for lh in vocab if len(lh) > len(h) and h in lh
+                  for m in re.finditer(re.escape(lh), task)]
+        for m in re.finditer(re.escape(h), task):
+            if any(s <= m.start() and m.end() <= e for s, e in longer):
+                continue
+            if after.match(task, m.end()):
+                out.append(h)
+                break
+    return out
+
+
+def rewording_that_resolves(task: str, headers_a: list, rows_a: list,
+                            headers_b: list, rows_b: list, unresolved: list) -> list | None:
+    """決まらなかった役割それぞれに「<候補の先頭>を<役割>に」を書き足した依頼文で解決をやり直し、
+       **それで全部決まる時だけ**その言い方の並びを返す。決まらないなら None。
+
+    ★★ 2026-10-01（盲検で「嘘の案内」が 6 回）: 旧版は役割ごとに「例:『品目をキーに』」と言い、
+      ① 依頼者が**既に書いた言い方**をそのまま返した（3・6・7 体目）
+      ② 片方の冊に金額の列が 1 本も無く、例どおりに書き足しても**必ず止まる**回にも言った（7 体目）。
+    ★ 案内は「その通りに打てば通る」ものだけ ── 通るかは、ここで同じ解決をやり直して確かめる。
+      依頼文に既に在る言い方は案内にならない（同じ文を言わせない）。
+    """
+    phrases = []
+    for _side, role, candidates in unresolved:
+        if not candidates:
+            return None
+        phrase = f"{candidates[0]}を{ROLE_WORDS[role]}に"
+        if phrase in (task or ""):
+            return None
+        if phrase not in phrases:
+            phrases.append(phrase)
+    trial = (task or "") + "、" + "、".join(phrases)
+    after = resolve_columns(trial, headers_a, rows_a, headers_b, rows_b)
+    if not after.ok:
+        return None
+    # ★ 書き足した言い方が、**もう決まっていた役割**を黙って別の列へ動かすなら案内しない
+    #   （例: B 側のために勧めた『請求番号をキーに』が、A 側のキー『取引先』を『請求番号』へ替える）。
+    before = resolve_columns(task or "", headers_a, rows_a, headers_b, rows_b)
+    for attr in ("key_a", "key_b", "amount_a", "amount_b"):
+        if getattr(before, attr) is not None and getattr(before, attr) != getattr(after, attr):
+            return None
+    return phrases
+
+
+def why_rewording_does_not_resolve(task: str, unresolved: list, names: dict) -> str:
+    """言い直しでは決まらない回の 1 行（★ 例を出さず、何が足りないかを言う）。names は {"A": 冊名, "B": 冊名}。"""
+    reasons = []
+    for side, role, candidates in unresolved:
+        label = ROLE_WORDS[role]
+        if not candidates:
+            kind = "数値だけの列" if role == "amount" else "文字の列"
+            reasons.append(f"『{names[side]}』に{label}に使える列（{kind}）がありません")
+        elif f"{candidates[0]}を{label}に" in (task or ""):
+            reasons.append(f"依頼文の『{candidates[0]}を{label}に』は読みましたが、"
+                           f"『{names[side]}』の{label}列はそれでも 1 本に決まりません")
+    if not reasons:
+        reasons.append("候補のどれを名指ししても、全部の列は決まりません")
+    tail = ("（2冊の run は、キーごとに金額を突き合わせる照合です ── 片方の値をもう片方へ"
+            "転記する入口ではありません）"
+            if any(role == "amount" and not c for _s, role, c in unresolved) else "")
+    return "→ 依頼文を言い直しても決まりません: " + "／".join(reasons) + tail
+
+
+def rewording_line(task: str, headers_a: list, rows_a: list, headers_b: list, rows_b: list,
+                   unresolved: list, names: dict) -> str:
+    """決まらなかった回の締めの 1 行。★ 例は**全部の役割ぶんを 1 行に**並べる ──
+       役割ごとに 1 つずつ言うと、1 つだけ直して打った人がまた止まる。"""
+    phrases = rewording_that_resolves(task, headers_a, rows_a, headers_b, rows_b, unresolved)
+    if phrases:
+        return ("→ 依頼文に" + "".join(f"『{p}』" for p in phrases)
+                + "を書き足して、もう一度実行してください（例は候補の先頭です）")
+    return why_rewording_does_not_resolve(task, unresolved, names)
+
+
 def resolve_role(task: str, headers: list, numeric: set, role: str,
                   vocabulary: list | None = None) -> tuple:
     """機械3段（LLM ゼロ）: ①依頼文に名指しされ、かつ役割に合う型の列がちょうど1本なら採用
@@ -107,6 +198,13 @@ def resolve_role(task: str, headers: list, numeric: set, role: str,
     named_typed = [h for h in named if type_ok(h)]
     if len(named_typed) == 1:
         return named_typed[0], []
+    # ★★ 2026-10-01（盲検 3・6・7 体目で同じ文が 3 度）: 依頼文が「取引先コード**をキーに**」と
+    #   役割まで名指ししているのに、同じ依頼文に別の列（『担当者』）も出てくると「名指しが 2 本」
+    #   で決まらず、道具は**依頼者が既に書いた言い方**を例として返していた。
+    #   ★ 役割の語が直後に付いた名指しは、ただの名指しより強い証拠 ── それが 1 本ならそれを採る。
+    marked = named_with_role(task, named_typed, role, vocab)
+    if len(marked) == 1:
+        return marked[0], []
     typed = [h for h in headers if type_ok(h)]
     if len(typed) == 1:
         return typed[0], []

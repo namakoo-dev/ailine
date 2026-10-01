@@ -42,6 +42,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -419,7 +420,12 @@ HINTS_REGISTER = REPO / "tests" / "typable_hints_register.json"
 
 
 def load_hints() -> list:
-    return json.loads(HINTS_REGISTER.read_bytes().decode("utf-8"))["hints"]
+    """歩く対象 ── hints（バッククォートの打てるもの）と guidance（それ以外の案内・2026-10-01）の両方。
+
+    ★ guidance を別の歩き手にしない ── 同じ盤で歩けば、walked 欄を縛る番人 3 本がそのまま両方に効く。
+    """
+    reg = json.loads(HINTS_REGISTER.read_bytes().decode("utf-8"))
+    return list(reg["hints"]) + list(reg.get("guidance") or [])
 
 
 def hint_key(h: dict) -> str:
@@ -525,7 +531,17 @@ def _walk_hint(h: dict, root: Path) -> dict:
             return {"key": key, "verdict": "vague",
                     "detail": f"案内の後ろに `{flag} …` が出ていない ── 拾う道が無い"}
         for p in picked:
-            argv2 += p.split(" ", 1)
+            argv2 += shlex.split(p)
+    if path.get("follow_quoted") is not None:
+        # ★★ 2026-10-01: 「依頼文に『A』『B』を書き足して」型の案内を、**画面から拾って**書き足す
+        #   （follow と同じ理由 ── 歩き方に正解を手で書くと、案内が何と言っても通ってしまう）。
+        line = next((ln for ln in out.splitlines() if w["expect"] in ln), "")
+        quoted = re.findall(r"『([^』]+)』", line)
+        if not quoted:
+            return {"key": key, "verdict": "vague",
+                    "detail": "案内の行に『…』が出ていない ── 書き足す言い方が無い"}
+        i = path["follow_quoted"]
+        argv2[i] = argv2[i] + "、" + "、".join(quoted)
     rc2, out2 = _run(argv2, path.get("plan", w.get("plan")))
     if rc2 == BUSY:
         return {"key": key, "verdict": "歩けなかった", "detail": "道の途中で機械が塞がっていた（exit 6）"}

@@ -4882,8 +4882,10 @@ def test_resolve_header_rows_ambiguous_asks_clarify_with_exact_wording():
     }}}}
     header_rows, clarify = ailine.resolve_header_rows(struct_dump, ["Sheet"])
     # ★ W8a 項目3: 旧文言は答え方が無い行き止まりだった。--header-row の使い方まで添える。
-    assert clarify == ("見出しが何行目か分かりません。"
-                        "`--header-row 3` のように指定して再実行してください")
+    # ★ 2026-10-01（盲検 7 体目）: 例の行番号は決め打ちの 3 でなく、見出しらしく見えた行（幅が同じなら上）。
+    #   旧版の「`--header-row 3`」は試算表（見出しは 4 行目）で嘘になった。
+    assert clarify == ("見出しが何行目か分かりません（見出しらしい行: 1 行目・3 行目）。"
+                        "`--header-row 1` のように指定して再実行してください")
     assert header_rows == {"Sheet": 1}   # 既定のまま(呼び出し側は CLARIFY で止まるので使われない)
 
 def test_resolve_header_rows_no_struct_dump_defaults_to_row1_no_clarify():
