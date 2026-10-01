@@ -9645,24 +9645,29 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         #   行が 4 → 5 に増えたのに成功と報告していた（取り除き限定では黙る形）。
         #   ★ 5,045 件の実走行で 21 件 0.42%・全部が本物（誤爆 0）。
         _op_now = str(result.get("op") or "")
+        _ran = list(dict.fromkeys([_op_now, *(str(o) for o in (result.get("ops") or []) if o)]))
+        _pools = {_o: [p for p in _op_match_pool(_o) if p] for _o in OP_META}
+        _effs = {_o: set(getattr(OP_WRITE_TARGET.get(_o), "writes", ()) or ())
+                 for _o in OP_META}
         _asked = intent_mismatch.op_effect_mismatch(
-            getattr(a, "task", "") or "",
-            {_op_now} | {str(o) for o in (result.get("ops") or []) if o}, scope,
-            {_o: [p for p in _op_match_pool(_o) if p] for _o in OP_META},
-            {_o: set(getattr(OP_WRITE_TARGET.get(_o), "writes", ()) or ())
-             for _o in OP_META})
+            getattr(a, "task", "") or "", set(_ran), scope, _pools, _effs)
         if _asked:
             _removes = WRITE_REMOVE in (
                 getattr(OP_WRITE_TARGET.get(_op_now), "writes", ()) or ())
+            # ★★ 2026-10-01: 同じ系統の取り違え（「順番を逆に」で入れ替え等）も鳴るように
+            #   なったので、「取り除きません（元の表はそのまま）」は**取り除く依頼の時だけ**。
+            #   入れ替えや行追加が走った回にこう書くと、断り文そのものが嘘になる。
+            _not_removed = (not _removes
+                            and intent_mismatch.asked_to_remove(_asked, _pools, _effs))
+            _ran_label = "・".join(OP_LABELS[_o] for _o in _ran if _o in OP_LABELS) or _op_now
             _tail = ("行や列を取り除きません（元の表はそのまま残っています）"
-                     if not _removes else
-                     f"『{OP_LABELS.get(_op_now, _op_now)}』です")
+                     if _not_removed else f"『{_ran_label}』です")
             _say(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は{_tail}"
                   "── 頼んだ通りかを「解釈:」行で確かめてください")
             # ★★ 2026-09-21: 断るだけで終わらせない ── **本当に消す道**が在るなら名指しする。
             #   消す op は自然語の振り分けから外してある（誤爆が許されないため）ので、
             #   ここで教えないと買い手は辿り着けない。
-            _sib = destructive_sibling(_op_now)
+            _sib = destructive_sibling(_op_now) if _not_removed else None
             if _sib:
                 _say(f"  → 本当に元の表から消すなら: "
                       f"ailine run <ブック> \"<依頼>\" --op {_sib}"

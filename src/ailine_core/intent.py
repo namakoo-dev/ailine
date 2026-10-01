@@ -252,12 +252,24 @@ def op_effect_mismatch(task: str, ops, declaration: str,
 
     ★ 拒否は 3 つ（この 3 つで、実測の誤爆 24 件が全部消えた）:
       ① 実行した op **自身の語彙**が依頼文に在る（利用者がその操作を名指ししている）
-      ② 2 つの op の**効果が重なる**（COMPUTE_COLUMN と ADD_COLUMN は共に列を作る＝上位下位）
+      ② 2 つの op の**効果が重なり**、実行した op が依頼の op の**一種**と読める
+         （COMPUTE_COLUMN と ADD_COLUMN は共に列を作る＝上位下位）── 下の★★を参照
       ③ 当たった語が**解釈行に出ている**（『小計の列を追加』の『小計』は新しい列の名前
          ＝依頼は宣言に反映されている ── 残差の関所と同じ考え）
 
     ★ 実測: 5,045 件の実走行で **21 件 0.42%・全部が本物**
       （DEDUP と EXTRACT が「消して」と言われて消さない 19 件 ＋ 入れ替えが行追加に化けた 2 件）。
+
+    ★★ 2026-10-01: ② を「重なれば黙る」から**狭めた**。重なれば一律に黙る版は、
+      **同じ系統の中**の取り違え（書式どうし・並べ替えどうし・消すどうし…）に原理的に鳴らず、
+      台帳（tests/warning_register.json）に本物 2 件が残っていた:
+          「税込み金額の順番を逆にして」→ 操作:**入れ替え**（列を入れ替えて ✓）
+          「件数の合計も合計行に入れて」→ 操作:**行追加**（値は文字列『合計』で ✓）
+      いま黙るのは、重なりが**上位下位**と宣言から読める時だけ（`_executed_is_a_kind_of`）。
+      ★ 測って選んだ（実走行の一意な依頼 1,312 件・成功回で新しく鳴るのは 2 件＝上の 2 件そのもの／
+        失敗回まで含めた 1,618 件で 11 件・全部が本物の取り違え／正しい op を付けた凍結検体
+        190 件で 0 件）。一律に鳴らす版（② を外すだけ）は同じ成功回で 17 件鳴り、うち 13 件は
+        「列を追加」で計算列が走る上位下位だった ── ②を入れた理由そのもの。
     """
     text, decl = task or "", declaration or ""
     if not text:
@@ -276,12 +288,56 @@ def op_effect_mismatch(task: str, ops, declaration: str,
     hits = []
     for other, phrases in (vocab_by_op or {}).items():
         theirs = set(effects.get(other) or ())
-        if other in mine_ops or not theirs or (theirs & mine):
-            continue                                # ② 効果が重なるなら食い違いでない
+        if other in mine_ops or not theirs:
+            continue
+        if (theirs & mine) and _executed_is_a_kind_of(other, theirs, mine, mine_ops,
+                                                        vocab_by_op, text):
+            continue                                # ② 実行した op が依頼の op の一種
         hits += [p for p in (phrases or ()) if p and p in text and p not in decl]  # ③
     if not hits and mine and not (mine & {WRITE_REMOVE}):
         hits = [w for w in BARE_REMOVALS if w in text and w not in decl]
     return list(dict.fromkeys(hits))
+
+
+def _executed_is_a_kind_of(other: str, theirs: set, mine: set, mine_ops: set,
+                           vocab_by_op: dict, text: str) -> bool:
+    """効果が重なる時、実行した op を依頼の op（other）の**一種**と読めるか（読めれば黙る）。
+
+    ★ 手書きの対表を持たない ── 材料は呼び出し側が既に渡している 2 つの宣言だけ:
+      ・効果（OP_WRITE_TARGET の writes）: 依頼の op に**実行した op の持たない効果**が在れば、
+        実行した op はその一部だけをする一種（INSERT_ROWS は値を入れない ADD_ROW・
+        COMPUTE_COLUMN は計算で埋める ADD_COLUMN）。誤爆 24 件の家系はこの形だった。
+      ・語彙（照合語彙）: 効果が同じでも、実行した op の語が依頼の op の語を**含み**
+        （『重複行を削除』⊃『行を削除』・『クロス集計』⊃『集計』）、かつ**差の部分**
+        （『重複』『クロス』）が依頼に在れば、依頼はその一種を名指ししている。
+        ★ 差の部分を見るのは、「鈴木の行を消して」で重複行の削除が走った回まで
+          黙らないため（含むだけで黙らせると、本物の取り違えを見逃す）。
+    """
+    if not theirs <= mine:
+        return True
+    for o in mine_ops:
+        for mine_word in (vocab_by_op.get(o) or ()):
+            for their_word in (vocab_by_op.get(other) or ()):
+                if not their_word or mine_word == their_word or their_word not in mine_word:
+                    continue
+                rest = [r for r in mine_word.split(their_word) if r]
+                if rest and all(r in text for r in rest):
+                    return True
+    return False
+
+
+def asked_to_remove(words, vocab_by_op: dict, effects: dict) -> bool:
+    """当たった語が「取り除く」依頼か（裸の動詞か、取り除く op の照合語彙か）。
+
+    ★ 2026-10-01: 同じ系統の取り違え（並べ替えを頼んで入れ替え等）も鳴るようになったので、
+      断り文の「取り除きません（元の表はそのまま残っています）」を**取り除く依頼の時だけ**に
+      絞るための問い合わせ口。入れ替えが走った回にこう書くと、それ自体が嘘になる。
+    """
+    removers = [o for o, e in (effects or {}).items() if WRITE_REMOVE in set(e or ())]
+    for w in words or ():
+        if w in BARE_REMOVALS or any(w in (vocab_by_op.get(o) or ()) for o in removers):
+            return True
+    return False
 
 
 #: 「取り除く」の効果名（登録簿の writes に入る値）。
