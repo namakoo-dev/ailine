@@ -19,6 +19,7 @@ import csv
 from dataclasses import dataclass, field
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 from ailine_core import input_path
 from ailine_core import accounts_core, csv_quarantine, filetypes
@@ -66,7 +67,13 @@ def _raw_rows_from_csv(path) -> tuple:
 
 
 def _raw_rows_from_book(path) -> tuple:
-    """xlsx を (行の並び, 打ち切ったか) で返す（1 枚目のシート・値だけ）。"""
+    """xlsx を (行の並び, 打ち切ったか, 式のまま値の無いセル) で返す（1 枚目のシート・値だけ）。
+
+    ★★ 2026-10-01（依頼の項の台帳・入口の在庫 D の最後の 1 つ・Namakoo 決裁 A）:
+      式のまま計算結果が入っていないセルは、値だけで読むと**空**に見える ── 借方金額が
+      式の仕訳は、その行が候補から黙って落ちうる。accounts は LibreOffice を起動しない
+      設計なので、値を作らずに**見つけて断る**（読む列に在る時だけ・read_journal 側）。
+    """
     book = openpyxl.load_workbook(path, data_only=True, read_only=True)
     try:
         sheet = book.worksheets[0]
@@ -76,9 +83,23 @@ def _raw_rows_from_book(path) -> tuple:
                 truncated = True
                 break
             rows.append((i, list(values)))
-        return rows, truncated
     finally:
         book.close()
+    uncached = set()
+    formulas = openpyxl.load_workbook(path, data_only=False, read_only=True)
+    try:
+        values_by_row = dict(rows)
+        for i, values in enumerate(formulas.worksheets[0].iter_rows(values_only=True), start=1):
+            if i > len(rows):
+                break
+            got = values_by_row.get(i) or []
+            for c, v in enumerate(values, start=1):
+                if (isinstance(v, str) and v.startswith("=")
+                        and (c > len(got) or got[c - 1] in (None, ""))):
+                    uncached.add((i, c))
+    finally:
+        formulas.close()
+    return rows, truncated, uncached
 
 
 def read_journal(path, overrides=None, suggest: bool = True) -> JournalBook:
@@ -89,12 +110,13 @@ def read_journal(path, overrides=None, suggest: bool = True) -> JournalBook:
     """
     suffix = path.suffix.lower()
     encoding, ambiguous, truncated = None, False, False
+    uncached: set = set()
     notes: list = []   # ★ 指定が当たらず自動照合へ落ちた等の名指し
     try:
         if suffix == filetypes.CSV_SUFFIX:
             raw_rows, encoding, ambiguous, truncated = _raw_rows_from_csv(path)
         elif suffix == filetypes.OPENPYXL_READABLE_SUFFIX:
-            raw_rows, truncated = _raw_rows_from_book(path)
+            raw_rows, truncated, uncached = _raw_rows_from_book(path)
         else:
             return JournalBook(name=path.name, path=str(path),
                                refused=f"扱えない形式です（{path.name}）── 仕訳の書き出しは "
@@ -118,6 +140,21 @@ def read_journal(path, overrides=None, suggest: bool = True) -> JournalBook:
                            ambiguous=ambiguous, truncated=truncated,
                            notes=list(notes), missing_roles=list(missing),
                            refused=f"{path.name}: {refusal}")
+    # ★ 読む列のデータ行に「式のまま値が無い」セルが在れば断る（黙って空として読まない）。
+    #   読まない列に式が在るだけなら断らない（断りすぎない）。
+    used_cols = set((header_map or {}).values())
+    blind = sorted((r, c) for r, c in uncached
+                   if c in used_cols and (header_row is None or r > header_row))
+    if blind:
+        shown = "、".join(f"{get_column_letter(c)}{r}" for r, c in blind[:3])
+        more = f" ほか {len(blind) - 3} 個" if len(blind) > 3 else ""
+        return JournalBook(name=path.name, path=str(path), header_row=header_row,
+                           headers=list(headers), width=width, encoding=encoding,
+                           ambiguous=ambiguous, truncated=truncated, notes=list(notes),
+                           refused=f"{path.name}: 読む列に、式はあるのに計算結果が保存されていない"
+                                   f"セルがあります（{shown}{more}）── 値だけで読むと空に"
+                                   f"見え、行が黙って候補から落ちます。Excel か LibreOffice で"
+                                   f"一度開いて保存してから渡してください")
     rows = [(r, v) for r, v in sorted(raw_rows, key=lambda rv: rv[0])
             if header_row is None or r > header_row]
     return JournalBook(name=path.name, path=str(path), header_row=header_row,

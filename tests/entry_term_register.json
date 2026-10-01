@@ -37,7 +37,7 @@
   },
   "caps": {
    "B": 0,
-   "D": 1
+   "D": 0
   },
   "caps_rule": "B と D は縮める在庫。数が上限を超えたら赤・下回ったら上限を下げるまで赤（下がる向きにしか動かない）。",
   "basis_rule": "basis は『ファイル:関数』。番人が実在を確かめる。",
@@ -61,6 +61,14 @@
      "D": 1
     },
     "note": "2冊の照合の key/amount B→A・シート D→A・式の値 D→A／フォルダ抽出の LLM:col・column B→A・LLM:value D→A・シート D→A／split 式の値 D→A／verify 式の値 D→A。残り D 1（accounts 式の値・在庫）"
+   },
+   {
+    "date": "2026-10-01",
+    "counts": {
+     "A": 81,
+     "C": 45
+    },
+    "note": "accounts 式の値 D→A（式のまま値の無いセルが読む列に在れば断る・決裁 A）。B と D は 0"
    }
   ],
   "frozen": "2026-10-01"
@@ -239,12 +247,13 @@
   {
    "route": "accounts",
    "item": "式の値",
-   "class": "D",
+   "class": "A",
    "basis": [
-    "src/ailine_core/accounts_read.py:read_journal"
+    "src/ailine_core/accounts_read.py:read_journal",
+    "src/ailine_core/accounts_read.py:_raw_rows_from_book"
    ],
-   "stock": "仕訳の書き出しの xlsx で金額が式のまま（計算結果なし）だと、data_only の読みで空になる。借方金額は『候補を出す行』の条件なので、その行は黙って候補の外へ落ちうる（画面で理由を言っていない）。未測定 ── 実物の書き出しは CSV が本流で、xlsx の式のままの金額は検体に無い。塞ぎ方は split と同じ器官（read_with_values_filled_in）だが、accounts は『LO を起動しない（読むだけ）』と設計で決めてあるので、断る（値の無い金額の行を名指しする）か器官を呼ぶかは設計の判断が要る"
-  },
+   "how": "★ 2026-10-01（Namakoo 決裁 A）: 読む列のデータ行に式のまま値の無いセルが在れば断る（セルを名指しし、Excel か LibreOffice で一度開いて保存してから、と言う）。LO を起動しない設計は保つ。読まない列の式だけなら断らない",
+   "was": "D"  },
   {
    "route": "accounts-apply",
    "item": "--column",
