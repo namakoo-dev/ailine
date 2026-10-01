@@ -11,14 +11,14 @@ from __future__ import annotations
 import openpyxl
 import re
 from ailine_core import arith as arith_request, cellmap, inspection, intent as intent_mismatch, report_group, split_cell, threshold, total_row
-from ailine_core.anchor import _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _resolve_named_row, _table_rows_for_anchor, range_named_in_task, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, row_count_in_task, task_names_a_cell, task_names_a_row_number
+from ailine_core.anchor import _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _range_text, _re_any_cell, _resolve_named_row, _table_rows_for_anchor, range_named_in_task, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, row_count_in_task, task_names_a_cell, task_names_a_row_number, task_names_a_table_edge_row
 from ailine_core.book_view import BookView
 from ailine_core.column_type import column_is_all_numeric
 from ailine_core.dedup_key import _dedup_normalize_key_part
 from ailine_core.quotes import _task_outside_quotes, extract_quoted_literal
 from ailine_core.report_per_row import cells_with_multiple_placeholders, scan_placeholders, unique_sheet_name
 from ailine_core.sort_direction import read_direction
-from ailine_core.subject import name_matches_task
+from ailine_core.subject import designates_a_sheet, name_matches_task
 from ailine_core.table_scan import _col_index_by_header, _scan_last_row, data_extent
 from openpyxl.utils import column_index_from_string, get_column_letter
 from pathlib import Path
@@ -503,6 +503,16 @@ def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, 
         return False, resolved, inferred, err
     if (err := check_sheet("source_sheet")):
         return False, resolved, inferred, err
+    # ★★ 2026-10-01（依頼の項の台帳で B だった項目・上書き）: 転記先と参照表のシートは
+    #   「実在するか」しか見ていなかった。参照表が複数ある冊で、依頼が名指ししないシートを
+    #   LLM が選ぶと、別の表から引いた値で列を上書きして ✓ が出る（宣言↔実体は合っている）。
+    #   ★ 依頼文がそのシートを名指ししていれば（designates_a_sheet＋name_matches_task）そのまま。
+    #   ★ 名指しが無ければ実表から候補を数え、1 つなら機械が決める・2 つ以上なら ⚠ で開示して
+    #     ✓ を降ろす（_lookup_sheets_from_request）。
+    #   ★ 断らない: 既存の値を書き換える回は上書きの関所が適用前に聞く。断ると、参照表を
+    #     言わない自然な言い方（「別のシートの定価を埋めて」）まで止める。
+    for _w in _lookup_sheets_from_request(task, resolved, book_meta, headers):
+        resolved["_warnings"] = resolved.get("_warnings", []) + [_w]
     # ★ 挙動変更#2: 旧実装はここで「対象シートは1枚目のみ対応しています」と拒否していた
     #   （散在した『1枚目固定』の一つ・査定の致命そのもの）。LOOKUP_FILL は元々
     #   target_sheet を自分の必須 slot として名前で受け取り check_sheet で実在確認まで
@@ -629,6 +639,72 @@ def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, 
             f"転記はキーとは別の列を持ってくる操作です（{_hint}）。{_how}"
         )
     return None
+
+
+def _sheet_named_by_the_request(task, name, sheets) -> bool:
+    """依頼文がそのシートを名指ししているか。
+
+    ★ 読み手は既存の 2 本（subject.designates_a_sheet・name_matches_task）── 対象シートの
+      照合（subject の SHEET スロット）と同じ判定。動詞は名指しではない（「集計して」）・
+      他のシート名の断片は証拠にしない（『雛形』と『雛形_英文』）。
+    ★ 引用符は外さない（「『単価表』シートから」のシート名は引用符の中に在る）。
+    """
+    name = str(name or "")
+    return bool(task and name) and designates_a_sheet(task, name) and name_matches_task(
+        name, task, others=[s for s in sheets if s != name])
+
+
+def _lookup_sheets_from_request(task, resolved, book_meta, headers) -> list:
+    """転記先（target_sheet）と参照表（source_sheet）を依頼文と突き合わせる。戻りは ⚠ の文。
+
+    ① 依頼文が名指ししている（--sheet・画面で選んだ転記先も名指しと数える）→ そのまま
+    ② 名指しの無いシートは実表から候補を数える:
+       転記先＝もう一方以外でキー列を持つシート／参照表＝もう一方以外で対象列を持つシート
+       （持つシートが 1 つも無ければ、もう一方以外の全部）。両方とも名指しが無ければ
+       (転記先, 参照表) の組（違うシートどうし）で数える。
+       候補が 1 つ → 機械が決める（LLM と違えば書き換え、出典を解釈行に出す）
+       候補が 2 つ以上 → ⚠（選ばれたシートと他の候補を名指しする）
+    ★ 依頼文が空・シートが 1 枚の冊は黙る（選ぶものが無い）。
+    """
+    sheets = [str(s) for s in (book_meta.get("sheets") or [])]
+    if not task or len(sheets) <= 1:
+        return []
+    t, s = str(resolved.get("target_sheet")), str(resolved.get("source_sheet"))
+    named_t = ((book_meta.get("_sheet_source") == "cli" and t == resolved.get("_target_sheet"))
+               or _sheet_named_by_the_request(task, t, sheets))
+    named_s = _sheet_named_by_the_request(task, s, sheets)
+    if named_t and named_s:
+        return []
+    key, col = str(resolved.get("key_col") or ""), str(resolved.get("target_col") or "")
+
+    def _has(sheet, name):
+        return bool(name) and name in [str(h) for h in (headers.get(sheet) or [])]
+
+    def _narrow(cands, name):
+        return [x for x in cands if _has(x, name)] or cands
+
+    if named_t:
+        pairs = [(t, x) for x in _narrow([x for x in sheets if x != t], col)]
+    elif named_s:
+        pairs = [(x, s) for x in _narrow([x for x in sheets if x != s], key)]
+    else:
+        pairs = [(x, y) for x in _narrow(sheets, key) for y in _narrow(sheets, col) if x != y]
+    if len(pairs) == 1:
+        for k, old, new in (("target_sheet", t, pairs[0][0]), ("source_sheet", s, pairs[0][1])):
+            if new != old:
+                resolved[k] = new
+                resolved["_sources"] = {**resolved.get("_sources", {}),
+                                        k: f"依頼文にシートの名指しが無く、実表で『{new}』に決まる"}
+        return []
+    out = []
+    for named, idx, cur, what in ((named_t, 0, t, "転記先"), (named_s, 1, s, "参照表")):
+        if named:
+            continue
+        others = [p for p in dict.fromkeys(p[idx] for p in pairs) if p != cur]
+        out.append(f"依頼文に{what}のシートを指す語が見当たりません（『{cur}』は解釈が選んだシートです"
+                   + (f"・他の候補: {'、'.join(f'『{o}』' for o in others)}" if others else "")
+                   + "）── 頼んだシートかを「解釈:」行で確かめてください")
+    return out
 
 
 def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in, args, task, vocab, headers):
@@ -826,7 +902,7 @@ def _sum_overwrite_note(cur, letter, first, total_row, col, factor) -> str | Non
             " ── 足す範囲か倍率が変わります）")
 
 
-def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers):
+def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers, task=""):
     """REPORT_PER_ROW の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
     ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
@@ -841,6 +917,13 @@ def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_i
         return False, resolved, inferred, (
             f"雛形シートとデータシートが同じ『{template_sheet}』です。"
             "雛形は別のシートに用意してください")
+    # ★★ 2026-10-01（依頼の項の台帳で B だった項目）: 雛形のシートは「実在するか・印が在るか」
+    #   しか見ていなかった。雛形が 2 枚ある冊（日本語と英文）で、依頼が名指ししない方を LLM が
+    #   選んでも ✓ が出る。名指しが無ければ印を持つシートを数え、1 枚なら機械が決める・
+    #   2 枚以上なら ⚠ で開示して ✓ を降ろす（_template_sheet_from_request）。
+    if (_tw := _template_sheet_from_request(task, resolved, book_meta, first_sheet)):
+        resolved["_warnings"] = resolved.get("_warnings", []) + [_tw]
+    template_sheet = resolved["template_sheet"]
     if (err := resolve_in("name_col", first_sheet)):
         return False, resolved, inferred, err
 
@@ -1031,6 +1114,46 @@ def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_i
     return None
 
 
+def _template_sheet_from_request(task, resolved, book_meta, data_sheet) -> str | None:
+    """雛形のシート（template_sheet）を依頼文と突き合わせる。戻りは ⚠ の文（無ければ None）。
+
+    ① 依頼文が名指ししている（_sheet_named_by_the_request）→ そのまま
+    ② 名指しが無ければ、データのシート以外で印（{{列名}}）を持つシートを数える:
+       1 枚 → 機械が決める（LLM と違えば書き換え、解釈行に出典を出す）
+       2 枚以上 → ⚠（選ばれたシートと他の候補を名指しする）
+    ★ 依頼文が空・冊が読めない・印を持つシートが 1 枚も無い時は黙る
+      （最後の形は、続く印の検査が雛形の側で断る）。
+    """
+    sheets = [str(s) for s in (book_meta.get("sheets") or [])]
+    cur = str(resolved.get("template_sheet"))
+    path = book_meta.get("path")
+    if not task or not path or _sheet_named_by_the_request(task, cur, sheets):
+        return None
+    try:
+        wb = openpyxl.load_workbook(path)
+    except Exception:
+        return None
+    try:
+        cands = [s for s in sheets if s != data_sheet and s in wb.sheetnames
+                 and scan_placeholders(wb[s], wb[s].max_row or 1, wb[s].max_column or 1)]
+    except Exception:
+        return None
+    finally:
+        wb.close()
+    if len(cands) == 1:
+        if cands[0] != cur:
+            resolved["template_sheet"] = cands[0]
+            resolved["_sources"] = {**resolved.get("_sources", {}),
+                                    "template_sheet": f"依頼文にシートの名指しが無く、印を持つシートは『{cands[0]}』だけ"}
+        return None
+    if not cands:
+        return None
+    others = [c for c in cands if c != cur]
+    return (f"依頼文に雛形のシートを指す語が見当たりません（『{cur}』は解釈が選んだシートです"
+            + (f"・他に印を持つシート: {'、'.join(f'『{o}』' for o in others)}" if others else "")
+            + "）── 頼んだ雛形かを「解釈:」行で確かめてください")
+
+
 def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers, op):
     """SET_CELL_VALUE の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
@@ -1125,6 +1248,18 @@ def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers,
             _note_c = f"{_hitrow}行目（見出し行）── 見出しの名前を変えます"
         else:
             _row_name = _row_name or (_rowvals[0] if _rowvals and _rowvals[0] else str(_hitrow))
+            # ★★ 2026-10-01（依頼の項の台帳で B だった項目・1 セルの上書き）: 行番号は
+            #   「表の範囲内か」しか見ていなかった。依頼が行を言っていないのに LLM が行番号を
+            #   返すと、その行に書いて ✓ が出る（宣言↔実体は合っている）。
+            #   ★ 読み直しの道が機械で入れた行番号（「7行目」・端の語・行の名前）は、同じ読み手を
+            #     ここでもう一度通せば同じ行に戻るので鳴らない（_row_number_named_by_the_request）。
+            #   ★ 名指しが無ければ ⚠ で開示して ✓ を降ろす（行の名前で指した道と同じ作法・
+            #     既存の値を書き換える回は上書きの関所が適用前に聞く）。表が読めなければ黙る。
+            if task and _row_number_named_by_the_request(
+                    task, book_meta, _sheet_c, _hitrow, _headers_c) is False:
+                resolved["_warnings"] = resolved.get("_warnings", []) + [
+                    f"依頼文に{_hitrow}行目を指す語が見当たりません"
+                    f"（{_hitrow}行目『{_row_name}』は解釈が選んだ行です）── 頼んだ行かを「解釈:」行で確かめてください"]
     else:
         # ★ 行が実在し・1 つに決まることを**適用前に**確かめる（推測で別の行に書かない）。
         _hitrow, _note_c = _resolve_named_row(book_meta, _sheet_c, _row_name)
@@ -1221,7 +1356,36 @@ def _row_named_by_the_request(task, book_meta, sheet, row, row_name, headers) ->
                for v in dict.fromkeys(cands))
 
 
-def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers):
+def _row_number_named_by_the_request(task, book_meta, sheet, row, headers) -> bool | None:
+    """依頼文が、行番号で決まった行（row）を名指ししているか。表を読めなければ None（黙る）。
+
+    名指し＝ 次のどれかの読み手が、その行を指していること（どれも既存の器官 ── 読み直しの道が
+      行番号を機械で入れる時に使う読み手と同じ。だから「機械が入れた」印を別に持たなくても、
+      同じ依頼文を同じ読み手に通せば同じ行に戻る）:
+      ①「N行目」（task_names_a_row_number）
+      ② A1 のセル（「E5に」── anchor の _re_any_cell。2 つ以上在ればどれかがその行）
+      ③ 表の端（「最終行の担当」── task_names_a_table_edge_row）
+      ④ その行の値（取引先名・合計の語）が依頼文と照合できる（_row_named_by_the_request）
+    ★ データ行が 1 行しか無い表は、行は実表で 1 つに決まる（機械が決める）── 名指しと数える。
+    """
+    row = int(row)
+    hr = int((book_meta.get("header_rows") or {}).get(sheet, 1) or 1)
+    rows, _heads = _table_rows_for_anchor(book_meta, sheet, hr)
+    if not rows:
+        return None
+    if list(rows) == [row]:
+        return True
+    if task_names_a_row_number(task) == row:
+        return True
+    if any(int(m.group(2)) == row for m in _re_any_cell.finditer(_range_text(task))):
+        return True
+    edge = task_names_a_table_edge_row(task, book_meta, sheet)
+    if edge and edge[0] == row:
+        return True
+    return bool(_row_named_by_the_request(task, book_meta, sheet, row, "", headers))
+
+
+def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers, task=""):
     """FORMAT_MAP の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
     ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
@@ -1241,6 +1405,11 @@ def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, 
     if book_path is None:
         return False, resolved, inferred, (
             "様式写像段はファイルの実体が無いと検証できません（book_meta に path が無い）")
+    # ★★ 2026-10-01（依頼の項の台帳で B だった項目）: 帳票段と同じ ── 雛形のシートは
+    #   実在と印しか見ていなかった。名指しが無ければ印を持つシートを数える。
+    if (_tw := _template_sheet_from_request(task, resolved, book_meta, first_sheet)):
+        resolved["_warnings"] = resolved.get("_warnings", []) + [_tw]
+    template_sheet = resolved["template_sheet"]
     data_headers = headers.get(first_sheet, [])
     header_row_here = book_meta.get("header_rows", {}).get(first_sheet, 1)
 
@@ -1449,6 +1618,17 @@ def _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, heade
         if min(_ra, _rb) <= _hr_s:
             return False, resolved, inferred, (
                 f"見出し行（{_hr_s}行目）を巻き込む入れ替えは受け付けません")
+    # ★★ 2026-10-01（依頼の項の台帳で B だった項目・動かす）: a/b は「実在の列名/行の名前か」
+    #   しか見ていなかった（読み直しの道だけが依頼文に在ることを要求していた）。
+    #   実例:「税込み金額の順番を逆にして」→ 税込み金額 ⇄ 締め日（締め日は依頼に無い）で ✓。
+    #   ★ 依頼文が 2 つとも名指ししていれば黙る。名指しの無い方があれば、候補が実表で
+    #     2 つしか無い（列が 2 つ・データ行が 2 行）時だけ機械が決まったと数え、それ以外は
+    #     ⚠ で開示して ✓ を降ろす（_swap_targets_unnamed）。表が読めなければ黙る。
+    if task:
+        for _nm in _swap_targets_unnamed(task, resolved, book_meta, _sheet_s, _hr_s, _headers_s, as_col):
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"依頼文に入れ替える{'列' if as_col else '行'}『{_nm}』を指す語が見当たりません"
+                "（解釈が選んだものです）── 頼んだ入れ替えかを「解釈:」行で確かめてください"]
     # ★★ 2026-08-29: 入れ替えは「表に写像 π を掛ける」ことで、式もその対象。
     #   LibreOffice の自動付け替えに任せず、**π を通した式を自分で書き戻す**。
     _sh = (cellmap.swap_cols(resolved["_a_pos"], resolved["_b_pos"]) if as_col
@@ -1486,6 +1666,35 @@ def _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, heade
                                         unit=("列" if as_col else "行"), **_kw)):
         resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
     return None
+
+
+def _swap_targets_unnamed(task, resolved, book_meta, sheet, header_row, headers, as_col) -> list:
+    """入れ替える 2 つ（a/b）のうち、依頼文が名指ししていないものの名前（無ければ空）。
+
+    ★ 列: 見出しの名前が name_matches_task で照合できる、または依頼文の「C列」がその位置。
+    ★ 行: その行の値（または LLM が挙げた名前・「3行目」）が照合できる（_row_named_by_the_request）。
+    ★ 候補が実表で 2 つしか無い（列が 2 つ・データ行が 2 行）なら入れ替えは 1 通りに決まる ── 空。
+    ★ 表を読めない行は数えない（測れないものを鳴らさない）。
+    """
+    text = _task_outside_quotes(task or "")
+    if as_col:
+        heads = [h for h in headers if h]
+        if len(heads) == 2:
+            return []
+        letters = set()
+        for m in _re_a1_col_word.finditer(text):
+            try:
+                letters.add(column_index_from_string(m.group(0).replace("列", "").strip().upper()))
+            except ValueError:
+                continue
+        return [n for n, pos in ((resolved["a"], resolved["_a_pos"]), (resolved["b"], resolved["_b_pos"]))
+                if pos not in letters
+                and not name_matches_task(n, text, others=[h for h in heads if h != n])]
+    rows, _heads = _table_rows_for_anchor(book_meta, sheet, header_row)
+    if not rows or len(rows) == 2:
+        return []
+    return [n for n, pos in ((resolved["a"], resolved["_a_pos"]), (resolved["b"], resolved["_b_pos"]))
+            if _row_named_by_the_request(task, book_meta, sheet, pos, n, headers) is False]
 
 
 def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
@@ -1785,14 +1994,33 @@ def _verify_chart(resolved, inferred, first_sheet, resolve_in, task, headers):
     resolved["kind"] = kind
     # ★ グラフ段②: category_col(省略可・既定は先頭列)。指定があれば実在列検証。
     raw_cat = resolved.get("category_col")
+    first_col = (headers.get(first_sheet) or [None])[0]
     if raw_cat in (None, ""):
-        first_col = (headers.get(first_sheet) or [None])[0]
         if first_col is None:
             return False, resolved, inferred, f"シート『{first_sheet}』に列がありません"
         resolved["category_col"] = first_col
         inferred.add("category_col")
     elif (err := resolve_in("category_col", first_sheet)):
         return False, resolved, inferred, err
+    # ★★ 2026-10-01（依頼の項の台帳で B だった項目）: LLM が返した横軸の列は「実在するか」
+    #   しか見ていなかった。事後条件は種類と値の列しか見ないので、依頼が言っていない列を
+    #   横軸にしても ✓ が出る。
+    #   ★ 依頼文がその列を名指ししていれば（name_matches_task）そのまま。
+    #   ★ 無指定の時と同じ既定（先頭列）を LLM も選んだ回・値の列以外に列が 1 つしか無い回は
+    #     実表で決まる（機械が決める）── 黙る。横軸を言わない依頼（「金額の棒グラフを」）は
+    #     健全系そのもので、既定の回まで鳴らすと常時ノイズになる（OP_SUBJECT_SLOTS の注記）。
+    #   ★ それ以外（依頼が言っていない別の列を LLM が選んだ）は ⚠ で開示して ✓ を降ろす。
+    #     ★ 既定へ書き換えない: 実走行に「客先ごとの売上推移を」→ 横軸『取引先』が在る
+    #       （同義語は照合の外）。読めない時に推測で書き換えると、正しい選択を壊す。
+    cat = str(resolved.get("category_col") or "")
+    _heads_ch = [str(h) for h in (headers.get(first_sheet) or []) if h]
+    _cands_ch = [h for h in _heads_ch if h != str(resolved.get("value_col"))]
+    if (task and "category_col" not in inferred and cat != str(first_col) and len(_cands_ch) > 1
+            and not name_matches_task(cat, _task_outside_quotes(task),
+                                      others=[h for h in _heads_ch if h != cat])):
+        resolved["_warnings"] = resolved.get("_warnings", []) + [
+            f"依頼文に横軸の列（『{cat}』）を指す語が見当たりません（解釈が選んだ列です・"
+            f"既定は先頭列『{first_col}』）── 頼んだ横軸かを「解釈:」行で確かめてください"]
     return None
 
 
@@ -2082,6 +2310,16 @@ def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in
         resolved["_row_index"] = _nf_row
         resolved.pop("col", None)
         resolved["_at_basis"] = f"{_nf_row}行目"
+        # ★★ 2026-10-01（依頼の項の台帳で B だった項目）: 行番号は「見出しより下か」しか
+        #   見ていなかった（依頼が言っていない行に書式を掛けても ✓）。1 セル書換の行番号と
+        #   同じ読み手で依頼文と突き合わせ、名指しが無ければ ⚠ で開示して ✓ を降ろす
+        #   （読み直しの道が合計行を機械で入れた回は、合計の語で同じ行に戻るので鳴らない）。
+        if task and _row_number_named_by_the_request(
+                task, book_meta, _nf_sheet, _nf_row,
+                (book_meta.get("headers") or {}).get(_nf_sheet) or []) is False:
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"依頼文に{_nf_row}行目を指す語が見当たりません"
+                f"（{_nf_row}行目は解釈が選んだ行です）── 頼んだ行かを「解釈:」行で確かめてください"]
     elif (err := resolve_in("col", first_sheet)):
         return False, resolved, inferred, err
     if resolved.get("style") != "thousands":

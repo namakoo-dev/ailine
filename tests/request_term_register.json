@@ -10,7 +10,7 @@
   },
   "denominator": "(op, 項目) の集合は宣言から導く: OP_SCHEMA ∪ OP_SUBJECT_SLOTS ∪ _CONFIRM_FIELDS ∪ CODEGEN_BY_OP・POSTCONDITIONS・verify_dsl_args の振り分け先が読む resolved の鍵（_ で始まらないもの・他の op の枝は除く）。この台帳と等号で縛る。",
   "caps": {
-   "B": 9,
+   "B": 0,
    "D": 0
   },
   "caps_rule": "B と D は縮める在庫。数が上限を超えたら赤・下回ったら上限を下げるまで赤（下がる向きにしか動かない）。",
@@ -44,6 +44,14 @@
      "C": 2
     },
     "note": "INSERT_ROWS.count D→A・FILL_COLOR.color D→A・APPEND_TOTAL.label D→A・MERGE.range D→A"
+   },
+   {
+    "date": "2026-10-01",
+    "counts": {
+     "A": 64,
+     "C": 2
+    },
+    "note": "LOOKUP_FILL.target_sheet・source_sheet・SWAP.a・b・SET_CELL_VALUE.row_number・NUMBER_FORMAT.row_number・CHART.category_col・REPORT_PER_ROW.template_sheet・FORMAT_MAP.template_sheet B→A"
    }
   ],
   "frozen": "2026-10-01"
@@ -159,12 +167,13 @@
   {
    "op": "CHART",
    "item": "category_col",
-   "class": "B",
+   "class": "A",
    "basis": [
     "src/ailine_core/argcheck.py:_verify_chart"
    ],
-   "how": "実在列か・無指定なら先頭列(1602-1606)。SUBJ_INPUT＝消費だけで判定しない",
-   "note": "事後条件(check_chart_series)は種類と値列しか見ない。PENDING-20260910 に「発火は LLM がどの列を項目に選ぶかで決まる」"
+   "how": "依頼文が横軸の列を名指ししていれば（name_matches_task）黙る。実表で決まる回（LLM も既定の先頭列を選んだ・値の列以外に列が 1 つしか無い・LLM が空で機械が先頭列を入れた）も黙る。それ以外（依頼が言っていない別の列を LLM が選んだ）は ⚠ で開示して ✓ を降ろす。書き換えはしない",
+   "was": "B",
+   "note": "直す前: 実在列か・無指定なら先頭列。事後条件(check_chart_series)は種類と値列しか見ない。既定の回を鳴らさない理由: 横軸を言わない依頼（「金額の棒グラフを」）は健全系そのもので、毎回鳴らすと常時ノイズになる（OP_SUBJECT_SLOTS の CHART の注記と同じ判断）。既定へ書き換えない理由: 実走行に「客先ごとの売上推移を」→ 横軸『取引先』が在り、同義語は照合の外（推測で書き換えると正しい選択を壊す）"
   },
   {
    "op": "CHART",
@@ -376,12 +385,15 @@
   {
    "op": "FORMAT_MAP",
    "item": "template_sheet",
-   "class": "B",
+   "class": "A",
    "basis": [
-    "src/ailine_core/argcheck.py:_verify_format_map"
+    "src/ailine_core/argcheck.py:_verify_format_map",
+    "src/ailine_core/argcheck.py:_template_sheet_from_request",
+    "src/ailine_core/argcheck.py:_sheet_named_by_the_request"
    ],
-   "how": "実在シート＋印の検査",
-   "note": "同上"
+   "how": "同上",
+   "was": "B",
+   "note": "直す前: 実在シート＋印の検査"
   },
   {
    "op": "INSERT_ROWS",
@@ -422,12 +434,15 @@
   {
    "op": "LOOKUP_FILL",
    "item": "source_sheet",
-   "class": "B",
+   "class": "A",
    "basis": [
-    "src/ailine/__init__.py:verify_dsl_args"
+    "src/ailine_core/argcheck.py:_verify_lookup_fill",
+    "src/ailine_core/argcheck.py:_lookup_sheets_from_request",
+    "src/ailine_core/argcheck.py:_sheet_named_by_the_request"
    ],
-   "how": "check_sheet（実在シート）。OP_SUBJECT_SLOTS は SHEET_INPUT＝語を消費するだけで判定しない",
-   "note": "★自動は A（540 の if に source_headers が居るだけ）→ 目視で B"
+   "how": "同上（参照表の候補＝もう一方以外で対象列を持つシート。持つシートが 1 つも無ければもう一方以外の全部）",
+   "was": "B",
+   "note": "直す前: check_sheet（実在シート）だけ。OP_SUBJECT_SLOTS は SHEET_INPUT＝語を消費するだけで判定しない"
   },
   {
    "op": "LOOKUP_FILL",
@@ -441,12 +456,15 @@
   {
    "op": "LOOKUP_FILL",
    "item": "target_sheet",
-   "class": "B",
+   "class": "A",
    "basis": [
-    "src/ailine/__init__.py:verify_dsl_args"
+    "src/ailine_core/argcheck.py:_verify_lookup_fill",
+    "src/ailine_core/argcheck.py:_lookup_sheets_from_request",
+    "src/ailine_core/argcheck.py:_sheet_named_by_the_request"
    ],
-   "how": "check_sheet（実在シート）＋複数シートの冊だけ _target_sheet の3段階",
-   "note": "★自動は A → 目視で B"
+   "how": "依頼文がそのシートを名指ししているか（designates_a_sheet＋name_matches_task・--sheet で選んだ転記先も名指しと数える）。名指しが無ければ実表から候補を数える（もう一方以外でキー列を持つシート・両方とも名指しが無ければ (転記先, 参照表) の組）。1 つなら機械が決め、LLM と違えば書き換えて出典を出す。2 つ以上なら ⚠ で他の候補を名指しして ✓ を降ろす（書き込みは止めない ── 既存の値を書き換える回は上書きの関所が適用前に聞く）",
+   "was": "B",
+   "note": "直す前: check_sheet（実在シート）だけ。OP_SUBJECT_SLOTS の _target_sheet（SHEET）は無言なら ②＝✓ のまま。断りでなく ⚠ にした理由: 参照表を言わない自然な言い方（「別のシートの定価を埋めて」）は、対象列を持つシートが 1 枚なら機械が決められる"
   },
   {
    "op": "MERGE",
@@ -489,12 +507,15 @@
   {
    "op": "NUMBER_FORMAT",
    "item": "row_number",
-   "class": "B",
+   "class": "A",
    "basis": [
     "src/ailine_core/argcheck.py:_verify_number_format",
+    "src/ailine_core/argcheck.py:_row_number_named_by_the_request",
     "src/ailine/__init__.py:_reread_the_plan"
    ],
-   "how": "見出し行より下か"
+   "how": "1 セル書換の行番号と同じ読み手で依頼文と突き合わせ、指していなければ ⚠ で開示して ✓ を降ろす（読み直しが合計行へ付け替えた回は合計の語で同じ行に戻る）。見出し行より下かは従来どおり",
+   "was": "B",
+   "note": "直す前: 見出し行より下かだけ"
   },
   {
    "op": "NUMBER_FORMAT",
@@ -544,12 +565,15 @@
   {
    "op": "REPORT_PER_ROW",
    "item": "template_sheet",
-   "class": "B",
+   "class": "A",
    "basis": [
-    "src/ailine_core/argcheck.py:_verify_report_per_row"
+    "src/ailine_core/argcheck.py:_verify_report_per_row",
+    "src/ailine_core/argcheck.py:_template_sheet_from_request",
+    "src/ailine_core/argcheck.py:_sheet_named_by_the_request"
    ],
-   "how": "実在シート＋印の検査",
-   "note": "SHEET_INPUT＝判定しない"
+   "how": "依頼文がそのシートを名指ししているか。名指しが無ければ、データのシート以外で印（{{列名}}）を持つシートを数え、1 枚なら機械が決める（LLM と違えば書き換えて出典を出す）・2 枚以上なら ⚠ で他の候補を名指しして ✓ を降ろす",
+   "was": "B",
+   "note": "直す前: 実在シート＋印の検査。★ demo/1_請求_2026年8月.xlsx は雛形が 2 枚（雛形・雛形_英文）なので「取引先ごとに請求書を作って」は ⚠（△）になる"
   },
   {
    "op": "SET_CELL_VALUE",
@@ -579,12 +603,15 @@
   {
    "op": "SET_CELL_VALUE",
    "item": "row_number",
-   "class": "B",
+   "class": "A",
    "basis": [
     "src/ailine_core/argcheck.py:_verify_set_cell_value",
+    "src/ailine_core/argcheck.py:_row_number_named_by_the_request",
     "src/ailine_core/row_conflict.py:value_not_in_the_named_row"
    ],
-   "how": "表の範囲内か・見出し行なら依頼の行番号と一致か＋最終の value_not_in_the_named_row"
+   "how": "行番号で決まった行を依頼文が指しているか ──「N行目」（task_names_a_row_number）・A1 のセル（anchor の _re_any_cell）・表の端（task_names_a_table_edge_row）・その行の値（_row_named_by_the_request）のどれか。データ行が 1 行の表は実表で決まる。指していなければ ⚠ で開示して ✓ を降ろす（書き込みは止めない・既存の値は上書きの関所が聞く）。見出し行は従来どおり依頼の行番号と一致を要求",
+   "was": "B",
+   "note": "直す前: 表の範囲内か・見出し行なら依頼の行番号と一致か。前の子が残した「読み直しの道が機械で入れた行番号と区別できない」は、印を足さず同じ読み手に同じ依頼文を通して解いた（機械が入れた行は必ず同じ行に戻る ── 試験で縛った）"
   },
   {
    "op": "SET_CELL_VALUE",
@@ -746,21 +773,27 @@
   {
    "op": "SWAP",
    "item": "a",
-   "class": "B",
+   "class": "A",
    "basis": [
-    "src/ailine_core/argcheck.py:_verify_swap"
+    "src/ailine_core/argcheck.py:_verify_swap",
+    "src/ailine_core/argcheck.py:_swap_targets_unnamed",
+    "src/ailine_core/argcheck.py:_row_named_by_the_request"
    ],
-   "how": "実在の列名/行の名前か。列として解いた時だけ subject の COLUMN",
-   "note": "★自動は A（swap_targets_are_cells(task) の if に居るだけ）→ 目視で B。読み直し経路(fixed-op)だけは a,b が依頼に在ることを要求 __init__.py:10602"
+   "how": "列: 見出しの名前が name_matches_task で照合できるか・依頼文の「C列」がその位置か。行: その行の値（または LLM が挙げた名前・「3行目」）が照合できるか（_row_named_by_the_request）。名指しの無い方があれば ⚠ で開示して ✓ を降ろす。候補が実表で 2 つしか無い（列が 2 つ・データ行が 2 行）なら 1 通りに決まるので黙る。セルの入れ替え（座標は依頼文と実表から機械が解く）は変えない",
+   "was": "B",
+   "note": "直す前: 実在の列名/行の名前かだけ（読み直し経路だけが依頼文に在ることを要求）。実走行の実例:「税込み金額の順番を逆にして」→ 税込み金額 ⇄ 締め日で ✓"
   },
   {
    "op": "SWAP",
    "item": "b",
-   "class": "B",
+   "class": "A",
    "basis": [
-    "src/ailine_core/argcheck.py:_verify_swap"
+    "src/ailine_core/argcheck.py:_verify_swap",
+    "src/ailine_core/argcheck.py:_swap_targets_unnamed",
+    "src/ailine_core/argcheck.py:_row_named_by_the_request"
    ],
    "how": "同上",
+   "was": "B",
    "note": "同上"
   }
  ]

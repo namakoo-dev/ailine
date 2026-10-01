@@ -106,9 +106,11 @@ def test_the_edge_organ_is_wired_to_both_the_refusal_and_the_reach():
         到達側だけ  → 1 セルへ落とせなかった回に列全体を潰す（④ そのもの）
     ★ 場所で決め打ちしない（tests/test_guard_ledger.py が「本体を場所で決め打ちする
       番人が増えた」と鳴る）── 製品の出所を配線経由で読む。
+    ★ 2026-10-01: 3 つ目の呼び手が増えた ── 検証の段（argcheck._row_number_named_by_the_request）
+      が、読み直しの道の入れた行番号を同じ読み手で読み直す。断る側・到達側の 2 本は変わらない。
     """
     sys.path.insert(0, str(REPO / "tests"))
     from _product_source import count_in_product
-    assert count_in_product("task_names_a_table_edge_row(") == 3, (
-        "★ 表の端の器官の呼び出しが 2 箇所（＋定義 1）でない ── "
-        "断る側か到達側のどちらかが外れた疑い")
+    assert count_in_product("task_names_a_table_edge_row(") == 4, (
+        "★ 表の端の器官の呼び出しが 3 箇所（断る側・到達側・検証の段の読み直し ＋定義 1）でない ── "
+        "どれかが外れた疑い")

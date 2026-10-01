@@ -4924,7 +4924,7 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     #   印({{列名}})が置かれたセルだけ ── ここで印を実在検証し、印以外は一切触らない前提を
     #   固める（型の出し分け・出力シート名・合計行の除外まで、すべて機械が決め切る）。
     elif op == "REPORT_PER_ROW":
-        r = _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers)
+        r = _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers, task)
         if r is not None:
             return r
 
@@ -4932,7 +4932,7 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
     #   （縦の展開）── 表の1行を、人が作った雛形の1行に転写して N行の新シートを1枚出す。
     #   憲法の適用は同じ: 機械が触ってよいのは雛形の中の印({{列名}})が置かれたセルだけ。
     elif op == "FORMAT_MAP":
-        r = _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers)
+        r = _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers, task)
         if r is not None:
             return r
 
