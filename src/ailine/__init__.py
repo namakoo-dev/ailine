@@ -227,6 +227,7 @@ from ailine_core import alias_store   # ★ W10 便A: 別名ストアの検疫/�
 from ailine_core import suggest as suggest_candidates   # ★ W10 便C2: もしかして提案の候補生成（語としての厳格一致+about）
 from ailine_core import intent as intent_mismatch   # ★ 依頼が名指しした操作の種類と食い違わないか
 from ailine_core import arith as arith_request   # ★ 依頼が書いた式と、実行した計算が同じか
+from ailine_core import colors as color_words   # ★ 依頼文の色の語 → COLOR_MAP の鍵（背景色）
 from ailine_core import required_word   # ★「その語が在る時だけ使う」を散文でなく機械にする
 from ailine_core.new_sheet import empty_new_sheets   # ★ 新しく作ったシートが空なら頼まれたことは起きていない
 from ailine_core.header_cell import header_cell_target   # ★「<列名>の見出しに」は列ぜんぶでなく 1 セル
@@ -3071,9 +3072,16 @@ WRITE_REMOVE = "remove"                     # 行/列ごと取り除く（値は
 #   ちょうど 1 個・座標も宣言どおり」を別に証明している）。鳴らない理由を op 名の if で
 #   書かず、**宣言の種別**として持つ ── 新しい op が増えても配線が要らない。
 WRITE_SINGLE_CELL = "single_cell"           # 宣言した 1 セルだけを書く
+# ★★ 2026-10-01（実機で確定・Namakoo 決裁 B）: セル結合は「書式だけ」と宣言していたが、
+#   LibreOffice は結合した範囲の左上以外の値を**消す**（A1:C1 で B1『数量』C1『金額』が空に）。
+#   宣言が嘘なので、承知（--overwrite）の後も「書式だけのはずが」で毎回 △ に落ちていた。
+#   ★ 消すことは適用前の関所（_confirm_delete）が件数と中身つきで聞く。ここは**消え方の前提**
+#     ── 値は空になる以外に変わらない・1 枚のシートの中、を持つ（前提なしにはしない）。
+WRITE_MERGE_FOLD = "merge_fold"             # 範囲を 1 セルに畳む（左上以外の値は空になる）
 WRITE_KINDS = frozenset({
     WRITE_EXISTING_COLUMN, WRITE_NEW_COLUMN, WRITE_NEW_ROW_AT_END, WRITE_NEW_SHEET,
-    WRITE_FORMAT_ONLY, WRITE_ROW_SHIFT, WRITE_REORDER, WRITE_REMOVE, WRITE_SINGLE_CELL})
+    WRITE_FORMAT_ONLY, WRITE_ROW_SHIFT, WRITE_REORDER, WRITE_REMOVE, WRITE_SINGLE_CELL,
+    WRITE_MERGE_FOLD})
 
 
 @dataclass(frozen=True)
@@ -3129,7 +3137,7 @@ OP_WRITE_TARGET = {
     "BOLD": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     "FILL_COLOR": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     "NUMBER_FORMAT": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
-    "MERGE": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
+    "MERGE": WriteTarget(writes=(WRITE_MERGE_FOLD,)),
     # 埋め込みグラフを足すだけ（セルの値も見出しも書かない＝値の書き込み先は無いと確認した）
     "CHART": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
     "CENTER_ALIGN": WriteTarget(writes=(WRITE_FORMAT_ONLY,)),
@@ -4462,7 +4470,7 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
 
 
 def _verify_bold(resolved, inferred, first_sheet, headers, op, task="",
-                  header_row=1):
+                  header_row=1, book_meta=None):
     """BOLD の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
     ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
@@ -4534,6 +4542,22 @@ def _verify_bold(resolved, inferred, first_sheet, headers, op, task="",
             f"対象『{target}』の形式が不明です（row:N / col:列名 / cell:行,列 / all）")
     if op == "FILL_COLOR":
         color = str(resolved.get("color", "")).lower()
+        # ★★ 2026-10-01（依頼の項の台帳で D だった項目）: 色は「COLOR_MAP に在るか」しか
+        #   見ていなかった（「黄色にして」に blue が返っても ✓）。依頼文の色の語を
+        #   COLOR_MAP の鍵へ読み（読み手は colors.read_color の 1 本）、食い違えば依頼文が
+        #   勝ち、解釈行に出典を出す（並べ替えの向きと同じ作法）。読めない時は何も変えない。
+        #   ★ 列名と表の値の中の語（『青果』『白石』）は数えない ── 実表を渡す。
+        _rows_c, _heads_c = (_table_rows_for_anchor(
+            book_meta, resolved.get("_target_sheet") or first_sheet, header_row)
+            if book_meta else ({}, []))
+        _color_read = color_words.read_color(
+            _task_outside_quotes(task or ""),
+            [str(h) for h in (headers.get(first_sheet) or [])] + list(_heads_c)
+            + [v for vals in _rows_c.values() for v in vals])
+        if _color_read is not None and _color_read[0] != color:
+            color = _color_read[0]
+            resolved["_sources"] = {**resolved.get("_sources", {}),
+                                    "color": f"依頼文: 『{_color_read[1]}』"}
         if color not in COLOR_MAP:
             return False, resolved, inferred, f"色『{color}』は未対応です。使える色: {', '.join(sorted(COLOR_MAP))}"
         resolved["color"] = color
@@ -4775,7 +4799,8 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
 
     elif op in ("BOLD", "FILL_COLOR", "CENTER_ALIGN"):
         r = _verify_bold(resolved, inferred, first_sheet, headers, op, task,
-                          int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1))
+                          int((book_meta.get("header_rows") or {}).get(first_sheet, 1) or 1),
+                          book_meta=book_meta)
         if r is not None:
             return r
 
@@ -4785,7 +4810,7 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
             return r
 
     elif op == "MERGE":
-        r = _verify_merge(resolved, inferred)
+        r = _verify_merge(resolved, inferred, task, book_meta)
         if r is not None:
             return r
 
@@ -10244,7 +10269,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
     def _is_a_different_job(st):
         op_ = (st or {}).get("op")
         if not any(_op_writes(op_, k)
-                    for k in (WRITE_FORMAT_ONLY, WRITE_REMOVE, WRITE_REORDER)):
+                    for k in (WRITE_FORMAT_ONLY, WRITE_MERGE_FOLD, WRITE_REMOVE, WRITE_REORDER)):
             return False
         # ★★ 2026-09-08（Namakoo「語彙が増えると類似の意味に引っ張られる。制御可能か」）:
         #   列移動を語彙に入れた途端、「鈴木の右に東棟」（1 セル書換）が**列移動**に

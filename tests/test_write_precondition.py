@@ -578,10 +578,15 @@ def test_f5b_merge_over_occupied_cells_now_gates(tmp_path, monkeypatch, capsys):
       (b) 誤爆だと見る ── 結合は宣言どおりの効果であり、MERGE の宣言が format_only で
           あること自体が間違い（値を畳む op なので別の種類が要る）。
     どちらを採るかで直す場所が変わる（(a) は何もしない・(b) は OP_WRITE_TARGET の宣言）。
+
+    ★★ 2026-10-01（実機で消えるのを確かめた）: (a) の側で、**適用の前**に聞くようにした
+      （argcheck._verify_merge が消える値を数えて _confirm_delete に積む）。止まる所が
+      適用後の前提の関所から適用前の削除の関所に移っただけで、exit 7・原本は無傷は同じ。
+      宣言（format_only）は変えていない ── (b) は判断が要るので本体へ報告に回した。
     """
     book = _book(tmp_path, {"Sheet": [["品名", "金額"], ["a", 100], ["b", 200]]})
     rc = _run(tmp_path, monkeypatch, book, "A1:B1 を結合して", "MERGE", {"range": "A1:B1"}, _f5_merge)
     out = capsys.readouterr().out
     assert rc == 7, out
-    assert "★ 書式だけのはずが、セルの値が 1 件変わりました（Sheet!B1: '金額' → (空)）" in out
+    assert "A1:B1 を結合すると値が 1 件消えます（B1『金額』" in out
     assert _cell(book, "Sheet", "B1") == "金額"   # 原本は無傷

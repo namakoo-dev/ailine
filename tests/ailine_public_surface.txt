@@ -102,6 +102,7 @@ value VOCAB_FILE
 value WRITE_EXISTING_COLUMN
 value WRITE_FORMAT_ONLY
 value WRITE_KINDS
+value WRITE_MERGE_FOLD
 value WRITE_NEW_COLUMN
 value WRITE_NEW_ROW_AT_END
 value WRITE_NEW_SHEET
@@ -473,7 +474,7 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op)
 def _verify_aggregate(resolved, inferred, first_sheet, resolve_in, task='', sheet_headers=())
 def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in, args, task, vocab, headers)
 def _verify_autofit()
-def _verify_bold(resolved, inferred, first_sheet, headers, op, task='', header_row=1)
+def _verify_bold(resolved, inferred, first_sheet, headers, op, task='', header_row=1, book_meta=None)
 def _verify_chart(resolved, inferred, first_sheet, resolve_in, task, headers)
 def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers, op)
 def _verify_dedup(resolved, inferred, first_sheet, headers)
@@ -485,7 +486,7 @@ def _verify_extract_columns(resolved, inferred, first_sheet, book_meta, task, he
 def _verify_format_map(resolved, inferred, first_sheet, book_meta, check_sheet, sheets, headers)
 def _verify_insert_rows(resolved, inferred, book_meta, task, sheets, op)
 def _verify_lookup_fill(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, task, headers, op)
-def _verify_merge(resolved, inferred)
+def _verify_merge(resolved, inferred, task='', book_meta=None)
 def _verify_move_column(resolved, inferred, book_meta, task)
 def _verify_number_format(resolved, inferred, first_sheet, book_meta, resolve_in, task='')
 def _verify_pivot(resolved, inferred, first_sheet, resolve_in)

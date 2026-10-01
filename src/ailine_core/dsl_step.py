@@ -304,6 +304,11 @@ def print_dsl_confirmation(op: str, resolved: dict, inferred: set, task: str, *,
     _ask_delete = str(resolved.get("_confirm_delete") or "")
     if _ask_delete and not warn_overwrite:
         warn_overwrite = _ask_delete
+    # ★ 2026-10-01: 列を宣言しない op の上書き（既にある合計行の =SUM を別の式に書き換える）も
+    #   同じ関所に載せる。聞く文は既定の「上書きしますか？」のまま。
+    _ask_overwrite = str(resolved.get("_confirm_overwrite") or "")
+    if _ask_overwrite and not warn_overwrite:
+        warn_overwrite = _ask_overwrite
     if warn_overwrite:
         summary = deps.interpretation_summary_line(resolved, inferred)   # ★ W10a 項目3
         if summary:

@@ -11,7 +11,7 @@ from __future__ import annotations
 import openpyxl
 import re
 from ailine_core import arith as arith_request, cellmap, inspection, intent as intent_mismatch, report_group, split_cell, threshold, total_row
-from ailine_core.anchor import _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _resolve_named_row, _table_rows_for_anchor, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, row_count_in_task, task_names_a_row_number
+from ailine_core.anchor import _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _resolve_named_row, _table_rows_for_anchor, range_named_in_task, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, row_count_in_task, task_names_a_cell, task_names_a_row_number
 from ailine_core.book_view import BookView
 from ailine_core.column_type import column_is_all_numeric
 from ailine_core.dedup_key import _dedup_normalize_key_part
@@ -20,6 +20,7 @@ from ailine_core.report_per_row import cells_with_multiple_placeholders, scan_pl
 from ailine_core.sort_direction import read_direction
 from ailine_core.subject import name_matches_task
 from ailine_core.table_scan import _col_index_by_header, _scan_last_row, data_extent
+from openpyxl.utils import column_index_from_string, get_column_letter
 from pathlib import Path
 
 
@@ -644,6 +645,8 @@ def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in,
     #   確認行の全部に同じ既定解決を一貫して渡す。
     resolved["label"] = str(resolved.get("label") or "合計")
     label = resolved["label"]
+    _label_from_row = False
+    _sum_before = None
 
     # ★★ 2026-08-29（Namakoo が実測）: 合計行が**既に在る**表で「単価列の合計行に
     #   単価の合計を書いて」と頼むと、10 行目に『単価合計』という**別の行**が増えた。
@@ -675,13 +678,29 @@ def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in,
                 if _lbl not in (None, ""):
                     resolved["label"] = str(_lbl)
                     label = resolved["label"]
+                    _label_from_row = True
             except Exception:
                 pass
+            if str(_cur or "").startswith("=SUM("):
+                _sum_before = (str(_cur), get_column_letter(_tidx), _tot_hr + 1, _tr)
         # ★★ 2026-08-29: ここで「既に値が入っています」と**断るのはやめた**。
         #   既存の番人（事後条件の算術の検算＝二重計上に ✓ を出さない／単位F の関所）が
         #   同じ事故を既に止めていて、断りを重ねると**その番人の出番が消える**
         #   ── 過去の事故を守っている検体が通らなくなる（実測で 3 本落ちた）。
         #   ★ 埋められる時だけ埋め、それ以外は今までどおり深い番人に任せる。
+
+    # ★★ 2026-10-01（依頼の項の台帳で D だった項目）: ラベルは LLM の値（無ければ『合計』）が
+    #   そのまま書かれていた。「小計を出して」に『売上合計』が返っても、事後条件は宣言の
+    #   ラベルが書かれたかを確かめて ✓ を出す ── 依頼の項が欠けていた。
+    #   ★ 依頼文にラベルの語（合計・小計・税込み合計…）が在ればそれ、無ければ既定の『合計』
+    #     （機械が決める）。LLM が依頼に無いラベルを作ったら戻し、解釈行に出典を出す。
+    #   ★ 既にある合計行のラベル（実表）が正の回は触らない。2 種類の語が読める時・
+    #     税/込 を含む LLM のラベル（下の税の関所の材料）は何も変えない。
+    if not _label_from_row:
+        _lbl_m = _total_label_from_request(task, label, (headers or {}).get(_tot_sheet) or [])
+        if _lbl_m is not None:
+            resolved["label"] = label = _lbl_m[0]
+            resolved["_sources"] = {**resolved.get("_sources", {}), "label": _lbl_m[1]}
 
     # ★ A': factor は LLM から受け取らない。LLM が返した値(あれば)はいったん取り出して
     #   おき、機械抽出/用語集の結果と食い違う場合だけ WARN として記録する（常に機械が勝つ）。
@@ -721,7 +740,7 @@ def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in,
             return False, resolved, inferred, tax_err
 
     if sources:
-        resolved["_sources"] = sources
+        resolved["_sources"] = {**resolved.get("_sources", {}), **sources}
     if llm_factor_raw not in (None, ""):
         try:
             llm_factor = float(llm_factor_raw)
@@ -733,9 +752,78 @@ def _verify_append_total(resolved, inferred, first_sheet, book_meta, resolve_in,
                 f"LLM が返した倍率({llm_factor:g})と機械抽出の倍率({mfactor:g})が"
                 f"食い違うため機械抽出({mfactor:g})を採用しました"
             ]
+    # ★★ 2026-10-01（実機で確かめた）: 既にある合計行の =SUM は**確認なしで書き換わる**。
+    #   =SUM(C2:C3)（3 行のうち 2 行だけ足す式）が =SUM(C2:INDEX(C:C,ROW()-1)) になり、
+    #   値は 800 → 1500 に変わって ✓ が出た。足す範囲（と倍率）が同じなら値は変わらず無害、
+    #   違うなら人の式を黙って別の式に置き換えている ── 上書きの関所に載せて聞く。
+    if _sum_before is not None:
+        _over = _sum_overwrite_note(*_sum_before, resolved["col"], resolved["factor"])
+        if _over:
+            resolved["_confirm_overwrite"] = _over
 
 # --- ★ 2026-08-26: 表の基本操作 3 種（追加・行削除・列削除）---------------
     return None
+
+
+#: 合計のラベルの語（依頼文から読む）。★ 語は列挙で増やさない。
+_re_total_label = re.compile(r"(?:消費税込み?|税込み?|税抜き?)?(?:合計|小計|総計|総額)")
+
+
+def _total_label_from_request(task, label, names) -> tuple | None:
+    """合計のラベルを依頼文と突き合わせる。直すべき時だけ (ラベル, 出典)、それ以外は None。
+
+    ① LLM のラベルが依頼文に在る／「〈修飾〉＋合計」の両方が依頼文に在る → None（そのまま）
+    ② 依頼文にラベルの語がちょうど 1 種類 → その語
+    ③ 依頼文にラベルの語が無い → 既定の『合計』（機械が決める）。★ ただし LLM のラベルが
+       税/込 を含む時は None（「消費税込みでいくら」の税の関所の材料を消さない）
+    ★ 列の名前（『小計』列）の中の語は数えない。2 種類以上の語が読める時は None。
+    """
+    if not task:
+        return None
+    text = _task_outside_quotes(task)
+    for n in sorted({str(x) for x in names if x}, key=len, reverse=True):
+        text = text.replace(n, "・")
+    if label and label in text:
+        return None
+    m = re.fullmatch(r"(.*?)(合計|小計|総計|総額)(?:金額|額)?", label or "")
+    if m and m.group(2) in text and (not m.group(1) or m.group(1) in text):
+        return None
+    words = {w.group(0) for w in _re_total_label.finditer(text)}
+    if len(words) == 1:
+        w = words.pop()
+        return (w, f"依頼文: 『{w}』") if w != label else None
+    if words or any(k in (label or "") for k in ("税", "込")):
+        return None
+    return ("合計", "依頼文にラベルの語が無いため既定の『合計』") if label != "合計" else None
+
+
+_re_sum_simple = re.compile(
+    r"=SUM\(\s*\$?([A-Z]{1,3})\$?(\d+)\s*:\s*\$?([A-Z]{1,3})\$?(\d+)\s*\)(.*)", re.I)
+_re_sum_index = re.compile(
+    r"=SUM\(\s*\$?([A-Z]{1,3})\$?(\d+)\s*:\s*INDEX\(\s*\$?([A-Z]{1,3}):\$?([A-Z]{1,3})\s*[,;]\s*ROW\(\)\s*-\s*1\s*\)\s*\)(.*)",
+    re.I)
+
+
+def _sum_overwrite_note(cur, letter, first, total_row, col, factor) -> str | None:
+    """既にある合計行の =SUM を書き換えると値が変わりうるなら、その 1 行（上書きの関所の文）。
+
+    書く式は =SUM(〈列〉〈データ先頭〉:〈合計行の 1 つ上〉)（×倍率）。今の式がそれと同じ範囲・
+    同じ倍率なら None（無害）。読めない式（=SUM(C2:C4)+100 等）も「違う」として聞く。
+    """
+    tail = "" if float(factor or 1) == 1 else f"*{float(factor):g}"
+    s = str(cur).replace(" ", "")
+    m = _re_sum_simple.fullmatch(s)
+    if m and m.group(1).upper() == m.group(3).upper() == letter:
+        same = (int(m.group(2)), int(m.group(4))) == (first, total_row - 1) and m.group(5) == tail
+    else:
+        m = _re_sum_index.fullmatch(s)
+        same = bool(m and m.group(1).upper() == m.group(3).upper() == m.group(4).upper() == letter
+                    and int(m.group(2)) == first and m.group(5) == tail)
+    if same:
+        return None
+    return (f"★ 合計行（{total_row}行目）の{col}には既に {cur} が入っています"
+            f"（=SUM({letter}{first}:{letter}{total_row - 1}){tail} 相当の式に書き換えます"
+            " ── 足す範囲か倍率が変わります）")
 
 
 def _verify_report_per_row(resolved, inferred, first_sheet, book_meta, resolve_in, check_sheet, sheets, headers):
@@ -1743,7 +1831,48 @@ def _verify_insert_rows(resolved, inferred, book_meta, task, sheets, op):
         if not (count_str.isdigit() and int(count_str) >= 1):
             return False, resolved, inferred, f"挿入行数『{count_raw}』が不正です（1以上の整数）"
         resolved["count"] = int(count_str)
+    # ★★ 2026-10-01（依頼の項の台帳で D だった項目）: 挿入する行の**数**を LLM だけが
+    #   決めていた。「5行目に1行挿入して」に count=3 が返ると 3 行入り、事後条件は
+    #   「宣言どおり 3 行ずれた」を確かめて ✓ を出す ── 削除の件数と同じ形の穴。
+    #   ★ 件数は機械が決める（_insert_count_from_request・読み手は削除と同じ
+    #     row_count_in_task の 1 本）。食い違えば機械が勝ち、解釈行に出典を出す。
+    #   ★ 読めない形は何も変えない。始まりの行が宣言の at と違う時も変えない。
+    _machine_n = _insert_count_from_request(task, resolved)
+    if _machine_n is not None and _machine_n[0] != resolved["count"]:
+        resolved["count"] = _machine_n[0]
+        resolved["_sources"] = {**resolved.get("_sources", {}), "count": _machine_n[1]}
+        inferred.discard("count")
     return None
+
+
+#: 挿入で「N行」の直後に来て、N を**件数**と読ませる動詞（「3行挿入」「2行空けて」）。
+#: ★ 語は列挙で増やさない（足す前に何を奪うかを測る ── sort_direction と同じ約束）。
+_INSERT_COUNT_VERBS = r"挿入|追加|入れ|空け|足[しすさ]|挟|差し込|増や"
+#: 数字でない数の言い方 ──「数字が無いから 1 行」と決めてはいけない形。
+_re_row_count_unsaid = re.compile(r"[一二三四五六七八九十両]\s*行|数行|何行|いくつ|複数|何本")
+
+
+def _insert_count_from_request(task, resolved) -> tuple | None:
+    """挿入する行の**件数**を機械が決める。戻りは (件数, 出典)。決められなければ None。
+
+    ① 依頼文が数字で言っている（「5行目に3行挿入」「2行空けて」「5〜7行目に」「5行目に空行を」）
+       → その数。★ ただし始まりの行（N行目）が宣言の at と違う時は決めない
+       （「3行目の下に」は at=4 ── 件数だけ直すと別の位置の話を混ぜる）。
+    ② 依頼文に数字も数の言い方（三行・数行・いくつか）も無い → 1
+    それ以外は None。
+    """
+    if not task:
+        return None
+    read = row_count_in_task(task, _INSERT_COUNT_VERBS)
+    if read is not None:
+        n, start, word = read
+        if start is not None and start != resolved.get("at"):
+            return None
+        return n, f"依頼文: 『{word}』"
+    text = _task_outside_quotes(task)
+    if re.search(r"[0-9０-９]", text) or _re_row_count_unsaid.search(text):
+        return None
+    return 1, "依頼文に行数の指定が無い（1 行）"
 
 
 def _verify_extract_columns(resolved, inferred, first_sheet, book_meta, task, headers):
@@ -2103,7 +2232,7 @@ def _verify_aggregate(resolved, inferred, first_sheet, resolve_in, task="", shee
     return None
 
 
-def _verify_merge(resolved, inferred):
+def _verify_merge(resolved, inferred, task="", book_meta=None):
     """MERGE の引数を確かめる（★ verify_dsl_args から切り出した・挙動不変）。
 
     ★ 返り値は **返すべき tuple か None（＝続行）**。op 分岐は「早期 return するか、
@@ -2111,9 +2240,90 @@ def _verify_merge(resolved, inferred):
     ★ resolved(dict) / inferred(set) は参照が渡り、副作用はそのまま伝わる。
     ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
     """
+    book_meta = book_meta or {}
+    _sheet_m = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    # ★★ 2026-10-01（依頼の項の台帳で D だった項目）: 範囲は LLM だけが決めていた
+    #   （「ナットの右に東棟」が A1:D1 という作られた範囲になった実例が地図に在る）。
+    #   ★ 依頼文のセルの書き方（A1:D1・A1からD1・1行目のA〜D列）から読み（読み手は
+    #     anchor.range_named_in_task の 1 本）、食い違えば依頼文が勝ち、解釈行に出典を出す。
+    #   ★ 依頼文がセルを言っていない時は、タイトル行（見出しの上に 1 セルだけ在る行）を
+    #     表の幅で結合する形だけ機械が決める。決められなければ ⚠ で開示して ✓ を降ろす
+    #     （1 セル書換の行と同じ作法 ── 断るより見せる）。依頼文が空なら黙る。
+    #   ★ セルの書き方は在るが読めない（「A1を結合」・違う範囲が 2 つ）時は何も変えない。
+    _llm_range = str(resolved.get("range", ""))
+    _read_m = range_named_in_task(task) if task else None
+    if _read_m is not None:
+        if _read_m[0] != (range_named_in_task(_llm_range) or (_llm_range.upper(),))[0]:
+            resolved["range"] = _read_m[0]
+            resolved["_sources"] = {**resolved.get("_sources", {}),
+                                    "range": f"依頼文: 『{_read_m[1]}』"}
     if not re.fullmatch(r"[A-Za-z]{1,3}\d+:[A-Za-z]{1,3}\d+", str(resolved.get("range", ""))):
         return False, resolved, inferred, f"範囲『{resolved.get('range')}』の形式が不正です（例: A1:C1）"
+    if task and _read_m is None and not task_names_a_cell(task):
+        _title = (_title_row_range(book_meta, _sheet_m)
+                  if re.search(r"タイトル|表題", _task_outside_quotes(task)) else None)
+        if _title is not None:
+            if _title[0] != (range_named_in_task(str(resolved["range"])) or ("",))[0]:
+                resolved["range"] = _title[0]
+                resolved["_sources"] = {**resolved.get("_sources", {}), "range": _title[1]}
+        else:
+            resolved["_warnings"] = resolved.get("_warnings", []) + [
+                f"依頼文に結合する範囲（A1:C1 のようなセルの書き方）が見当たりません"
+                f"（{resolved['range']} は解釈が選んだ範囲です）── 頼んだ範囲かを「解釈:」行で確かめてください"]
+    # ★★ 2026-10-01（実機で確かめた）: LibreOffice は結合すると左上以外のセルの値を**消す**
+    #   （A1:C1 の結合で B1『数量』・C1『金額』が空になった）。宣言（書式だけ）のまま
+    #   黙って消していた ── 削除と同じ関所（_confirm_delete）に載せ、消える値を名指しして聞く。
+    #   ★ 鳴る条件は削除と対称: **消えるものが在る時だけ**（左上だけに値がある結合は黙る）。
+    _lost = _merge_would_erase(book_meta, _sheet_m, str(resolved["range"]))
+    if _lost:
+        _shown = "、".join(f"{ref}『{v}』" for ref, v in _lost[:5]) + ("…" if len(_lost) > 5 else "")
+        _tl = str(resolved["range"]).split(":")[0].upper()
+        resolved["_confirm_delete"] = (
+            f"{resolved['range']} を結合すると値が {len(_lost)} 件消えます"
+            f"（{_shown} ── 左上の {_tl} の値だけが残ります）")
     return None
+
+
+def _title_row_range(book_meta, sheet) -> tuple | None:
+    """見出しの上に**1 セルだけ値が在る行**（タイトル行）がちょうど 1 つなら、それを表の幅で
+    結合する範囲。戻りは ("A1:D1", 出典)。決められなければ None。"""
+    path = (book_meta or {}).get("path")
+    hr = int(((book_meta or {}).get("header_rows") or {}).get(sheet, 1) or 1)
+    if not path or hr <= 1:
+        return None
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            _last, last_col = data_extent(ws, hr)
+            rows = [r for r in range(1, hr)
+                    if [c for c in range(1, last_col + 1)
+                        if ws.cell(row=r, column=c).value not in (None, "")] == [1]]
+    except Exception:
+        return None
+    if len(rows) != 1 or last_col < 2:
+        return None
+    r = rows[0]
+    rng = f"A{r}:{get_column_letter(last_col)}{r}"
+    return rng, f"タイトル行（{r}行目）を表の幅（{last_col} 列）で機械が決めました"
+
+
+def _merge_would_erase(book_meta, sheet, rng) -> list:
+    """結合すると消える値（左上以外の値の在るセル）。[(番地, 値)]。読めなければ空。"""
+    path = (book_meta or {}).get("path")
+    m = re.fullmatch(r"([A-Za-z]{1,3})(\d+):([A-Za-z]{1,3})(\d+)", rng or "")
+    if not path or not m:
+        return []
+    c1, c2 = sorted((column_index_from_string(m.group(1).upper()),
+                     column_index_from_string(m.group(3).upper())))
+    r1, r2 = sorted((int(m.group(2)), int(m.group(4))))
+    try:
+        with BookView(Path(path)) as bv:
+            ws = bv.sheet(sheet)
+            return [(f"{get_column_letter(c)}{r}", ws.cell(row=r, column=c).value)
+                    for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)
+                    if (r, c) != (r1, c1) and ws.cell(row=r, column=c).value not in (None, "")]
+    except Exception:
+        return []
 
 
 def _verify_draw_borders():

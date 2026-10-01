@@ -11,7 +11,7 @@
   "denominator": "(op, 項目) の集合は宣言から導く: OP_SCHEMA ∪ OP_SUBJECT_SLOTS ∪ _CONFIRM_FIELDS ∪ CODEGEN_BY_OP・POSTCONDITIONS・verify_dsl_args の振り分け先が読む resolved の鍵（_ で始まらないもの・他の op の枝は除く）。この台帳と等号で縛る。",
   "caps": {
    "B": 9,
-   "D": 4
+   "D": 0
   },
   "caps_rule": "B と D は縮める在庫。数が上限を超えたら赤・下回ったら上限を下げるまで赤（下がる向きにしか動かない）。",
   "basis_rule": "basis は『ファイル:関数』。番人が実在を確かめる（腐った根拠を残さない）。",
@@ -35,6 +35,15 @@
      "D": 4
     },
     "note": "DELETE_ROWS.count D→A・COMPUTE_COLUMN.operator D→A・SET_CELL_VALUE.row B→A"
+   },
+   {
+    "date": "2026-10-01",
+    "counts": {
+     "A": 55,
+     "B": 9,
+     "C": 2
+    },
+    "note": "INSERT_ROWS.count D→A・FILL_COLOR.color D→A・APPEND_TOTAL.label D→A・MERGE.range D→A"
    }
   ],
   "frozen": "2026-10-01"
@@ -118,12 +127,14 @@
   {
    "op": "APPEND_TOTAL",
    "item": "label",
-   "class": "D",
+   "class": "A",
    "basis": [
-    "src/ailine_core/argcheck.py:_verify_append_total"
+    "src/ailine_core/argcheck.py:_verify_append_total",
+    "src/ailine_core/argcheck.py:_total_label_from_request"
    ],
-   "how": "LLM 値（無ければ『合計』）。subject の LABEL は税込/税抜の限定語が依頼に在る時だけ③",
-   "note": "限定語以外の食い違い（例:「総額」「小計」）は照合なし"
+   "how": "依頼文にラベルの語（合計・小計・総計・総額・税込み合計…）が在ればそれ、無ければ既定の『合計』（機械が決める）。LLM のラベルが依頼文に在る（修飾＋合計の両方が在る）時はそのまま。LLM が依頼に無いラベルを作ったら戻して解釈行に出典を出す。既にある合計行のラベル（実表）が正の回・2 種類の語が読める時・税/込 を含む LLM のラベル（税の関所の材料）は何も変えない",
+   "was": "D",
+   "note": "直す前: LLM 値（無ければ『合計』）。限定語（税/込）以外の食い違いは照合なし"
   },
   {
    "op": "BOLD",
@@ -343,12 +354,14 @@
   {
    "op": "FILL_COLOR",
    "item": "color",
-   "class": "D",
+   "class": "A",
    "basis": [
-    "src/ailine/__init__.py:_verify_bold"
+    "src/ailine/__init__.py:_verify_bold",
+    "src/ailine_core/colors.py:read_color"
    ],
-   "how": "COLOR_MAP に在るかだけ",
-   "note": "check_fill_color は宣言の色を確かめて pass"
+   "how": "依頼文の色の語（赤・青・黄色・水色・灰色・薄い青…）を COLOR_MAP の鍵へ読み、LLM と食い違えば依頼文が勝ち解釈行に出典を出す。行き先は必ず COLOR_MAP の鍵（COLOR_WORDS の番人が縛る）。読めない（語が無い・2 色・打ち消し・濃い/明るい・light＋鍵が COLOR_MAP に無い修飾）時は何も変えない。列名と表の値の中の語（『青果』）は数えない",
+   "was": "D",
+   "note": "直す前: COLOR_MAP に在るかだけ（check_fill_color は宣言の色を確かめて pass）"
   },
   {
    "op": "FILL_COLOR",
@@ -384,12 +397,15 @@
   {
    "op": "INSERT_ROWS",
    "item": "count",
-   "class": "D",
+   "class": "A",
    "basis": [
-    "src/ailine_core/argcheck.py:_verify_insert_rows"
+    "src/ailine_core/argcheck.py:_verify_insert_rows",
+    "src/ailine_core/argcheck.py:_insert_count_from_request",
+    "src/ailine_core/anchor.py:row_count_in_task"
    ],
-   "how": "1 以上の整数か（無指定だけ機械が 1）",
-   "note": "★自動は C（無指定の既定値を機械決定と数えた）→ 目視で D"
+   "how": "件数は機械が決める: 依頼文の数（「5行目に3行挿入」「2行空けて」「5〜7行目に」「5行目に空行を」＝1）・数字も数の言い方（三行・数行・いくつか）も無ければ 1。LLM と食い違えば機械の数を採り解釈行に出典を出す。読めない形・始まりの行（N行目）が宣言の at と違う時は何も変えない。読み手は削除の件数と同じ row_count_in_task の 1 本（挿入の動詞を渡した時だけ裸の「N行」を件数と読む）",
+   "was": "D",
+   "note": "直す前: 1 以上の整数か（無指定だけ機械が 1）"
   },
   {
    "op": "LOOKUP_FILL",
@@ -435,12 +451,15 @@
   {
    "op": "MERGE",
    "item": "range",
-   "class": "D",
+   "class": "A",
    "basis": [
-    "src/ailine_core/argcheck.py:_verify_merge"
+    "src/ailine_core/argcheck.py:_verify_merge",
+    "src/ailine_core/anchor.py:range_named_in_task",
+    "src/ailine_core/argcheck.py:_title_row_range"
    ],
-   "how": "A1:C1 の形かだけ",
-   "note": "OP_SUBJECT_SLOTS も空（「実在名との照合対象が無い」と宣言）。check_merge は宣言の範囲が結合されたかだけ"
+   "how": "依頼文のセルの書き方（A1:D1・A1からD1・A1とB1・1行目のA〜D列）から範囲を読み、LLM と食い違えば依頼文が勝ち解釈行に出典を出す。依頼がセルを言っていない時は、タイトル/表題の依頼でタイトル行（見出しの上に 1 セルだけ在る行）がちょうど 1 つなら表の幅で機械が決める。決められなければ ⚠ で開示して ✓ を降ろす。セルの書き方は在るが読めない（単独のセル・違う範囲が 2 つ）時は何も変えない",
+   "was": "D",
+   "note": "直す前: A1:C1 の形かだけ（「ナットの右に東棟」が A1:D1 になった実例）。★ 結合は左上以外の値を消す（実機 2026-10-01）── 消える値が在れば _confirm_delete で聞く。OP_WRITE_TARGET の宣言（format_only）は変えていない"
   },
   {
    "op": "MOVE_COLUMN",

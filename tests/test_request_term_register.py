@@ -229,13 +229,17 @@ def test_the_unmatched_stock_only_shrinks():
 
 
 def test_the_stock_guard_rings_both_ways():
-    """変異: D を 1 つ増やした台帳は赤・A を 1 つ減らして上限を据え置いた台帳も赤。"""
+    """変異: D を 1 つ増やした台帳は赤・在庫（D か B）を 1 つ減らして上限を据え置いた台帳も赤。
+
+    ★ D が 0 になった（2026-10-01）後も鳴ることを確かめるため、減らす側は在庫の残っている
+      区分を選ぶ（D が空なら B）。"""
     reg = _load()
     grow = json.loads(json.dumps(reg))
     next(e for e in grow["items"] if e["class"] == "A")["class"] = "D"
     assert any("増えた" in b for b in _cap_breaches(grow))
     shrink = json.loads(json.dumps(reg))
-    next(e for e in shrink["items"] if e["class"] == "D")["class"] = "A"
+    stock = next(c for c in ("D", "B") if any(e["class"] == c for e in shrink["items"]))
+    next(e for e in shrink["items"] if e["class"] == stock)["class"] = "A"
     assert any("下げて" in b for b in _cap_breaches(shrink))
 
 

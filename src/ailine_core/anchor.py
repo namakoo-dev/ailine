@@ -8,10 +8,11 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from ailine_core.book_view import BookView
 from ailine_core.row_words import _re_row_number_word
 from ailine_core.table_scan import data_extent
-from openpyxl.utils import column_index_from_string
+from openpyxl.utils import column_index_from_string, get_column_letter
 from pathlib import Path
 from ailine_core.quotes import _task_outside_quotes
 
@@ -180,8 +181,15 @@ _re_row_count_from = re.compile(
 _re_row_word_any = re.compile(r"[0-9０-９]{1,4}\s*行(目)?")
 
 
-def row_count_in_task(task: str | None) -> tuple | None:
-    """依頼文が言っている行の**数**。戻りは (件数, 始まりの行, 根拠の語)。読めなければ None。"""
+def row_count_in_task(task: str | None, count_verb: str | None = None) -> tuple | None:
+    """依頼文が言っている行の**数**。戻りは (件数, 始まりの行, 根拠の語)。読めなければ None。
+
+    ★ count_verb（2026-10-01・行の挿入から）: 「目」の無い裸の「N行」は件数か位置か決められない
+      ので既定では読まない。ただ、**その直後に件数を取る動詞が来る**形（「3行挿入」「2行空けて」
+      「5行目に3行挿入」）は件数と読める ── 呼び出し側がその動詞を正規表現で渡した時だけ読む。
+      この時、始まりの行は「N行目」が 1 つだけ在ればその行、無ければ None（位置は言っていない）。
+      ★ 削除は渡さない（「3行削除」は 3 行目の削除とも読める ── 削除の件数の約束は変えない）。
+    """
     text = _task_outside_quotes(task or "").replace("　", " ")
     spans, found = [], []
     for pat, kind in ((_re_row_range, "range"), (_re_row_count_from, "from")):
@@ -199,12 +207,90 @@ def row_count_in_task(task: str | None) -> tuple | None:
             if not any(s <= m.start() < e for s, e in spans)]
     if found:
         return found[0] if len(found) == 1 and not rest else None
+    if count_verb is not None:
+        bare = [m for m in rest if not m.group(1)]
+        counted = [m for m in bare
+                   if re.match(r"\s*(?:を|分|だけ|ほど)?\s*(?:" + count_verb + ")", text[m.end():])]
+        named = {int(re.sub(r"\D", "", m.group(0).translate(_ZENKAKU_DIGITS)))
+                 for m in rest if m.group(1)}
+        if len(bare) == 1 and counted and len(named) <= 1:
+            n = int(re.sub(r"\D", "", counted[0].group(0).translate(_ZENKAKU_DIGITS)))
+            if n >= 1:
+                return n, (next(iter(named)) if named else None), counted[0].group(0).strip()
+            return None
     if any(not m.group(1) for m in rest):
         return None                          # 「3行」は件数か位置か決められない
     nums = {int(re.sub(r"\D", "", m.group(0).translate(_ZENKAKU_DIGITS))) for m in rest}
     if len(nums) == 1:
         return 1, nums.pop(), rest[0].group(0).strip()
     return None
+
+
+# ★★ 2026-10-01（依頼の項の台帳で D だった項目・セル結合）: 結合の**範囲**を LLM だけが
+#   決めていた（形が A1:C1 かだけを見る）。地図の実例:「ナットの右に東棟」が A1:D1 という
+#   作られた範囲になり、事後条件は「宣言の範囲が結合されたか」を確かめて ✓ を出していた。
+#   ★ 依頼文のセルの書き方から範囲を読む。読めない形は None（推測しない）。
+#     - 「A1:D1」「A1〜D1」「A1からD1（まで）」「A1-D1」（全角も可・逆順は並べ直す）
+#     - 「A1とB1」（同じ行か同じ列の 2 セル）
+#     - 「1行目のA〜D列」「1行目のA列からD列」「1行目のA列とB列」「A〜D列の1行目」
+#     - 違う範囲が 2 つ以上・単独のセル（「A1を結合」）→ None
+#   ★ 引用符の中は値なので読まない（位置の語と同じ約束）。
+_CELL = r"(?<![A-Za-z0-9])([A-Za-z]{1,3})([0-9]{1,5})(?![A-Za-z0-9])"
+_COL = r"(?<![A-Za-z0-9])([A-Za-z]{1,3})(?![A-Za-z0-9])"
+_TO = r"\s*(?::|〜|~|-|ー|から|to)\s*"
+_re_range_cells = re.compile(_CELL + _TO + _CELL + r"(?:\s*まで)?")
+_re_range_pair = re.compile(_CELL + r"\s*と\s*" + _CELL)
+_TO_OR_AND = r"(?:" + _TO + r"|\s*と\s*)"
+_re_range_row_cols = re.compile(
+    r"([0-9]{1,5})\s*行目\s*の?\s*" + _COL + r"\s*列?" + _TO_OR_AND + _COL + r"\s*列(?:\s*まで)?")
+_re_range_cols_row = re.compile(
+    _COL + r"\s*列?" + _TO_OR_AND + _COL + r"\s*列\s*の?\s*([0-9]{1,5})\s*行目")
+_re_any_cell = re.compile(_CELL)
+
+
+def _range_text(task: str | None) -> str:
+    return unicodedata.normalize("NFKC", _task_outside_quotes(task or ""))
+
+
+def task_names_a_cell(task: str | None) -> bool:
+    """依頼文にセルの書き方（A1 など）が 1 つでも在るか。"""
+    return bool(_re_any_cell.search(_range_text(task)))
+
+
+def range_named_in_task(task: str | None) -> tuple | None:
+    """依頼文が言っているセルの**範囲**。戻りは ("A1:D1", 根拠の語)。読めなければ None。
+
+    ★ 本体の `ailine.cell_range_in_task` とは**別の約束**（あちらは「A1:C5」の形だけを
+      最初の 1 つ拾い、範囲を扱えない op の断りの案内に使う）。こちらはセル結合の範囲を
+      依頼と突き合わせるため、から・〜・と・列の書き方まで読み、**ちょうど 1 つ**の時だけ返す。
+    """
+    text = _range_text(task)
+    found: dict = {}
+    spans: list = []
+
+    def add(c1, r1, c2, r2, m):
+        spans.append((m.start(), m.end()))
+        a, b = column_index_from_string(c1.upper()), column_index_from_string(c2.upper())
+        lo_c, hi_c, lo_r, hi_r = min(a, b), max(a, b), min(r1, r2), max(r1, r2)
+        if (lo_c, lo_r) == (hi_c, hi_r):
+            return
+        key = f"{get_column_letter(lo_c)}{lo_r}:{get_column_letter(hi_c)}{hi_r}"
+        found.setdefault(key, m.group(0).strip())
+
+    for m in _re_range_cells.finditer(text):
+        add(m.group(1), int(m.group(2)), m.group(3), int(m.group(4)), m)
+    for m in _re_range_pair.finditer(text):
+        if any(s <= m.start() < e for s, e in spans):
+            continue
+        if m.group(1).upper() == m.group(3).upper() or m.group(2) == m.group(4):
+            add(m.group(1), int(m.group(2)), m.group(3), int(m.group(4)), m)
+    for m in _re_range_row_cols.finditer(text):
+        add(m.group(2), int(m.group(1)), m.group(3), int(m.group(1)), m)
+    for m in _re_range_cols_row.finditer(text):
+        add(m.group(1), int(m.group(3)), m.group(2), int(m.group(3)), m)
+    if len(found) != 1:
+        return None
+    return next(iter(found.items()))
 
 
 def _resolve_named_row(book_meta: dict, sheet: str | None, name: str) -> tuple:

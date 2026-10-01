@@ -233,6 +233,25 @@ def _check_format_only(before: dict, after: dict, *, cell_ref: Callable, fmt_val
             f"（{_samples(hits, cell_ref=cell_ref, fmt_value=fmt_value)}）")
 
 
+def _check_merge_fold(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable, **_kw):
+    """前提: 値は**空になる以外に変わらない**・変わるのは 1 枚のシートの中だけ（セル結合）。
+
+    ★ 2026-10-01: 結合は左上以外の値を消す（実機で確定）。消すこと自体は適用前の関所が
+      件数と中身つきで聞く ── ここは「畳む以外のことをしていない」を差分から取り返す。
+    """
+    hits = _changed(before, after)
+    if not hits:
+        return None
+    bad = [h for h in hits if h[2] not in (None, "")]
+    if bad:
+        return (f"★ 結合で畳むだけのはずが、値が空以外に {len(bad)} 件変わりました"
+                f"（{_samples(bad, cell_ref=cell_ref, fmt_value=fmt_value)}）")
+    if len({h[0][0] for h in hits}) > 1:
+        return (f"★ 結合で畳むだけのはずが、複数のシートで値が消えました"
+                f"（{_samples(hits, cell_ref=cell_ref, fmt_value=fmt_value)}）")
+    return None
+
+
 def _check_value_multiset(before: dict, after: dict, *, cell_ref: Callable, fmt_value: Callable, **_kw):
     """前提: 値の多重集合が保存される（行を挿入してずらす/並べ替えるだけ）。
 
@@ -284,6 +303,7 @@ PRECONDITIONS = {
     "new_row_at_end": _check_new_row_at_end,
     "new_sheet": _check_new_sheet,
     "format_only": _check_format_only,
+    "merge_fold": _check_merge_fold,
     "row_shift": _check_value_multiset,
     "reorder": _check_value_multiset,
     "single_cell": _check_single_cell,

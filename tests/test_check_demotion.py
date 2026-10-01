@@ -42,11 +42,13 @@ def test_suspicious_warning_demotes_the_checkmark(tmp_path, monkeypatch, capsys)
         if calls["n"] == 1:
             ws["A2"], ws["B2"], ws["A3"], ws["B3"] = "a", 100, "b", 50
         else:
-            # ★ 結合（openpyxl/LibreOffice とも仕様どおり）で非アンカー側 B1 の値が消える
-            #   （実測の形 ── check_merge の事後条件を満たしつつ、単位F の format_only
-            #   前提を破る。前提: merge_cells は check_merge が読む merged_cells.ranges に
-            #   "A1:B1" を登録し、副作用として B1 の値を None にする）。
+            # ★ 結合（openpyxl/LibreOffice とも仕様どおり）で非アンカー側 B1 の値が消える。
+            # ★★ 2026-10-01（決裁 B）: 結合は「値を畳む」と宣言したので、B1 が空になる
+            #   だけなら正当（前提は破れない）。この検体が縛るのは「⚠ が出たら ✓ を名乗らない」
+            #   なので、畳む以外のこと（範囲の外 A3 を別の値に書き換える）も起こし、
+            #   merge_fold の前提を破らせる。
             ws.merge_cells("A1:B1")
+            ws["A3"] = "z"
         wb.save(out_book)
         return True, None, "ok"
     monkeypatch.setattr(ailine, "basrun_apply", fake_apply)
