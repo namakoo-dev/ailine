@@ -271,6 +271,19 @@ def _quoted(label: str) -> str:
     return f'"{label}"' if any(ch in _NEEDS_QUOTE for ch in label) else label
 
 
+def _inputs_changed_lines(result: dict, what: str) -> list:
+    """読むだけのはずの入力の指紋が前後で違った時の警告（違わなければ空）。
+
+    ★ 形 7: 「1 バイトも変えていません」は**照合した時だけ**言う。違った回にその文を出すと、
+      同じ画面で自分の警告と矛盾する。accounts は同じ警告を自前で持っている（そちらは
+      同じ形のまま）── forms / split がこれを通る。"""
+    if not result.get("原本が変わった"):
+        return []
+    return ["⚠ 入力の指紋が前後で違います: "
+            + "／".join(result.get("changed_inputs") or ())
+            + f"（読むだけのはずの入力が変わりました ── {what}は信じないでください）"]
+
+
 def verify_hint(creator: str, out_label: str, source_label: str, extra: str = "") -> list:
     """後から確かめる呼び方を 1 行で返す。支えていない種類には**書かない**。
 
@@ -751,8 +764,12 @@ def render_forms_report(folder_label: str, out_label: str, result: dict) -> list
         if len(sus) > SUSPECT_SHOWN:
             lines.append(f"  ⚠ ほか {len(sus) - SUSPECT_SHOWN} 件"
                          "（ここで打ち切っています ── 全部は『束の所見』シートにあります）")
+    # ★ 形 7: 「元の請求書は 1 バイトも変えていません」は、入力の指紋を前後で照合して
+    #   違いが無かった時だけ言う（違えば警告を出し、変えていない旨は言わない）。
+    lines += _inputs_changed_lines(result, "出した一覧")
     if result.get("file_written"):
-        lines.append("（一覧は新しいブックです ── 元の請求書は 1 バイトも変えていません）")
+        lines.append("（一覧は新しいブックです）" if result.get("原本が変わった") else
+                     "（一覧は新しいブックです ── 元の請求書は 1 バイトも変えていません）")
         lines += verify_hint("ailine forms", out_label, folder_label)
     return lines
 
@@ -852,9 +869,11 @@ def render_split_report(book_label: str, out_label: str, result: dict) -> list:
     if excluded:
         lines.append(f"（分けない行 {len(excluded)} 行: {_rows_label(excluded)}"
                      " ── 合計・小計・空の行。誰の冊にも入れていません）")
+    lines += _inputs_changed_lines(result, "配った冊")
     if result.get("files_written"):
         lines.append(f"（配った冊 {len(parts)} 件 ＋ 検分 1 件は新しいブックです"
-                     " ── 元の表は 1 バイトも変えていません）")
+                     + ("）" if result.get("原本が変わった")
+                        else " ── 元の表は 1 バイトも変えていません）"))
         amount = result.get("amount")
         lines += verify_hint("ailine split", out_label, book_label,
                              f"--amount {_quoted(str(amount))}" if amount else "")
@@ -956,7 +975,10 @@ def render_accounts_report(today_label: str, out_label: str, result: dict) -> li
                      + "（読むだけのはずの入力が変わりました ── 出した候補は信じないでください）")
     if result.get("file_written"):
         lines.append(f"出力先: {out_label}")
-        lines.append("（候補の冊は新しいブックです ── 今回の仕訳も過去の仕訳も "
+        # ★ 形 7: 上で「入力の指紋が前後で違います」と言った回に、同じ画面で
+        #   「1 バイトも変えていません」と言わない（自分の警告と矛盾していた）。
+        lines.append("（候補の冊は新しいブックです）" if result.get("原本が変わった") else
+                     "（候補の冊は新しいブックです ── 今回の仕訳も過去の仕訳も "
                      "1 バイトも変えていません）")
         past = " ".join(_quoted(str(p)) for p in result.get("past_paths") or ())
         lines += verify_hint("ailine accounts", out_label, today_label, past)

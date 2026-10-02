@@ -234,6 +234,7 @@ from ailine_core import required_word   # ★「その語が在る時だけ使�
 from ailine_core.new_sheet import empty_new_sheets   # ★ 新しく作ったシートが空なら頼まれたことは起きていない
 from ailine_core.header_cell import header_cell_target   # ★「<列名>の見出しに」は列ぜんぶでなく 1 セル
 from ailine_core.row_conflict import value_not_in_the_named_row   # ★「N行目の<値>」で、その行にその値が無い
+from ailine_core.row_conflict import written_values_in_declaration   # ★ 書き込む新しい値は行の名指しではない
 from ailine_core.row_placement import task_places_a_new_row   # ★「〜の下に…足して」は行を増やす依頼（1セルへ読み替えない）
 from ailine_core.fold_insert_add import fold_insert_then_add   # ★ 空行を挿してから値を入れる 2 段を 1 段に畳む
 from ailine_core.drop_redundant_delete import drop_delete_that_was_only_a_qualifier   # ★「除いて」は対象から外す意味（削除ではない）
@@ -1981,6 +1982,32 @@ def _changed_sheets(before: dict, after: dict) -> set:
     return changed
 
 
+def _axis_extent(*snaps: dict) -> tuple:
+    """スナップショット（原本・適用後）に実在する最大の (行番号, 列番号)。
+
+    ★★ 2026-10-02（形 7「断り・警告の文言が偽」の列・行の枝）: 「依頼で言及された『列B』は
+      存在しません/変更されていません」は、**存在しない**のと**存在するが変わらなかった**のを
+      1 文に畳んでいた。機械はどちらか知っている（スナップショットを見れば分かる）のに、
+      知らないふりをしていた。シートの枝は 09-21 に分けて言うように直っていた ── 列・行の枝が
+      片配線のまま残っていた。★ 実在の物差しは「どちらかの冊に、値か書式の入ったセルが
+      その番号まで在るか」（値の無い途中の列も、表の一部として在ると数える）。"""
+    max_r = max_c = 0
+    for s in snaps:
+        for n in (s.get("true_rows") or {}).values():
+            max_r = max(max_r, int(n or 0))
+        for key in (s.get("cells") or {}):
+            r_str, c_str = key.rsplit("!", 1)[-1].split(",")
+            max_r, max_c = max(max_r, int(r_str)), max(max_c, int(c_str))
+    return max_r, max_c
+
+
+def _mention_untouched_line(label: str, exists: bool) -> str:
+    """言及されたものが変わらなかった時の 1 行。**在るのに変わらなかった**のか**そもそも無い**のかを
+    言い分ける（列・行・シートの 3 つの枝がこの 1 つを通る ── 枝ごとに書き写さない）。"""
+    return (f"★ 依頼で言及された『{label}』は"
+            + ("変更されていません" if exists else "存在しません"))
+
+
 def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
                               exclude_sheets: set | None = None,
                               exclude_cols: set | None = None) -> list:
@@ -2002,6 +2029,7 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
     changed_cols = {c for _, _, c in changed}
     changed_rows = {r for _, r, _ in changed}
     changed_sheets = _changed_sheets(before, after)
+    max_row, max_col = _axis_extent(before, after)
 
     lines = []
     for col in sorted(mentions["cols"]):
@@ -2009,16 +2037,17 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
             continue
         if col not in changed_cols:
             letter = get_column_letter(col)
-            lines.append(f"★ 依頼で言及された『列{letter}』は存在しません/変更されていません")
+            lines.append(_mention_untouched_line(f"列{letter}", col <= max_col))
     for n in sorted(mentions.get("digit_cols", set())):
         # 1 起点読み = 列 n / 0 起点読み = 列 n+1 (1 起点換算)。両方外れた時だけ警告し、
         # 警告文は文字に変換せずユーザーの書いた数字のまま返す (推定で上書きしない)
         candidates = {c for c in (n, n + 1) if c >= 1}
         if candidates and not (candidates & changed_cols):
-            lines.append(f"★ 依頼で言及された『列{n}』は存在しません/変更されていません")
+            lines.append(_mention_untouched_line(
+                f"列{n}", any(c <= max_col for c in candidates)))
     for row in sorted(mentions["rows"]):
         if row not in changed_rows:
-            lines.append(f"★ 依頼で言及された『行{row}』は存在しません/変更されていません")
+            lines.append(_mention_untouched_line(f"行{row}", row <= max_row))
     for sheet in sorted(mentions["sheets"]):
         if sheet in exclude_sheets:
             continue
@@ -2035,10 +2064,8 @@ def mention_overlap_advisory(mentions: dict, before: dict, after: dict,
             #   買い手は前半を読んで、正しくできた仕事の ✓ が △ に落ちた回を疑った。
             #   ★ 推論（「シートの枝では存在しないは起こりえない」）に寄りかからず、
             #     **実際に見て**言い分ける ── 前提が崩れても嘘にならない側に置く。
-            if sheet in set(before.get("sheets") or ()):
-                lines.append(f"★ 依頼で言及された『{sheet}』は変更されていません")
-            else:
-                lines.append(f"★ 依頼で言及された『{sheet}』は存在しません")
+            lines.append(_mention_untouched_line(
+                sheet, sheet in set(before.get("sheets") or ())))
     return lines
 
 
@@ -7021,6 +7048,7 @@ def _verify_sources_with_values(paths: list, workdir: Path) -> tuple:
             continue
         wd = Path(workdir) / str(i)
         wd.mkdir(parents=True, exist_ok=True)
+        _d0 = _file_digest(p)   # ★ 形 7: 「原本は変えていません」は開いた後の指紋で言う
         filled, why = read_with_values_filled_in(p, wd)
         if filled is None:
             return list(paths), notes, (
@@ -7031,7 +7059,8 @@ def _verify_sources_with_values(paths: list, workdir: Path) -> tuple:
         same_name.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(filled, same_name)
         notes.append(f"　★『{p.name}』の式のままのセル {n} 個は、LibreOffice で開いて計算させた値で"
-                     "読み直しました（原本は変えていません／この値は LibreOffice が計算したものです）")
+                     f"読み直しました（{_untouched_claim(p, _d0, verb='変えていません')}"
+                     "／この値は LibreOffice が計算したものです）")
         out.append(same_name)
     return out, notes, None
 
@@ -7057,6 +7086,7 @@ def _match_after_filling_values(book_a: Path, book_b: Path, formula_only: dict,
                 continue
             wd = Path(td) / side
             wd.mkdir(parents=True, exist_ok=True)
+            _d0 = _file_digest(book)   # ★ 形 7
             filled, why = read_with_values_filled_in(book, wd, timeout=timeout)
             if filled is None:
                 notes.append(f"　★『{book.name}』の値を入れられませんでした（{why}）")
@@ -7068,7 +7098,8 @@ def _match_after_filling_values(book_a: Path, book_b: Path, formula_only: dict,
             #   ★ 原本を変えていないことも言う ── 黙って直すと「何をされたか」が消える。
             notes.append(f"　★『{book.name}』の『{_names}』は式のままで計算結果が"
                           "入っていなかったので、LibreOffice で開いて計算させました"
-                          "（原本は変えていません／この値は LibreOffice が計算したものです）")
+                          f"（{_untouched_claim(book, _d0, verb='変えていません')}"
+                          "／この値は LibreOffice が計算したものです）")
             reads[side] = _peek_match_book(filled)
             # ★ 検算が読む格子も**ここで**取る ── コピーは with を出ると消えるので、
             #   ファイルの寿命に頼らず中身を持って回る（読み手は本番と同じ独立実装）。
@@ -7501,6 +7532,7 @@ def restore_backup(book: Path) -> Path:
        ★ W11: 退避先は undo の棚（undo_shelf_dir）で、遡りの履歴には混ぜない
        （混ぜていたので、端に着いた後の undo が退避を最新世代として釣り上げていた）。"""
     backups = list_backups(book)   # 新しい順
+    _before = _file_digest(book)   # ★ 形 7: 「原本は変更していません」は出口で照合して言う
     # ★ 2026-08-25（復元の致命①）: 旧領域の同名世代は**使わない**が、
     #   「無い」と言い切ると嘘になる場面がある ── 在ることと、なぜ使わないかを言う。
     legacy_note = "".join(render_legacy_note(list_legacy_backups(book)))
@@ -7540,7 +7572,7 @@ def restore_backup(book: Path) -> Path:
         if broken:
             raise BrokenBackupError(
                 f"バックアップ {target.name} が開けません（{broken}）。"
-                f"原本は変更していません ── 世代は {target.parent} に在ります")
+                f"{_untouched_claim(book, _before)} ── 世代は {target.parent} に在ります")
     _prev = book.read_bytes() if book.exists() else None
     shutil.copy2(target, book)
     if _prev is not None and _prev != book.read_bytes():
@@ -7580,6 +7612,7 @@ def redo_last_undo(book: Path) -> Path:
         同じ物差しを当てる根拠が無い）。
     """
     shelved = list_undo_shelf(book)
+    _before = _file_digest(book)   # ★ 形 7: 「原本は変更していません」は出口で照合して言う
     if not shelved:
         raise NothingToRedoError(
             f"{book.name} はやり直せません（直前の undo がありません）")
@@ -7589,7 +7622,7 @@ def redo_last_undo(book: Path) -> Path:
         if broken:
             raise BrokenBackupError(
                 f"退避 {target.name} が開けません（{broken}）。"
-                f"原本は変更していません ── 退避は {target.parent} に在ります")
+                f"{_untouched_claim(book, _before)} ── 退避は {target.parent} に在ります")
     # ★★ 2026-09-02（自作 review・致命 1）: ここは**上書き前に今の中身を退避していなかった**。
     #   実測: undo のあとに別の編集を挟んでから redo すると、その編集内容が
     #   **警告なしに完全消失**した（backups にも棚にも残らず、rglob で全探索して不在を確認）。
@@ -7603,7 +7636,7 @@ def redo_last_undo(book: Path) -> Path:
         make_backup(book)
     except OSError as e:
         raise BrokenBackupError(
-            f"やり直す前に今の内容を退避できませんでした（{e}）。原本は変更していません")
+            f"やり直す前に今の内容を退避できませんでした（{e}）。{_untouched_claim(book, _before)}")
     try:
         shutil.copy2(target, book)
     except OSError as e:
@@ -7700,17 +7733,22 @@ def cmd_adopt(a: argparse.Namespace) -> int:
         blocked = refuse_if_locked(book)
         if blocked is not None:
             return blocked
+        _before, _draft_before = _file_digest(book), _file_digest(draft)   # ★ 形 7
         want = (getattr(a, "base_sha", None) or "").strip().lower()
         if want:
             try:
                 now = hashlib.sha256(book.read_bytes()).hexdigest()
             except OSError as e:
-                print(f"× 原本 {book.name} を読めませんでした（{e}）。原本は変更していません")
+                print(f"× 原本 {book.name} を読めませんでした（{e}）。"
+                      + _untouched_claim(book, _before))
                 return EXIT_APPLY_FAILED
             if now != want:
                 print(f"× 下書きを作った後に原本 {book.name} が変わっています"
                       "（Excel などで直した分が在るかもしれません）。")
-                print("  → 清書すると、その変更が消えます。原本も下書きも触っていません")
+                print("  → 清書すると、その変更が消えます。"
+                      + _untouched_claim(book, _before, verb="触っていません")
+                      + "。" + _untouched_claim(draft, _draft_before, verb="触っていません",
+                                                subject="下書き"))
                 print("  → 今の原本から下書きを作り直してください（画面なら「原本からやり直す」）")
                 print("  → 原本の今の変更を捨てて、下書きで上書きするなら:")
                 print(f'    ailine adopt "{draft}" "{book}"')
@@ -7725,11 +7763,12 @@ def cmd_adopt(a: argparse.Namespace) -> int:
                 drafted_sheets = list(bv.sheetnames)
         except Exception as e:   # noqa: BLE001 ── どの例外でも、生の名前は見せない
             print(f"× 下書き {draft.name}: {input_path.explain_unreadable(e, draft)}")
-            print(f"  → 原本 {book.name} には反映していません（変更していません）")
+            print(f"  → 原本 {book.name} には反映していません。"
+                  + _untouched_claim(book, _before))
             return EXIT_APPLY_FAILED
         if not drafted_sheets:
             print(f"× 下書き {draft.name} にシートが 1 枚もないため、原本には反映しませんでした")
-            print(f"  → 原本 {book.name} は変更していません")
+            print("  → " + _untouched_claim(book, _before, subject=f"原本 {book.name} "))
             return EXIT_APPLY_FAILED
         try:
             with BookView(book) as bv:
@@ -7743,7 +7782,8 @@ def cmd_adopt(a: argparse.Namespace) -> int:
             try:
                 shutil.copy2(draft, staged)
             except OSError as e:
-                print(f"× 下書き {draft.name} を読めませんでした（{e}）。原本は変更していません")
+                print(f"× 下書き {draft.name} を読めませんでした（{e}）。"
+                      + _untouched_claim(book, _before))
                 return EXIT_APPLY_FAILED
             ok, err = atomic_replace_inplace(book, staged, workdir)
         finally:
@@ -7812,6 +7852,7 @@ def _cmd_undo_body(a: argparse.Namespace, book: Path) -> int:
     blocked = refuse_if_locked(book)
     if blocked is not None:
         return blocked
+    _before = _file_digest(book)   # ★ 形 7: 失敗の出口の「原本は変更していません」を照合して言う
     try:
         used = restore_backup(book)
     except (FileNotFoundError, NoOlderBackupError, BrokenBackupError) as e:
@@ -7824,7 +7865,10 @@ def _cmd_undo_body(a: argparse.Namespace, book: Path) -> int:
         print("  → ファイルが読み取り専用か、他のアプリが開いていないか確認してください")
         return EXIT_WRITE_BLOCKED
     except OSError as e:
-        print(f"× 復元に失敗しました（{e}）。原本は変更していません。")
+        # ★★ 形 7: restore_backup は `shutil.copy2(target, book)` で**原本へ直接書く**。copy2 は
+        #   書き先を開いた瞬間に切り詰めるので、途中で失敗すると原本は半端になる ──
+        #   そこへ「変更していません」と言い切るのは、置換の関数で 8/26 に直したのと同じ嘘。
+        print(f"× 復元に失敗しました（{e}）。{_untouched_claim(book, _before)}。")
         return 1
     print(render_restore_done(book.name, used.name, remaining=undo_steps_left(book)))
     # ★ 誤分類の実例台帳センサ②: undo が成功した＝その run の判断を人がひっくり返した
@@ -8232,10 +8276,12 @@ def atomic_replace_inplace(book: Path, out_book: Path, workdir: Path,
        へフォールバックし、その旨を1行表示する。成功時は out_book を削除する
        （原本に反映済みの内容と同じものを残しておく理由が無い＝旧 shutil.move
        と同じ最終状態）。"""
+    _before = _file_digest(book)   # ★ 形 7: 「原本は無変更」は出口で照合して言う
     try:
         make_backup(book, keep=keep_backups)
     except Exception as e:
-        return False, f"バックアップに失敗したため --inplace を中止した（原本は無変更）: {e}"
+        return False, (f"バックアップに失敗したため --inplace を中止した"
+                       f"（{_untouched_claim(book, _before, verb='無変更')}）: {e}")
 
     def _discard(p: Path) -> None:
         try:
@@ -8265,7 +8311,8 @@ def atomic_replace_inplace(book: Path, out_book: Path, workdir: Path,
             os.replace(near, book)
         except OSError as e2:
             _discard(near)
-            return False, (f"置換に失敗した（原本は無変更・バックアップは確保済み）: {e2}")
+            return False, (f"置換に失敗した（{_untouched_claim(book, _before, verb='無変更')}"
+                           f"・バックアップは確保済み）: {e2}")
         print("⚠ 作業フォルダからの置換に失敗したため、原本と同じフォルダで置換した"
               f"（原本は壊していません・バックアップは確保済み）: {e}")
     finally:
@@ -8917,6 +8964,7 @@ def report_postcondition(a, book, out_book, result, op, resolved, status, reason
     ★ 畳む時に挙動は変えない（文言・終了コード・`_finish_run` の失敗種別まで同じ）。
     """
     result["postcondition"] = "fail" if status == "error" else status
+    _stamp_book_if_missing(book)   # ★ 形 7: 置換より前（原本はまだ無傷）
     if status == "error":
         print(f"{chr(10)}× {reason}")
         print(_untouched_original_line(book, out_book))   # ★ C9: 失敗の沈黙を塞ぐ
@@ -8955,6 +9003,93 @@ def _file_digest(path: Path) -> str | None:
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
     except OSError:
         return None
+
+
+# ★★ 2026-10-02（形 7「断り・警告の文言が偽」・S4）: 「原本は変更していません／触っていません／
+#   1 バイトも変えません」を、**言う時点で原本の指紋を照合せず**、出口の前後関係
+#   （ここへ来たのだから書いていないはず）だけで言っていた ── 約 28 か所。
+#   8/26 に障害注入で「**壊した上で無変更を名乗る**」を再現して 1 か所直した前例（下の
+#   atomic_replace_inplace）があったが、同じ言い方が他の出口に残っていた（片配線）。
+#   ★ 直しは「出口ごとに直す」でなく **1 つの口に畳む**: 走る前の指紋を控え、言う時に今の指紋と
+#     照合し、一致した時だけ「変更していません」と言う。違えば「変わっている可能性があります」。
+#     指紋が取れない（無い・読めない）なら**言わない**（無言の方が嘘より安い）。
+#   ★ 出口が多く、失敗の出口は別の関数にまたがる（run だけで 10 か所超）ので、run の入口で
+#     控えた指紋は冊の絶対パスで引く（`_stamp_book` / `_stamp_of`）。単独の関数で完結する出口
+#     （undo・清書・置換）は、その関数の先頭で取った指紋を直接渡す。
+_BOOK_STAMPS: dict = {}
+
+
+def _stamp_key(book) -> str:
+    try:
+        return str(Path(book).resolve())
+    except OSError:
+        return str(book)
+
+
+def _stamp_book(book) -> str | None:
+    """走る前の原本の指紋を控える（読めなければ None を控える ── 控えが無いこととは別）。"""
+    digest = _file_digest(Path(book))
+    _BOOK_STAMPS[_stamp_key(book)] = digest
+    return digest
+
+
+def _stamp_book_if_missing(book) -> None:
+    """控えが無ければ、**原本にまだ書いていない位置**で控える（run の入口を通らず内側の器官が
+    直接呼ばれた時の保険）。★ 置換の後ろ・失敗の後始末では呼ばない ── そこで取ると、既に
+    壊れた原本の指紋を「走る前」と名乗ってしまう。"""
+    if not _stamp_of(book)[0]:
+        _stamp_book(book)
+
+
+def _stamp_of(book) -> tuple:
+    """(控えが在るか, 指紋)。控えが無い出口は原本のことを言わない側へ倒す。"""
+    key = _stamp_key(book)
+    return (key in _BOOK_STAMPS), _BOOK_STAMPS.get(key)
+
+
+def _contents_stamps(paths) -> dict:
+    """{パス: 中身の指紋} ── 入力の冊を**読む前**に取り、書き終えた後で照合する材料。"""
+    return {str(p): _file_digest(Path(p)) for p in paths}
+
+
+def _changed_since(before: dict) -> list:
+    """控えた指紋と今が違う（読めなくなった含む）冊の名前。"""
+    return [Path(k).name for k, d in before.items() if _file_digest(Path(k)) != d]
+
+
+def _folder_stamp(folder) -> str | None:
+    """フォルダ直下の冊の控え（名前・大きさ・更新時刻）。中身を全部読まずに「変わったか」を見る。
+    ★ 中身の指紋ではない（同じ大きさ・同じ時刻で書き換えれば見えない）── 言うのは
+      「大きさも更新時刻も変わっていません」までで、中身まで照合したとは言わない
+      （観測した範囲だけを言う）。"""
+    try:
+        items = []
+        for p in sorted(Path(folder).iterdir()):
+            if p.is_file():
+                st = p.stat()
+                items.append(f"{p.name}|{st.st_size}|{st.st_mtime_ns}")
+        return hashlib.sha256("\n".join(items).encode("utf-8")).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def _untouched_claim(book, digest_before, *, verb: str = "変更していません",
+                      subject: str = "原本", now="") -> str:
+    """原本について言う 1 句。**今の指紋を走る前の指紋と照合した結果だけ**を言う。
+
+      一致   → 「{subject}は{verb}」（例: 原本は変更していません）
+      不一致 → 「{subject}が変わっている可能性があります（…）」── 触っていないと言い張らない
+      取れない → 「{subject}の変更の有無は照合できませんでした」── 見ていないことは言わない
+    ★ 「一致」は**中身が同じ**であって、道具が触らなかったことの証明ではない（同じ中身で
+      書き戻していても一致する）。それでも「変更していません」は結果について正しい。
+    """
+    if now == "":
+        now = _file_digest(Path(book))
+    if digest_before is None or now is None:
+        return f"{subject}の変更の有無は照合できませんでした（指紋が取れません）"
+    if now == digest_before:
+        return f"{subject}は{verb}"
+    return f"{subject}が変わっている可能性があります（走る前と今の指紋が一致しません）"
 
 
 def run_started_from_a_test() -> bool:
@@ -9608,6 +9743,40 @@ def _apply_note_basic(book: Path, workdir: Path, body: str, helper_files,
     return None
 
 
+def _table_values_left_alone(book: Path, out_book: Path, ops) -> bool:
+    """実行した op が**既存シートの中身を書き換えていない**と、宣言と実体の両方で言えるか。
+
+    ★★ 2026-10-02（形 7「断り・警告の文言が偽」）: 食い違いの断り文は「（元の表はそのまま残って
+      います）」を、依頼が取り除くことを頼んだかだけで出していた。実行した op が値を書き換えた
+      回（一括書換・条件つき書換・並べ替え…）でも、置換後の原本はもう元の表ではない。
+    ★ ① 宣言: 実行した op が全部「新しいシートを作るだけ」と OP_WRITE_TARGET に書いている
+      （書式だけの op も言わない ── 表の見た目は変わっている）。
+      ② 実体: 原本と成果物を読み、原本に在るシートの全セルが 1 つも違わない。
+      どちらかが言えない（宣言の無い op・読めない・違う）なら言わない ── 無言の方が嘘より安い。
+    ★ 複合計画の疑似 op「PLAN」は段の op を見る（OP_META に無い名前は数えない）。
+    """
+    real = [o for o in ops if o in OP_META]
+    if not real:
+        return False
+    for o in real:
+        wt = OP_WRITE_TARGET.get(o)
+        if wt is None or not wt.writes or not set(wt.writes) <= {WRITE_NEW_SHEET}:
+            return False
+    try:
+        before, after = snapshot(book), snapshot(out_book)
+    except Exception:   # noqa: BLE001 ── 読めないものは「そのまま」と言わない
+        return False
+    for sheet in before["sheets"]:
+        if sheet not in after["sheets"]:
+            return False
+        prefix = sheet + "!"
+        keys = {k for k in before["cells"] if k.startswith(prefix)} | {
+            k for k in after["cells"] if k.startswith(prefix)}
+        if any(before["cells"].get(k) != after["cells"].get(k) for k in keys):
+            return False
+    return True
+
+
 def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Path,
                    result: dict, machine_verified: bool, scope: str = "",
                    scope_note: str = "", warning_count: int = 0,
@@ -9636,6 +9805,7 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
     #   ⚠ ごとに「print して append」を書くと、次に足す ⚠ で片方を忘れる。
     #   ★ 初版は advisories しか渡しておらず、ここで直接出す 8 種が 1 つも冊に
     #     届いていなかった（番人が「画面の ⚠ は全部冊に在る」で捕まえた）。
+    _stamp_book_if_missing(book)   # ★ 形 7: 置換より前（原本はまだ無傷）
     _said: list = []
 
     def _say(msg: str) -> None:
@@ -9707,7 +9877,12 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             _not_removed = (not _removes
                             and intent_mismatch.asked_to_remove(_asked, _pools, _effs))
             _ran_label = "・".join(OP_LABELS[_o] for _o in _ran if _o in OP_LABELS) or _op_now
-            _tail = ("行や列を取り除きません（元の表はそのまま残っています）"
+            # ★★ 2026-10-02（形 7）: 括弧の「元の表はそのまま残っています」は、取り除く依頼かだけで
+            #   言っていた ── 実行した op が表の値を**書き換えた**回（一括書換・並べ替え等）でも出ていた。
+            #   宣言（OP_WRITE_TARGET）と実体の差分の**両方**が「書き換えていない」と言う時だけ言う。
+            _tail = ("行や列を取り除きません"
+                     + ("（元の表はそのまま残っています）"
+                        if _table_values_left_alone(book, out_book, _ran) else "")
                      if _not_removed else f"『{_ran_label}』です")
             _say(f"⚠ 依頼は『{_asked[0]}』と読めますが、実行した操作は{_tail}"
                   "── 頼んだ通りかを「解釈:」行で確かめてください")
@@ -9762,7 +9937,8 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
             _sheet_rc, _hr_rc = None, 1
         _clash = value_not_in_the_named_row(
             getattr(a, "task", "") or "", task_names_a_row_number(
-                getattr(a, "task", "") or ""), book, _sheet_rc, _hr_rc)
+                getattr(a, "task", "") or ""), book, _sheet_rc, _hr_rc,
+            written=written_values_in_declaration(scope))
         if _clash:
             _say(f"⚠ 依頼は『{_clash}』と行番号の両方を指していますが、"
                   f"その行に『{_clash}』はありません "
@@ -9817,7 +9993,10 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         final, trailer = book, f'（もとに戻す: ailine undo "{book}"）'
         result["out"] = str(book)
     else:
-        final, trailer = out_book, f"（原本 {book.name} は変更していません）"
+        _st, _before = _stamp_of(book)
+        final = out_book
+        trailer = (f"（{_untouched_claim(book, _before, subject=f'原本 {book.name} ')}）"
+                   if _st else "")
         result["out"] = str(out_book)
 
     # ★ 2026-08-24（土台固め）: 忠実度ゲートを **人に渡す最終ファイル**にも回す。
@@ -9917,7 +10096,8 @@ def _finish_apply(a: argparse.Namespace, book: Path, out_book: Path, workdir: Pa
         _verdict_line, helper_files)
     if _wrote:
         print(_wrote)
-    print(trailer)
+    if trailer:   # ★ 照合できない（控えが無い）回は括弧ごと言わない
+        print(trailer)
     return True
 
 
@@ -9980,7 +10160,11 @@ def _untouched_original_line(book: Path, out_book: Path) -> str:
     """★ C9: 失敗して終わるときに必ず出す1行。査定2本が「原本がどうなったか分からない」と
        書いた沈黙の穴 ―― 途中で止まった run は原本無変更を名乗らず、`.out` が黙って隣に
        残ることも告げていなかった。"""
-    return f"（原本 {book.name} は変更していません。作業結果は {out_book.name} に残っています）"
+    kept = f"作業結果は {out_book.name} に残っています"
+    stamped, before = _stamp_of(book)
+    if not stamped:
+        return f"（{kept}）"   # ★ 走る前の指紋が無い出口は、原本のことを言わない
+    return f"（{_untouched_claim(book, before, subject=f'原本 {book.name} ')}。{kept}）"
 
 
 def cmd_run(a: argparse.Namespace) -> int:
@@ -10082,6 +10266,7 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
     if conflict is not None:
         return conflict
 
+    _stamp_book(book)   # ★ 原本の指紋（形 7: 「変更していません」は照合した時だけ言う）
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
     try:
@@ -13620,6 +13805,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
     say = (lambda *args, **kw: None) if as_json else print
 
     # ① 分母と自己参照除外（V6）── cmd_stack と同じ判定（ailine 産は種類を問わず入力から外す）。
+    _folder_before = _folder_stamp(folder)   # ★ 形 7: 「元フォルダも変更していません」の照合の材料
     candidates, folder_excluded = multifile.classify_folder_contents(folder)
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
     denominator = len(candidates)
@@ -13926,7 +14112,11 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
                     print("     見出しの行や列名を揃えるか、この冊を別フォルダへ移してお試しください")
                 print(f"⚠ {PC_BROKEN}: {where}  元 {primitives.fmt_num(m['source'])} / "
                       f"出力(書いた直後) {primitives.fmt_num(m['output'])}")
-                print(f"（{out.name} は書き込んでいません。元フォルダも変更していません）")
+                print(f"（{out.name} は書き込んでいません。"
+                      + _untouched_claim(folder, _folder_before, now=_folder_stamp(folder),
+                                         subject="元フォルダの冊",
+                                         verb="大きさも更新時刻も変わっていません")
+                      + "）")
             return 1
 
         # ★ M2.5①: 検分シート（出力2枚目）── 事後条件(post)が通った直後の数字だけを並べる
@@ -14676,6 +14866,18 @@ def _csv_kind_label(cls) -> str:
     return f"判定不能・文字列として保持（{reason_txt}）"
 
 
+def _csv_untouched_line(csv_path: Path, evaluation: _CsvEvaluation) -> str:
+    """「原本 CSV: 変更なし（sha256 … 一致）」── **今の指紋を読んだ時の指紋と照合した時だけ**言う。
+
+    ★ 形 7: 「一致」と書きながら、印字する値は**読んだ時の値**で、今のファイルとは
+      照合していなかった（言葉だけが照合を名乗っていた）。"""
+    claim = _untouched_claim(csv_path, (evaluation.sha256 or "")[:16] or None,
+                              verb="変更なし", subject="原本 CSV")
+    if claim.endswith("変更なし"):
+        return f"原本 CSV: 変更なし（sha256 {evaluation.sha256} 一致）"
+    return f"⚠ {claim}"
+
+
 def _render_csv_report(csv_path: Path, out_path: Path, evaluation: _CsvEvaluation,
                        write_result, compare_result) -> list:
     """`ailine csv` の人間向け報告（REVIEW-20260822-csv-architect.md §『✓ 文例』の凍結形）。
@@ -14710,7 +14912,7 @@ def _render_csv_report(csv_path: Path, out_path: Path, evaluation: _CsvEvaluatio
         lines.append(f"  ⚠ {w}")
     for row, col, code in write_result.removed_control_chars:
         lines.append(f"  ⚠ {row}行目{col}列目: 制御文字 {code} を除去して書きました")
-    lines.append(f"原本 CSV: 変更なし（sha256 {evaluation.sha256} 一致）")
+    lines.append(_csv_untouched_line(csv_path, evaluation))
     return lines
 
 
@@ -14740,7 +14942,7 @@ def _render_csv_transfer_failure(csv_path: Path, out_path: Path, evaluation: _Cs
         lines.append(f"  ⚠ {row}行目{col}列目: 転送で値が変わりました（{dval!r} → {aval!r}）")
     for row, col, aval in compare_result.surplus:
         lines.append(f"  ⚠ {row}行目{col}列目: 転送で余剰として現れました（{aval!r}）")
-    lines.append(f"原本 CSV: 変更なし（sha256 {evaluation.sha256} 一致）")
+    lines.append(_csv_untouched_line(csv_path, evaluation))
     return lines
 
 
@@ -14809,7 +15011,8 @@ def _cmd_run_csv_prestage(a: argparse.Namespace) -> int:
     if warn_count or not compare_result.ok:
         print(f"■ ailine run（CSV 検疫）  file={csv_path}")
         print(f"⚠ {csv_path.name} の読み取りに確認事項があるため、続行しません"
-              f"（原本は無変更・検疫結果は {out.name} として書きました）。")
+              f"（{_untouched_claim(csv_path, evaluation.sha256[:16], verb='無変更')}"
+              f"・検疫結果は {out.name} として書きました）。")
         for w in evaluation.warnings:
             print(f"  ⚠ {w}")
         for row, col, code in write_result.removed_control_chars:
@@ -15280,6 +15483,7 @@ def cmd_forms(a: argparse.Namespace) -> int:
                                                              recursive=recursive)
     # ★ 自分の出力を入力に数えない（V6・stack と同じ判定を使う ── 書き写さない）。
     candidates, self_excluded = multifile_stack.split_own_outputs(candidates)
+    _inputs_before = _contents_stamps(candidates)   # ★ 形 7: 「1 バイトも変えていません」の照合の材料
     if not candidates:
         print(multifile.nothing_to_read(folder, excluded,
                                         what=("請求書（.xlsx / .pdf・サブフォルダの中も見ました）"
@@ -15462,6 +15666,10 @@ def cmd_forms(a: argparse.Namespace) -> int:
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
+    _changed = _changed_since(_inputs_before)
+    if _changed:   # ★ 違った時だけ印を足す（普段の JSON は変えない）
+        result["changed_inputs"] = _changed
+        result["原本が変わった"] = True
     if a.json:
         print(json.dumps(result, ensure_ascii=False))
     else:
@@ -15773,8 +15981,14 @@ def cmd_split(a: argparse.Namespace) -> int:
               "unparsed": [], "proof": {}, "files_written": [],
               "overwrote_own": [], "stale_own": []}
 
+    _book_before = _contents_stamps([book])   # ★ 形 7: 「1 バイトも変えていません」の照合の材料
+
     def emit() -> None:
         """人向け／機械可読の**唯一の出口**（どの経路も同じ事実を出す）。"""
+        _changed = _changed_since(_book_before)
+        if _changed:   # ★ 違った時だけ印を足す（普段の JSON は変えない）
+            result["changed_inputs"] = _changed
+            result["原本が変わった"] = True
         if a.json:
             print(json.dumps(result, ensure_ascii=False))
         else:
@@ -15799,6 +16013,7 @@ def cmd_split(a: argparse.Namespace) -> int:
         from openpyxl.utils import get_column_letter as _col_letter
         _cells = "、".join(f"{_col_letter(c)}{r}" for r, c in uncached[:3])
         fill_dir = Path(tempfile.mkdtemp(prefix="ailine_split_fill_"))
+        _d0 = _file_digest(book)   # ★ 形 7
         filled, why = read_with_values_filled_in(book, fill_dir)
         if filled is None:
             shutil.rmtree(fill_dir, ignore_errors=True)
@@ -15809,7 +16024,8 @@ def cmd_split(a: argparse.Namespace) -> int:
             return 4
         src = filled
         result["filled_note"] = (f"　★ 式のままで計算結果が入っていなかったセル {len(uncached)} 個（{_cells} など）を、"
-                                 "LibreOffice で開いて計算させました（原本は変えていません／"
+                                 "LibreOffice で開いて計算させました"
+                                 f"（{_untouched_claim(book, _d0, verb='変えていません')}／"
                                  "この値は LibreOffice が計算したものです）")
     try:
         wb = openpyxl.load_workbook(src, data_only=True)
@@ -16088,6 +16304,7 @@ def cmd_accounts_apply(a: argparse.Namespace) -> int:
     """
     candidate = input_path.require_file(a.book, what="候補の冊")
     journal = input_path.require_file(a.journal, what="今回の仕訳")
+    _journal_before = _file_digest(journal)   # ★ 形 7: 「元の仕訳は無変更です」の照合の材料
     out = Path(a.out).resolve()
     if out.suffix.lower() != journal.suffix.lower():
         print(f"× --out は元の仕訳と同じ形式で（元 {journal.suffix} ／ 指定 {out.suffix or '拡張子なし'}）")
@@ -16140,7 +16357,9 @@ def cmd_accounts_apply(a: argparse.Namespace) -> int:
         shutil.rmtree(workdir, ignore_errors=True)
     print(f"採用 {len(adopted)} 行（候補の冊の {seen} 行のうち）── 借方勘定科目に写しました: {out}")
     print(f"変わったセル {got['changed']} 個（採用の行の『{accounts_core.DEBIT_ACCOUNT}』だけ・ほかは 1 文字も変えていません）")
-    print(f"（元の仕訳 {journal.name} は無変更です。○ の無い行は空のままです ── 決めるのは人）")
+    print("（" + _untouched_claim(journal, _journal_before, verb="無変更です",
+                                  subject=f"元の仕訳 {journal.name} ")
+          + "。○ の無い行は空のままです ── 決めるのは人）")
     return 0
 
 
