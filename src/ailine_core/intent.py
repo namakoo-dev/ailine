@@ -207,6 +207,50 @@ def asked_for_what_we_do_not_do(task: str, column_names=()) -> str | None:
     return None
 
 
+#: 各 op の「**逆に当たる op**」の宣言（打ち消せと頼まれた時に、一覧に在るものを無いと言わない）。
+#:   ★ 値が None = 登録簿に、その効果を打ち消す op は**無い**と宣言してある。
+#:   ★ 表に**無い** op は「在るか決められなかった」と言う（無いとは言わない）── 宣言に当たった時だけ
+#:     「ありません」と言う線。全 op を載せる義務は tests/test_claim_wording_is_observed.py が持つ
+#:     （op を足した日に、ここへの宣言を忘れると赤）。
+INVERSE_OP = {
+    "ADD_COLUMN": "DELETE_COLUMN", "INSERT_ROWS": "DELETE_ROWS", "ADD_ROW": "DELETE_ROWS",
+    "SORT": None, "COMPUTE_COLUMN": None, "LOOKUP_FILL": None, "AGGREGATE": None, "BOLD": None,
+    "FILL_COLOR": None, "NUMBER_FORMAT": None, "MERGE": None, "CHART": None, "CENTER_ALIGN": None,
+    "APPEND_TOTAL": None, "SET_CELL_VALUE": None, "SWAP": None, "EXTRACT_COLUMNS": None,
+    "SET_WHERE": None, "DELETE_ROWS": None, "DELETE_COLUMN": None, "MOVE_COLUMN": None,
+    "DRAW_BORDERS": None, "AUTOFIT": None, "PIVOT": None, "SET_COLUMN_VALUE": None, "EXTRACT": None,
+    "SPLIT_CELL": None, "DEDUP": None, "DEDUP_DELETE": None, "REPORT_PER_ROW": None,
+    "FORMAT_MAP": None,
+}
+
+
+def undo_op_note(op: str, labels: dict) -> str:
+    """「その操作を打ち消す操作」について、宣言に当たった事実だけを言う 1 句。"""
+    label = labels.get(op, op)
+    if op not in INVERSE_OP:
+        return f"『{label}』を打ち消す操作が在るかは、決められませんでした"
+    inverse = INVERSE_OP[op]
+    if inverse is None:
+        return f"この道具の操作の一覧に、『{label}』を打ち消す操作はありません"
+    return (f"『{label}』の逆に当たる操作は『{labels.get(inverse, inverse)}』です"
+            "（どこを消すかを名指しして頼んでください）")
+
+
+#: 依頼文が日付の**読み方**（曜日・「今日から見て」・今週…）を頼んでいるか見る語。
+#:   ★ この道具は日付を文字としてしか見ない（曜日にも今日からの距離にも読み替えない）ので、
+#:     「その読み方はありません」と言ってよいのは、**利用者がその語を言った時だけ**。
+#:     言っていないのに言うと、見ていないことを見たように言う（形 7）。
+CALENDAR_READING_WORDS = ("曜日", "月曜", "火曜", "水曜", "木曜", "金曜", "土曜", "日曜", "土日",
+                          "平日", "休日", "祝日", "今日", "本日", "昨日", "明日", "今週", "先週",
+                          "来週", "今月", "先月", "来月", "今年", "去年", "昨年", "来年")
+
+
+def calendar_reading_asked(task: str) -> str | None:
+    """依頼文が日付の読み方を頼む語を言っていれば、その語を返す（言っていなければ None）。"""
+    text = task or ""
+    return next((w for w in CALENDAR_READING_WORDS if w in text), None)
+
+
 #: 「消す」意味の語 ── 値として書き込むと、literal で『空』と書いてしまう。
 ERASERS = ("空", "空欄", "クリア", "未入力", "なし", "ブランク", "空白")
 
@@ -227,11 +271,11 @@ def why_not_a_value(value, column_names, sheet_names, op_words) -> str | None:
     if not v:
         return "値が空です"
     if v in {str(c) for c in (column_names or ()) if c}:
-        return f"『{v}』は列の名前です（書き込む値ではありません）"
+        return f"『{v}』は列の名前と同じ字です（囲まれていないので、値なのか列の指定なのか決められません）"
     if v in {str(s) for s in (sheet_names or ()) if s}:
-        return f"『{v}』はシートの名前です（書き込む値ではありません）"
+        return f"『{v}』はシートの名前と同じ字です（囲まれていないので、値なのかシートの指定なのか決められません）"
     if any(w and w in v for w in (op_words or ())):
-        return f"『{v}』は操作の名前を含みます（書き込む値ではありません）"
+        return f"『{v}』は操作の名前を含みます（囲まれていないので、値なのか操作の指定なのか決められません）"
     if v in ERASERS:
         return f"『{v}』は消す操作です（その文字を書き込むことはできません）"
     return None

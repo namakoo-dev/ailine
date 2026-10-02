@@ -1492,7 +1492,7 @@ def resolve_new_column_placement(op: str, resolved: dict, book_meta: dict,
     # 既存列への書き込みなら新しい列は生まれない（位置の話は起きない）
     if wt.col_key and str(resolved.get(wt.col_key) or "") in headers:
         return None
-    at, note = resolve_col_anchor(task, headers)
+    at, note = resolve_col_anchor(task, headers, sheet=sheet)
     if at is None:
         return None
     src0 = len(headers)          # 0 起点・新規列は既存見出しの直後（右端）
@@ -4085,8 +4085,10 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
                 _shown = "』『".join(list(dict.fromkeys(_real))[:5])
                 return False, resolved, inferred, (
                     f"列『{resolved['col']}』に『{raw_value}』を含む行は 1 行もありません"
-                    f"（在る値の例: 『{_shown}』）── 曜日や「今日から見て」のような読み方は"
-                    "この道具にはありません。どの列のどの文字かを書いてください")
+                    f"（在る値の例: 『{_shown}』）"
+                    + (f"── 「{_cal}」のような日付の読み方（曜日や「今日から見て」）はこの道具にはありません。"
+                       if (_cal := intent_mismatch.calendar_reading_asked(task)) else "── ")
+                    + "どの列のどの文字かを書いてください")
         resolved["value"] = str(raw_value)
     else:
         try:
@@ -4164,7 +4166,7 @@ def _verify_extract(resolved, inferred, first_sheet, book_meta, resolve_in, task
                         and str(raw_value).strip() not in _real):
                     _shown = "』『".join(_real[:8])
                     return False, resolved, inferred, (
-                        f"列『{resolved['col']}』に『{raw_value}』という値はありません"
+                        f"シート『{first_sheet}』の列『{resolved['col']}』に『{raw_value}』という値はありません"
                         f"（在る値: 『{_shown}』{'…' if len(_real) > 8 else ''}）── "
                         "在る値で指してください")
                 resolved["value"] = str(raw_value)
@@ -4217,7 +4219,7 @@ def _verify_set_where(resolved, inferred, first_sheet, book_meta, resolve_in, ta
         if _hits_r is not None:
             if not _hits_r:
                 return False, resolved, inferred, (
-                    f"『{resolved['cond_col']}』に『{_pair[0]}』の行がありません"
+                    f"シート『{first_sheet}』の『{resolved['cond_col']}』に『{_pair[0]}』の行がありません"
                     "（ファイルには何も書いていません）")
             resolved["_match_rows"] = _hits_r
             resolved["_match_label"] = (
@@ -4537,7 +4539,7 @@ def _verify_bold(resolved, inferred, first_sheet, headers, op, task="",
             )
     elif target.startswith("col:"):
         colname = target[4:]
-        v, was_inferred, err = resolve_col_ref(colname, headers.get(first_sheet, []))
+        v, was_inferred, err = resolve_col_ref(colname, headers.get(first_sheet, []), sheet=first_sheet)
         if err:
             return False, resolved, inferred, err
         resolved["target"] = f"col:{v}"
@@ -4770,7 +4772,7 @@ def verify_dsl_args(op: str, args: dict, book_meta: dict, task: str = "", vocab:
                 return False, resolved, inferred, "\n".join(_ax_lines)
 
     def resolve_in(key: str, sheet_name: str):
-        val, was_inferred, err = resolve_col_ref(resolved.get(key), headers.get(sheet_name, []))
+        val, was_inferred, err = resolve_col_ref(resolved.get(key), headers.get(sheet_name, []), sheet=sheet_name)
         if err:
             # ★ operator10 ③ (A' 原則): LLM の値がこのシートに実在しなくても、依頼文が
             #   対象シートの実在列名を独立した語として一意に名指ししていれば、そちらを
@@ -5844,7 +5846,7 @@ def task_asks_to_undo_this_op(task: str, op: str | None) -> str | None:
         return None
     return (f"依頼は『{hit}』を『{undo}』と言っていますが、読み取った操作は"
             f"『{label}』そのものです ── 真逆のことをしかけました。"
-            f"この道具に『{label}』を打ち消す操作はありません")
+            + intent_mismatch.undo_op_note(op, OP_LABELS))
 
 
 def _undo_word_right_after(text: str, hit: str, words) -> str | None:
@@ -10520,7 +10522,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
         if wt_ is not None and wt_.needs_col_anchor:
             _hh = [str(h) for h in
                     ((book_meta.get("headers") or {}).get(_sheet_h) or [])]
-            at_, _why_ = resolve_col_anchor(a.task, _hh)
+            at_, _why_ = resolve_col_anchor(a.task, _hh, sheet=_sheet_h)
             if at_ is None:
                 return False
         return True
@@ -13762,8 +13764,9 @@ def refuse_if_output_is_someone_elses(book: Path, task: str = "",
 def _refuse_edited_output(out: Path) -> int:
     """自分が書いた物だが、その後**人が手を入れている** ── 消さずに断る（exit 7）。"""
     print(f"⚠ 出力先に書けません: {out}")
-    print(f"（{out.name} は ailine が作った物ですが、そのあと変更されています。"
-          "作業内容が消えるので上書きしません ── 別の場所へ移すか削除してから、"
+    print(f"（{out.name} は ailine が書いた記録が在りますが、今の中身はその時の指紋と一致しません"
+          "（そのあと変更されています ── 誰がどう変えたかは分かりません）。"
+          "作業内容が消えるかもしれないので上書きしません ── 別の場所へ移すか削除してから、"
           "もう一度実行してください）")
     return 7
 
@@ -13780,8 +13783,8 @@ def _refuse_output_conflict(out: Path, mark: str | None) -> int:
     if mark:
         whose = f"ailine の別のコマンドの出力です（作成: {mark}）"
     else:
-        whose = ("この道具が書いた記録がありません（人が置いたファイルか、"
-                 "途中で失敗した run が残した作業結果のどちらかです）")
+        whose = ("この道具が書いた記録がありません（誰が置いたかは分かりません ── "
+                 "人が置いたファイルかもしれず、途中で失敗した run が残した作業結果かもしれません）")
     print(f"⚠ 出力先に書けません: {out}")
     print(f"（{out.name} は{whose}。run にはフラグでの上書き許可がありません ── "
           "そのファイルを別の場所へ移すか削除してから、もう一度実行してください）")
@@ -13899,7 +13902,7 @@ def cmd_run_folder(a: argparse.Namespace) -> int:
               "言い方を変えて（例:『金額が40000以上の行を抜き出して』）もう一度お願いします。")
         return 3
     if col not in base_headers:
-        print(f"？ 列『{col}』が基準ファイル『{base_path.name}』にありません。"
+        print(f"？ 列『{col}』が基準ファイル『{base_path.name}』のシート『{base_sheet}』にありません。"
               f"ある列: {', '.join(base_headers)}")
         return 3
     if value in (None, ""):
@@ -16489,7 +16492,8 @@ def cmd_accounts(a: argparse.Namespace) -> int:
     # ★ 入力の指紋（D4「書き込みは 0」を機械にする・設計 §6.3）── 後で前後を比べる。
     digests = {str(p): _file_digest(p) for p in [today_path] + past_paths}
     plan = accounts_core.plan_accounts(today.rows, today.header_map,
-                                       accounts_read.past_pool(past_books))
+                                       accounts_read.past_pool(past_books),
+                                       seen_headers=today.headers)
     rows = accounts_core.candidate_rows(plan)
     result.update({"keys_used": list(plan.keys_used), "refused": plan.refused,
                    "untouched": [[r, why] for r, why in plan.untouched],

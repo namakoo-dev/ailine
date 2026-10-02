@@ -60,9 +60,13 @@ def test_listing_declares_what_it_cannot_do():
     text = "\n".join(_table())
     # ★ freeform 最終決定 (2026-08-21): 旧文の凍結を新しい正直な文へ更新
     # （負の被覆: 旧い約束が復活しないことも見る）
-    assert "頼める操作の一覧に照合できないため生成せず断ります" in text
+    # ★ 2026-10-02（形 7）: 「照合できないため…」「言い換えても通らないときは未対応です」は、一覧の言い方に
+    #   合わないだけの依頼にも「未対応」と言っていた。断る振る舞いは今までどおり言い、未対応かどうかは
+    #   この道具には決められない、と言う（能力の否定は宣言表に当たった時だけ）。
+    assert "どの操作にも照合できなかった依頼は、生成せず断ります" in text
     assert "今はできません" not in text
-    assert "未対応" in text
+    assert "未対応です" not in text and "照合できないため" not in text
+    assert "未対応" in text and "決められません" in text
 
 
 def test_needed_info_uses_existing_japanese_labels_only():

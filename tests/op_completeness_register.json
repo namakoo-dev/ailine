@@ -20,6 +20,7 @@
     "src/ailine/__init__.py:_CONFIRM_FIELDS",
     "src/ailine/__init__.py:_OP_SCHEMA_NOTES",
     "src/ailine_core/examples.py:EXAMPLE_TASKS",
+    "src/ailine_core/intent.py:INVERSE_OP",
     "src/ailine_core/intent.py:REDUCING_EXAMPLES",
     "src/ailine_core/intent.py:STRUCTURAL_EFFECT",
     "src/ailine_core/op_axes.py:AXES",
@@ -115,6 +116,9 @@
       "coverage": "partial",
       "reason": "op の『軸』の上で、まだ実装していない兄弟を宣言する閉集合。2026-08-22 に Namakoo が却下したのは開集合（道具が持たない全機能）── 軸は op の意味が決めるので有限、という線で狭くしてある（op_axes.py:33-37）。★ 読まれるのは断り／提案の 3 経路だけで、**LLM が実在の op を返した成功経路では読まれない**。",
       "unlock": "実需で別の op の軸に『まだ無い値』が出たとき（各 note が発火条件を持つ）。★ 掃き出しの所見: AGGREGATE / PIVOT は合計しか計算しない（SummaryTable / PivotSum）のに軸を宣言しておらず、AGGREGATE 側は _COUNT_WORDS の if で件数だけを手書きで止めている（文面は render_axis_refusal の雛形と同じ言い回し）。ただし AXES に足すだけでは成功経路に効かないので、_verify_aggregate から軸を引く配線が要る。**平均が AGGREGATE へ写るかは未実測** ── 測ってから動かす。"
+    },
+    "src/ailine_core/intent.py:INVERSE_OP": {
+      "coverage": "full"
     },
     "src/ailine_core/intent.py:REDUCING_EXAMPLES": {
       "coverage": "partial",

@@ -643,13 +643,29 @@ def _amount_present(v) -> bool:
     return bool(form_read.norm(v))
 
 
-def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> AccountsPlan:
+def _no_key_column_refusal(seen_headers) -> str:
+    """鍵の列が 1 本も決まらなかった断り ── **見たこと**と**推し量り**を分けて言う（形 7）。
+
+    ★ 見たのは「見出しの綴りが、鍵の列の名前にも別名にも当たらなかった」ことだけ。旧文は
+      「列の取り違えか、別のソフトの書き出しが混ざっています」と**閉じた二択で断定**し、
+      見出しの綴りが違うだけの冊への道も、`--column` で教える道も言わなかった。
+    ★ 見た見出しは持っている時だけ添える（持っていないのに「見た」と言わない）。"""
+    seen = f"　見た見出し: {_seen_headers(seen_headers)}。" if seen_headers is not None else ""
+    return (f"先例を引く鍵の列が 1 本も決まりませんでした（鍵: {'／'.join(KEYS)}）。"
+            f"{seen}"
+            f"　見出しの綴りが違うだけかもしれません（読ませたい列は `--column {KEYS[0]}=<見出し>` で"
+            "教えられます）。列の取り違えや、別のソフトの書き出しが混ざっていることも考えられます")
+
+
+def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict,
+                  seen_headers=None) -> AccountsPlan:
     """今回の行（データ行だけ）と過去の行から、候補と名指しを決める（値は作らない）。
 
     today_rows:        [(行番号, [値, ...]), ...] ★ 見出し行を含めない（呼び出し側が外す）
     header_map:        {役割: 1 起点の列番号}（`resolve_accounts_columns` が決めたもの）
     past_rows_by_file: {ファイル名: {"header_map": {...}, "rows": [(行番号, [値, ...]), ...]}}
       ★ ファイルごとに列を解決する（同じソフトの書き出しでも列順が同じとは限らない）。
+    seen_headers:      今回の冊で見た見出し（任意）。鍵が 1 本も決まらない断りに、見たものを添える。
     ★ ここは純関数 ── ファイルも openpyxl も触らない（同じ入力なら同じ計画）。
     """
     keys_used = tuple(k for k in KEYS if header_map.get(k))
@@ -671,8 +687,7 @@ def plan_accounts(today_rows, header_map: dict, past_rows_by_file: dict) -> Acco
     if not keys_used:
         return AccountsPlan(
             header_map=dict(header_map), notes=notes,
-            refused=(f"先例を引く鍵の列が 1 本もありません（鍵: {'／'.join(KEYS)}）"
-                     "── 列の取り違えか、別のソフトの書き出しが混ざっています"))
+            refused=_no_key_column_refusal(seen_headers))
 
     index, past_rows, past_filled = _precedent_index(past_rows_by_file, keys_used)
     records, citations, hits, untouched, differs, tax_differs = {}, {}, {}, [], [], []

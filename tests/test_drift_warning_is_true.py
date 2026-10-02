@@ -55,12 +55,12 @@ def test_the_note_names_the_axis_it_was_given(unit):
     """★ 列の入れ替えなのに「行が入れ替わります」と言っていた
        （同じ形の言い間違いを 08-30 に別の場所で直したばかり）。"""
     note = cm.reference_drift_note([("S", "B1", "=A2", 2, 1)], unit=unit)
-    assert f"指している{unit}が入れ替わります" in note, note
+    assert f"指している{unit}が動くなら" in note, note
 
 
 def test_the_swap_passes_the_axis_through():
     """★ 変異試験: 入れ替えが軸を渡していること（既定の「行」に戻ったら赤くする）。"""
-    seg = window_around("reference_drift_warning(book_meta, _sw_sheet", after=300)
+    seg = window_around("note_drift_candidates(resolved, book_meta, _sw_sheet", after=300)
     assert 'unit=("列" if as_col else "行")' in seg, seg[:200]
     assert "rewritten=set(_rw)" in seg, "書き直した式を渡していない"
 
@@ -89,7 +89,7 @@ def test_swapping_columns_no_longer_warns_about_its_own_formulas(tmp_path):
     wb.save(p)
     r = _run(p, "単価と金額を入れ替えて", "売上")
     assert "✓" in r.stdout, r.stdout[-1200:]
-    assert "指す先の中身が変わる式" not in r.stdout, r.stdout[-1200:]
+    assert "指す先の中身が変わった式" not in r.stdout, r.stdout[-1200:]
     v = openpyxl.load_workbook(tmp_path / "b.out.xlsx", data_only=True)["売上"]
     assert [v.cell(1, c).value for c in (2, 3)] == ["金額", "単価"]
     assert v.cell(2, 4).value == pytest.approx(1320)   # 税込は金額に付いていく
@@ -111,4 +111,4 @@ def test_a_cross_sheet_reference_is_still_named(tmp_path):
     wb.save(p)
     r = _run(p, "単価と金額を入れ替えて", "売上")
     assert "まとめ!B1" in r.stdout, r.stdout[-1200:]
-    assert "指している列が入れ替わります" in r.stdout, r.stdout[-1200:]
+    assert "指している列の中身が入れ替わりました" in r.stdout, r.stdout[-1200:]

@@ -11,7 +11,7 @@ from __future__ import annotations
 import openpyxl
 import re
 from ailine_core import arith as arith_request, cellmap, inspection, intent as intent_mismatch, report_group, split_cell, threshold, total_row
-from ailine_core.anchor import _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _range_text, _re_any_cell, _resolve_named_row, _table_rows_for_anchor, range_named_in_task, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, row_count_in_task, task_names_a_cell, task_names_a_row_number, task_names_a_table_edge_row
+from ailine_core.anchor import column_missing, _COL_AFTER, _COL_BEFORE, _cell_row_name_for, _digit_candidates, _range_text, _re_any_cell, _resolve_named_row, _table_rows_for_anchor, range_named_in_task, resolve_col_anchor, resolve_col_ref, resolve_row_anchor, row_count_in_task, task_names_a_cell, task_names_a_row_number, task_names_a_table_edge_row
 from ailine_core.book_view import BookView
 from ailine_core.column_type import column_is_all_numeric
 from ailine_core.dedup_key import _dedup_normalize_key_part
@@ -245,10 +245,11 @@ def _verify_sort(resolved: dict, inferred: set, first_sheet: str, book_meta: dic
                 f"{r}行目" for r in resolved["_skip_rows"]) + "（データ行でないため並べ替えません）")
     # ★ 並べ替えで「指す先の中身が変わる式」を名指しする（★ 付き＝決裁③で ✓→△）。
     #   ここは疑いなので警告でよい ── 合計行の除外（開示）とは性質が違う。
+    #   ★ 2026-10-02（形 7・S3）: **適用の前には言わない**。動くかは適用してみないと分からない
+    #     （既に並んでいた表では何も動かず、それでも ✓ が △ に落ちていた）── 候補だけ控え、
+    #     適用の後に前後を比べて、実際に変わった式だけを助言に出す（dsl_step の助言の合流点）。
     _s_last = resolved.get("_sort_end_row") or 10 ** 7
-    if (_dw := reference_drift_warning(book_meta, _s_sheet,
-                                        row_lo=_s_hr + 1, row_hi=_s_last)):
-        resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
+    note_drift_candidates(resolved, book_meta, _s_sheet, row_lo=_s_hr + 1, row_hi=_s_last)
     return None
 
 
@@ -270,7 +271,7 @@ def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers
         return False, resolved, inferred, "演算対象が2つの列名になっていません"
 
     if single_factor_mode:
-        v, was_inferred, err = resolve_col_ref(operands[0], headers.get(first_sheet, []))
+        v, was_inferred, err = resolve_col_ref(operands[0], headers.get(first_sheet, []), sheet=first_sheet)
         if err:
             return False, resolved, inferred, err
         resolved["operands"] = [v]
@@ -306,7 +307,9 @@ def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers
                 return False, resolved, inferred, (
                     f"依頼「{task}」は『{v}』列に何らかの倍率（税率等）を掛ける操作として"
                     "解釈しましたが、依頼文に倍率らしき手がかりが見当たりません。"
-                    "列の値をそのまま書き換える操作は今のところ対応していません。"
+                    "値をそのまま書き換えたいのであれば、書き込む値を『』で囲んで言ってください"
+                    "（一括書換・条件つき書換・1セル書換の操作が在ります。"
+                    "例:「備考列を全部『確認済み』にして」）。"
                     "倍率を掛ける処理であれば、依頼文に率を書く（例:「消費税10%」）か、"
                     "用語集に登録してください（例: ailine vocab add 消費税 1.1）"
                 )
@@ -361,7 +364,7 @@ def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers
     else:
         new_operands = []
         for o in operands:
-            v, was_inferred, err = resolve_col_ref(o, headers.get(first_sheet, []))
+            v, was_inferred, err = resolve_col_ref(o, headers.get(first_sheet, []), sheet=first_sheet)
             if err:
                 return False, resolved, inferred, err
             new_operands.append(v)
@@ -431,7 +434,7 @@ def _verify_compute_column(resolved, inferred, first_sheet, task, vocab, headers
     #   従来どおり捏造とみなして捨てる（W3 本来の防御は生きている）。
     if resolved.get("target"):
         raw_target = resolved["target"]
-        v, was_inferred, err = resolve_col_ref(raw_target, headers.get(first_sheet, []))
+        v, was_inferred, err = resolve_col_ref(raw_target, headers.get(first_sheet, []), sheet=first_sheet)
         if err:
             if "一意に決まりません" in err:
                 return False, resolved, inferred, err
@@ -1185,9 +1188,7 @@ def _verify_set_cell_value(resolved, inferred, book_meta, task, sheets, headers,
     if _col_name not in _headers_c:
         _v, _inf, _err = resolve_col_ref(_col_name, _headers_c)
         if _err:
-            return False, resolved, inferred, (
-                f"列『{_col_name}』がこの表にありません"
-                f"（ある列: {"、".join(_headers_c)}）")
+            return False, resolved, inferred, column_missing([_col_name], _headers_c, _sheet_c)
         if _inf:
             inferred.add("col")
         _col_name = _v
@@ -1661,10 +1662,9 @@ def _verify_swap(resolved, inferred, first_sheet, book_meta, task, sheets, heade
     #   ★ 片配線の**逆**: 警告は並べ替え（式を直さない）用に作って入れ替えにも配線し、
     #     そのあと入れ替えだけ式を直すようになったのに、警告は昔の前提のまま残った。
     #   ★ 書き直す式は名指しから外す（別シートから指す式は書き直さないので残す）。
-    if (_dw := reference_drift_warning(book_meta, _sw_sheet,
-                                        rewritten=set(_rw),
-                                        unit=("列" if as_col else "行"), **_kw)):
-        resolved["_warnings"] = resolved.get("_warnings", []) + [_dw]
+    #   ★ 2026-10-02（形 7・S3）: 適用の前には言わず、候補だけ控える（並べ替えと同じ）。
+    note_drift_candidates(resolved, book_meta, _sw_sheet, rewritten=set(_rw),
+                           unit=("列" if as_col else "行"), **_kw)
     return None
 
 
@@ -1831,13 +1831,11 @@ def _verify_add_row(resolved, inferred, book_meta, task, sheets, headers, op):
         if not isinstance(vals, dict) or not vals:
             return False, resolved, inferred, (
                 "入れる値が読み取れません（列名と値の組で書いてください）")
-        headers = (book_meta.get("headers") or {}).get(
-            resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
+        _sheet_ar = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+        headers = (book_meta.get("headers") or {}).get(_sheet_ar) or []
         unknown = [k for k in vals if str(k) not in [str(h) for h in headers]]
         if unknown:
-            return False, resolved, inferred, (
-                f"列『{"、".join(map(str, unknown))}』がこの表にありません"
-                f"（ある列: {"、".join(map(str, headers))}）")
+            return False, resolved, inferred, column_missing(unknown, headers, _sheet_ar)
         # ★ 同上: 値が空の列は書かない（"None" という文字列を作らない）。
         resolved["values"] = {str(k): v for k, v in vals.items()
                                if v is not None and v != ""}
@@ -1932,7 +1930,7 @@ def _verify_add_column(resolved, inferred, book_meta, task, sheets, headers):
     if _name_c and _name_c in _headers_c:
         return False, resolved, inferred, (
             f"列『{_name_c}』は既にあります（{_headers_c.index(_name_c) + 1}列目）")
-    _at_c, _note_c = resolve_col_anchor(task, _headers_c)
+    _at_c, _note_c = resolve_col_anchor(task, _headers_c, sheet=_sheet_c)
     if _at_c is None and _note_c:
         return False, resolved, inferred, _note_c
     if _at_c is None:
@@ -2156,7 +2154,7 @@ def _verify_dedup(resolved, inferred, first_sheet, headers):
         )
     resolved_keys = []
     for raw_key in raw_keys:
-        v, was_inferred, err = resolve_col_ref(raw_key, headers.get(first_sheet, []))
+        v, was_inferred, err = resolve_col_ref(raw_key, headers.get(first_sheet, []), sheet=first_sheet)
         if err:
             return False, resolved, inferred, err
         resolved_keys.append(v)
@@ -2345,11 +2343,10 @@ def _verify_delete_column(resolved, inferred, book_meta, sheets, headers):
     ★ 挙動不変は bench/verify_golden.json（641 件）との突き合わせで確かめている。
     """
     name = str(resolved.get("col", "")).strip()
-    headers = (book_meta.get("headers") or {}).get(
-        resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or []
+    _sheet_dc = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    headers = (book_meta.get("headers") or {}).get(_sheet_dc) or []
     if name not in [str(h) for h in headers]:
-        return False, resolved, inferred, (
-            f"列『{name}』がこの表にありません（ある列: {"、".join(map(str, headers))}）")
+        return False, resolved, inferred, column_missing([name], headers, _sheet_dc)
     if len([h for h in headers if str(h) != ""]) <= 1:
         return False, resolved, inferred, "列が 1 本しかないので削除できません"
     resolved["col"] = name
@@ -2383,14 +2380,13 @@ def _verify_move_column(resolved, inferred, book_meta, task):
       入るのが一番こわい、を列でも同じに扱う）。
     """
     name = str(resolved.get("col", "")).strip()
-    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(
-        resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]) or [])]
+    _sheet_mc = resolved.get("_target_sheet") or (book_meta.get("sheets") or [None])[0]
+    headers = [str(h) for h in ((book_meta.get("headers") or {}).get(_sheet_mc) or [])]
     if name not in headers:
-        return False, resolved, inferred, (
-            f"列『{name}』がこの表にありません（ある列: {"、".join(headers)}）")
+        return False, resolved, inferred, column_missing([name], headers, _sheet_mc)
     if len([h for h in headers if h != ""]) <= 1:
         return False, resolved, inferred, "列が 1 本しかないので動かせません"
-    at, note = resolve_col_anchor(task, headers)
+    at, note = resolve_col_anchor(task, headers, sheet=_sheet_mc)
     if at is None:
         return False, resolved, inferred, (
             note or "どこへ動かすかが依頼文から読み取れません"
@@ -2978,6 +2974,27 @@ def formula_columns_to_inherit(book_meta: dict, sheet: str | None, header_row: i
     if not below:
         return [], 0
     return cols, min(below) + 1                    # ★ 挿入で 1 行ずれた後の位置
+
+
+def note_drift_candidates(resolved: dict, book_meta: dict, sheet: str | None, *,
+                          row_lo: int = 1, row_hi: int = 10 ** 7,
+                          col_lo: int = 1, col_hi: int = 10 ** 4,
+                          rewritten=None, unit: str = "行") -> None:
+    """動かす区画を外から指す式の**候補**を resolved["_drift"] に控える（言わない・適用の前だから）。
+
+    ★ 言うのは適用の後（cellmap.reference_drift_observed が前後を比べる）。ここで言うと、
+      何も動かなかった回にも「指す先の中身が変わる」と鳴る（形 7・S3）。
+    ★ 読めない回は黙る（断定しない）・こちらで書き直す式は候補から外す（reference_drift_warning と同じ）。"""
+    path = book_meta.get("path")
+    if not path or not sheet:
+        return
+    try:
+        hits = cellmap.refs_pointing_into(Path(path), sheet, row_lo, row_hi, col_lo, col_hi)
+    except Exception:
+        return
+    hits = cellmap.drop_rewritten(hits, rewritten, sheet)
+    if hits:
+        resolved["_drift"] = {"sheet": sheet, "unit": unit, "hits": [list(h) for h in hits]}
 
 
 def reference_drift_warning(book_meta: dict, sheet: str | None, *,

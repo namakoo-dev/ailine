@@ -3261,7 +3261,7 @@ def test_verify_dsl_args_error_lists_named_target_sheet_columns_not_first_sheet(
     assert ok is False
     # ★ 直った点そのもの: 対象(工事台帳)の列名だけが出る。1枚目(請求書)の「宛先」「金額」を
     #   誤って「ある列」に混ぜない（宛先は工事台帳に無い列なのでエラー自体は正しい）。
-    assert err == "列『宛先』がありません。ある列: 取引先名, 工事名, 金額"
+    assert err == "列『宛先』がありません（探したシート: 『工事台帳』）。ある列: 取引先名, 工事名, 金額"
     assert "請求書" not in err
 
 

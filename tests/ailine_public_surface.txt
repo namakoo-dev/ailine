@@ -827,8 +827,8 @@ def render_vocab_miss_refusal(about: 'str' = '', sunset_notice: 'bool' = False, 
 def replace_examples_in_question(question: 'str', ops=None) -> 'str'
 def report_postcondition(a, book, out_book, result, op, resolved, status, reason, header_row: 'int' = 1) -> 'int | None'
 def resolve_cell_target_from_task(task: 'str', book_meta: 'dict', sheet: 'str | None', header_row: 'int' = 1)
-def resolve_col_anchor(task: 'str', headers: 'list') -> 'tuple'
-def resolve_col_ref(raw, headers: 'list') -> 'tuple'
+def resolve_col_anchor(task: 'str', headers: 'list', sheet=None) -> 'tuple'
+def resolve_col_ref(raw, headers: 'list', sheet=None) -> 'tuple'
 def resolve_dsl_step_args(op: 'str', raw_args: 'dict', task: 'str', meta: 'dict', vocab: 'dict', *, original_headers: 'dict | None' = None, first_sheet: 'str | None' = None, deps: 'DslStepDeps') -> 'DslGroundResult'
 def resolve_header_rows(struct_dump: 'dict', sheets: 'list', target_sheet: 'str | None' = None) -> 'tuple'
 def resolve_home_dir() -> 'Path'

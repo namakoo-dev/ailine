@@ -197,6 +197,16 @@ def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, 
     #   片配線を 6 回踏んでいる）。⚠ 始まりなので決裁③が数えて ✓ を △ に降ろす。
     from ailine_core.claim import render_unverified_advisories
     advisories.extend(render_unverified_advisories((resolved or {}).get("_unverified")))
+    # ★★ 2026-10-02（形 7・S3）: 「指す先の中身が変わる式」は**適用の前後を比べた**ここでだけ言う。
+    #   適用の前に候補（resolved["_drift"]）だけ控え、実際に中身が変わった式だけを名指しする。
+    #   ★ 単発・複合計画の両方が通る合流点なので、1 箇所で足りる。
+    _drift = (resolved or {}).get("_drift")
+    if _drift:
+        from ailine_core import cellmap
+        _line = cellmap.reference_drift_observed(
+            _drift["hits"], _drift["sheet"], before, after, _drift.get("unit") or "行")
+        if _line:
+            advisories.append(_line)
     # ★★ 2026-08-26: 削除は**画面の差分に何も出ない**操作なので、何を消したかを言わなければ
     #   人は取り返しがつくかを判断できない（「消えたものは差分に出ない」の家系）。
     #   ★ ⚠ は付けない ── 頼まれたとおりに消えたことは事実で、✓ を降ろす理由にはならない。

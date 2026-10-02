@@ -31,7 +31,25 @@ def _digit_candidates(raw: str, headers: list) -> list:
     return cands
 
 
-def resolve_col_ref(raw, headers: list) -> tuple:
+def searched(sheet) -> str:
+    """「どこを探したか」の句（★ 形 7・範囲を言わない不在）。列・行が**無い**と言う文は、探したシートを
+    名指しする ── 「列『X』がありません」だけでは、どのシートの話か（別のシートには在るかもしれない）が
+    読み手に分からない。シートが分からない回は何も言わない（作り話のシート名を言わない）。"""
+    return f"（探したシート: 『{sheet}』）" if sheet else ""
+
+
+def column_missing(names, headers, sheet, *, anchor: bool = False) -> str:
+    """列が表に無い、の 1 文 ── 探したシートと、そこに在る列を並べる（列の不在を言う口はここ 1 つ）。
+    anchor=True は「〇〇の右に」の位置の語の言い方（『X』という列がありません）。"""
+    wanted = "』『".join(str(n) for n in names)
+    where = f"探したシート: 『{sheet}』・" if sheet else ""
+    known = '、'.join(str(h) for h in headers)
+    if anchor:
+        return f"『{wanted}』という列がありません（{where}ある列: {known}）"
+    return f"列『{wanted}』がこの表にありません（{where}ある列: {known}）"
+
+
+def resolve_col_ref(raw, headers: list, sheet=None) -> tuple:
     """(実在列名 or None, 推定だったか, エラー文 or None)。
        ★ 列名を正とする。実在すればそのまま。数字表記なら 0/1 起点の両候補を試し、
        一意に決まればそれを『推定』として解決、決まらなければ CLARIFY 相当のエラーを返す。"""
@@ -57,7 +75,7 @@ def resolve_col_ref(raw, headers: list) -> tuple:
         if 1 <= idx <= len(headers):
             return headers[idx - 1], True, None
     known = ", ".join(headers) if headers else "(無し)"
-    return None, False, f"列『{s}』がありません。ある列: {known}"
+    return None, False, f"列『{s}』がありません{searched(sheet)}。ある列: {known}"
 
 
 _re_between = re.compile(r"([^\s、。]+?)\s*と\s*([^\s、。]+?)\s*の\s*間")
@@ -339,7 +357,7 @@ def _resolve_named_row(book_meta: dict, sheet: str | None, name: str) -> tuple:
     except Exception as e:
         return None, f"表を読めませんでした（{type(e).__name__}）"
     if not hits:
-        return None, f"『{name}』という行が見つかりません"
+        return None, f"『{name}』という行が見つかりません{searched(sheet)}"
     if len(hits) > 1:
         return None, (f"『{name}』が {len(hits)} 行あります"
                        f"（{'、'.join(str(h) for h in hits)}行目）── どれか決められません")
@@ -552,7 +570,7 @@ def resolve_row_anchor(task: str, book_meta: dict, sheet: str | None,
                 return header_row + 1, f"『{_pos2}』＝{header_row + 1}行目（見出しの次）"
             _last2 = header_row + len(ws_rows)
             return _last2, f"『{_pos2}』＝{_last2}行目（表の最後）"
-        return None, (f"『{name}』という行が見つかりません"
+        return None, (f"『{name}』という行が見つかりません{searched(sheet)}"
                        "（この表に在る値で指してください・行番号でも指せます）")
     if len(hits) > 1:
         # ★★ 2026-08-29（Namakoo）:「どうしても中身でさせない場面が出てくる。例えば
@@ -612,7 +630,7 @@ def _header_index(headers: list, name: str) -> tuple:
 _ZENKAKU_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
 
 
-def resolve_col_anchor(task: str, headers: list) -> tuple:
+def resolve_col_anchor(task: str, headers: list, sheet=None) -> tuple:
     """依頼文の「**原価の右に**」「**原価と売上の右側に**」から、新しい列が入る位置
        （1 起点）を決める。
 
@@ -645,8 +663,7 @@ def resolve_col_anchor(task: str, headers: list) -> tuple:
         ic, c = _header_index(names, c)
         if ia is None or ic is None:
             missing = [x for x, i in ((a, ia), (c, ic)) if i is None]
-            return None, (f"『{"』『".join(missing)}』という列がありません"
-                           f"（ある列: {"、".join(names)}）")
+            return None, column_missing(missing, names, sheet, anchor=True)
         lo, hi = min(ia, ic), max(ia, ic)
         at = hi + 1 if side == "右" else lo
         return at, f"『{a}』と『{c}』の{side}＝{at}列目"
@@ -665,8 +682,7 @@ def resolve_col_anchor(task: str, headers: list) -> tuple:
                 _grabbed = max(_tails, key=len)
         idx, name = _header_index(names, _grabbed)
         if idx is None:
-            return None, (f"『{name}』という列がありません"
-                           f"（ある列: {"、".join(names)}）")
+            return None, column_missing([name], names, sheet, anchor=True)
         after = suf in _COL_AFTER
         at = idx + 1 if after else idx
         return at, f"『{name}』（{idx}列目）の{"右" if after else "左"}＝{at}列目"

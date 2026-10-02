@@ -99,7 +99,10 @@ def test_sort_discloses_the_drift(tmp_path):
     ok, r, _i, err = ailine.verify_dsl_args(
         "SORT", {"col": "金額", "order": "desc"}, _meta(p), task="金額の大きい順に並べ替えて")
     assert ok, err
-    assert any("指す先の中身が変わる式" in w for w in r.get("_warnings", [])), r.get("_warnings")
+    # ★ 2026-10-02（形 7・S3）: 適用の前には言わない。候補だけ控え、適用の後に前後を比べて言う
+    #   （言う側の試験は tests/test_form7_remaining_claims_say_what_was_observed.py）。
+    assert r.get("_drift") and r["_drift"]["hits"], r
+    assert not any("指す先の中身" in w for w in r.get("_warnings", [])), r.get("_warnings")
 
 
 @pytest.mark.parametrize("args", [
@@ -110,7 +113,8 @@ def test_swap_discloses_the_drift(tmp_path, args):
     p = _book(tmp_path)
     ok, r, _i, err = ailine.verify_dsl_args("SWAP", args, _meta(p), task="入れ替えて")
     assert ok, err
-    assert any("指す先の中身が変わる式" in w for w in r.get("_warnings", [])), r.get("_warnings")
+    assert r.get("_drift") and r["_drift"]["hits"], r        # 候補を控える（言うのは適用の後）
+    assert not any("指す先の中身" in w for w in r.get("_warnings", [])), r.get("_warnings")
 
 
 def test_the_note_says_it_did_not_fix_anything():

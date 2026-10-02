@@ -1,0 +1,84 @@
+{
+  "_meta": {
+    "what": "断定の語（tests/claim_wording_core.py の WORDS）を含む文を、畳んだ関数の外に置いてよい理由の台帳。鍵は (file, func, word)・count は文の数。",
+    "rule": "足した断定の文は、ここに理由を書くまで赤（tests/test_claim_wording_is_observed.py）。理由は『何を観測して／どの宣言表に当たって言っているか』を書く。書けないなら文を直す。",
+    "born": "2026-10-02 形 7（断り・警告の文言が偽）の残りの直し"
+  },
+  "allowed": [
+    {
+      "file": "src/ailine/__init__.py", "func": "_refuse_edited_output", "word": "after_change", "count": 1,
+      "reason": "出力先の今の指紋が、履歴に残した指紋と違うという観測（_file_digest の不一致）を言う。『誰がどう変えたかは分かりません』と続け、原因は断定しない。",
+      "unlock": "指紋の不一致以外の根拠（人が編集した証拠）を持たない限り、この文は『変更されています』までに留める"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "_refuse_output_conflict", "word": "placed_by_human", "count": 1,
+      "reason": "『この道具が書いた記録がありません』は履歴を引いた観測。誰が置いたかは『分かりません』と言い、『人が置いたかもしれず…かもしれません』と推し量りの形で書いている（閉じた二択にしない）。",
+      "unlock": "履歴以外に出所を知る材料（作成者の印）が出力に付くようになったら、その観測を足す"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "cmd_verify", "word": "closed_two_way", "count": 2,
+      "reason": "verify の引数の形（元フォルダ 1 個／元 A 元 B の 2 冊）という宣言された使い方の列挙。原因の推測ではなく、引数の個数で決まる閉じた集合。",
+      "unlock": "verify が第三の引数の形を受けるようになったら、文と同時に直す"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "_verify_extract", "word": "not_supported", "count": 1,
+      "reason": "抽出の宣言（OP_SCHEMA の EXTRACT は 列・比較・値）に行番号が無い。宣言表に当たった時だけ言い、通る書き方を添えている。",
+      "unlock": "EXTRACT が行番号の指定を受けるようになったらこの文を消す"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "_verify_extract", "word": "tool_lacks", "count": 1,
+      "reason": "日付の読み方（曜日・今日から見て）。利用者がその語を言った時だけ付く（intent.calendar_reading_asked が宣言表 CALENDAR_READING_WORDS を引く）。言っていない時は付かない。",
+      "unlock": "日付の読み方を持つようになったら、CALENDAR_READING_WORDS ごと消す"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "likely_cause_of_no_change", "word": "no_such_op", "count": 1,
+      "reason": "『結合を解除する操作』は INVERSE_OP['MERGE'] が None（登録簿に無いと宣言）。宣言表に当たった事実を言っている。",
+      "unlock": "結合の解除を op として持ったら、INVERSE_OP と同時にこの文を直す"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "_run_folder_refuse", "word": "not_supported", "count": 2,
+      "reason": "OP_META の folder 宣言（フォルダに頼めるのは抽出だけ）に当たった時だけ言う。op の宣言から導いた事実。",
+      "unlock": "他の op に folder を宣言したら、この断りの対象から外れる（宣言から導くので文は直さなくてよい）"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "_verify_bold", "word": "not_supported_now", "count": 3,
+      "reason": "太字の対象（all／col:列名）と色の宣言表（COLOR_MAP）に無い語を言っている。宣言表に当たった時だけ。",
+      "unlock": "対象や色を足したら、宣言表を足す（文は表から導くので直さない）"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "_reread_the_plan", "word": "not_supported", "count": 1,
+      "reason": "intent.WE_DO_NOT_DO（宣言表）に当たった属性だけを断る。表に無い語では鳴らない。",
+      "unlock": "表の語を能力として持ったら、表から消す"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "_translate_and_dispatch", "word": "no_such_op", "count": 1,
+      "reason": "利用者が --op で指定した名前が OP_META（登録簿）に無い、という照合の結果を言う。",
+      "unlock": "なし（登録簿との照合そのもの）"
+    },
+    {
+      "file": "src/ailine/__init__.py", "func": "cmd_run_plan", "word": "not_supported_now", "count": 1,
+      "reason": "計画の段のうち verify_dsl_args が通らなかった段の数（観測した件数）。理由は直前に段ごとに出している。ただし『未対応』の語は強い ── 言い換え候補。",
+      "unlock": "言い換えるなら『検証を通らなかった』に。件数は観測のまま"
+    },
+    {
+      "file": "src/ailine_core/argcheck.py", "func": "_verify_number_format", "word": "not_supported_now", "count": 1,
+      "reason": "数値書式で持っているのは桁区切り（thousands）だけ、という宣言（intent.UNSUPPORTED_FORMATS と書式の宣言）に当たった時だけ。",
+      "unlock": "書式を足したら宣言を足す"
+    },
+    {
+      "file": "src/ailine_core/compare_words.py", "func": "read", "word": "tool_lacks", "count": 1,
+      "reason": "抽出の宣言は『列×比較×値』の単一条件（OP_SCHEMA の EXTRACT）。比較の語が 2 つ見つかった事実と、宣言表に当たった事実を言っている。",
+      "unlock": "範囲の抽出・複数列の条件を持ったらこの文を消す"
+    },
+    {
+      "file": "src/ailine_core/intent.py", "func": "refuse_reducing_a_check", "word": "no_such_op", "count": 1,
+      "reason": "OP_META に『読むだけ』の op が無いという宣言への当たり。★ 未解決の疑い: 抽出（EXTRACT）は元を変えず新しいシートへ写すだけなので『見つけるだけの操作はありません』は DELETE_ROWS 側では強すぎるかもしれない（DEDUP では成り立つ）。文言の再検討候補。",
+      "unlock": "再検討して言い分けるか、この文を『行や列を減らさずに見つける操作は、一覧には在りません』に絞る"
+    },
+    {
+      "file": "src/ailine_core/intent.py", "func": "undo_op_note", "word": "no_such_op", "count": 1,
+      "reason": "INVERSE_OP（宣言表）で値が None の op に当たった時だけ『ありません』と言い、表に無い op には『決められませんでした』と言う（この関数の分岐そのもの）。",
+      "unlock": "op を足した日に INVERSE_OP へ宣言を足す（tests/test_claim_wording_is_observed.py が全 op の宣言を縛る）"
+    }
+  ]
+}

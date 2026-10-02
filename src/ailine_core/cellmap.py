@@ -594,6 +594,46 @@ def reference_drift_note(hits: list, unit: str = "行") -> str | None:
     more = f" ほか {len(hits) - 3} 件" if len(hits) > 3 else ""
     # ★ 2026-08-31: 列の入れ替えなのに「**行**が入れ替わります」と言っていた
     #   （同じ形の言い間違いを 08-30 に別の場所で直したばかり）── 軸を受け取る。
-    return (f"この操作で、指す先の中身が変わる式が {len(hits)} 件あります: {head}{more}"
-             f" ── 式そのものは壊れませんが、指している{unit}が入れ替わります"
+    return (f"この操作で、指す先の中身が変わる可能性のある式が {len(hits)} 件あります: {head}{more}"
+             f" ── 指している{unit}が動くなら、式そのものは壊れませんが、指す先の中身が入れ替わります"
              "（直してよいかは人が決めることなので、直していません）")
+
+
+def _snap_cell_value(snap: dict, sheet: str, row: int, col: int):
+    """スナップショットのセルの値（★ 完全に既定のセルは載っていない ── 無ければ None）。"""
+    cell = (snap.get("cells") or {}).get(f"{sheet}!{row},{col}")
+    return cell[0] if cell else None
+
+
+def reference_drift_observed(hits: list, target_sheet: str, before: dict, after: dict,
+                              unit: str = "行") -> str | None:
+    """適用の**前後**を見て、指している先の中身が**実際に変わった**式だけを 1 行にする（無ければ None）。
+
+    ★★ 2026-10-02（形 7「断り・警告の文言が偽」・S3）: 旧版は適用の**前**に、動かす区画を外から
+      指す式が在れば無条件に「指す先の中身が変わる式が N 件あります」と言っていた。
+      並べ替えが**既に並んでいた表**で何も動かさなかった回にも鳴り、ここで鳴ると ✓ が △ に落ちる。
+      ★ 見えるのは適用の後 ── 指されているセル（hits の行・列）の中身を前後で比べ、
+        **変わったものだけ**を名指しする。変わっていなければ黙る（言うことが無い）。
+    ★ 切り詰めたスナップショットでは、範囲外のセルの前後を比べられない ── その時は確かめられた
+      とは言わず、「実際に変わったかは確かめていません」と言う（黙らない・断定しない）。
+    hits: [(式の在るシート, 式のセル参照, 式, 指している行, 指している列), ...]"""
+    if not hits:
+        return None
+    moved = [h for h in hits
+             if _snap_cell_value(before, target_sheet, h[3], h[4]) != _snap_cell_value(after, target_sheet, h[3], h[4])]
+    if not moved:
+        if not (before.get("truncated") or after.get("truncated")):
+            return None
+        head = "・".join(f"{sh}!{ref}（{f}）" for sh, ref, f, *_ in hits[:3])
+        more = f" ほか {len(hits) - 3} 件" if len(hits) > 3 else ""
+        return (f"★ 動かす区画を外から指している式が {len(hits)} 件あります: {head}{more}"
+                " ── 表が長く、指す先の中身が実際に変わったかは確かめていません"
+                "（直してよいかは人が決めることなので、直していません）")
+    head = "・".join(
+        f"{sh}!{ref}（{f}）が指す {_ref((r, c))} は『{_snap_cell_value(before, target_sheet, r, c)}』"
+        f"から『{_snap_cell_value(after, target_sheet, r, c)}』に"
+        for sh, ref, f, r, c in moved[:3])
+    more = f" ほか {len(moved) - 3} 件" if len(moved) > 3 else ""
+    return (f"★ この操作で、指す先の中身が変わった式が {len(moved)} 件あります: {head}{more}"
+            f" ── 式そのものは壊れていませんが、指している{unit}の中身が入れ替わりました"
+            "（直してよいかは人が決めることなので、直していません）")
