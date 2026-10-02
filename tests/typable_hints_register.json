@@ -1640,7 +1640,8 @@
      "並べ替えて",
      "--copy",
      "--out",
-     "{root}/o1.xlsx"
+     "{root}/o1.xlsx",
+     "--dry"
     ],
     "plan": [
      {
@@ -1660,7 +1661,8 @@
       "--copy",
       "--out",
       "{root}/o2.xlsx",
-      "--show-basic"
+      "--show-basic",
+      "--dry"
      ],
      "plan": [
       {
