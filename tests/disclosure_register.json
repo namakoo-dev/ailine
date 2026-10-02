@@ -1,0 +1,716 @@
+{
+ "_meta": {
+  "written": "2026-10-02",
+  "what": "開示なしの在り処（形 4）の台帳。tests/disclosure_core.py の走査と等号で縛る。足したら理由を書くまで赤・直したら台帳からも消す（件数が増える向きは常に赤）。",
+  "classes": {
+   "a": "unrouted=出力を作った後に履歴の口を通らない return／exc_unguarded=例外の出口が履歴の口を通らない入口",
+   "b": "print_after_out=出力を作った後に print 直書きする ⚠（画面だけ）",
+   "c": "silent=上限・読み飛ばしを使うのに、同じ関数が外したことを言う語を持たない",
+   "d": "ungated=置き換える書き込みの前に、同じ関数が関所を通らない"
+  }
+ },
+ "undisclosed": [
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_accounts",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "一時フォルダ（mkdtemp）に書き、finally で消す。最終の冊は shutil.copy2 → record_made_book の 2 行だけ（その間に割り込まれた時だけ、記録の無い冊が残りうる）。",
+   "unlock": "copy2 と record_made_book を 1 つの口へ畳む時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_accounts",
+   "class": "unrouted",
+   "count": 2,
+   "reason": "断り・検算の破れの出口。書いたのは作業用の一時フォルダ（finally で消す）の中だけで、最終の冊は検算と出力先の関所を通った後の shutil.copy2 でしか置かれない ── この出口の時点で利用者の場所に残る物が無い。（accounts）",
+   "unlock": "最終の冊を一時フォルダを経ずに書く経路を足す時（その出口は _finish 系の口へ）"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_accounts_apply",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "一時フォルダに書き、finally で消す。最終の取込用ファイルは copy2 → record_made_book の 2 行だけ（割り込みの窓）。",
+   "unlock": "copy2 と record_made_book を 1 つの口へ畳む時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_demo",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "同梱サンプルを 1 冊ずつ copy2 → record_made_book で置く。割り込みの窓は 1 冊の copy と記録の間だけ（置けなかった時の OSError は置けた分を名指しする・2026-10-02）。",
+   "unlock": "demo を 1 つの口で置く時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_export_csv",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "`open(out, 'wb')` で最終の .csv へ直に書く。窓は書き込みの間だけ・書き込み失敗と読み戻しの失敗は履歴に残す（2026-10-02）。割り込みで落ちた回は記録が無い ── 残した在庫。",
+   "unlock": "書き出しを一時ファイル + os.replace にする時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_export_pdf",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "soffice が出す PDF は専用の一時フォルダから `shutil.move` で最終の名前へ移す（出力先に現れるのは 1 つだけ）。窓は move の間だけ。残した在庫。",
+   "unlock": "export-pdf を例外の出口でも履歴に残す時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_forms",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "一時フォルダに書き、finally で消す。最終の一覧は copy2 → record_made_book の 2 行だけ（割り込みの窓）。",
+   "unlock": "copy2 と record_made_book を 1 つの口へ畳む時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_forms",
+   "class": "unrouted",
+   "count": 3,
+   "reason": "断り・検算の破れの出口。書いたのは作業用の一時フォルダ（finally で消す）の中だけで、最終の冊は検算と出力先の関所を通った後の shutil.copy2 でしか置かれない ── この出口の時点で利用者の場所に残る物が無い。（forms: 事後条件の破れ 1・出力先の断り 2）",
+   "unlock": "最終の冊を一時フォルダを経ずに書く経路を足す時（その出口は _finish 系の口へ）"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_restore",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "undo と同じ restore_backup（原本へ copy2 で直に戻す）。窓は copy の間だけ・世代は残る。",
+   "unlock": "restore_backup を staging + os.replace にする時（残した在庫）"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_run_csv",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "`ailine csv` は最終の xlsx へ直に書く（write_quarantined_xlsx）。割り込みの窓は保存の間だけで、書きかけは次回 own 印が読めず出力先の関所が名指しで断る（人の物と断定しない文面）。残した在庫。",
+   "unlock": "csv の書き出しを一時ファイル + os.replace にする時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_run_folder",
+   "class": "unrouted",
+   "count": 2,
+   "reason": "出力を書かない回（照合の破れ rc 1／実行中に別のファイルが現れた rc 7）。移す前の一時ファイルだけで、画面が『書き込んでいません』と元フォルダが無変更であることを名指しする（named）。",
+   "unlock": "最終の冊を一時フォルダを経ずに書く経路を足す時（その出口は _finish 系の口へ）"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_split",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "一時フォルダに書き、finally で消す。配る冊は copy2 → record_made_book を 1 冊ずつ（途中で割り込まれると、配れた分は記録され残りは配られない ── 残った冊は『前回出力』として次の split が名指しする）。",
+   "unlock": "配る冊を 1 つの口で全部置く（途中で止まった時に配れた分を名指しする）時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_split",
+   "class": "unrouted",
+   "count": 2,
+   "reason": "断り・検算の破れの出口。書いたのは作業用の一時フォルダ（finally で消す）の中だけで、最終の冊は検算と出力先の関所を通った後の shutil.copy2 でしか置かれない ── この出口の時点で利用者の場所に残る物が無い。（split: 帰属の破れで files_written を空にして返す 1・出力先の断り 1）",
+   "unlock": "最終の冊を一時フォルダを経ずに書く経路を足す時（その出口は _finish 系の口へ）"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_stack",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "一時フォルダに書き、finally で消す。最終の冊は copy2 → record_made_book の 2 行だけ（割り込みの窓）。",
+   "unlock": "copy2 と record_made_book を 1 つの口へ畳む時"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_stack",
+   "class": "unrouted",
+   "count": 2,
+   "reason": "断り・検算の破れの出口。書いたのは作業用の一時フォルダ（finally で消す）の中だけで、最終の冊は検算と出力先の関所を通った後の shutil.copy2 でしか置かれない ── この出口の時点で利用者の場所に残る物が無い。（stack: 出力先の断り 2）",
+   "unlock": "最終の冊を一時フォルダを経ずに書く経路を足す時（その出口は _finish 系の口へ）"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_undo",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "原本へ shutil.copy2 で直に戻す（原子的でない）。窓は copy の間だけ・バックアップの世代は残るのでもう一度 undo で戻せる。★ 退避（_shelve_bytes）が書き込みの後ろにあるのは意図（失敗した回に棚を汚さない・2026-08-25 の致命⑨）。",
+   "unlock": "restore_backup を staging + os.replace にする時（残した在庫）"
+  },
+  {
+   "axis": "a",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_verify",
+   "class": "exc_unguarded",
+   "count": 1,
+   "reason": "読むだけの検算。式のままの冊を LibreOffice で読むための写しを一時フォルダへ作るだけで、利用者の置き場には何も残さない。",
+   "unlock": "verify が利用者の置き場へ書く時"
+  },
+  {
+   "axis": "b",
+   "file": "src/ailine/__init__.py",
+   "func": "_cmd_run_csv_prestage",
+   "class": "print_after_out",
+   "count": 2,
+   "reason": "★ 残した在庫: 検疫の確認事項・制御文字の除去（値を変えた開示）は、画面と履歴の `disclosed` 欄には運んだが（2026-10-02）、書いた xlsx の**中**には載らない。検疫の出力に申し送りシートを足すと、1 枚目と見出し行を前提にする後続の run が変わるため、まだ足していない。",
+   "unlock": "検疫の出力に申し送りシートを足す決裁が出た時"
+  },
+  {
+   "axis": "b",
+   "file": "src/ailine/__init__.py",
+   "func": "atomic_replace_inplace",
+   "class": "print_after_out",
+   "count": 1,
+   "reason": "★ 残した在庫: 『作業フォルダからの置換に失敗したため、原本と同じフォルダで置換した』は画面だけ。原本は壊れておらずバックアップは確保済み（文面どおり）。置換は申し送りを書いた後なので、冊には運べない。",
+   "unlock": "置換の結果を返り値で運び、_say の口から申し送りへ載せる時"
+  },
+  {
+   "axis": "b",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_accounts",
+   "class": "print_after_out",
+   "count": 2,
+   "reason": "出力先の関所の断り（人のファイル・別コマンドの出力）。この時点で最終の冊は置いていない（一時フォルダのみ）。置いた冊の所見は冊の『検分』シートが運ぶ。",
+   "unlock": "断りの後に冊が残る経路を足す時"
+  },
+  {
+   "axis": "b",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_forms",
+   "class": "print_after_out",
+   "count": 3,
+   "reason": "事後条件の破れ・出力先の断り。最終の冊は置いていない（一時フォルダのみ）。置いた冊の所見は『検分』シートが運ぶ。",
+   "unlock": "断りの後に冊が残る経路を足す時"
+  },
+  {
+   "axis": "b",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_run_folder",
+   "class": "print_after_out",
+   "count": 3,
+   "reason": "照合できなかったファイル・照合の破れ・出力先の断り。出力は書かない回で、元フォルダ無変更を名指しする。書いた回の所見は出力の冊が運ぶ。",
+   "unlock": "書いた後に出す ⚠ を足す時"
+  },
+  {
+   "axis": "b",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_split",
+   "class": "print_after_out",
+   "count": 2,
+   "reason": "出力先の断り 2 種。配る冊はまだ置いていない。置いた冊の所見は一覧の冊（_検分）が運ぶ。",
+   "unlock": "断りの後に冊が残る経路を足す時"
+  },
+  {
+   "axis": "b",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_stack",
+   "class": "print_after_out",
+   "count": 2,
+   "reason": "出力先の断り 2 種。最終の冊は置いていない。置いた冊の所見（積めなかったファイル等）は冊の『検分』シートに載る（実機で確認: bad.xlsx が備考に出る）。",
+   "unlock": "断りの後に冊が残る経路を足す時"
+  },
+  {
+   "axis": "c",
+   "file": "gui/server.py",
+   "func": "_read_sheet",
+   "class": "silent",
+   "count": 2,
+   "reason": "GUI の表示を MAX_ROWS・MAX_COLS で切る。切った時は note に『N 行 × M 列だけ出しています（実際は …）』を載せる（実装を読んで確認）。",
+   "unlock": "GUI が切ったことを言わなくなった時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "_ask_about_a_suspicious_word",
+   "class": "silent",
+   "count": 1,
+   "reason": "候補の提示数の上限（MAX_CANDIDATES）。選ぶのは人で、出さなかった候補は人の目に入らない（提示は上位の数件）。",
+   "unlock": "候補を全部出す時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "_csv_output_edited_since",
+   "class": "silent",
+   "count": 1,
+   "reason": "履歴は新しい 500 件だけ引く。見つからなければ None（記録なし）── 従来どおりの扱いで、本日 prestage も記録するようになった。",
+   "unlock": "500 件を超える運用で素通りが出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "_formula_columns_without_values",
+   "class": "silent",
+   "count": 1,
+   "reason": "★ 残した在庫: 式の列かの判定が先頭 MAX_ROWS 行までで、それより下を見ていないことを言わない。結果は『式の列の候補』の補助で、誤るのは見落とす向き。",
+   "unlock": "判定が見た範囲を結果に載せる時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "_peek_match_book",
+   "class": "silent",
+   "count": 2,
+   "reason": "見出し行を推定するために読む行数の上限（MAX_ROWS・MAX_COLS・STRUCT_HEADER_SCAN_ROWS）。データ行の読み飛ばしではない（データは全行を別の読み手が読む）。",
+   "unlock": "この上限をデータ行の読み取りにも使う時（切ったことを言う口へ）"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "_sanitize_vocab_term",
+   "class": "silent",
+   "count": 1,
+   "reason": "語の長さ上限を超える語は None を返し、呼び出し側（vocab_add / alias_add）が『N 文字超は登録できません』と断る。",
+   "unlock": "上限超えを黙って落とす呼び出しを足す時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "build_struct_dump",
+   "class": "silent",
+   "count": 2,
+   "reason": "見出し行を推定するために読む行数の上限（MAX_ROWS・MAX_COLS・STRUCT_HEADER_SCAN_ROWS）。データ行の読み飛ばしではない（データは全行を別の読み手が読む）。",
+   "unlock": "この上限をデータ行の読み取りにも使う時（切ったことを言う口へ）"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "check_round_trip_fidelity",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じ種類の喪失ラベルを 1 度だけ数える重複の畳み。喪失の有無と種類は警告に出る。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_scan",
+   "class": "silent",
+   "count": 2,
+   "reason": "見出し行を推定するために読む行数の上限（MAX_ROWS・MAX_COLS・STRUCT_HEADER_SCAN_ROWS）。データ行の読み飛ばしではない（データは全行を別の読み手が読む）。",
+   "unlock": "この上限をデータ行の読み取りにも使う時（切ったことを言う口へ）"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_split",
+   "class": "silent",
+   "count": 4,
+   "reason": "見出し行を推定するために読む行数の上限（MAX_ROWS・MAX_COLS・STRUCT_HEADER_SCAN_ROWS）。データ行の読み飛ばしではない（データは全行を別の読み手が読む）。／冊自身が足した合計行を明細から外す（行の完全会計に『除外』として出る）。",
+   "unlock": "この上限をデータ行の読み取りにも使う時（切ったことを言う口へ）"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_stack",
+   "class": "silent",
+   "count": 2,
+   "reason": "見出し行を推定するために読む行数の上限（MAX_ROWS・MAX_COLS・STRUCT_HEADER_SCAN_ROWS）。データ行の読み飛ばしではない（データは全行を別の読み手が読む）。",
+   "unlock": "この上限をデータ行の読み取りにも使う時（切ったことを言う口へ）"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "existing_sheet_replaced_advisory",
+   "class": "silent",
+   "count": 1,
+   "reason": "助言を出す条件の判定（変わっていない・内容が無い回は助言しない）。外す対象はデータでなく助言そのもの。",
+   "unlock": "助言を出さない条件を増やす時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "judge_ops_via_llm",
+   "class": "silent",
+   "count": 1,
+   "reason": "モデルに見せる候補 op の数の上限（MAX_CANDIDATES）。見せなかった op を使えないと言う文は無い（候補の絞り込み）。",
+   "unlock": "候補を全部見せる時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "load_aliases",
+   "class": "silent",
+   "count": 2,
+   "reason": "★ 残した在庫: 別名ファイルを読む時、上限を超えた件・形の悪い件を読み捨てる（alias_store の仕様・先着順）。書く側（alias add）は上限と形で断るので、起きるのは手で編集した場合だけ。",
+   "unlock": "読み捨てた件数を言う時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "load_attribute_entries",
+   "class": "silent",
+   "count": 2,
+   "reason": "★ 残した在庫: 属性ファイルを読む時、上限を超えた件を読み捨てる。書く側は断る。",
+   "unlock": "読み捨てた件数を言う時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "mention_overlap_advisory",
+   "class": "silent",
+   "count": 3,
+   "reason": "宣言（OP_WRITE_TARGET の reads_only）が読むだけと言うシート・列を、重なりの助言から外す。外す範囲は宣言から導く（手で持たない）。",
+   "unlock": "宣言外の除外を足す時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "refuse_if_output_is_someone_elses",
+   "class": "silent",
+   "count": 1,
+   "reason": "履歴は新しい 500 件だけ引く（HISTORY_RECALL_MAX）。古くて見つからない記録は『この道具が書いた記録がありません』と**断る側**に倒れる（誰の物かは断定しない文面）。",
+   "unlock": "500 件を超える運用で断りが増えた時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "scan_rate_literals",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じ値の文面を 2 度拾わない重複の畳み（拾った値は 1 度は出す）。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine/__init__.py",
+   "func": "snapshot",
+   "class": "silent",
+   "count": 2,
+   "reason": "前後の比較の写しを MAX_ROWS・MAX_COLS で切る。切ったことは呼び出し側が言う（`_truncation_notice` が『表示は先頭 1000 行の変化のみ・N 行目より下は確認していない』・実機で 1500 行の並べ替えで確認）。",
+   "unlock": "snapshot を切ったことを言わない呼び出しを足す時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/accounts_core.py",
+   "func": "format_citations",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じ根拠セルを 2 度引用しない重複の畳み（根拠は 1 度は載る）。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/accounts_core.py",
+   "func": "reason_of",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じ根拠セルを 2 度数えない重複の畳み（二重計上を防ぐ側）。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/accounts_read.py",
+   "func": "_raw_rows_from_csv",
+   "class": "silent",
+   "count": 1,
+   "reason": "行数の上限（MAX_ROWS 200000）を超えると呼び出し側が『N 行で…読めません』と unreadable に載せて断る。",
+   "unlock": "上限超えを黙って落とす呼び出しを足す時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/ask_choice.py",
+   "func": "ask_choice",
+   "class": "silent",
+   "count": 1,
+   "reason": "聞き直しの回数の上限（MAX_REPROMPTS）。続いたら key=None（asked=True）を返し、呼び出し側は選ばれなかったものとして扱う（関数自身は言わない）。",
+   "unlock": "上限超えの扱いを変える時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/attributes.py",
+   "func": "_collapse_across_sheets",
+   "class": "silent",
+   "count": 1,
+   "reason": "属性の候補をシートをまたいで 1 つに畳む（候補が 2 つ以上なら人に聞く器官）。",
+   "unlock": "畳んだ元を名指しする時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/attributes.py",
+   "func": "parse_attributes_json",
+   "class": "silent",
+   "count": 1,
+   "reason": "★ 残した在庫: 属性ラベルの長さ上限を超えた行を読み捨てる。書く側が断る形なので、起きるのは手編集のみ。",
+   "unlock": "読み捨てた件数を言う時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/field_record.py",
+   "func": "both_sides",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じ根拠セルを 2 度数えない重複の畳み（二重計上を防ぐ側）。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/form_read.py",
+   "func": "_first_number_right",
+   "class": "silent",
+   "count": 1,
+   "reason": "読み取りの規則（率らしい 0〜1 の数は金額として採らない）。採らなかった値は競合として別に残る。",
+   "unlock": "規則の除外を結果に載せる時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/form_read.py",
+   "func": "_labelled_by_format",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じアンカーを 2 度読まない重複の畳み。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/form_read.py",
+   "func": "_labelled_number",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じアンカーを 2 度読まない重複の畳み。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/form_read.py",
+   "func": "_labelled_text_right",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じアンカーを 2 度読まない重複の畳み。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/form_read.py",
+   "func": "_labels_with_nothing_right",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じアンカーを 2 度読まない重複の畳み（右隣が空のラベルを探す器官）。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/form_read.py",
+   "func": "_record",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じセルを 2 度記録しない重複の畳み（二重計上を防ぐ側）。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/form_read.py",
+   "func": "read_issuer",
+   "class": "silent",
+   "count": 1,
+   "reason": "同じアンカーを 2 度読まない重複の畳み。",
+   "unlock": "畳んだ件数を言う必要が出た時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/form_read.py",
+   "func": "unswept_mouths",
+   "class": "silent",
+   "count": 1,
+   "reason": "掃けていない口（合計らしい語）を探す検出器自身の絞り込み（短い文字列・語の無い文字列を除く）。探した結果が『掃けていない』の開示そのもの。",
+   "unlock": "検出器の絞り込みを変える時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/postconditions/shape.py",
+   "func": "check_set_where",
+   "class": "silent",
+   "count": 1,
+   "reason": "事後条件が、計画が書くと宣言した行を『変わってよい』として外して残りを見る（外す範囲は宣言から導く）。",
+   "unlock": "宣言外の行を外す時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/report_per_row.py",
+   "func": "sanitize_sheet_name",
+   "class": "silent",
+   "count": 1,
+   "reason": "シート名を Excel の上限 31 字で切る（LibreOffice は無警告で切るので、機械が先に切る）。作ったシート名が変更点に出るかは、この走査では確かめていない。",
+   "unlock": "切った事実を名指しする時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/suggest.py",
+   "func": "suggest_ops",
+   "class": "silent",
+   "count": 1,
+   "reason": "提案の候補から、既に出した op と語の無い op を外す。提示は上位 MAX_CANDIDATES 件。",
+   "unlock": "候補を全部出す時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/verify_accounts.py",
+   "func": "_blank_reasoned",
+   "class": "silent",
+   "count": 1,
+   "reason": "検算が、検分シートから『理由つきの空欄』の種類の行だけを拾う（読む対象の絞り込みで、行を捨てる処理でない）。",
+   "unlock": "拾う種類を増やす時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/verify_forms.py",
+   "func": "verify_forms_list",
+   "class": "silent",
+   "count": 1,
+   "reason": "検算が、冊自身の合計行（_TOTAL_ROW_NAMES）を破れに数えず total_rows に名指しして『検算の対象外』と報告する（関数の中の語でなく返す値で言う）。",
+   "unlock": "合計行の名指しが報告から消えた時"
+  },
+  {
+   "axis": "c",
+   "file": "src/ailine_core/verify_split.py",
+   "func": "verify_split_folder",
+   "class": "silent",
+   "count": 1,
+   "reason": "冊自身の合計行を明細から外す（split の行の完全会計に『除外』として出る）。",
+   "unlock": "除外件数が報告から消えた時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "_apply_note_basic",
+   "class": "ungated",
+   "count": 1,
+   "reason": "作業用コピー（workdir / 一時フォルダ）への書き込み。置き換える相手は道具が作った作業ファイルで、原本への反映は atomic_replace_inplace の 1 か所（バックアップ確保・undo つき）だけを通る。",
+   "unlock": "作業コピーを利用者の置き場へ直に書く経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "_body",
+   "class": "ungated",
+   "count": 2,
+   "reason": "adopt は下書きの複写を原本へ置き換える（その目的の操作）。置く前に原本の指紋と下書きを照合して断る（--base-sha）・バックアップ確保済み。",
+   "unlock": "adopt の照合を外す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "_finish_apply",
+   "class": "ungated",
+   "count": 1,
+   "reason": "原本への反映（既定）。置く前にバックアップを確保し、成功時に『原本に適用しました』と ailine undo を言う仕様。出力先の関所は入口（cmd_run の refuse_if_output_is_someone_elses）で 1 回通っている。",
+   "unlock": "反映の前の関所を外す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "_prepare_book_for_print",
+   "class": "ungated",
+   "count": 1,
+   "reason": "作業用コピー（workdir / 一時フォルダ）への書き込み。置き換える相手は道具が作った作業ファイルで、原本への反映は atomic_replace_inplace の 1 か所（バックアップ確保・undo つき）だけを通る。",
+   "unlock": "作業コピーを利用者の置き場へ直に書く経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "_verify_sources_with_values",
+   "class": "ungated",
+   "count": 1,
+   "reason": "作業用コピー（workdir / 一時フォルダ）への書き込み。置き換える相手は道具が作った作業ファイルで、原本への反映は atomic_replace_inplace の 1 か所（バックアップ確保・undo つき）だけを通る。",
+   "unlock": "作業コピーを利用者の置き場へ直に書く経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "_write_csv_output",
+   "class": "ungated",
+   "count": 1,
+   "reason": "検疫の xlsx を書く口。関所は呼び出し側（cmd_run_csv・暗黙前段）が out.exists() の照合・自分の印・編集済みの指紋の 3 つで通す（暗黙前段は 2026-10-02 から履歴も残す）。",
+   "unlock": "この口を関所なしで呼ぶ経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "cmd_run_plan",
+   "class": "ungated",
+   "count": 1,
+   "reason": "出力先（.out）への作業コピー。出力先の関所は入口（cmd_run の refuse_if_output_is_someone_elses）で通っている。",
+   "unlock": "入口の関所を通らない経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "normalize_book",
+   "class": "ungated",
+   "count": 4,
+   "reason": "作業用コピー（workdir / 一時フォルダ）への書き込み。置き換える相手は道具が作った作業ファイルで、原本への反映は atomic_replace_inplace の 1 か所（バックアップ確保・undo つき）だけを通る。",
+   "unlock": "作業コピーを利用者の置き場へ直に書く経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "preview_plan_changes",
+   "class": "ungated",
+   "count": 2,
+   "reason": "作業用コピー（workdir / 一時フォルダ）への書き込み。置き換える相手は道具が作った作業ファイルで、原本への反映は atomic_replace_inplace の 1 か所（バックアップ確保・undo つき）だけを通る。",
+   "unlock": "作業コピーを利用者の置き場へ直に書く経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine/__init__.py",
+   "func": "run_freeform_plan_step",
+   "class": "ungated",
+   "count": 5,
+   "reason": "作業用コピー（workdir / 一時フォルダ）への書き込み。置き換える相手は道具が作った作業ファイルで、原本への反映は atomic_replace_inplace の 1 か所（バックアップ確保・undo つき）だけを通る。",
+   "unlock": "作業コピーを利用者の置き場へ直に書く経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine_core/accounts_apply.py",
+   "func": "apply_to_book",
+   "class": "ungated",
+   "count": 1,
+   "reason": "取込用の冊を一時パス（workdir）へ書く。出力先の関所は cmd_accounts_apply が copy2 の前に通す。",
+   "unlock": "最終の出力先へ直に書く時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine_core/accounts_apply.py",
+   "func": "apply_to_csv",
+   "class": "ungated",
+   "count": 1,
+   "reason": "取込用 CSV を一時パス（workdir）へ書く。出力先の関所は cmd_accounts_apply が copy2 の前に通す。",
+   "unlock": "最終の出力先へ直に書く時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine_core/csv_quarantine.py",
+   "func": "write_quarantined_xlsx",
+   "class": "ungated",
+   "count": 1,
+   "reason": "検疫の xlsx を書く口。関所は呼び出し側の `_write_csv_output` の更に外（cmd_run_csv・暗黙前段）で通す。",
+   "unlock": "この口を関所なしで呼ぶ経路を足す時"
+  },
+  {
+   "axis": "d",
+   "file": "src/ailine_core/dsl_step.py",
+   "func": "apply_dsl_step",
+   "class": "ungated",
+   "count": 3,
+   "reason": "作業用コピー（workdir / 一時フォルダ）への書き込み。置き換える相手は道具が作った作業ファイルで、原本への反映は atomic_replace_inplace の 1 か所（バックアップ確保・undo つき）だけを通る。",
+   "unlock": "作業コピーを利用者の置き場へ直に書く経路を足す時"
+  }
+ ]
+}

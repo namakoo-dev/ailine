@@ -706,3 +706,17 @@ def detect_excel_damage(columns: list, classifications: list, header: list | Non
                 "（Excel で一部だけ書式が外れた可能性があります）"
             )
     return findings
+
+
+def warning_lines(evaluation, write_result) -> list:
+    """検疫の ⚠ の行を作る**唯一の口**（画面の 3 経路と履歴の `disclosed` が同じ文を持つ）。
+
+    ★★ 2026-10-02（盲検の形 4）: 同じ 2 つの for が `ailine csv` の報告・転送失敗の報告・`run x.csv` の
+      暗黙前段に**写されていて**、どれも画面にしか出さなかった（履歴に残る文が 0 件）。
+      「制御文字を除去して書きました」は**値を変えた**開示 ── 転送した xlsx からも履歴からも追えなかった。
+    ★ 引数は読むだけ（`evaluation.warnings` と `write_result.removed_control_chars`）── 型を import しない。
+    """
+    lines = [f"  ⚠ {w}" for w in (evaluation.warnings or [])]
+    for row, col, code in write_result.removed_control_chars:
+        lines.append(f"  ⚠ {row}行目{col}列目: 制御文字 {code} を除去して書きました")
+    return lines

@@ -141,10 +141,13 @@ def test_the_side_routes_all_go_through_the_helper():
         増やす時は理由を書いて更新する。
     ★★ 2026-09-24: 6 本目 ── `ailine adopt`（下書きの清書）。原本を置き換える道で、
       下書きで増えたシートの出所を残す（冊まるごとではないので record_made_book には乗せない）。
+    ★★ 2026-10-02（盲検の形 4）: 7 本目 ── `ailine export-pdf`。export-csv は履歴に残るのに export-pdf は
+      1 行も残らなかった（2 冊照合 4a61518 の兄弟）。出口が 5 本あるので、cmd_export_pdf の中の
+      `_finish_pdf` 1 か所から呼ぶ（出口ごとに書き写さない）。
     """
     n = len(_calls("_record_side_command_history"))
-    assert n == 6, (
-        f"★ 呼び手が {n} 本（期待 6: csv / export-csv / 照合の成功 / 照合の断り / "
+    assert n == 7, (
+        f"★ 呼び手が {n} 本（期待 7: csv / export-csv / export-pdf / 照合の成功 / 照合の断り / "
         "冊を作った記録 / 下書きの清書）── どれかが畳まれていないか、配線が増減した")
 
 

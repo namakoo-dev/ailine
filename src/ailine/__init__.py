@@ -9498,7 +9498,7 @@ def _record_history(a: argparse.Namespace, book: Path, result: dict, failure_kin
 
 def _record_side_command_history(path_kind: str, book: Path, task: str, out: Path | None,
                                  ok: bool, failure_kind: str | None = None,
-                                 stamp_out: bool = True, made_sheets=()) -> None:
+                                 stamp_out: bool = True, made_sheets=(), notes=()) -> None:
     """run の DSL 経路を通らない道（csv 変換・export-csv・**2 冊の照合**）の履歴を 1 行残す。
 
     ★★ 2026-09-18（盲検 3 体目 ⑨）: 買い手「**2 冊照合の履歴が `ailine history` に
@@ -9512,6 +9512,9 @@ def _record_side_command_history(path_kind: str, book: Path, task: str, out: Pat
     ★ 畳む時に挙動は変えない ── stamp_out=False で export-csv の現状（指紋なし）を保つ。
       その食い違いを直すかは別の判断（勝手に広げない）。
     ★ 履歴は付帯情報 ── 書けなくても本体の結果（rc・出力）は変えない。
+    ★★ 2026-10-02（盲検の形 4）: `notes` は**画面に出した ⚠ の文**をそのまま運ぶ（`disclosed` 欄）。
+      画面は転送した先にもう無い ── 「制御文字を除去して書きました」のような**値を変えた**警告が、
+      月次の証跡（`ailine history`）に 1 つも残らなかった。無ければ欄ごと作らない（旧い行と同じ形）。
     """
     try:
         append_history({
@@ -9537,6 +9540,7 @@ def _record_side_command_history(path_kind: str, book: Path, task: str, out: Pat
             #   build_history_entry が同じキーを運ぶ（両方で同じ名前・同じ意味）。
             "made_sheets": list(made_sheets) or None,
             "fidelity": None,
+            **({"disclosed": [str(n).strip() for n in notes]} if notes else {}),
         })
     except OSError:
         pass
@@ -9667,6 +9671,39 @@ def _finish_gated(a: argparse.Namespace, book: Path, out_book: Path | None,
         result["out"] = str(out_book)
     _finish_run(a, book, result, "gate_refused")
     return gate_exit
+
+
+def _finish_aborted(a: argparse.Namespace, book: Path, exc: BaseException,
+                    out_before: str | None) -> None:
+    """**例外で**落ちる run の、唯一の出口（`_finish_gated` / `_finish_failed_apply` の兄弟）。
+
+    ★★ 2026-10-02（盲検の形 4: 開示の欠落・出口を宣言から導かず 1 つずつ塞いだ 4 件目）:
+      Ctrl-C（LibreOffice が重い時に人が押す）や想定外の例外は、`return` でなく**例外**で出る。
+      `_finish_run` を通らないので、作業結果の `.out` が
+        ・画面で名指しされず
+        ・履歴に残らず（次の run が出力先の関所で「この道具が書いた記録がありません」と塞ぐ）
+      人がファイルを消すまで行き止まりだった（実機で再現）。3 件の兄弟（失敗・上書きの関所・
+      関所の中断）と同じ形 ── 出口が `return` でなく `raise` だっただけ。
+    ★ 消さない（作業結果は人の物）。言う・履歴に自分が作ったと残す、の 2 つだけ揃える。
+    ★ `out_before` は走る前の `.out` の指紋。**変わっていない**（前から在った物に触れていない）なら
+      何も言わない ── この run が作った物でないものを「残しました」と名乗らない。
+    ★ 後始末が失敗しても元の例外を隠さない（呼び出し側は必ず投げ直す）。
+    """
+    try:
+        left = run_output_path(a, book)
+        if not left.exists():
+            return
+        if out_before is not None and _file_digest(left) == out_before:
+            return
+        print(f"{chr(10)}× run が途中で止まりました（{type(exc).__name__}）。")
+        print(_untouched_original_line(book, left))
+        _kind = "interrupted" if isinstance(exc, KeyboardInterrupt) else "aborted"
+        _finish_run(a, book, {"ok": False, "attempts": 1, "task": a.task, "model": a.model,
+                              "path": "aborted", "command": None, "postcondition": None,
+                              "changes": [], "out": str(left)},
+                    _kind, error_detail=f"{type(exc).__name__}: {exc}"[:300])
+    except Exception:   # noqa: BLE001 ── 元の例外を隠さない
+        pass
 
 
 # ★ 申し送りのシート名。書く所と消す所で 1 つを引く（文字列を 2 回書かない）。
@@ -10271,8 +10308,17 @@ def _cmd_run_body(a: argparse.Namespace) -> int:
     _stamp_book(book)   # ★ 原本の指紋（形 7: 「変更していません」は照合した時だけ言う）
     workdir = book.parent / f".ailine_{book.stem}"
     workdir.mkdir(exist_ok=True)
+    _out_probe = run_output_path(a, book)
+    _out_before = _file_digest(_out_probe) if _out_probe.exists() else None
     try:
         return _cmd_run_dispatch(a, book, workdir)
+    except BaseException as exc:
+        # ★★ 2026-10-02（盲検の形 4・出口の 4 件目）: Ctrl-C や想定外の例外で落ちると、
+        #   `_finish_run` を通らないので `.out` が黙って残り、履歴にも無く、次の run が
+        #   「この道具が書いた記録がありません」と塞がれた（実機で再現）。例外は握りつぶさず
+        #   出口の後始末（言う・履歴に残す）だけ通して、そのまま投げ直す。
+        _finish_aborted(a, book, exc, _out_before)
+        raise
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -11026,7 +11072,7 @@ def _reread_the_plan(a: argparse.Namespace, book_meta: dict, plan: list) -> tupl
 
 
 def _answer_before_asking(a: argparse.Namespace, book: Path, book_meta: dict,
-                           sheets: list) -> bool:
+                           sheets: list, out_book: Path | None = None) -> bool:
     """聞き返しを出す**前に**、機械が答えを持っていないか実表へ聞く（2026-09-08）。
 
     戻り値: 断って終わったら True（呼び出し側は exit 3 で返る）。
@@ -11043,15 +11089,21 @@ def _answer_before_asking(a: argparse.Namespace, book: Path, book_meta: dict,
       どちらも既に実装済みで、**この経路にだけ通っていなかった**。
     ★ CLARIFY は単発と複合計画の 2 箇所にあるので、**畳んでここ 1 つに置く**
       （両方に配ると、また片方だけ直る ── 今日 8 回見た形）。
+    ★★ 2026-10-02（形 4）: 複合計画は 1 段目を適用した**後**の CLARIFY でもここへ来る ── その時は
+      `.out` が既に在る。`out_book` を渡された時は、残したことを言い、履歴の `out` も `.out` にする
+      （原本のパスを書くと、次の run が「この道具が書いた記録がありません」と `.out` を塞いだ）。
     """
     missing = sheet_named_but_missing(a.task, sheets)
     if missing:
         for line in render_missing_sheet_refusal(missing, sheets):
             print(line)
+        _kept = out_book is not None and Path(out_book).exists()
+        if _kept:
+            print(_untouched_original_line(book, Path(out_book)))
         _finish_run(a, book, {"ok": False, "attempts": 0, "task": a.task,
                                "model": a.model, "path": "vocab_miss",
                                "command": None, "postcondition": None,
-                               "changes": [], "out": str(book)},
+                               "changes": [], "out": str(out_book if _kept else book)},
                     failure_kind=f"{_VOCAB_MISS_KIND_PREFIX}/sheet_missing")
         return True
     try:
@@ -13388,7 +13440,7 @@ def cmd_run_plan(a: argparse.Namespace, book: Path, source_book: Path, book_meta
 
         if op == "CLARIFY":
             if _answer_before_asking(a, book, book_meta,
-                                      list(book_meta.get("sheets") or [])):
+                                      list(book_meta.get("sheets") or []), out_book=out_book):
                 return 3
             question = step.get("question") or "確認が必要です"
             items.append((i, question, "fail", "計画の途中で確認が必要なため対応できません"))
@@ -14911,10 +14963,7 @@ def _render_csv_report(csv_path: Path, out_path: Path, evaluation: _CsvEvaluatio
     if string_kept:
         lines.append(f"（{'、'.join(string_kept)} は文字列として保持したため、"
                      "Σ で検算していません）")
-    for w in evaluation.warnings:
-        lines.append(f"  ⚠ {w}")
-    for row, col, code in write_result.removed_control_chars:
-        lines.append(f"  ⚠ {row}行目{col}列目: 制御文字 {code} を除去して書きました")
+    lines.extend(csv_quarantine.warning_lines(evaluation, write_result))
     lines.append(_csv_untouched_line(csv_path, evaluation))
     return lines
 
@@ -14935,10 +14984,7 @@ def _render_csv_transfer_failure(csv_path: Path, out_path: Path, evaluation: _Cs
                  f" 1 セルも変えずに書けませんでした"
                  f"（欠落{len(compare_result.missing)}・不一致{len(compare_result.mismatched)}・"
                  f"余剰{len(compare_result.surplus)}）")
-    for w in evaluation.warnings:
-        lines.append(f"  ⚠ {w}")
-    for row, col, code in write_result.removed_control_chars:
-        lines.append(f"  ⚠ {row}行目{col}列目: 制御文字 {code} を除去して書きました")
+    lines.extend(csv_quarantine.warning_lines(evaluation, write_result))
     for row, col in compare_result.missing:
         lines.append(f"  ⚠ {row}行目{col}列目: 転送で欠落しました")
     for row, col, dval, aval in compare_result.mismatched:
@@ -14970,21 +15016,24 @@ def cmd_run_csv(a: argparse.Namespace) -> int:
     if not compare_result.ok:
         for ln in _render_csv_transfer_failure(csv_path, out, evaluation, write_result, compare_result):
             print(ln)
-        _record_csv_conversion_history(csv_path, out, ok=False)
+        _record_csv_conversion_history(csv_path, out, ok=False,
+                                       notes=csv_quarantine.warning_lines(evaluation, write_result))
         return 3
     for ln in _render_csv_report(csv_path, out, evaluation, write_result, compare_result):
         print(ln)
-    _record_csv_conversion_history(csv_path, out, ok=True)
+    _record_csv_conversion_history(csv_path, out, ok=True,
+                                   notes=csv_quarantine.warning_lines(evaluation, write_result))
     return 0
 
 
-def _record_csv_conversion_history(csv_path: Path, out_path: Path, ok: bool) -> None:
+def _record_csv_conversion_history(csv_path: Path, out_path: Path, ok: bool, notes=(),
+                                   failure_kind: str | None = None) -> None:
     """`ailine csv` の変換を history.jsonl に残す（★ 2026-09-18: 記録の組み立ては
        _record_side_command_history 1 箇所へ畳んだ ── 手で組んでいた 2 経路は
        out_sha の有無で既に食い違っていた）。"""
     _record_side_command_history(
         "csv", csv_path, f"csv: {csv_path.name} → {out_path.name}", out_path, ok,
-        failure_kind=None if ok else "csv_transfer_failed")
+        failure_kind=None if ok else (failure_kind or "csv_transfer_failed"), notes=notes)
 
 
 def _cmd_run_csv_prestage(a: argparse.Namespace) -> int:
@@ -15008,30 +15057,45 @@ def _cmd_run_csv_prestage(a: argparse.Namespace) -> int:
             return _refuse_output_conflict(out, mark)
         if _csv_output_edited_since(out):
             # ★ 同じ CSV から作った自分の出力でも、そのあと作業が乗っていれば消さない。
-            return _refuse_edited_output(out)
+            #   ★★ 2026-10-02（形 4・置き換え）: この暗黙前段は変換を**履歴に残していなかった**ので、
+            #     `run x.csv` を 2 回打つと 2 回目が 1 回目の作業結果を黙って作り直していた
+            #     （`edited_since` は記録が無ければ None ＝素通り・実機で再現）。残すようにしたので、
+            #     続きは xlsx を直接指す案内を添える。
+            _rc_edited = _refuse_edited_output(out)
+            print(f"（続きの作業は、できた {out.name} を直接指定して実行してください）")
+            return _rc_edited
     write_result, compare_result = _write_csv_output(evaluation, out)
-    warn_count = len(evaluation.warnings) + len(write_result.removed_control_chars)
+    warn_lines = csv_quarantine.warning_lines(evaluation, write_result)
+    warn_count = len(warn_lines)
     if warn_count or not compare_result.ok:
         print(f"■ ailine run（CSV 検疫）  file={csv_path}")
         print(f"⚠ {csv_path.name} の読み取りに確認事項があるため、続行しません"
               f"（{_untouched_claim(csv_path, evaluation.sha256[:16], verb='無変更')}"
               f"・検疫結果は {out.name} として書きました）。")
-        for w in evaluation.warnings:
-            print(f"  ⚠ {w}")
-        for row, col, code in write_result.removed_control_chars:
-            print(f"  ⚠ {row}行目{col}列目: 制御文字 {code} を除去して書きました")
+        for ln in warn_lines:
+            print(ln)
         if not compare_result.ok:
             print(f"  ⚠ 転送の検算で 欠落{len(compare_result.missing)}・"
                   f"不一致{len(compare_result.mismatched)}・余剰{len(compare_result.surplus)} を検出しました")
         print(f"（内容を確認し、『ailine run {out.name} <依頼>』のように"
               "xlsx を直接指定してやり直してください）")
+        # ★ 2026-10-02（形 4）: 書いた `.xlsx` を履歴に残す（画面の ⚠ ごと）。残さないと、次の run が
+        #   「この道具が書いた記録がありません」と塞がれ、⚠ は画面と一緒に消える。
+        _record_csv_conversion_history(
+            csv_path, out, ok=False,
+            notes=warn_lines + ([f"転送の検算で 欠落{len(compare_result.missing)}・"
+                                 f"不一致{len(compare_result.mismatched)}・"
+                                 f"余剰{len(compare_result.surplus)}"] if not compare_result.ok else []),
+            failure_kind="csv_transfer_failed" if not compare_result.ok else "csv_needs_review")
         return 3
     print(f"（{csv_path.name} を検疫し、{out.name} として書きました。以後はこのファイルに対して実行します）")
+    _record_csv_conversion_history(csv_path, out, ok=True)
     a.book = str(out)
     return _cmd_run_body(a)
 
 
-def _record_csv_export_history(book_path: Path, out_path: Path, sheet: str, ok: bool) -> None:
+def _record_csv_export_history(book_path: Path, out_path: Path, sheet: str, ok: bool, notes=(),
+                               failure_kind: str | None = None) -> None:
     """`ailine export-csv` を history.jsonl に残す。
 
     ★★ 2026-09-18（Namakoo 決裁 A）: この経路は前から out_sha（出力の指紋）を
@@ -15046,8 +15110,9 @@ def _record_csv_export_history(book_path: Path, out_path: Path, sheet: str, ok: 
     """
     _record_side_command_history(
         "export-csv", book_path,
-        f"export-csv: {book_path.name}[{sheet}] → {out_path.name}", out_path, ok,
-        failure_kind=None if ok else "csv_export_roundtrip_mismatch")
+        f"export-csv: {book_path.name}[{sheet}] → {out_path.name}",
+        out_path if out_path.exists() else None, ok,
+        failure_kind=None if ok else (failure_kind or "csv_export_roundtrip_mismatch"), notes=notes)
 
 
 def _export_out_path(a: argparse.Namespace, default_path: Path) -> tuple:
@@ -15131,6 +15196,9 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
         print(f"■ ailine export-csv  file={book_path}  sheet={a.sheet}")
         print(f"× 書き出しに失敗しました: {e}"
               "（別のアプリが開いている可能性があります）")
+        # ★ 2026-10-02（形 4）: 書きかけの `.csv` が残りうる ── 履歴に残す（出口を履歴の口へ）。
+        _record_csv_export_history(book_path, out_path, a.sheet, ok=False,
+                                   failure_kind="csv_export_write_failed")
         return 1
 
     # ★ 2026-08-24（盲検の契約レビュー）: 読み戻すのは**ディスク上のファイル**。
@@ -15142,11 +15210,15 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
     except OSError as e:
         print(f"■ ailine export-csv  file={book_path}  sheet={a.sheet}")
         print(f"× 書き出したファイルを読み戻せませんでした: {e}")
+        _record_csv_export_history(book_path, out_path, a.sheet, ok=False,
+                                   failure_kind="csv_export_readback_failed")
         return 1
     if written != write_result.raw_bytes:
         print(f"■ ailine export-csv  file={book_path}  sheet={a.sheet}")
         print(f"× 書き出したファイルの中身が、書いたはずの内容と違います"
               f"（{len(write_result.raw_bytes)} バイトのつもりが {len(written)} バイト）")
+        _record_csv_export_history(book_path, out_path, a.sheet, ok=False,
+                                   failure_kind="csv_export_bytes_mismatch")
         return 3
     roundtrip = csv_export.verify_roundtrip(write_result.declared, written, enc)
 
@@ -15178,12 +15250,14 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
             print(ln)
         _record_csv_export_history(book_path, out_path, a.sheet, ok=True)
         return 0
+    # ★ 2026-10-02（形 4）: 画面に出した ⚠ を履歴にも残す（△ の回が履歴では ✓ と区別がつかなかった）。
+    _warned = [ln for ln in lines if ln.lstrip().startswith("⚠")]
     if roundtrip.ok:
         # ★ 書けた分は本当に書けている ── ✓ は名乗らないが × でもない（△）。
         lines.append(f"△ シートの {body} ── ただし上の ⚠ は確かめられていません")
         for ln in lines:
             print(ln)
-        _record_csv_export_history(book_path, out_path, a.sheet, ok=True)
+        _record_csv_export_history(book_path, out_path, a.sheet, ok=True, notes=_warned)
         return 0
 
     # ★ 恒真殺し: 読み戻しで食い違ったら ✓ を名乗らない（csv_quarantine と同じ規律）。
@@ -15196,7 +15270,8 @@ def cmd_export_csv(a: argparse.Namespace) -> int:
         lines.append(f"  ⚠ {row}行目{col}列目: 転送で余剰として現れました（{aval!r}）")
     for ln in lines:
         print(ln)
-    _record_csv_export_history(book_path, out_path, a.sheet, ok=False)
+    _record_csv_export_history(book_path, out_path, a.sheet, ok=False,
+                               notes=[ln for ln in lines if ln.lstrip().startswith("⚠")][:20])
     return 3
 
 
@@ -15337,20 +15412,31 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
         tmp_holder.cleanup()
     lines = [f"■ ailine export-pdf  file={book_path}  sheet={sheet}"]
     lines.extend(pdf_export.vanishing_shapes_warning(vanishing))
-    if not ok:
-        lines.append(f"× {why}")
+
+    def _finish_pdf(rc: int, done: bool, kind: str | None = None) -> int:
+        """PDF を出した後の出口は全部ここ（言った ⚠ / △ / × を履歴にも残す）。
+
+        ★★ 2026-10-02（盲検の形 4・2 冊照合 4a61518 の兄弟）: export-csv は履歴に残るのに、export-pdf は
+          **1 行も残らなかった**（書き出した PDF も、消えた図形の ⚠ も）。出口が 5 本あり、どれも
+          `print` して `return` するだけ。★ 出口ごとに書き写さず、ここ 1 つへ畳む。"""
         for ln in lines:
             print(ln)
-        return EXIT_ENVIRONMENT
+        _record_side_command_history(
+            "export-pdf", book_path, f"export-pdf: {book_path.name}[{sheet}] → {out_path.name}",
+            out_path if out_path.exists() else None, done, failure_kind=kind,
+            notes=[ln.strip() for ln in lines if ln.lstrip().startswith(("⚠", "△", "×"))])
+        return rc
+
+    if not ok:
+        lines.append(f"× {why}")
+        return _finish_pdf(EXIT_ENVIRONMENT, False, "pdf_export_failed")
     lines.append(f"出力先: {out_path}")
 
     check = pdf_export.verify_values_in_pdf(out_path, values)
     if not check.available:
         lines.append("⚠ PDF は作りましたが、機械保証はありません"
                       "（テキスト層の読み戻しに pdfplumber が要ります: pip install pdfplumber）")
-        for ln in lines:
-            print(ln)
-        return 0
+        return _finish_pdf(0, True)
     if check.missing:
         lines.append(f"× シートの {check.checked} 個の値のうち {len(check.missing)} 個が"
                       f"PDF の中に見つかりません（読み戻しで確認）")
@@ -15365,22 +15451,16 @@ def cmd_export_pdf(a: argparse.Namespace) -> int:
         if len(check.missing) > 10:
             lines.append(f"  … 他 {len(check.missing) - 10} 個")
         lines.append("  （数値の書式や列幅で表示が変わっている可能性があります）")
-        for ln in lines:
-            print(ln)
-        return 3
+        return _finish_pdf(3, False, "pdf_values_missing")
     # ★ 決裁③（✓ の絶対性）: 疑わしい ⚠ が 1 件でも在れば ✓ を名乗らない。
     #   値は載っていても、消えた角印は「宣言どおり」ではない。
     if vanishing:
         lines.append(f"△ シートの {check.checked} 個の値が PDF に載っていることは"
                      "確認しました ── ただし上の図形は消えています")
-        for ln in lines:
-            print(ln)
-        return 0
+        return _finish_pdf(0, True)
     lines.append(f"✓ シートの {check.checked} 個の値が PDF に載っていることを"
                   f"読み戻して確認しました（欠落 0）")
-    for ln in lines:
-        print(ln)
-    return 0
+    return _finish_pdf(0, True)
 
 def bundled_demo_dir() -> Path:
     """同梱サンプルの置き場所（パッケージの中）。
@@ -15429,6 +15509,9 @@ def cmd_demo(a: argparse.Namespace) -> int:
             copied.append(name)
     except OSError as e:
         print(f"× サンプルを置けませんでした: {e}")
+        # ★ 2026-10-02（形 4）: 途中で落ちた時、**先に置けた分が黙って残る**（履歴には残している）。
+        if copied:
+            print(f"（置けた分は残っています: {chr(12289).join(copied)} ── {dest_dir}）")
         return EXIT_ENVIRONMENT
     print(f"■ ailine demo  出力先={dest_dir}")
     for name in copied:
