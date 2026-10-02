@@ -170,8 +170,19 @@ def _run(argv: list, plan, second=None) -> tuple:
     #   ことと同じ（ここは module の fixture から呼ばれ、その切り替えの外だった）。歩いて確かめたいのは案内であって
     #   正規化ではなく、案内を 200 本歩く間に LibreOffice を毎回起こすと 3 分近くかかった。実機の番人は本物で歩く。
     real_norm = ailine.normalize_book
+    # ★ 2026-10-02: ollama も同じ ── conftest の _no_real_ollama は関数ごとの fixture で、module の fixture から呼ばれる
+    #   ここには届かない。届かないと素の環境（ollama が居ない）で、語彙外の近い候補を訊く判定器（judge_ops_via_llm）が
+    #   実 ollama に当たり、接続拒否が exit 9 で画面を埋めて案内が出なかった（手元は ollama が答えるので緑）。
+    #   判定器は「候補なし」・自由生成は「空」に固定し（翻訳を固定するのと同じ作法）、残りの口は塞ぐ ── 漏れは歩きの失敗として手元でも赤になる。
+    real_ollama = (ailine.judge_ops_via_llm, ailine.ollama_generate_json, ailine.ollama_generate)
     if not os.environ.get("AILINE_WALK_ON_MACHINE"):
         ailine.normalize_book = lambda book, workdir, timeout=None: book
+        def _no_ollama(*a, **k):
+            raise AssertionError("歩き手が実 ollama を呼んだ（固定していない口 ── 素の環境には存在しない）")
+        ailine.judge_ops_via_llm = lambda task, about=None: []
+        ailine.ollama_generate_json = _no_ollama
+        #   自由生成（語彙外段）は「何も返さない」に固定 ── 歩きたいのは生成の前に出る通知で、生成物ではない。
+        ailine.ollama_generate = lambda *a, **k: ""
     calls = []
     if plan is not None:
         def fake(*a, **k):
@@ -193,6 +204,7 @@ def _run(argv: list, plan, second=None) -> tuple:
     finally:
         ailine.translate_task, ailine.translate_task_fixed_op = real, real_fixed
         ailine.normalize_book = real_norm
+        ailine.judge_ops_via_llm, ailine.ollama_generate_json, ailine.ollama_generate = real_ollama
         sys.stdin = real_stdin
     return rc, buf.getvalue()
 
