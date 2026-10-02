@@ -7645,7 +7645,7 @@ def cmd_redo(a: argparse.Namespace) -> int:
             used = redo_last_undo(book)
         except NothingToRedoError as e:
             print(f"× {e}")
-            print("  → 戻すなら ailine undo、世代の一覧は ailine undo --list")
+            print(f'  → 戻すなら ailine undo "{book}"、世代の一覧は ailine undo "{book}" --list')
             return 1
         except BrokenBackupError as e:
             print(f"× {e}")

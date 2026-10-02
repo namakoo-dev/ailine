@@ -17,8 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import guidance_sites_core as g  # noqa: E402
 from test_every_typable_hint_is_accounted_for import _declared, occurrences  # noqa: E402
 
-#: ★ 2026-10-01 の初回計測で未調査 151 件。歯止めは下げる向きにだけ動かす（歩いたら下げる）。
-UNWALKED_AT_FIRST_COUNT = 151
+#: ★ 2026-10-01 の初回計測で未調査 151 件 → 2026-10-02 に 4 件（115 件を歩き、33 件は案内ではなかったと理由つきで仕分けた）。
+#:   歯止めは下げる向きにだけ動かす（歩いたら下げる）。残り 4 件は台帳の note に歩けない理由がある。
+UNWALKED_AT_FIRST_COUNT = 4
 
 
 def _guide() -> list:

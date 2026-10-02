@@ -166,14 +166,24 @@ def _run(argv: list, plan, second=None) -> tuple:
     real_stdin = sys.stdin
     sys.stdin = io.StringIO("")
     real, real_fixed = ailine.translate_task, ailine.translate_task_fixed_op
+    # ★ 2026-10-02: 文書の正規化（LibreOffice で開いて保存し直す）は素通しにする ── conftest が関数ごとにやっている
+    #   ことと同じ（ここは module の fixture から呼ばれ、その切り替えの外だった）。歩いて確かめたいのは案内であって
+    #   正規化ではなく、案内を 200 本歩く間に LibreOffice を毎回起こすと 3 分近くかかった。実機の番人は本物で歩く。
+    real_norm = ailine.normalize_book
+    if not os.environ.get("AILINE_WALK_ON_MACHINE"):
+        ailine.normalize_book = lambda book, workdir, timeout=None: book
     calls = []
     if plan is not None:
         def fake(*a, **k):
             calls.append(1)
             return {"plan": second if (second and len(calls) == 2) else plan}
         ailine.translate_task = fake
+        # ★ 2026-10-02: 引数を渡すのは**固定する op が計画の先頭の op と同じ時だけ**。旧版は別の op にも先頭の引数を
+        #   そのまま返した ── 製品は「抽出の依頼を 1 セル書換に読み直せるか」を第二段（op 固定の翻訳）の値で確かめるので、
+        #   抽出の値（営業）が 1 セル書換の値として返り、**抽出の例が 1 セル書換に化けた**（治具の側の嘘・製品は正しい）。
+        first_op = str((plan[0] or {}).get("op") or "") if plan else ""
         ailine.translate_task_fixed_op = lambda model, op, task, meta, **k: {
-            "op": op, "args": dict((plan[0] or {}).get("args") or {})}
+            "op": op, "args": dict((plan[0] or {}).get("args") or {}) if op == first_op else {}}
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             try:
@@ -182,6 +192,7 @@ def _run(argv: list, plan, second=None) -> tuple:
                 rc = e.code
     finally:
         ailine.translate_task, ailine.translate_task_fixed_op = real, real_fixed
+        ailine.normalize_book = real_norm
         sys.stdin = real_stdin
     return rc, buf.getvalue()
 
@@ -413,6 +424,21 @@ def render(rows: list) -> str:
 #           ── 示した道。expect_rc（既定 0）で着いたとみなす。expect を書けばその文面も要る
 #   machine true ── その場の機械の状態（ollama・LibreOffice・doctor の点検・demo）に左右される歩き。
 #           素の環境（CI）では歩かず「実機で歩く」と数え、実機の番人（-m local）が AILINE_WALK_ON_MACHINE=1 で歩く
+#   ── 2026-10-02 に足した口（どれも「歩き方に正解を手で書かない」「機械の状態を名前で決める」ため）──
+#   env     {"COLUMNS": "400"}                         ── 歩きの間の環境変数（argparse の -h が折り返さないように）
+#   patch   {"doctor_missing": [...] | "doctor_ok": true | "struct_dump_missing": true | "fidelity_lost": true}
+#           ── 引き金の間だけ、製品の外の状態を名前で決め打ちにする（path.patch は道の間だけ）。_patched を見る
+#   hold_lock true ── 引き金の間だけ、別のプロセスが実行ロックを持っている形にする（道は離してから歩く）
+#   second  [...]                                      ── 2 回目の読みだけ別の計画（読みの割れの検体）
+#   setup の {"edit_cell": {...}} / {"copy": [元, 先]}  ── 製品が作った冊を人が直した形にする／案内が名指しする名前を付ける
+#   path    の follow_* ── 画面から拾って打つ（正解を歩き方に手で書かない）:
+#           follow_command    "ailine undo \"" 等（リストなら全部）── 打てと言われた 1 行そのもの（Windows の打ち方で割る）
+#           follow_task       {"at": argv の位置, "after": "例:", "nth": 1, "next": 0} ── 「（例:「…」）」の例を依頼文にして打つ（入れ子の括弧を読む）
+#           follow_option     旗の番号 / その旗の説明の文 ── 「以下のいずれかを指定して」の旗
+#           follow_choice     何番目か ── 画面の『候補: <op>』を --op に渡す
+#   path    の remove（先に消すパス）/ then（案内が「先に A、それから B」と言う時の B。リストなら順に）/ second / patch
+#   {sha256:名} ── 作業場にある冊の sha256（--base-sha に渡す値）
+#   walk.not_guidance true（kind が by_design の時）── 走査が拾ったが、次に打つものを指していなかった（理由は why）
 #   kind    "by_design"（意図した行き止まり・why 必須）/
 #           "walked_on_the_real_machine"（walked_by に歩いている試験名）── 歩かない種類
 
@@ -449,6 +475,19 @@ def _prepare(root: Path, w: dict) -> str | None:
     for d in w.get("dirs") or []:
         (root / d).mkdir(parents=True, exist_ok=True)
     for i, step in enumerate(w.get("setup") or []):
+        if step.get("edit_cell"):
+            # ★ 2026-10-02: 製品が作った冊を、人が手で直した形にする（「そのあと変更されています」の検体）
+            e = step["edit_cell"]
+            wb = openpyxl.load_workbook(root / e["book"])
+            wb[e["sheet"]][e["cell"]] = e["value"]
+            wb.save(root / e["book"])
+            wb.close()
+            continue
+        if step.get("copy"):
+            # ★ 2026-10-02: 製品が作った出力に、案内が名指しする名前を付ける（「照合.xlsx」等。名前は検体の都合）
+            src, dst = _subst(step["copy"], root)
+            shutil.copy2(src, dst)
+            continue
         rc, out = _run(_subst(step["argv"], root), step.get("plan"))
         if rc != 0:
             return f"setup {i + 1} が exit {rc}（検体を作れていない）: {out.strip()[-120:]}"
@@ -464,6 +503,8 @@ def _make_books(root: Path, books: dict) -> None:
             ws = wb.create_sheet(sheet)
             for r in rows:
                 ws.append(r)
+        # ★ 2026-10-02: 「配る/人の資料.xlsx」のようにフォルダの中へ置ける（出力先の関所の検体）
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
         wb.save(root / name)
         wb.close()
 
@@ -476,6 +517,12 @@ def _subst(args: list, root: Path) -> list:
             i = a.index("{book:")
             j = a.index("}", i)
             a = a[:i] + str(root / a[i + 6:j]) + a[j + 1:]
+        while "{sha256:" in a:
+            # ★ 2026-10-02: その時の冊の指紋（`--base-sha` に渡す値 ── 歩き方に値を手で書かない）
+            i = a.index("{sha256:")
+            j = a.index("}", i)
+            import hashlib
+            a = a[:i] + hashlib.sha256((root / a[i + 8:j]).read_bytes()).hexdigest() + a[j + 1:]
         out.append(a)
     return out
 
@@ -486,8 +533,71 @@ def walk_hint(h: dict, root: Path) -> dict:
     # ★ 今いるフォルダも作業場へ移す ── 2026-09-23 に歩きの中の `ailine demo` が repo の根っこへ
     #   見本の冊を 5 つ書いた（保存先と同じく、呼ぶ側が忘れても汚さない）。
     root.mkdir(parents=True, exist_ok=True)
-    with isolated_home(ailine, root / "_ailine_home"), contextlib.chdir(root):
+    env = (h.get("walk") or {}).get("env")
+    with isolated_home(ailine, root / "_ailine_home"), contextlib.chdir(root), _env(env):
         return _walk_hint(h, root)
+
+
+@contextlib.contextmanager
+def _patched(spec: dict | None):
+    """歩きの間だけ製品の外の状態を決め打ちにする（★ 2026-10-02・名前で宣言できるものだけ）。
+      doctor_missing: ["LibreOffice", …]  doctor の点検を、この名前の項目だけ「足りない」にする
+                      （★ 機械の状態に左右されない ── demo の「先に足りないものがあります」の検体）
+      doctor_ok: true                     doctor の点検を全部「在る」にする（demo の「次にこれを打ってみてください」の検体）
+      struct_dump_missing: true           構造の読み取りが取れなかった形にする（LibreOffice の一時不調の検体）
+      fidelity_lost: true                 往復の忠実度ゲートが「失われる」と言う形にする（実機の LibreOffice が要らない）"""
+    spec = spec or {}
+    real = (ailine.doctor_checks, ailine._struct_dump_info_missing, ailine.check_round_trip_fidelity)
+    missing = list(spec.get("doctor_missing") or [])
+    if missing:
+        ailine.doctor_checks = lambda *a, **k: [(n, False, "足りない（検体）") for n in missing]
+    elif spec.get("doctor_ok"):
+        ailine.doctor_checks = lambda *a, **k: [("（検体）", True, "")]
+    if spec.get("struct_dump_missing"):
+        ailine._struct_dump_info_missing = lambda *a, **k: True
+    if spec.get("fidelity_lost"):
+        ailine.check_round_trip_fidelity = lambda *a, **k: {"lost": True, "items": [{"label": "図形", "count": 1}]}
+    try:
+        yield
+    finally:
+        ailine.doctor_checks, ailine._struct_dump_info_missing, ailine.check_round_trip_fidelity = real
+
+
+@contextlib.contextmanager
+def _env(extra: dict | None):
+    """歩きの間だけ環境変数を足す（★ 2026-10-02: argparse の -h は端末の幅で折り返す ── COLUMNS を固定して
+    文面の途中で割れないようにする）。終わったら元に戻す。"""
+    saved = {k: os.environ.get(k) for k in (extra or {})}
+    os.environ.update({k: str(v) for k, v in (extra or {}).items()})
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+@contextlib.contextmanager
+def _held_run_lock(enabled):
+    """★ 2026-10-02: 「別の ailine が実行中です」の検体 ── 別プロセスが持っている形を、**同じプロセスの別の fd** で
+    OS の排他ロックを掛けて作る（製品は鍵を別の fd で開き直して掛けに行くので、掛けられず断る）。
+    引き金を引く間だけ持ち、道を歩く前に必ず離す。"""
+    if not enabled:
+        yield
+        return
+    Path(ailine.RUN_LOCK_FILE).parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(ailine.RUN_LOCK_FILE), os.O_CREAT | os.O_RDWR)
+    try:
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b" ")
+        if not ailine._try_os_lock(fd):
+            raise RuntimeError("検体を作れない: 実行ロックを先に掛けられなかった")
+        yield
+    finally:
+        ailine._release_os_lock(fd)
+        os.close(fd)
 
 
 def _walk_hint(h: dict, root: Path) -> dict:
@@ -510,14 +620,38 @@ def _walk_hint(h: dict, root: Path) -> dict:
     why = _prepare(root, w)
     if why:
         return {"key": key, "verdict": "引き金が引けない", "detail": why}
-    rc, out = _run(_subst(w["argv"], root), w.get("plan"))
-    if rc == BUSY:
+    with _held_run_lock(w.get("hold_lock")), _patched(w.get("patch")):     # ★ 決め打ちは引き金の間だけ（道は本物の状態で歩く）
+        rc, out = _run(_subst(w["argv"], root), w.get("plan"), w.get("second"))
+    if rc == BUSY and not w.get("hold_lock"):
         return {"key": key, "verdict": "歩けなかった", "detail": "機械が塞がっていた（exit 6）"}
     if w["expect"] not in out:
         return {"key": key, "verdict": "引き金が引けない",
                 "detail": f"案内『{w['expect']}』が画面に出なかった（exit {rc}）",
                 "screen": out.strip()[-200:]}
     path = w.get("path") or {}
+    for victim in _subst(path.get("remove") or [], root):
+        # ★ 2026-10-02: 「そのファイルを別の場所へ移すか削除してから、もう一度実行して」型 ── 言われたとおり先に消す
+        Path(victim).unlink()
+    if path.get("follow_command"):
+        # ★★ 2026-10-02: 「例: ailine verify 縦積み.xlsx 受領フォルダ」型 ── 打てと言われた**1 行そのもの**を
+        #   画面から拾って打つ（歩き方に手で書くと、案内が何と言っても通ってしまう）。
+        #   冊は作業場に置いてあること（歩きは作業場で走る）。
+        #   リストなら 1 つの案内が打てと言った**全部**を打つ（最後の 1 つは下の共通の歩きで打つ）。
+        starts = path["follow_command"] if isinstance(path["follow_command"], list) else [path["follow_command"]]
+        cmds = []
+        for start in starts:
+            cmd = _typed_command(out, start)
+            if not cmd:
+                return {"key": key, "verdict": "vague",
+                        "detail": f"画面に『{start}』で始まる打てる 1 行が出ていない"}
+            cmds.append(cmd)
+        for cmd in cmds[:-1]:
+            rc_i, out_i = _run(cmd, path.get("plan", w.get("plan")), path.get("second"))
+            if rc_i != path.get("expect_rc", 0):
+                return {"key": key, "verdict": "path_fails",
+                        "detail": f"案内どおり `ailine {' '.join(cmd)}` と打ったが exit {rc_i}",
+                        "screen": out_i.strip()[-200:]}
+        path = {**path, "argv": cmds[-1]}
     if not path.get("argv"):
         return {"key": key, "verdict": "vague", "detail": "path.argv が無い ── 示した道を書いていない"}
     argv2 = _subst(path["argv"], root)
@@ -542,14 +676,96 @@ def _walk_hint(h: dict, root: Path) -> dict:
                     "detail": "案内の行に『…』が出ていない ── 書き足す言い方が無い"}
         i = path["follow_quoted"]
         argv2[i] = argv2[i] + "、" + "、".join(quoted)
-    rc2, out2 = _run(argv2, path.get("plan", w.get("plan")))
+    if path.get("follow_option") is not None:
+        # ★★ 2026-10-02: 「以下のいずれかを指定して再実行してください」型 ── 画面に並んだ旗の n 番目を、そのまま足して打つ
+        #   （どの旗を勧めるかを歩き方に手で書かない）。follow_option = 何番目か（1 起点）。
+        #   follow_option が文字列なら「その文を説明にしている旗」（案内の文が旗の説明の側にある時）。
+        fo = path["follow_option"]
+        if isinstance(fo, str):
+            flags_seen = [m.group(1) for m in (re.match(r"\s{2,}(--[a-z][a-z-]*)(?=\s)", ln)
+                                               for ln in out.splitlines() if fo in ln) if m]
+            fo = 1
+        else:
+            flags_seen = re.findall(r"^\s{2,}(--[a-z][a-z-]*)(?=\s)", out.split(w["expect"], 1)[1], flags=re.M)
+        if len(flags_seen) < fo:
+            return {"key": key, "verdict": "vague", "detail": "案内に旗の選択肢が並んでいない"}
+        argv2 += [flags_seen[fo - 1]]
+    if path.get("follow_choice") is not None:
+        # ★★ 2026-10-02: 「片方を選ぶなら、その候補を --op で固定して」型 ── 画面の『候補: <op>』を拾って --op に渡す
+        #   （正解の op を歩き方に手で書かない）。follow_choice = 何番目の候補か（1 起点）。
+        ops_seen = re.findall(r"^候補: ([A-Z_]+)\t", out, flags=re.M)
+        if len(ops_seen) < path["follow_choice"]:
+            return {"key": key, "verdict": "vague", "detail": "画面に『候補: <op>』が出ていない ── 固定する候補が無い"}
+        argv2 += ["--op", ops_seen[path["follow_choice"] - 1]]
+    if path.get("follow_task") is not None:
+        # ★★ 2026-10-02: 「（例:「…」）」型の案内を、**画面の例そのもの**を依頼文にして打つ（follow と同じ理由）。
+        #   follow_task = {"at": argv の位置, "after": この語より後ろの最初の「…」（省略可）, "nth": 何番目か（省略可）}
+        ft = path["follow_task"]
+        screen = out.splitlines()
+        at_line = next((i for i, ln in enumerate(screen) if w["expect"].splitlines()[0] in ln), None)
+        # ★ next = 案内の行の何行あとに例が出るか（省略時は同じ行）。★ 入れ子の『…』は「…」の中身として読む
+        line = screen[at_line + ft.get("next", 0)] if at_line is not None and at_line + ft.get("next", 0) < len(screen) else ""
+        seg = line.split(ft["after"], 1)[1] if ft.get("after") and ft["after"] in line else line
+        said = _quoted_examples(seg)
+        if len(said) < ft.get("nth", 1):
+            return {"key": key, "verdict": "vague", "detail": "案内の行に「…」の例が出ていない ── 打つ例が無い"}
+        argv2[ft["at"]] = said[ft.get("nth", 1) - 1]
+    with _patched(path.get("patch")):        # ★ 道の側の決め打ちは path.patch に別に書く（引き金のとは混ぜない）
+        rc2, out2 = _run(argv2, path.get("plan", w.get("plan")), path.get("second"))
     if rc2 == BUSY:
         return {"key": key, "verdict": "歩けなかった", "detail": "道の途中で機械が塞がっていた（exit 6）"}
     want = path.get("expect_rc", 0)
     if rc2 == want and (not path.get("expect") or path["expect"] in out2):
+        thens = path.get("then") or []
+        for then in (thens if isinstance(thens, list) else [thens]):
+            # ★ 2026-10-02: 案内が「先に A をして、それから B」と言う道（例: 用語集に登録してから、もう一度）── A を打った
+            #   後に B まで歩いて初めて着いたと数える。then = {"argv", "plan"（省略時は上と同じ）, "expect_rc", "expect"}（並べれば順に）
+            rc3, out3 = _run(_subst(then["argv"], root), then.get("plan", path.get("plan", w.get("plan"))), then.get("second"))
+            want3 = then.get("expect_rc", 0)
+            if rc3 != want3 or (then.get("expect") and then["expect"] not in out3):
+                return {"key": key, "verdict": "path_fails",
+                        "detail": f"案内の前半は通ったが、その後の実行が exit {rc3}（期待 {want3}）",
+                        "screen": out3.strip()[-200:]}
         return {"key": key, "verdict": "walked", "detail": f"道を歩いて到達（exit {rc2}）"}
     return {"key": key, "verdict": "path_fails",
             "detail": f"道を歩いたが exit {rc2}（期待 {want}）", "screen": out2.strip()[-200:]}
+
+
+def _quoted_examples(seg: str) -> list:
+    """行の中の最も外側の「…」『…』の中身を、出てきた順に返す（★ 入れ子を読む: 「備考の列を全部「確認済」に書き換えて」
+    は 1 つの例 ── 最初の閉じ括弧で切らない）。"""
+    pairs = {"「": "」", "『": "』"}
+    out, depth, start, closer = [], 0, 0, ""
+    for i, ch in enumerate(seg):
+        if depth == 0 and ch in pairs:
+            depth, start, closer = 1, i + 1, pairs[ch]
+        elif depth and ch == closer:
+            depth -= 1
+            if depth == 0:
+                out.append(seg[start:i])
+        elif depth and ch == {v: k for k, v in pairs.items()}[closer]:
+            depth += 1
+    return out
+
+
+def _typed_command(out: str, start: str) -> list | None:
+    """画面の中の『ailine …』で始まる 1 行（start を含むもの）を、打てる引数の列にして返す。
+    ★ 行の終わりか、閉じ括弧・読点（）)」』、。）までを 1 つのコマンドと数える（':' は数えない ── パスのドライブ名）。
+    ★ start は文脈つきでもよい（「世代の一覧は ailine undo」）── 打つのは、その後ろの最初の `ailine` から。"""
+    for ln in out.splitlines():
+        i = ln.find(start)
+        if i < 0:
+            continue
+        j = ln.find("ailine", i)
+        seg = re.split(r"[）)」』、。]", ln[j if j >= 0 else i:], 1)[0].strip()
+        try:
+            # ★ Windows の打ち方で割る（posix=False）── パスの \\ を畳まない。引用符は外す。
+            toks = [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'" else t
+                    for t in shlex.split(seg, posix=False)]
+        except ValueError:
+            return None
+        return toks[1:] if toks and toks[0] == "ailine" else toks
+    return None
 
 
 def survey_hints() -> list:

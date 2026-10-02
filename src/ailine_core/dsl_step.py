@@ -203,7 +203,11 @@ def compose_dsl_step_advisories(mode: str, op: str, resolved: dict, meta: dict, 
     #     ただし**必ず読める場所に出す**（undo で戻せることも同時に言う）。
     deleted = (resolved or {}).get("_deleted") or []
     if deleted:
-        advisories.append(f"消した中身（{len(deleted)} 行）── 戻すなら ailine undo:")
+        # ★ 2026-10-02: 旧文言は「戻すなら ailine undo:」── 冊の指定が無く、その通りに打つと
+        #   `ailine undo` は必須の引数が足りず exit 2 で落ちた（嘘の案内）。打てる形（冊の指定つき）は
+        #   適用の最後の行『（もとに戻す: ailine undo "<冊>"）』が持つので、ここはそれを指す。
+        advisories.append(f"消した中身（{len(deleted)} 行）── 原本に反映した時は最後の『もとに戻す』の行で戻せます"
+                          "（--copy では原本は消えていません）:")
         for row in deleted[:10]:
             shown = "／".join("" if v is None else str(v) for v in row)
             advisories.append(f"  ・{shown}")

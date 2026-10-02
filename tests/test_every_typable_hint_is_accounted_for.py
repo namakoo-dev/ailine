@@ -162,8 +162,10 @@ def test_existing_is_not_the_same_as_walkable():
       台帳の note に「補助スクリプトで一度歩いた・歩けない理由」を書いてある。歯止めは下げる向きにだけ動かす。
       ★ 0 件でも通る試験にしない ── 数が減ったら**気づく**側に倒す。
     ★ 2026-10-01: 5 → 4（「行目に見出しがあるようです。`--header-row」を --dry で歩けた）。
+    ★ 2026-10-02: 4 → 1（demo の doctor を名前で決め打ちできるようにし、`--sheet <名前>` は適用まで歩いた）。
+      残る 1 件は PDF の書き出し（実 soffice が要る）── 台帳の note に理由がある。
     """
     todo = [e for e in _register()["hints"] if e.get("walked") == "未調査"]
     assert todo, "★ 未調査が 0 件 ── 歩き終えたならこの試験は消してよい"
-    assert len(todo) <= 4, (
+    assert len(todo) <= 1, (
         f"未調査が増えています（{len(todo)} 件）── 新しい導線を足したなら歩いてから")

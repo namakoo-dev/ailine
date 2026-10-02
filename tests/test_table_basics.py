@@ -183,7 +183,7 @@ def test_deleted_content_reaches_the_report():
     # 本番の合流点が組み立てる助言に、消した中身が載ること
     src = Path(REPO / "src" / "ailine_core" / "dsl_step.py").read_text(encoding="utf-8")
     assert '"_deleted"' in src, "本番の合流点が消した中身を読んでいない"
-    assert "戻すなら ailine undo" in src, "取り返しがつくことを言っていない"
+    assert "もとに戻す" in src, "取り返しがつくことを言っていない"
 
 
 # --- ⑧ 位置は相対で言われる（Namakoo が実測）--------------------------------------------
